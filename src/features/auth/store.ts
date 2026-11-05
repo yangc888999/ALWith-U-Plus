@@ -16,10 +16,12 @@ import { toast } from "sonner"
 import { create } from "zustand"
 
 import { commands } from "@/bindings"
+import i18n from "@/lib/i18n"
 import { openStore } from "@/lib/store"
 
 import { bumpAuthGeneration, createAuthTransport, readAuthGeneration } from "./http"
 import { assertActiveLogin } from "./login-response"
+import { createEnterpriseEventHandler } from "./enterprise-events"
 import { createAccountTransition, createManagedProviders } from "./managed-providers"
 
 export const API_BASE_URL = import.meta.env.DEV ? "https://api-dev.alwith.ai/service" : "https://api.alwith.ai/service"
@@ -58,13 +60,42 @@ const transport = createAuthTransport({
     await emit(STATE_EVENT, { action: "logout" } satisfies AuthStateEvent)
   }
 })
+type EnterpriseAccount = { apiBaseUrl: string; userUuid: string }
+const enterpriseBindings = new Map<number, { account: EnterpriseAccount; generation: number }>()
+async function enterpriseBind(account: EnterpriseAccount): Promise<number> {
+  return commands.enterpriseBind({ account })
+}
+async function enterpriseRefresh(generation: number, accessToken: string): Promise<void> {
+  const binding = enterpriseBindings.get(generation)
+  if (!binding) throw new Error("Enterprise account binding is missing")
+  await commands.enterpriseRefresh({ ...binding, accessToken })
+}
+async function enterpriseClear(): Promise<void> {
+  enterpriseBindings.clear()
+  await commands.enterpriseClear()
+}
 const managedProviders = createManagedProviders({
-  bind: (userUuid) => commands.providersAccountBind({ account: { apiBaseUrl: API_BASE_URL, userUuid } }),
+  validate: async (userUuid) => {
+    const profile = await transport.request<{ uuid: string }>("/api/v1/me/profile", "GET")
+    if (profile?.uuid !== userUuid || usePlatformAuth.getState().user?.user_uuid !== userUuid)
+      throw new Error("ALwith account changed during profile validation")
+  },
+  bind: async (userUuid) => {
+    const account = { apiBaseUrl: API_BASE_URL, userUuid }
+    // Both catalogs belong to the same validated account, with independent gateways.
+    const generation = await commands.providersAccountBind({ account })
+    enterpriseBindings.set(generation, { account, generation: await enterpriseBind(account) })
+    return generation
+  },
   refresh: async (generation) => {
-    await transport.authenticated((accessToken) => commands.providersRefreshManaged({ generation, accessToken }))
+    await transport.authenticated(async (accessToken) => {
+      await commands.providersRefreshManaged({ generation, accessToken })
+      await enterpriseRefresh(generation, accessToken)
+    })
   },
   clear: async () => {
-    await commands.providersClearManaged()
+    const results = await Promise.allSettled([enterpriseClear(), commands.providersClearManaged()])
+    for (const result of results) if (result.status === "rejected") throw result.reason
   }
 })
 let validatedAccount: string | null = null
@@ -75,6 +106,12 @@ async function clearAccountProviders(): Promise<void> {
   } catch (error) {
     toast.error(`ALwith model cleanup failed: ${String(error)}`)
   }
+}
+async function loadAccountProviders(): Promise<void> {
+  if (!isMain()) throw new Error("ALwith model refresh belongs to the main window")
+  const user = usePlatformAuth.getState().user
+  if (!user) throw new Error("Sign in to refresh ALwith models")
+  await managedProviders.refresh(user.user_uuid)
 }
 function refreshAccountProviders(): void {
   if (!isMain()) return
@@ -122,13 +159,17 @@ export const usePlatformAuth = create<AuthState & AuthActions>(
     loadProviders: () => {},
     clearProviders: () => {},
     onProfileRestored: () => {
-      validatedAccount = usePlatformAuth.getState().user?.user_uuid ?? null
+      const user = usePlatformAuth.getState().user
+      if (!user) throw new Error("ALwith profile restored without an account")
+      validatedAccount = user.user_uuid
+      managedProviders.confirm(user.user_uuid)
       refreshAccountProviders()
     },
     clearAccountConversation: async () => {},
     onSignedIn: (user, source) => {
       if (source === "login") {
         validatedAccount = user.user_uuid
+        managedProviders.confirm(user.user_uuid)
         refreshAccountProviders()
       }
     },
@@ -165,6 +206,23 @@ export function loginPlatform(response: LoginResponse): Promise<void> {
 
 /** Register listeners before restoring credentials; called once by each window bootstrap. */
 export async function initPlatformAuth(): Promise<void> {
+  if (isMain()) {
+    const handleEnterpriseEvent = createEnterpriseEventHandler({
+      account: () => usePlatformAuth.getState().user?.user_uuid ?? null,
+      status: () => commands.enterpriseStatus(),
+      renewAccount: async (generation, requestId) => {
+        await transport.request("/api/v1/me/profile", "GET")
+        await transport.authenticated((accessToken) =>
+          commands.enterpriseUpdateAccount({ generation, requestId, accessToken })
+        )
+      },
+      refreshModels: loadAccountProviders,
+      failed: () => toast.error(i18n.t("enterprise.error"))
+    })
+    await listen<unknown>("enterprise:event", ({ payload }) => {
+      void handleEnterpriseEvent(payload)
+    })
+  }
   await listen<AuthStateEvent>(STATE_EVENT, (event) => {
     // A login/logout in any webview invalidates this window's in-flight account requests. It is
     // fire-and-forget: invalidate never emits a state event or writes the epoch, so it cannot loop.

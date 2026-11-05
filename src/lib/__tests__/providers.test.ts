@@ -8,6 +8,7 @@ import {
   displayModelLabel,
   normalizeProviderBaseUrl,
   gatewayModelId,
+  isAccountModel,
   nativeCatalogStatus,
   mergeDiscoveredModels,
   parseCustomModels,
@@ -406,3 +407,34 @@ test("a built-in provider never points at a Chat Completions-only endpoint", () 
     expect(provider.baseUrl).not.toContain("/paas/v4")
   }
 })
+
+test("account model classification follows the catalog source and exact provider ID", () => {
+  expect(isAccountModel("gateway:litellm:model")).toBe(true)
+  expect(isAccountModel("gateway:finture-enterprise:company-model")).toBe(true)
+  expect(isAccountModel("gateway:finture-enterprise-other:company-model")).toBe(false)
+  expect(isAccountModel("gateway:litellm-other:model")).toBe(false)
+  expect(isAccountModel("gateway:deepseek:deepseek-flash")).toBe(false)
+  expect(isAccountModel("gpt-6-sol")).toBe(false)
+  expect(isAccountModel(null)).toBe(false)
+})
+
+test.each(["gateway:litellm:old", "gateway:finture-enterprise:old"])(
+  "new drafts can replace the unavailable saved account model %s",
+  (model) => {
+    const snapshot: ProviderSnapshot = {
+      revision: 2,
+      appliedRevision: 2,
+      status: "applied",
+      error: null,
+      providers: {},
+      customProviders: [],
+      builtInModels: {}, managedProviders: []
+    }
+    expect(resolveSessionModel(model, snapshot, "draft")).toBeNull()
+    snapshot.providers.deepseek = { configured: true, disabled: false, region: null, base_url: null }
+    expect(resolveSessionModel(model, snapshot, "draft")).toBe(
+      gatewayModelId("deepseek", PROVIDERS.find((provider) => provider.id === "deepseek")!.models[0]!.id)
+    )
+    expect(() => resolveSessionModel(model, snapshot)).toThrow(/unavailable/i)
+  }
+)

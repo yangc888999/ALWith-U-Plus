@@ -25,6 +25,7 @@ import { stageNative as stageNativeGamepad } from "@alwith/native-gamepad/stage"
 import { stageNative as stageNativeInstalledApps } from "@alwith/native-installed-apps/stage"
 import { stageNative as stageNativeMobile } from "@alwith/native-mobile/stage"
 import { stageNative as stageNativeVoice } from "@alwith/native-voice/stage"
+import { stageNative as stageNativeEnterprise } from "@alwith/native-enterprise/stage"
 import { stageRuntime } from "@alwith/runtime/stage"
 import { $ } from "bun"
 
@@ -130,7 +131,8 @@ const nativeLibraries = [
   stageNativeGamepad,
   stageNativeComputer,
   stageNativeDrive,
-  stageNativeExtension
+  stageNativeExtension,
+  stageNativeEnterprise
 ].map((stage) => stage(triple, join(root, "src-tauri/resources/native"), licenses))
 if (triple.endsWith("apple-darwin") && process.env.APPLE_SIGNING_IDENTITY) {
   // A hardened application must load a library signed by the same team. Verify

@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
@@ -33,9 +34,26 @@ export function useProviders() {
       .catch((error: unknown) => {
         if (active) toast.error(String(error))
       })
+    // Enterprise login/logout changes the catalog without bumping the native provider revision,
+    // so the revision guard above must not filter these refreshes out. Outside Tauri (tests,
+    // Storybook) there is no event runtime; the catalog still loads, only live refresh is absent.
+    const stopEnterprise = listen("enterprise:models-changed", () => {
+      void loadProviders()
+        .then((value) => {
+          if (active) {
+            rememberNativeOverrides(value.builtInModels?.["openai"] ?? null)
+            setProviderSnapshot(value)
+            setSnapshot(value)
+          }
+        })
+        .catch((error: unknown) => {
+          if (active) toast.error(String(error))
+        })
+    }).catch(() => null)
     return () => {
       active = false
       void stop.then((fn) => fn())
+      void stopEnterprise.then((fn) => fn?.())
     }
   }, [])
   return snapshot

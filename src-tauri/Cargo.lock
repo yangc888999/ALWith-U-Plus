@@ -81,6 +81,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "alwith-enterprise-client"
+version = "0.6.2"
+dependencies = [
+ "alwith-native-client",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "alwith-extension"
 version = "0.1.0-rc.19"
 dependencies = [
@@ -160,6 +170,7 @@ dependencies = [
  "alwith-browser",
  "alwith-computer",
  "alwith-drive",
+ "alwith-enterprise-client",
  "alwith-extension",
  "alwith-fs",
  "alwith-gamepad",

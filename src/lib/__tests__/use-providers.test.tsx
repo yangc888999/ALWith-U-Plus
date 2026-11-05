@@ -35,8 +35,9 @@ for (const [eventRevision, readRevision, expectedRevision] of [
   test(`provider read ${readRevision} and event ${eventRevision} preserve the newest configuration`, async () => {
     let receive!: (event: events.Event<ProviderSnapshot>) => void
     let finish!: (value: ProviderSnapshot) => void
-    eventListen = vi.spyOn(events, "listen").mockImplementation((_event, callback) => {
-      receive = callback
+    eventListen = vi.spyOn(events, "listen").mockImplementation((event, callback) => {
+      // The hook also subscribes to enterprise:models-changed; only the providers event feeds `receive`.
+      if (event === providers.PROVIDERS_CHANGED) receive = callback
       return Promise.resolve(() => {})
     })
     providersRead = vi.spyOn(providers, "loadProviders").mockImplementation(

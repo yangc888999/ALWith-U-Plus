@@ -1,16 +1,50 @@
 {
-  "gpt-6.1-sol": { "shortLabel": "6.1-Sol" },
-  "gpt-6-astra": { "shortLabel": "6-Astra" },
-  "gpt-6-sol": { "shortLabel": "6-Sol" },
-  "gpt-6-luna": { "shortLabel": "6-Luna" },
-  "gpt-5.6-sol": { "shortLabel": "5.6-Sol" },
-  "gpt-5.6-terra": { "shortLabel": "5.6-Terra" },
-  "gpt-5.6-luna": { "shortLabel": "5.6-Luna" },
-  "claude-fable-5-1": { "shortLabel": "Fable 5.1" },
-  "claude-opus-5-5": { "shortLabel": "Opus 5.5" },
-  "claude-sonnet-5-5": { "shortLabel": "Sonnet 5.5" },
-  "gateway:hakimi:claude-fable-5-1": { "shortLabel": "Fable 5.1" },
-  "gateway:hakimi:claude-opus-5-5": { "shortLabel": "Opus 5.5" },
-  "gateway:hakimi:claude-sonnet-5-5": { "shortLabel": "Sonnet 5.5" },
-  "gateway:deepseek:deepseek-flash": { "shortLabel": "4.1-Flash" }
+  "gpt-6.1-sol": {
+    "shortLabel": "6.1-Sol"
+  },
+  "gpt-6-astra": {
+    "shortLabel": "6-Astra"
+  },
+  "gpt-6-sol": {
+    "shortLabel": "6-Sol"
+  },
+  "gpt-6-luna": {
+    "shortLabel": "6-Luna"
+  },
+  "gpt-5.6-sol": {
+    "shortLabel": "5.6-Sol"
+  },
+  "gpt-5.6-terra": {
+    "shortLabel": "5.6-Terra"
+  },
+  "gpt-5.6-luna": {
+    "shortLabel": "5.6-Luna"
+  },
+  "claude-fable-5-1": {
+    "shortLabel": "Fable 5.1"
+  },
+  "claude-opus-5-5": {
+    "shortLabel": "Opus 5.5"
+  },
+  "claude-sonnet-5-5": {
+    "shortLabel": "Sonnet 5.5"
+  },
+  "gateway:hakimi:claude-fable-5-1": {
+    "shortLabel": "Fable 5.1"
+  },
+  "gateway:hakimi:claude-opus-5-5": {
+    "shortLabel": "Opus 5.5"
+  },
+  "gateway:hakimi:claude-sonnet-5-5": {
+    "shortLabel": "Sonnet 5.5"
+  },
+  "gateway:deepseek:deepseek-flash": {
+    "shortLabel": "4.1-Flash"
+  },
+  "qwen4-max-preview": {
+    "shortLabel": "4-Max-Pre"
+  },
+  "gateway:qwen:qwen4-max-preview": {
+    "shortLabel": "4-Max-Pre"
+  }
 }

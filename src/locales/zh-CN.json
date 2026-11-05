@@ -1125,6 +1125,15 @@
     "label": "大模型",
     "active": "已提供 {{count}} 个模型，可在各聊天中选择。",
     "configured": "已配置",
+    "managed": {
+      "aliases": "模型别名",
+      "aliasHint": "为账户模型设置显示名称，模型标识保持不变。",
+      "saveAlias": "保存",
+      "resume": "使用所选模型继续",
+      "reselect": "请选择模型后继续对话，历史记录仍可查看。",
+      "description": "模型由当前登录的 ALwith U 账户提供。",
+      "topUp": "充值"
+    },
     "connectionSettings": "连接设置",
     "models": "可用模型",
     "editModels": "编辑 JSON",
@@ -2540,5 +2549,27 @@
     "didNotFinish": "操作没有完成",
     "surfaceOperationInProgress": "另一个窗口操作还在进行，请稍后再试",
     "handoffStalled": "上一步窗口操作没有响应，界面已恢复，请重试"
+  },
+  "device": {
+    "panel": {
+      "title": "iOS 模拟器",
+      "open": "显示模拟器",
+      "close": "隐藏模拟器"
+    }
+  },
+  "enterprise": {
+    "title": "企业登录",
+    "login": "登录 Finture",
+    "logout": "退出企业登录",
+    "cancel": "取消",
+    "authorized": "已授权",
+    "unknown": "状态未知",
+    "pending": "等待浏览器完成登录",
+    "checking": "正在检查企业授权",
+    "disabled": "企业网关未启用",
+    "signedOut": "未登录企业账号",
+    "accountHint": "这是 Finture 企业账号。退出企业登录不会退出 ALwith U 账号。",
+    "error": "企业授权状态获取或操作失败，请重试。",
+    "logoutHint": "退出后停止使用企业模型的会话，普通 ALwith 模型和自配模型不受影响。"
   }
 }

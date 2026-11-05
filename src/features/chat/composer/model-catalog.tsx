@@ -10,12 +10,15 @@ import {
   displayModelLabel,
   gatewayModelId,
   getProviderSnapshot,
+  isAccountModel,
   nativeCatalogStatus,
   nativeModelOverrides,
   servedNativeRows,
   providerGroups,
   PROVIDERS
 } from "@/lib/providers";
+
+import alwithLogo from "../../../../src-tauri/icons/32x32.png";
 
 import { ModelSettingsAction } from "./model-settings-action";
 
@@ -141,6 +144,7 @@ export function presentModelCatalog(groups: ModelGroup[]): ModelGroup[] {
         // and the bundled compact alias: the trigger used to keep showing "4.1-Flash" forever.
         const renamed = displayModelLabel(model.api_id)
         const label = stripGatewayPrefix(renamed ?? model.label)
+        const account = group.id === "litellm" || group.id === "finture-enterprise" || isAccountModel(model.api_id)
         return {
           ...model,
           // Menu rows render the catalog label, so the routing prefix has to go there as well.
@@ -156,6 +160,10 @@ export function presentModelCatalog(groups: ModelGroup[]): ModelGroup[] {
             >
               {native ? (
                 <img src={openaiLogo} alt="" className="dark:invert" />
+              ) : account ? (
+                // Account-owned models (ALwith LiteLLM, Finture enterprise) carry the app mark:
+                // they have no vendor entry in PROVIDERS and are not the user's own keys.
+                <img src={alwithLogo} alt="" className="size-4" />
               ) : provider ? (
                 // Keep each vendor's own mark: the picker's icon box already supplies the frame, and
                 // the brand colour is how the user recognises the provider at a glance.

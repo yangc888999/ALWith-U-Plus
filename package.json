@@ -111,7 +111,9 @@
     "y-protocols": "^1.0.7",
     "y-websocket": "^3.1.0",
     "yjs": "^13.6.33",
-    "zustand": "^5.0.16"
+    "zustand": "^5.0.16",
+    "@alwith/enterprise-client": "0.6.2",
+    "@alwith/native-enterprise": "0.6.2"
   },
   "devDependencies": {
     "@alwith/native-auth": "^0.1.2",

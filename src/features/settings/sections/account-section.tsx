@@ -11,6 +11,7 @@ import { AvatarPicker } from "@/features/profile/avatar-picker"
 import { saveProfileAvatar, saveProfileNickname } from "@/features/profile/profile-store"
 import { useDisplayProfile } from "@/features/profile/use-display-profile"
 
+import { EnterpriseSection } from "./enterprise-section"
 import { SettingRow, SettingsCard } from "./shared"
 
 export function AccountSection() {
@@ -113,6 +114,7 @@ export function AccountSection() {
           </span>
         </SettingRow>
       </SettingsCard>
+      <EnterpriseSection />
     </>
   )
 }

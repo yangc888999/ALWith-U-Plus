@@ -20,6 +20,7 @@ import { isTemporaryChatDir } from "@/lib/quick-chat"
 import { groupByDirectory } from "@/lib/groups"
 import { useHandoffBusy } from "@/lib/use-surface-operation"
 
+import { AccountModelRecovery } from "./composer/account-model-recovery"
 import { chatModelMenu } from "./composer/model-catalog"
 import { withoutWaitingForTurn } from "./composer/detach-submit"
 import { nativeAttachmentPolicy, NativeFileDrop } from "./composer/native-file-drop"
@@ -197,6 +198,8 @@ export function ChatComposer({
   // Registered by the in-composer bridge, which owns the attachment tray's `add` handle.
   const restoreAttachments = useRef<((content: acp.ContentBlock[]) => void) | null>(null)
   const sessionId = props.session.id
+  // An account-owned model that was revoked parks the chat read-only until a new model resumes it.
+  const accountRecovery = useStore(client.store, (state) => state.accountModelRecovery?.[props.session.id] ?? false)
   // A chat lives in the quick-chat folder; anything else is a project. `groupByDirectory` looked
   // right but only matches directories the reader registered as a group, so a normal project
   // folder fell through and lost its 分工 entry (2026-11-08).
@@ -287,6 +290,7 @@ export function ChatComposer({
   return (
     <div data-composer data-composer-mode={project === null ? "chat" : "project"} ref={shellRef} className="relative" onContextMenu={openMenu}>
       <ComposerResizeHandle shellRef={shellRef} />
+      {accountRecovery && <AccountModelRecovery key={props.session.id} session={props.session} />}
       <Composer
         modelMenu={chatModelMenu}
         {...props}

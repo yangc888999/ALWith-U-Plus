@@ -78,6 +78,10 @@
     ],
     "models": [
       {
+        "id": "qwen4-max-preview",
+        "label": "4 Max Preview"
+      },
+      {
         "id": "qwen3.8-max",
         "label": "3.8 Max"
       },

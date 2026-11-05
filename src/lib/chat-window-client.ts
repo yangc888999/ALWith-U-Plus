@@ -48,7 +48,8 @@ const METHODS = [
   "requestPrediction",
   "fuzzyFileSearch",
   "renameSession",
-  "delete"
+  "delete",
+  "resumeAccountModel"
 ] as const
 type Method = (typeof METHODS)[number]
 type Request = { connectionId: string; id: string; method: Method; args: unknown[] }
@@ -326,6 +327,7 @@ export class RemoteChatClient extends CodexClient {
       runStates: {},
       draftSessions: {},
       sessionWindows: {},
+      accountModelRecovery: {},
       configPending: {},
       drafts: {},
       sessionList: [],
@@ -367,6 +369,9 @@ export class RemoteChatClient extends CodexClient {
   }
   override prepareDraft(...args: Parameters<CodexClient["prepareDraft"]>): Promise<string> {
     return this.request("prepareDraft", args)
+  }
+  override resumeAccountModel(...args: Parameters<CodexClient["resumeAccountModel"]>): Promise<void> {
+    return this.request("resumeAccountModel", args)
   }
   override discardDraft(...args: Parameters<CodexClient["discardDraft"]>): Promise<void> {
     return this.request("discardDraft", args)

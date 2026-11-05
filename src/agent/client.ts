@@ -44,6 +44,7 @@ import {
   type SessionOperation,
   type SessionRequestOptions,
   type ListSessionsOptions,
+  type ReplayScope,
   type SessionSummary,
   type StateSetter
 } from "@alwith/api/client"
@@ -99,7 +100,7 @@ export type Launch = { engine: string; [key: string]: unknown }
 
 export type ClientOptions = BaseClientOptions & {
   /** Resolve a slot selection against the host's applied provider configuration. */
-  resolveModel?: (model: string | null) => Promise<string | null>
+  resolveModel?: (model: string | null, purpose: "session" | "draft") => Promise<string | null>
   /**
    * The effort a brand-new conversation starts on, or null for the model's own default.
    *
@@ -126,11 +127,16 @@ export type ClientOptions = BaseClientOptions & {
 export type DraftOwner = "main" | "chat"
 
 export type AppState = CodexClientState & {
+  /** Account revocation is independent of transient turn errors and mirrored to auxiliary windows. */
+  accountModelRecovery: Record<string, boolean>
   /** Window ownership survives switching the visible conversation; never persisted. */
   sessionWindows: Record<string, DraftOwner>
   /** Only drafts created by this connection are eligible for automatic cleanup. */
   draftSessions: Record<string, DraftOwner>
 }
+
+/** Stop reason published when an account-owned model was revoked and the chat needs a new pick. */
+const ACCOUNT_MODEL_REQUIRED = "account_model_required"
 
 /** `_meta.alwith.model`: open the thread on that gateway model (codex-acp-v2 catalog mode). */
 function modelHint(model: string | null): Record<string, unknown> | undefined {
@@ -299,9 +305,13 @@ export class CodexClient extends CodexAcpClient<AppState> {
     chat: null
   }
   private slotVersions: Record<DraftOwner, number> = { main: 0, chat: 0 }
+  private readonly draftDirectoryIntents = new Map<string, string | undefined>()
   private readonly draftOperations = new Map<DraftOwner, Promise<unknown>>()
   /** Attached session selections, retained for forks and event-stream repair only. */
   private readonly gatewayModels = new Map<string, string>()
+  /** Monotonic revocation/recovery counters so a stale recovery cannot clear a newer revocation. */
+  private readonly accountRevocations = new Map<string, number>()
+  private readonly accountRecoveries = new Map<string, number>()
   /**
    * Per-session model and effort, persisted across app restarts. The agent only keeps these in
    * memory (see `savedModels`/`slotModels`), so without this a conversation relaunched after a
@@ -345,7 +355,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     super(
       openPort,
       { info: { name: "alwith-u", version: "0.1.0" }, ...base },
-      { sessionWindows: {}, draftSessions: {} }
+      { sessionWindows: {}, draftSessions: {}, accountModelRecovery: {} }
     )
     this.resolveModelOption = resolveModel
     this.defaultEffortOption = defaultEffort
@@ -762,10 +772,12 @@ export class CodexClient extends CodexAcpClient<AppState> {
         owner === null ? undefined : { alwith: { draft: true } }
       )
     })
-    if (owner !== null)
+    if (owner !== null) {
+      this.draftDirectoryIntents.set(id, cwd)
       this.setApp((state) => ({
         draftSessions: { ...state.draftSessions, [id]: owner }
       }))
+    }
     this.noteModel(this.session(id))
     // The default effort lands before the caller confirms the selection, so it is persisted with
     // it instead of being overwritten by the model's own default a tick later.
@@ -2610,29 +2622,129 @@ export class CodexClient extends CodexAcpClient<AppState> {
     return next
   }
 
-  prepareDraft(owner: DraftOwner, cwd: string, model: string | null = null): Promise<string> {
+  /** A replay refused because the account model was revoked becomes a recovery card, not a crash. */
+  protected override async recoverReplay(
+    id: string,
+    cwd: string,
+    error: unknown,
+    scope: ReplayScope
+  ): Promise<boolean> {
+    const message = error instanceof Error ? error.message : String(error)
+    if (
+      !message.includes("The ALwith account changed") &&
+      !message.includes("The selected ALwith account model is unavailable")
+    )
+      return super.recoverReplay(id, cwd, error, scope)
+    await super.afterResume(id, cwd, scope)
+    scope.signal.throwIfAborted()
+    if (!this.current(scope) || !this.holds(id)) return true
+    this.accountRevocations.set(id, (this.accountRevocations.get(id) ?? 0) + 1)
+    this.setApp((state) => ({ accountModelRecovery: { ...state.accountModelRecovery, [id]: true } }))
+    this.publishSession({
+      ...this.session(id),
+      cwd,
+      attached: false,
+      restoring: false,
+      readOnly: true,
+      error: { stopReason: ACCOUNT_MODEL_REQUIRED, error: null, meta: null }
+    })
+    return true
+  }
+
+  /** Flag sessions whose account-owned model is no longer served so their surface offers a new pick. */
+  markAccountModelsUnavailable(ids: readonly string[]): void {
+    this.setApp((state) => ({
+      accountModelRecovery: { ...state.accountModelRecovery, ...Object.fromEntries(ids.map((id) => [id, true])) }
+    }))
+    for (const id of ids) {
+      this.accountRevocations.set(id, (this.accountRevocations.get(id) ?? 0) + 1)
+      if (!this.holds(id)) continue
+      this.publishSession({
+        ...this.session(id),
+        attached: false,
+        readOnly: true,
+        error: { stopReason: ACCOUNT_MODEL_REQUIRED, error: null, meta: null }
+      })
+    }
+  }
+
+  /** Explicit recovery is separate from the automatic model hints used by normal history replay. */
+  async resumeAccountModel(id: string, model: string | null): Promise<void> {
+    const session = this.session(id)
+    if (!this.state.accountModelRecovery[id]) throw new Error("Account model recovery is not required")
+    const revision = this.accountRevocations.get(id) ?? 0
+    let selected = model === null ? null : await this.resolveModel(model)
+    if (selected === null) {
+      // Ask the engine for its current native default; never hard-code a model or inherit a gateway.
+      const draft = await super.newSession(session.cwd, { draft: true })
+      try {
+        selected = selectedModel(this.session(draft).configOptions)
+        if (!selected || selected.startsWith("gateway:")) throw new Error("Native model is unavailable")
+      } finally {
+        await super.discardDraft(draft)
+      }
+    }
+    if ((this.accountRevocations.get(id) ?? 0) !== revision)
+      throw new Error("ALwith account changed during model selection")
+    this.accountRecoveries.set(id, revision)
+    try {
+      await this.replay(id, session.cwd, { meta: { alwith: { model: selected, accountModelSelection: true } } })
+    } finally {
+      this.accountRecoveries.delete(id)
+    }
+    if ((this.accountRevocations.get(id) ?? 0) !== revision)
+      throw new Error("ALwith account changed during model selection")
+    const resumed = this.session(id)
+    if (!resumed.attached || resumed.readOnly)
+      throw new Error(resumed.error?.error?.message ?? "Cannot resume this conversation")
+    this.accountRevocations.delete(id)
+    this.setApp((state) => {
+      const { [id]: _revoked, ...accountModelRecovery } = state.accountModelRecovery
+      return { accountModelRecovery }
+    })
+    this.confirmModel(this.state.sessionWindows[id] ?? "main", resumed)
+  }
+
+  prepareDraft(
+    owner: DraftOwner,
+    cwd: string,
+    model: string | null = null,
+    nativeDefault = false
+  ): Promise<string> {
     const version = ++this.slotVersions[owner]
     return this.changeDraft([owner], async () => {
       const existing = Object.keys(this.state.draftSessions).find((id) => this.state.draftSessions[id] === owner)
       if (existing) await this.lifecycle.admission.pending(existing)
+      // The caller's explicit pick wins; a brand-new draft prefers the configured default model
+      // over the previous conversation's model, then the slot's saved selection. Without the
+      // default here the inherited model silently overrode it and new chats opened on whatever
+      // came before.
+      const inherited =
+        model ??
+        (existing
+          ? selectedModel(this.session(existing).configOptions)
+          : (this.defaultModelOption?.() ?? this.savedModels[owner] ?? this.slotModels[owner]))
+      // Only an inherited, unsent selection may move to the currently available default.
+      const resolved = nativeDefault ? null : await this.resolveModel(inherited, model === null ? "draft" : "session")
       if (
         existing &&
         this.session(existing).cwd === cwd &&
-        (model === null || selectedModel(this.session(existing).configOptions) === model)
+        (!this.draftDirectoryIntents.has(existing) || this.draftDirectoryIntents.get(existing) === cwd) &&
+        !nativeDefault &&
+        !this.state.accountModelRecovery[existing] &&
+        (resolved === null
+          ? !selectedModel(this.session(existing).configOptions)?.startsWith("gateway:")
+          : selectedModel(this.session(existing).configOptions) === resolved)
       ) {
         this.activateSlot(owner, existing, version)
         if (!this.session(existing).attached) await this.replayForOwner(existing, cwd, owner)
         if (model !== null) this.confirmModel(owner, this.session(existing))
         return existing
       }
-      // The caller's explicit pick wins; otherwise a brand-new draft prefers the configured
-      // default model and only falls back to the model the previous conversation used. Without
-      // this the inherited model silently overrode the default and new chats kept opening on
-      // whatever came before.
-      const inherited = existing
-        ? selectedModel(this.session(existing).configOptions)
-        : (this.defaultModelOption?.() ?? this.savedModels[owner] ?? this.slotModels[owner])
-      const id = await this.createNativeSession(cwd, await this.resolveModel(model ?? inherited), owner)
+      // Inherit the confirmed model, including a change already requested by this surface. A
+      // failed change must not silently create a draft on the old model. Prepare the replacement
+      // before retiring the previous draft: failures preserve the user's input.
+      const id = await this.createNativeSession(cwd, resolved, owner)
       try {
         // An unsent model change starts directly on the target provider. Resuming
         // the default-model thread creates a misleading model-change warning.
@@ -2658,7 +2770,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
         throw error
       }
       this.activateSlot(owner, id, version)
-      if (model !== null) this.confirmModel(owner, this.session(id))
+      if (model !== null || nativeDefault || (inherited !== null && inherited !== resolved))
+        this.confirmModel(owner, this.session(id))
       return id
     })
   }
@@ -2693,6 +2806,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
 
   protected override onDraftMaterialized(id: string): void {
     super.onDraftMaterialized(id)
+    this.draftDirectoryIntents.delete(id)
     this.setApp((state) => {
       const { [id]: _draft, ...draftSessions } = state.draftSessions
       return { draftSessions }
@@ -2702,11 +2816,15 @@ export class CodexClient extends CodexAcpClient<AppState> {
 
   protected override onSessionDropped(id: string): void {
     super.onSessionDropped(id)
+    this.draftDirectoryIntents.delete(id)
     this.gatewayModels.delete(id)
+    this.accountRevocations.delete(id)
+    this.accountRecoveries.delete(id)
     this.setApp((state) => {
       const { [id]: _draft, ...draftSessions } = state.draftSessions
       const { [id]: _window, ...sessionWindows } = state.sessionWindows
-      return { draftSessions, sessionWindows }
+      const { [id]: _revoked, ...accountModelRecovery } = state.accountModelRecovery
+      return { draftSessions, sessionWindows, accountModelRecovery }
     })
   }
 
@@ -2748,6 +2866,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
 
   protected override onReplayed(id: string, response: acp.ResumeSessionResponse): void {
     super.onReplayed(id, response)
+    const revoked = this.accountRevocations.get(id)
+    if (revoked !== undefined && this.accountRecoveries.get(id) !== revoked) this.markAccountModelsUnavailable([id])
     this.noteModel(this.session(id))
   }
 
@@ -2766,6 +2886,15 @@ export class CodexClient extends CodexAcpClient<AppState> {
 
   protected override onSessionChanged(session: Session): void {
     super.onSessionChanged(session)
+    const revoked = this.accountRevocations.get(session.id)
+    if (
+      revoked !== undefined &&
+      this.accountRecoveries.get(session.id) !== revoked &&
+      (session.attached || !session.readOnly)
+    ) {
+      this.publishSession({ ...session, attached: false, readOnly: true })
+      return
+    }
     this.followModel("main", session)
     this.followModel("chat", session)
   }
@@ -2831,8 +2960,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
     for (const listener of this.confirmedModelListeners) listener(owner, model)
   }
 
-  private resolveModel(model: string | null): Promise<string | null> {
-    return this.resolveModelOption ? this.resolveModelOption(model) : Promise.resolve(model)
+  private resolveModel(model: string | null, purpose: "session" | "draft" = "session"): Promise<string | null> {
+    return this.resolveModelOption ? this.resolveModelOption(model, purpose) : Promise.resolve(model)
   }
 
   onSessionModel(listener: SessionModelListener): () => void {

@@ -20,6 +20,7 @@ mod computer;
 mod draft_directory;
 mod drive;
 mod drive_guard;
+mod enterprise;
 mod extension_capabilities;
 mod extension_inbox;
 mod extension_wire;
@@ -70,6 +71,7 @@ pub fn run() {
     let context = application_context();
 
     let builder = tauri::Builder::default()
+        .manage(enterprise::Enterprise::default())
         .register_asynchronous_uri_scheme_protocol("preview-html", html_preview::handle_protocol)
         .runtime(tauri_runtime_wry::Wry::default())
         // Second launch: focus the running instance instead of starting a second alwith-runtime
@@ -517,6 +519,15 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 providers::managed::providers_account_bind,
                 providers::managed::providers_refresh_managed,
                 providers::managed::providers_clear_managed,
+                enterprise::enterprise_bind,
+                enterprise::enterprise_refresh,
+                enterprise::enterprise_catalog,
+                enterprise::enterprise_clear,
+                enterprise::enterprise_status,
+                enterprise::enterprise_begin,
+                enterprise::enterprise_cancel,
+                enterprise::enterprise_update_account,
+                enterprise::enterprise_logout,
                 updater::commands::updater_get_state,
                 updater::commands::updater_install_and_relaunch,
                 window::attach_window_to_main,

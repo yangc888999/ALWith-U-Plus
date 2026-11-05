@@ -31,11 +31,6 @@ import { DraftProjectPicker } from "./draft-project-picker"
 
 export const DRAFT_SESSION_ID = "draft"
 
-function isAuthError(error: unknown): boolean {
-  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === -32000
-}
-
-/** 静默期内的重试预算：引擎冷启动 + config 自愈通常 1–3 秒，给到 8 轮足够覆盖，又不会无限拉进程。 */
 /** How long a startup-class failure keeps retrying before it is allowed on screen.
  *
  *  This used to be a *count* (`STARTUP_RECOVERY_LIMIT = 8`), which bottoms out at roughly
@@ -349,14 +344,19 @@ export function DraftChat({
             <Button variant="outline" size="sm" onClick={() => setAttempt((value) => value + 1)}>
               {t("actions.retry")}
             </Button>
-            {isAuthError(error) && (
-              <>
-                <Button variant="outline" size="sm" onClick={onAuthRequired}>
-                  {t("chat.draft.configureProvider")}
-                </Button>
-                <DraftModelSelect snapshot={providerSnapshot} model={model} onChange={setModel} />
-              </>
-            )}
+            <>
+              <Button variant="outline" size="sm" onClick={onAuthRequired}>
+                {t("chat.draft.configureProvider")}
+              </Button>
+              <DraftModelSelect
+                snapshot={providerSnapshot}
+                model={model}
+                onChange={(value) => {
+                  setPreparing(true)
+                  setModel(value)
+                }}
+              />
+            </>
           </div>
         )}
         {id !== null && <SessionActions sessionId={id} />}

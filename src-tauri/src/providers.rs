@@ -449,6 +449,10 @@ fn inferred_reasoning_levels(api_id: &str, label: &str) -> Option<(&'static [&'s
         // Qwen's own Codex catalogue for 3.8 publishes three levels and defaults to `xhigh`;
         // `none` is added because the endpoint accepts it and it genuinely disables thinking.
         Some((&["none", "low", "medium", "xhigh"], "xhigh"))
+    } else if hint.contains("qwen4") || hint.contains("qwen-4") || hint.contains("qwen 4") {
+        // Qwen4 preview (e.g. qwen4-max-preview) accepts none/low/medium/high/xhigh/max on the
+        // Responses endpoint (all verified 200) and defaults to `high`; `minimal` is not published.
+        Some((&["none", "low", "medium", "high", "xhigh", "max"], "high"))
     } else if hint.contains("qwen") {
         // 3.7 and earlier publish the full ladder. Verified against the Responses endpoint:
         // none/minimal/low/medium/high/xhigh/max all answer 200, and `none` reports zero
@@ -2413,6 +2417,13 @@ mod tests {
         };
         for (label, api_id, levels, default) in [
             ("Qwen 3.8 Flash", "qwen3.8-flash", vec!["none", "low", "medium", "xhigh"], "xhigh"),
+            // Qwen4 preview accepts none/low/medium/high/xhigh/max (verified 200) and defaults high.
+            (
+                "4 Max Preview",
+                "qwen4-max-preview",
+                vec!["none", "low", "medium", "high", "xhigh", "max"],
+                "high",
+            ),
             // 3.7 and earlier publish the full ladder; `none` disables thinking for real.
             (
                 "Qwen 3.7 Max",

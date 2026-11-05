@@ -125,6 +125,9 @@ pub fn prevent_exit(app: &AppHandle, code: Option<i32>) -> bool {
                 if let Err(error) = crate::mobile::shutdown().await {
                     log::error!("Mobile shutdown failed: {error}");
                 }
+                if let Err(reason) = app.state::<crate::enterprise::Enterprise>().close().await {
+                    log::error!("Enterprise shutdown failed: {reason}");
+                }
                 app.state::<RuntimeState>().shutdown().await;
             };
             if tokio::time::timeout(std::time::Duration::from_secs(5), drain).await.is_err() {
@@ -354,6 +357,7 @@ pub async fn runtime_start(
     let mut events = client.events();
     *state.client.lock().unwrap() = Some(Arc::clone(&client));
     app.state::<crate::providers::Providers>().reset().await;
+    crate::enterprise::reset(&app);
     let identity = Arc::downgrade(&client);
     tauri::async_runtime::spawn(async move {
         // Every emit is one script evaluation on the app's main thread. A session replay
@@ -400,6 +404,7 @@ pub async fn runtime_start(
                         if private_request(line) => {}
                     ClientEvent::Runtime(event) => {
                         crate::providers::managed::observe_event(&app, &event);
+                        crate::enterprise::observe_event(&app, &event);
                         crate::mobile::publish(&event);
                         if matches!(&event, alwith_api::RuntimeEvent::Exit { agent_id } if agent_id == "codex")
                             && let Err(error) = app.state::<alwith_computer::ComputerHost>().stop_current().await
@@ -514,15 +519,38 @@ pub async fn runtime_send(
     // The account-managed provider pins each session to the generation it was admitted under, so a
     // logout or account switch cannot silently re-route a conversation that is already running.
     let generation = crate::providers::managed::check(window.app_handle(), &request.method, request.params.as_ref())?;
+    crate::enterprise::check(window.app_handle(), &request.method, request.params.as_ref())?;
+    if crate::enterprise::uses_enterprise(window.app_handle(), &request.method, request.params.as_ref()) {
+        let agent = request.params.as_ref().and_then(|params| params["agentId"].as_str()).unwrap_or("codex");
+        crate::enterprise::apply(window.app_handle(), &client, agent).await?;
+    }
+    let enterprise_generation =
+        crate::enterprise::check(window.app_handle(), &request.method, request.params.as_ref())?;
+    let initialized_agent = initialization_agent(&request).map(str::to_owned);
     let original = request.params.clone();
     let outcome = client.request(&request.method, request.params).await;
+    if let (Some(agent), Ok(_)) = (initialized_agent.as_deref(), &outcome) {
+        crate::enterprise::ready(window.app_handle(), agent);
+        let _configuration = state.admission.lock().await;
+        if let Err(reason) = crate::enterprise::apply(window.app_handle(), &client, agent).await {
+            log::warn!("Enterprise route initialization deferred: {reason}");
+        }
+    }
     if let (Some(params), Ok(value)) = (&original, &outcome) {
         crate::providers::managed::observe_realtime(window.app_handle(), &request.method, params);
+        crate::enterprise::observe_realtime(window.app_handle(), &request.method, params);
         let body = if request.method == "acpRequest" { &params["params"] } else { params };
         if let Some(session) = value["sessionId"].as_str().or_else(|| body["sessionId"].as_str()) {
             let agent = params["agentId"].as_str().unwrap_or("codex");
             let confirmed = crate::providers::managed::confirms_model(&request.method, params).then_some(generation);
             crate::providers::managed::observe(window.app_handle(), agent, session, value, confirmed);
+            crate::enterprise::observe(
+                window.app_handle(),
+                agent,
+                session,
+                value,
+                confirmed.map(|_| enterprise_generation),
+            );
         }
     }
     if !state.owns(&client) {

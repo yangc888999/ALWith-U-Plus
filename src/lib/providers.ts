@@ -29,6 +29,12 @@ import { QwenLogo } from "@/components/icons/qwen-logo"
 
 import catalog from "./provider-catalog.json"
 import { defaultModelChoice } from "./default-model"
+import {
+  ENTERPRISE_PROVIDER_PREFIX,
+  enterpriseCatalog,
+  isEnterpriseModel,
+  projectEnterpriseProviders
+} from "@/features/auth/enterprise-providers"
 
 export type { CustomModel } from "@/bindings"
 export type ProviderKey = Metadata
@@ -196,7 +202,12 @@ export function providerGroups(
   snapshot: ProviderSnapshot
 ): Array<{ id: string; name: string; models: GatewayModel[] }> {
   return [
-    ...PROVIDERS.filter((provider) => snapshot.providers[provider.id] !== undefined).map((provider) => {
+    // A closed provider keeps its key and metadata (disabled=true) but must leave every picker and
+    // fallback: the engine catalog already drops it, so offering it here only yields rejected picks.
+    ...PROVIDERS.filter((provider) => {
+      const meta = snapshot.providers[provider.id]
+      return meta !== undefined && meta.disabled !== true
+    }).map((provider) => {
       const overridden = snapshot.builtInModels?.[provider.id]
       return {
         id: provider.id,
@@ -240,12 +251,31 @@ export function gatewayModelId(providerId: string, modelId: string): string {
   return `gateway:${encodeURIComponent(runtimeId)}:${encodeURIComponent(modelId)}`
 }
 
+/** Account-owned models: the ALwith account catalog (litellm) and the Finture enterprise gateway. */
+export function isAccountModel(model: string | null | undefined): boolean {
+  return (!!model && model.startsWith("gateway:litellm:")) || isEnterpriseModel(model)
+}
+
 /** Desktop's default selection prefers a user-configured provider; native defaults stay engine-owned. */
-export function resolveSessionModel(model: string | null, snapshot: ProviderSnapshot): string | null {
+export function resolveSessionModel(
+  model: string | null,
+  snapshot: ProviderSnapshot,
+  purpose: "session" | "draft" = "session"
+): string | null {
   const models = providerGroups(snapshot).flatMap((group) =>
     group.models.map((entry) => gatewayModelId(group.id, entry.id))
   )
+  if (model?.startsWith("gateway:finture-enterprise:")) {
+    const apiId = model.slice("gateway:finture-enterprise:".length)
+    const migrated = (snapshot.managedProviders ?? [])
+      .filter((provider) => provider.id.startsWith(ENTERPRISE_PROVIDER_PREFIX))
+      .flatMap((provider) => provider.models.map((entry) => gatewayModelId(provider.id, entry.api_id)))
+      .find((candidate) => candidate.endsWith(`:${apiId}`))
+    if (migrated) return migrated
+  }
   if (model !== null && (!model.startsWith("gateway:") || models.includes(model))) return model
+  if (isAccountModel(model) && purpose === "session")
+    throw new Error("The selected ALwith account model is unavailable. Select another model before sending.")
   return models.find((entry) => entry === gatewayModelId(DEFAULT_PROVIDER_ID, DEFAULT_MODEL_ID)) ?? models[0] ?? null
 }
 
@@ -277,14 +307,20 @@ export function providerKeyUrl(provider: Provider, regionId: string | null | und
   return providerRegion(provider, regionId)?.keyUrl ?? provider.keyUrl ?? null
 }
 
+/** Enterprise metadata joins every snapshot; relay credentials stay in native memory. */
+async function withEnterpriseCatalog(snapshot: ProviderSnapshot): Promise<ProviderSnapshot> {
+  return projectEnterpriseProviders(snapshot, enterpriseCatalog(await commands.enterpriseCatalog()))
+}
+
 export function loadProviders(): Promise<ProviderSnapshot> {
-  return commands.providersRead().then((snapshot) => {
-    setProviderSnapshot(snapshot)
-    return snapshot
+  return commands.providersRead().then(async (snapshot) => {
+    const projected = await withEnterpriseCatalog(snapshot)
+    setProviderSnapshot(projected)
+    return projected
   })
 }
 function applyProviders(): Promise<ProviderSnapshot> {
-  return commands.providersApply()
+  return commands.providersApply().then(withEnterpriseCatalog)
 }
 
 /**
@@ -332,13 +368,13 @@ export function saveProviderKey(
   providerId: string,
   input: ProviderInput | null
 ): Promise<ProviderSnapshot> {
-  return commands.providersSave({ providerId, input, expectedRevision: revision })
+  return commands.providersSave({ providerId, input, expectedRevision: revision }).then(withEnterpriseCatalog)
 }
 export function saveCustomProvider(revision: number, input: CustomProviderInput): Promise<ProviderSnapshot> {
-  return commands.providersSaveCustom({ input, expectedRevision: revision })
+  return commands.providersSaveCustom({ input, expectedRevision: revision }).then(withEnterpriseCatalog)
 }
 export function removeCustomProvider(revision: number, providerId: string): Promise<ProviderSnapshot> {
-  return commands.providersRemoveCustom({ providerId, expectedRevision: revision })
+  return commands.providersRemoveCustom({ providerId, expectedRevision: revision }).then(withEnterpriseCatalog)
 }
 export function testProvider(providerId: string): Promise<ProviderTestResult> {
   return commands.providersTest({ providerId })
@@ -617,7 +653,7 @@ export function saveBuiltInModels(
     if (model.enabled != null) entry.enabled = model.enabled
     return entry
   })
-  return commands.providersSaveBuiltInModels({ providerId, models: serialized, expectedRevision: revision })
+  return commands.providersSaveBuiltInModels({ providerId, models: serialized, expectedRevision: revision }).then(withEnterpriseCatalog)
 }
 
 export const PROVIDERS_CHANGED = events["providers:changed"].name

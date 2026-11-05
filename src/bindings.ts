@@ -350,6 +350,11 @@ export const commands = {
   driveGuardNoteWrite: (args: { path: string }): Promise<null> => __t3Invoke<null>("drive_guard_note_write", args),
   /**
    *  One scan pass over every indexed Drive root. Cheap when the switch is off: it returns at once.
+   *
+   *  Restores are written inside `DriveService::with_filesystem`, the same transaction every save
+   *  from the editor uses. That ordering matters: the daemon is told which path is about to change,
+   *  so the restored bytes are uploaded as a normal local edit instead of being seen as an outside
+   *  change and answered with a conflict copy.
    */
   driveGuardScan: (): Promise<ScanReport> => __t3Invoke<ScanReport>("drive_guard_scan"),
   skillsList: (): Promise<SkillEntry[]> => __t3Invoke<SkillEntry[]>("skills_list"),
@@ -671,6 +676,18 @@ export const commands = {
   providersRefreshManaged: (args: { generation: number; accessToken: string }): Promise<Snapshot_Serialize> =>
     __t3Invoke<Snapshot_Serialize>("providers_refresh_managed", args),
   providersClearManaged: (): Promise<null> => __t3Invoke<null>("providers_clear_managed"),
+  enterpriseBind: (args: { account: Account }): Promise<number> => __t3Invoke<number>("enterprise_bind", args),
+  enterpriseRefresh: (args: { account: Account; generation: number; accessToken: string }): Promise<Value> =>
+    __t3Invoke<Value>("enterprise_refresh", args),
+  enterpriseCatalog: (): Promise<Value> => __t3Invoke<Value>("enterprise_catalog"),
+  enterpriseClear: (): Promise<null> => __t3Invoke<null>("enterprise_clear"),
+  enterpriseStatus: (): Promise<Value> => __t3Invoke<Value>("enterprise_status"),
+  enterpriseBegin: (args: { generation: number }): Promise<Value> => __t3Invoke<Value>("enterprise_begin", args),
+  enterpriseCancel: (args: { generation: number; state: string }): Promise<null> =>
+    __t3Invoke<null>("enterprise_cancel", args),
+  enterpriseUpdateAccount: (args: { generation: number; requestId: string; accessToken: string }): Promise<null> =>
+    __t3Invoke<null>("enterprise_update_account", args),
+  enterpriseLogout: (args: { generation: number }): Promise<null> => __t3Invoke<null>("enterprise_logout", args),
   updaterGetState: (): Promise<State_Serialize> => __t3Invoke<State_Serialize>("updater_get_state"),
   updaterInstallAndRelaunch: (): Promise<null> => __t3Invoke<null>("updater_install_and_relaunch"),
   /**
@@ -863,6 +880,15 @@ export type CommandErrors = {
   providersAccountBind: string
   providersRefreshManaged: Value
   providersClearManaged: string
+  enterpriseBind: Value
+  enterpriseRefresh: Value
+  enterpriseCatalog: never
+  enterpriseClear: Value
+  enterpriseStatus: Value
+  enterpriseBegin: Value
+  enterpriseCancel: Value
+  enterpriseUpdateAccount: Value
+  enterpriseLogout: Value
   updaterGetState: null
   updaterInstallAndRelaunch: string
   attachWindowToMain: string
