@@ -2055,6 +2055,7 @@
     "driveEntryGone": "选中的云盘文件已经不在了（可能被删除或移动）。",
     "driveInvalidResponse": "云盘返回的数据不对（可能是版本不匹配）。重试一次；如果一直这样，重启应用。",
     "aborted": "操作已取消。",
+    "requestCanceled": "请求超时被取消了：多半是连不上账号服务（api.alwith.ai），公司网络外访问不了。换到公司网络再试。",
     "chatWindowNoResponse": "聊天浮窗没有响应，请重试。",
     "chatWindowInitFailed": "聊天浮窗启动失败，请重试。",
     "chatWindowNotReady": "聊天浮窗还没有准备好，请稍后再试。",

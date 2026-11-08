@@ -2054,6 +2054,7 @@
     "driveEntryGone": "The selected Drive entry is no longer there — it may have been deleted or moved.",
     "driveInvalidResponse": "Drive returned data this build does not understand (likely a version mismatch). Retry; if it persists, restart the app.",
     "aborted": "The operation was cancelled.",
+    "requestCanceled": "The request timed out and was cancelled — most likely the account service (api.alwith.ai) is unreachable, which happens outside the company network. Retry on that network.",
     "chatWindowNoResponse": "The chat window did not respond. Try again.",
     "chatWindowInitFailed": "The chat window failed to start. Try again.",
     "chatWindowNotReady": "The chat window is not ready yet. Try again in a moment.",

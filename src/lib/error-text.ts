@@ -160,6 +160,14 @@ const RULES: Rule[] = [
     key: "error.aborted"
   },
   {
+    // Tauri's HTTP plugin reports a cancelled request with this exact lowercase sentence when its
+    // Rust side drops the future — which is what `AbortSignal.timeout(30_000)` produces once the
+    // account service does not answer. The DOM `AbortError` rule above never sees it, so sign-in
+    // showed "request canceled" after half a minute of waiting (2026-11-08).
+    match: /request cancel?led/i,
+    key: "error.requestCanceled"
+  },
+  {
     match: /Chat window did not respond/i,
     key: "error.chatWindowNoResponse"
   },

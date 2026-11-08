@@ -88,6 +88,9 @@ test("Drive and abort failures are localized instead of leaking English", async 
   expect(drive).toContain("Drive")
   expect(drive).not.toContain("Attach to a compatible")
   expect(describeError(new Error("The operation was aborted."))).toBe("操作已取消。")
+  // Tauri's HTTP plugin says this instead of throwing a DOMException. It reached sign-in verbatim
+  // after `AbortSignal.timeout(30_000)` gave up on an unreachable account service (2026-11-08).
+  expect(describeError(new Error("request canceled"))).toContain("账号服务")
   expect(describeError(new Error("Chat window did not respond"))).toBe("聊天浮窗没有响应，请重试。")
 })
 
