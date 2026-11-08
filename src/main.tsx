@@ -37,6 +37,7 @@ import { bootstrapSettings } from "@/lib/settings-store"
 import { hydrateZoom } from "@/lib/zoom"
 import { startZoomViewport } from "@/lib/zoom-viewport"
 import "./index.css"
+import { primeQuickChatRoot } from "@/lib/quick-chat"
 
 // Install before anything can toast: early startup rejections were the last raw-English path.
 installToastErrorLocalization()
@@ -201,6 +202,9 @@ async function bootstrap(): Promise<void> {
   void startPreferenceSync()
   const root = document.getElementById("root")
   if (!root) throw new Error("index.html has no #root")
+  // Cache the quick-chat root before the first render decides what a chat is.
+  void primeQuickChatRoot()
+
   createRoot(root).render(
     <StrictMode>
       <AppDirectionProvider>

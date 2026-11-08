@@ -564,6 +564,22 @@ export const commands = {
    */
   quickChatDirectory: (): Promise<string> => __t3Invoke<string>("quick_chat_directory"),
   /**
+   *  A fresh folder for one temporary chat: `<quick-chat>/Chat/<stamp>/`.
+   *
+   *  Chats used to share one directory, so their memory and any files they produced all landed in the
+   *  same place and could not be removed together. One folder per conversation lets the whole thing
+   *  go when the conversation is deleted. The stamp comes from the frontend because the native side
+   *  cannot cheaply format the local timezone.
+   */
+  newChatDirectory: (args: { stamp: string }): Promise<string> => __t3Invoke<string>("new_chat_directory", args),
+  /**
+   *  Removes a temporary chat's own folder when the conversation is deleted.
+   *
+   *  Guarded on purpose: the path must sit under `<quick-chat>/Chat/`, so a malformed or hostile
+   *  caller cannot point this at a project (or anywhere else).
+   */
+  deleteChatDirectory: (args: { path: string }): Promise<null> => __t3Invoke<null>("delete_chat_directory", args),
+  /**
    *  Native folder picker for "new project": the chosen directory becomes a project.
    */
   pickProjectDirectory: (): Promise<string | null> => __t3Invoke<string | null>("pick_project_directory"),
@@ -787,6 +803,8 @@ export type CommandErrors = {
   restartApp: never
   appendDiagnostic: string
   quickChatDirectory: string
+  newChatDirectory: string
+  deleteChatDirectory: string
   pickProjectDirectory: string
   codexCheckEngineUpdate: string
   codexInstallEngineUpdate: string

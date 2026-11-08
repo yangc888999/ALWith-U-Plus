@@ -14,13 +14,13 @@ import type { VoiceResume } from "@/features/voice/use-voice-handoff"
 import { VoiceButton } from "@/features/voice/voice-button"
 import { ActivePreviewChip } from "@/features/workspace/active-preview-chip"
 import { client } from "@/lib/client"
+import { isTemporaryChatDir } from "@/lib/quick-chat"
 import { groupByDirectory } from "@/lib/groups"
 
 import { chatModelMenu } from "./composer/model-catalog"
 import { withoutWaitingForTurn } from "./composer/detach-submit"
 import { nativeAttachmentPolicy, NativeFileDrop } from "./composer/native-file-drop"
 import { OrchestrationControl } from "./composer/orchestration-control"
-import { isQuickChatDirectory } from "@alwith/module-chat/session-list"
 import { PendingModelChip } from "./composer/pending-model-chip"
 import { predictionPreference } from "./composer/prediction-preference"
 import { QueuedPromptChip } from "./composer/queued-prompt-chip"
@@ -170,7 +170,7 @@ export function ChatComposer({
   // A chat lives in the quick-chat folder; anything else is a project. `groupByDirectory` looked
   // right but only matches directories the reader registered as a group, so a normal project
   // folder fell through and lost its 分工 entry (2026-11-08).
-  const project = isQuickChatDirectory(props.session.cwd ?? "") ? null : props.session.cwd
+  const project = isTemporaryChatDir(props.session.cwd) ? null : props.session.cwd
   /**
    * Hands the send to the background instead of awaiting it.
    *

@@ -457,6 +457,8 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 session_origin::restart_app,
                 session_origin::append_diagnostic,
                 skills::quick_chat_directory,
+                skills::new_chat_directory,
+                skills::delete_chat_directory,
                 skills::pick_project_directory,
                 codex_update::codex_check_engine_update,
                 codex_update::codex_install_engine_update,

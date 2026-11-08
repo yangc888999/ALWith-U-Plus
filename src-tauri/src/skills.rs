@@ -230,6 +230,37 @@ pub fn quick_chat_directory() -> Result<String, String> {
     Ok(directory.to_string_lossy().to_string())
 }
 
+/// A fresh folder for one temporary chat: `<quick-chat>/Chat/<stamp>/`.
+///
+/// Chats used to share one directory, so their memory and any files they produced all landed in the
+/// same place and could not be removed together. One folder per conversation lets the whole thing
+/// go when the conversation is deleted. The stamp comes from the frontend because the native side
+/// cannot cheaply format the local timezone.
+#[tauri3_specta::command]
+pub fn new_chat_directory(stamp: String) -> Result<String, String> {
+    let base = quick_chat_directory()?;
+    let directory = std::path::PathBuf::from(base).join("Chat").join(&stamp);
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    Ok(directory.to_string_lossy().to_string())
+}
+
+/// Removes a temporary chat's own folder when the conversation is deleted.
+///
+/// Guarded on purpose: the path must sit under `<quick-chat>/Chat/`, so a malformed or hostile
+/// caller cannot point this at a project (or anywhere else).
+#[tauri3_specta::command]
+pub fn delete_chat_directory(path: String) -> Result<(), String> {
+    let base = std::path::PathBuf::from(quick_chat_directory()?).join("Chat");
+    let target = std::path::PathBuf::from(&path);
+    if !target.starts_with(&base) {
+        return Err(format!("refusing to delete outside {}", base.display()));
+    }
+    if !target.exists() {
+        return Ok(());
+    }
+    std::fs::remove_dir_all(&target).map_err(|error| error.to_string())
+}
+
 /// Native folder picker for "new project": the chosen directory becomes a project.
 #[tauri3_specta::command]
 pub fn pick_project_directory() -> Result<Option<String>, String> {

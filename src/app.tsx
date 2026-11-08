@@ -56,6 +56,7 @@ import { patchRunRecord, setTaskMonitorSession } from "@/features/automation/tas
 import type { OnRunTask } from "@/features/automation/types"
 import { useVoiceHandoff } from "@/features/voice/use-voice-handoff"
 import { WorkspaceHeaderContext } from "@/features/workspace/context"
+import { createChatDirectory, isTemporaryChatDir } from "@/lib/quick-chat"
 import { FileWorkspace } from "@/features/workspace/file-workspace"
 import { useFourColumnsDefault } from "@/features/workspace/four-columns-preference"
 import { closeOnlineBiWindow } from "@/features/workspace/online-bi"
@@ -444,7 +445,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
 
   // A temporary chat lives in the quick-chat folder: no file tree, no preview by default.
   const currentDirectory = session?.cwd ?? lastDirectory
-  const isTemporaryChat = currentDirectory !== null && isQuickChatDirectory(currentDirectory)
+  const isTemporaryChat = isTemporaryChatDir(currentDirectory)
   // Projects open four columns wide unless 设置 → 主题和外观 → 界面布局 says otherwise. A temporary
   // chat is two columns regardless: it has no project behind it to preview.
   const fourColumnsDefault = useFourColumnsDefault()
@@ -475,10 +476,9 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     [chooseDraftFolder, lastDirectory, operation, surfaceGeneration]
   )
 
-  /** 新建会话: a temporary chat in the quick-chat folder, never inside a project. */
+  /** 新建会话: a temporary chat in its own folder under the quick-chat root, never inside a project. */
   const newChat = useCallback(() => {
-    void commands
-      .quickChatDirectory()
+    void createChatDirectory()
       .then((directory) => newChatInDirectory(directory))
       .catch((error: unknown) => toast.error(describeError(error)))
   }, [newChatInDirectory])
@@ -1109,6 +1109,13 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
 
     const deleted = (sessionId: string): void => {
       setSelectedId((current) => (current === sessionId ? null : current))
+      // A temporary chat owns its folder, so deleting the conversation takes it along. Only the
+      // conversation on screen is known here; a background one was already released, and removing
+      // the wrong directory is worse than leaving an empty one.
+      if (session !== null && session.id === sessionId && isTemporaryChatDir(session.cwd)) {
+        const path = session.cwd
+        if (path !== null) void commands.deleteChatDirectory({ path }).catch(() => {})
+      }
     }
     if (session !== null && !draftSessions[session.id] && submittingDraftId !== session.id)
       return (

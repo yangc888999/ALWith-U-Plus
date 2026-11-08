@@ -1,6 +1,7 @@
 import type { Session } from "@alwith/api"
 import { ConversationView } from "@alwith/module-chat/conversation"
 import { type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
+import { isTemporaryChatDir } from "@/lib/quick-chat"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 import { ChevronUpIcon, Loader2Icon } from "lucide-react"
@@ -14,7 +15,6 @@ import { client } from "@/lib/client"
 import { getConversationDetail, subscribeChatDisplayPreferences } from "@/lib/chat-display-preferences"
 import { snapshotProjectMemory } from "@/lib/project-memory"
 
-import { isQuickChatDirectory } from "@alwith/module-chat/session-list"
 
 import { ChatActionsMenu } from "./chat-actions-menu"
 import { ChatBranchProvider } from "./chat-branches"
@@ -434,7 +434,7 @@ export function ChatView(props: ChatViewProps) {
           >
             <Conversation {...props} rootRef={rootRef} />
             {/* Temporary chats have no project memory: read/compress/clear do not apply. */}
-            {isQuickChatDirectory(session.cwd ?? "") ? null : (
+            {isTemporaryChatDir(session.cwd) ? null : (
             <ChatEdgeActions
               sessionId={session.id}
               onClearContext={
