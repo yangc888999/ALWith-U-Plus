@@ -72,6 +72,7 @@ import {
   useState,
   useSyncExternalStore
 } from "react"
+import { isQuickChatDirectory } from "@alwith/module-chat/session-list"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -277,7 +278,10 @@ export function FileWorkspace({
   const [treeVisible, setTreeVisible] = useTreeVisiblePreference()
   const canvas = useContext(CanvasContext)
   const navigateCanvas = canvas?.navigate
-  const showMainControls = canvas === null || canvas.selected === 1
+  // A temporary chat has none of these columns, so its window header carries no switches for them.
+  // Leaving them visible offered 评论栏 / 文件树 / 工作区 on a surface that has no tree to hide.
+  const temporaryChat = cwd === null || isQuickChatDirectory(cwd)
+  const showMainControls = (canvas === null || canvas.selected === 1) && !temporaryChat
   const previousChatRevealRequest = useRef(chatRevealRequest)
   useEffect(() => {
     if (previousChatRevealRequest.current === chatRevealRequest) return
