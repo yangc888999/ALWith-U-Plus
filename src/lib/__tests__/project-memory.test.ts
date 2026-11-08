@@ -22,8 +22,8 @@ describe("buildTurnMemoryBlock", () => {
     const block = buildTurnMemoryBlock(fakeSession())
     expect(block).not.toBeNull()
     const head = block!.split("\n")[0]!
-    expect(head).toMatch(/^\*\*\d{4}-\d{2}-\d{2} \d{2}:\d{2}  .+\*\*$/)
-    const title = head.slice(20, -2)
+    expect(head).toMatch(/^\*\*\d{4}-\d{2}-\d{2} \d{2}:\d{2}：.+\*\*$/)
+    const title = head.slice(19, -2)
     expect(Array.from(title).length).toBeLessThanOrEqual(15)
     expect(block).toContain("用户：请帮我分析交易指标")
   })
@@ -36,12 +36,12 @@ describe("buildTurnMemoryBlock", () => {
 
   test("still carries the idempotency marker", () => {
     const block = buildTurnMemoryBlock(fakeSession())
-    expect(block).toContain("\u2063alwith-turn:s1:a2\u2063")
+    expect(block).toContain("<!-- alwith-turn:s1:a2 -->")
   })
 
   test("falls back to the user's own words when the session has no title", () => {
     const block = buildTurnMemoryBlock(fakeSession({ title: "" }))
-    const title = block!.split("\n")[0]!.slice(20, -2)
+    const title = block!.split("\n")[0]!.slice(19, -2)
     expect(Array.from(title).length).toBeLessThanOrEqual(15)
     expect(block).toContain("用户：请帮我分析交易指标")
   })

@@ -90,8 +90,6 @@ function finalReply(messages: Session["items"], lastUser: number): string {
 }
 
 /** Renders the last completed turn of `session` as a Markdown section, or `null` when empty. */
-/** U+2063 INVISIBLE SEPARATOR — carries the turn id without printing anything. */
-const INVISIBLE = "\u2063"
 
 export function buildTurnMemoryBlock(session: Session): string | null {
   const messages = session.items.filter(isConversationMessage)
@@ -108,18 +106,19 @@ export function buildTurnMemoryBlock(session: Session): string | null {
   if (user.length === 0 && reply.length === 0) return null
   // The entry title is the only structure a reader scans by; keep it bold (it lost the markers at
   // some point and every entry started to read as one grey paragraph).
-  const parts = [`**${stamp()}  ${summarizeTitle(session, user)}**`]
+  const parts = [`**${stamp()}：${summarizeTitle(session, user)}**`]
   if (user.length > 0) parts.push(`用户：${clip(user)}`)
   if (reply.length > 0) parts.push(`助手：${clip(reply)}`)
   // An HTML comment makes the append idempotent: both windows (and an interrupted relaunch) can
   // hand the same turn to the writer, and the native side skips a block it already has instead of
   // duplicating it — repeated writes to a synced project are what produced conflict copies.
   const last = messages.at(-1)
-  // Invisible marker (U+2063) instead of an HTML comment: memory.md is opened in the editor as
-  // source, where a comment line sat between every entry and read as noise. The idempotency
-  // check only needs the token, and no renderer or editor shows it.
-  parts.push(`${INVISIBLE}alwith-turn:${session.id}:${last?.id ?? "unknown"}${INVISIBLE}`)
-  return parts.join("\n\n")
+  // The turn id rides in an HTML comment: markdown renderers drop it, and in a source editor it is
+  // one dim line instead of a bare `alwith-turn:…` sitting in the prose (2026-11-08). The native
+  // side already reads both this and the older invisible-separator form.
+  parts.push(`<!-- alwith-turn:${session.id}:${last?.id ?? "unknown"} -->`)
+  // Each turn is its own section: a horizontal rule between them is what the reader scans by.
+  return parts.join("\n\n---\n\n")
 }
 
 /** Appends a completed turn to the project's `memory.md`. */
