@@ -12,20 +12,55 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { authClient, loginPlatform, usePlatformAuth } from "./store"
 
 type Mode = "code" | "password" | "register"
+
+/** "Use it without an account" is remembered across launches: the reader who picked it should not
+ *  be asked again on every start, and the account service is unreachable outside the company
+ *  network — which is exactly when they need the local features to keep working. */
+const SKIP_KEY = "alwith:platform-login-skipped"
+
+/** Exported for the test that pins the escape hatch; not part of the public surface. */
+export function readSkipped(): boolean {
+  try {
+    return localStorage.getItem(SKIP_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+
+/** Exported for the test that pins the escape hatch; not part of the public surface. */
+export function rememberSkipped(): void {
+  try {
+    localStorage.setItem(SKIP_KEY, "1")
+  } catch {
+    // A locked-down webview may refuse storage. The session still works; it just asks again.
+  }
+}
+
 export function AuthGate({ children, auxiliary = false }: { children: ReactNode; auxiliary?: boolean }) {
   const authenticated = usePlatformAuth((s) => s.isAuthenticated)
   const loading = usePlatformAuth((s) => s.isLoading)
+  const [skipped, setSkipped] = useState(readSkipped)
   if (loading)
     return (
       <div className="flex h-dvh items-center justify-center">
         <Spinner />
       </div>
     )
-  if (authenticated) return children
-  return auxiliary ? null : <PlatformLogin />
+  // Skipping does not fake a login: `isAuthenticated` stays false, so Drive and the account-managed
+  // ALwith provider stay hidden exactly as they should, while the Codex engine and every other
+  // vendor's models keep working.
+  if (authenticated || skipped) return children
+  return auxiliary ? null : (
+    <PlatformLogin
+      onSkip={() => {
+        rememberSkipped()
+        setSkipped(true)
+      }}
+    />
+  )
 }
 
-function PlatformLogin() {
+function PlatformLogin({ onSkip }: { onSkip: () => void }) {
   const { t } = useTranslation()
   const [mode, setMode] = useState<Mode>("code")
   const [email, setEmail] = useState("")
@@ -182,6 +217,14 @@ function PlatformLogin() {
           </FieldGroup>
         </form>
         <p className="text-xs text-muted-foreground">{t("platformAuth.independent")}</p>
+        {/* The account service only answers inside the company network, so a reader away from it
+            would otherwise face a wall they cannot pass. Local features do not need an account. */}
+        <div className="flex flex-col items-center gap-1">
+          <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={onSkip}>
+            {t("platformAuth.skip")}
+          </Button>
+          <p className="text-center text-xs text-muted-foreground">{t("platformAuth.skipHint")}</p>
+        </div>
       </div>
     </main>
   )

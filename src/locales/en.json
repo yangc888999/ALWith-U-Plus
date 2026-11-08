@@ -2,6 +2,8 @@
   "platformAuth": {
     "intro": "Sign in to your ALwith account",
     "independent": "L and Desktop sign in independently. Your ALwith account, pets and entitlements remain the same. Model provider login is configured separately.",
+    "skip": "Continue without signing in",
+    "skipHint": "Drive and the ALwith enterprise models need an account. Conversations, the Codex engine and other vendors' models do not. You can sign in later from Settings → Account.",
     "accountHint": "This is your ALwith account, not your Codex account. Signing out here clears L's platform login only.",
     "codeLogin": "Email code",
     "passwordLogin": "Password",

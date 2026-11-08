@@ -16,6 +16,8 @@
   "platformAuth": {
     "intro": "登录你的 ALwith 账号",
     "independent": "L 与 Desktop 分别登录，同一 ALwith 账号的宠物和权益不变。模型供应商登录单独设置。",
+    "skip": "暂不登录，先用本地功能",
+    "skipHint": "云盘和 ALwith 企业模型需要登录；对话、Codex 引擎和其它厂商模型不受影响。之后可以在「设置 → 账号」里登录。",
     "accountHint": "这是 ALwith 账号，不是 Codex 账号。这里退出只清除 L 的平台登录。",
     "codeLogin": "验证码登录",
     "passwordLogin": "密码登录",
