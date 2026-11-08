@@ -130,9 +130,9 @@ test("scheduled runs live in their own section instead of the project groups", a
   await settle()
 
   // Its own section, open to the five newest monitors: a scheduled task is a peer of 聊天/项目,
-  // not a folder inside 项目, so the row is visible without a click. The heading is 监控 now
+  // not a folder inside 项目, so the row is visible without a click. The heading is 定时任务 now
   // that one task maps to one persistent monitor conversation instead of daily run rows.
-  const header = view.getByRole("button", { name: "监控 (1)" })
+  const header = view.getByRole("button", { name: "定时任务 (1)" })
   expect(view.getByText("提额监控表盘每日更新任务")).toBeTruthy()
   // The markdown heading marker is a prompt artifact, not part of the conversation's name.
   expect(view.queryByText("# 提额监控表盘每日更新任务")).toBeNull()

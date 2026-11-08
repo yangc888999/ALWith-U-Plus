@@ -166,6 +166,8 @@ export function ChatComposer({
   const [menu, setMenu] = useState<ContextMenuTarget | null>(null)
   const shellRef = useRef<HTMLDivElement>(null)
   const sessionId = props.session.id
+  // Projects get the 分工 entry; a plain chat is a throwaway conversation and does not.
+  const project = groupByDirectory(props.session.cwd)
   /**
    * Hands the send to the background instead of awaiting it.
    *
@@ -241,24 +243,25 @@ export function ChatComposer({
         onHandOff={handOff}
         inputHeader={
           props.inputHeader ?? (
-            // Two rows inside the same card: the running state on top (transparent until it needs
-            // attention), then the quoted document and 分工. Nothing floats above the surface, so
-            // the composer reads as one card instead of three stacked slabs.
-            <div className="flex w-full min-w-0 flex-col gap-1">
-              <TurnProgressBar session={props.session} />
-              <div className="flex w-full min-w-0 items-center justify-between gap-2">
+            // One row inside the card. The model-call notice used to sit on its own line above,
+            // which pushed the file chip and the model controls down and left a mostly empty band
+            // (2026-11-08). It now shares the row and takes whatever the chips leave.
+            <div className="flex w-full min-w-0 items-center justify-between gap-2">
               {/* A quoted document's name is a reference, not the subject: it never takes more
                   than a third of the row, and the rest goes to the model controls. */}
-                <div className="flex min-w-0 max-w-[33%] flex-1 items-center gap-2 overflow-hidden">
-                  <ActivePreviewChip />
-                  <QueuedPromptChip session={props.session} />
-                </div>
-              {/* 分工 sits at the composer's top-right: it is a property of the next message, and
-                  the conversation header had no room for it next to the title and icon actions. */}
-                <div className="flex shrink-0 items-center gap-1">
-                  <PendingModelChip session={props.session} />
-                  <OrchestrationControl session={props.session} />
-                </div>
+              <div className="flex min-w-0 max-w-[33%] shrink-0 items-center gap-2 overflow-hidden">
+                <ActivePreviewChip />
+                <QueuedPromptChip session={props.session} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <TurnProgressBar session={props.session} />
+              </div>
+              {/* 分工 belongs to projects: a chat is a throwaway conversation with no plan/execute
+                  flow. `groupByDirectory` is the same test the sidebar groups use, so the entry
+                  appears exactly under the conversations that live in a project folder. */}
+              <div className="flex shrink-0 items-center gap-1">
+                <PendingModelChip session={props.session} />
+                {project === null ? null : <OrchestrationControl session={props.session} />}
               </div>
             </div>
           )

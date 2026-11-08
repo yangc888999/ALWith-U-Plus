@@ -132,23 +132,32 @@ export function withShare(
   key: LayoutShare,
   percent: number
 ): WorkspaceLayoutPreferences {
+  // The chat column is deliberately absent from every drag path: the sidebar divider writes
+  // `navigation`, the preview divider writes `tree`/`preview`. So only the Settings slider can move
+  // chat, and a manual drag can never pull it away — which is the rule. (Rejecting `chat` edits here
+  // would also disable that slider, so it is not rejected.)
   const shares = layoutShares(layout)
-  const target = clamp(percent / 100, 0, 0, 1)
   const NON_PREVIEW: LayoutShare[] = SHARE_KEYS.filter((entry) => entry !== "preview")
   const next: Record<LayoutShare, number> = { ...shares }
   if (key === "preview") {
-    const room = 1 - target
-    const othersTotal = NON_PREVIEW.reduce((sum, entry) => sum + shares[entry], 0)
+    // Preview takes its room from the sidebar and the file tree only. Chat stays exactly where the
+    // settings put it, so widening the preview never squeezes the conversation.
+    const adjustable: LayoutShare[] = ["navigation", "tree"]
+    const ceiling = Math.max(0, 1 - shares.chat)
+    const target = Math.min(clamp(percent / 100, 0, 0, 1), ceiling)
+    const room = 1 - target - shares.chat
+    const adjustableTotal = adjustable.reduce((sum, entry) => sum + shares[entry], 0)
     next.preview = target
-    if (othersTotal <= 1e-9) {
-      for (const entry of NON_PREVIEW) next[entry] = room / NON_PREVIEW.length
+    if (adjustableTotal <= 1e-9) {
+      for (const entry of adjustable) next[entry] = room / adjustable.length
     } else {
-      for (const entry of NON_PREVIEW) next[entry] = (shares[entry] / othersTotal) * room
+      for (const entry of adjustable) next[entry] = (shares[entry] / adjustableTotal) * room
     }
   } else {
-    // Pin the edited column, keep the other two non-preview columns fixed, preview is the buffer.
+    // Pin the edited column, keep the other non-preview columns fixed, preview is the buffer.
     const fixed = NON_PREVIEW.filter((entry) => entry !== key)
     const fixedSum = fixed.reduce((sum, entry) => sum + shares[entry], 0)
+    const target = clamp(percent / 100, 0, 0, 1)
     let edited = target
     let preview = 1 - target - fixedSum
     if (preview < 0) {
@@ -162,6 +171,8 @@ export function withShare(
   return {
     ...layout,
     navigationRatio: next.navigation,
+    // Only the Settings slider reaches this branch; every drag path edits another column and
+    // leaves chat untouched, so the conversation width stays exactly where Settings put it.
     chatRatio: next.chat,
     treeRatio: next.tree,
     previewRatio: next.preview

@@ -145,7 +145,7 @@
     "automation": "Scheduled tasks",
     "automationHint": "Each scheduled task owns one fixed monitor; every run's result and summary accumulate in it",
     "automationShowAll": "Show the other {{count}}",
-    "automationRuns": "Monitors"
+    "automationRuns": "Scheduled tasks"
   },
   "welcome": {
     "title": "What would you like to build?",
@@ -594,8 +594,8 @@
     "appearanceDesc": "Adjust theme, zoom, column layout and conversation display.",
     "themeDesc": "System follows the macOS appearance automatically.",
     "zoomDesc": "Changes the interface's type size and spacing, not system settings.",
-    "layoutSection": "Layout",
-    "layoutSectionDesc": "The four columns total 100% and save automatically.",
+    "layoutSection": "Project chat layout",
+    "layoutSectionDesc": "The default split when a project conversation opens. The four columns total 100% and save automatically; the chat column follows only this setting and ignores divider drags.",
     "resetLayout": "Reset",
     "layoutShareCaption": "Current column shares",
     "layoutShareNote": "Hidden columns are excluded; reopening restores the saved share.",
@@ -743,6 +743,14 @@
     "customizationRepo": "ALwith U",
     "customizationOutro": "project. The main changes:",
     "customizationItems": [
+      "v0.2.29",
+      "Scheduled tasks can notify you and other chosen recipients through the Lark CLI assistant.",
+      "Lark CLI joins as a component: install and update it in-app, sign in, and request scopes.",
+      "A local sign-in bypass for when the ALwith account service cannot be reached.",
+      "Settings - Usage opens noticeably faster.",
+      "Clearer notices around model-call status.",
+      "Drive alerts and voice prompts are localized for Chinese.",
+      "Chat and project are now distinct: chat is a throwaway conversation without 分工, preview or file columns; projects keep all four columns, 分工 and references.",
       "v0.2.28",
       "Scheduled tasks: create custom prompts that run on a repeating schedule.",
       "Clearer model-call progress, plus a fix for an Effort handling bug.",

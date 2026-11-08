@@ -3746,16 +3746,16 @@ test("scheduled codex exec runs are listed under 自动化运行, not under the 
   }
 })
 
-test("a model-switch note is rewritten as a bracketed line, without the persona aside", () => {
+test("a model-switch note names the destination and the timing", () => {
   expect(
     withoutModelSwitchNotes("模型已从 GPT-6.1 Terra 更改为 GPT-6.1-Sol（新会话才会使用 GPT-6.1-Sol 的身份说明）")
-  ).toBe("—— 模型已从 GPT-6.1 Terra 更改为 GPT-6.1-Sol ——")
+  ).toBe("—— 模型切换到 GPT-6.1-Sol 下次会话开始生效 ——")
 })
 
-test("the English form keeps its own wording", () => {
+test("the English form says the same thing", () => {
   expect(
     withoutModelSwitchNotes("Model switched from GPT-6.1 Terra to GPT-6.1-Sol (new sessions use Sol's persona)")
-  ).toBe("—— switched from GPT-6.1 Terra to GPT-6.1-Sol ——")
+  ).toBe("—— switched to GPT-6.1-Sol; takes effect next session ——")
 })
 
 test("ordinary plan lines are left alone", () => {

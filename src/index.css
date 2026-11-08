@@ -1302,3 +1302,12 @@ body::after {
 .alwith-model-pill > svg:last-child {
   order: 4;
 }
+
+
+/* 隐藏输入框左侧的「+」（attachImage）。
+   它只用于添加图片/文件，L 这个界面不走附件流程；按钮由 @alwith/module-chat 硬编码渲染，
+   没有开关属性，所以按工具栏的结构定位。若上游改了工具栏层级，这条会失效而不是隐藏错东西
+   —— 它只作用于 `.chat-composer-toolbar` 内的第一个按钮。 */
+.chat-composer-toolbar > div > div:first-child > button:first-child {
+  display: none;
+}

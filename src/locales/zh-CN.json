@@ -145,7 +145,7 @@
     "automation": "定时任务",
     "automationHint": "每个定时任务对应一条固定监控，历次运行结果和总结都累积在这条监控里",
     "automationShowAll": "显示其余 {{count}} 条",
-    "automationRuns": "监控"
+    "automationRuns": "定时任务"
   },
   "welcome": {
     "title": "想做点什么?",
@@ -595,8 +595,8 @@
     "appearanceDesc": "调整主题、缩放、界面分栏和对话展示方式。",
     "themeDesc": "跟随系统会随 macOS 外观自动切换。",
     "zoomDesc": "影响整个界面的字号与间距，不改变系统设置。",
-    "layoutSection": "界面布局",
-    "layoutSectionDesc": "四栏比例合计 100%，拖动后自动保存。",
+    "layoutSection": "项目对话界面布局",
+    "layoutSectionDesc": "打开项目对话时的默认分栏。四栏合计 100%，拖动后自动保存；对话栏只跟随这里的设置，不接受手动拖拽。",
     "resetLayout": "重置",
     "layoutShareCaption": "当前分栏比例",
     "layoutShareNote": "关闭的分栏不参与分配，重新打开时按保存的比例恢复。",
@@ -744,6 +744,14 @@
     "customizationRepo": "ALwith U",
     "customizationOutro": "定制，主要调整内容如下：",
     "customizationItems": [
+      "v0.2.29",
+      "新增定时任务功能，支持通过飞书CLI助手信息通知本人及其他指定账户。",
+      "新增飞书CLI作为组件接入ALWith L，支持应用内安装和更新、登录及权限申请。",
+      "新增本地免登录模式，在 ALwith 账号无法正常登录时使用。",
+      "优化「设置 - 用量」页打开速度。",
+      "优化模型调用状态提醒逻辑。",
+      "云盘告警语音本地化（中文适配）。",
+      "聊天和项目逻辑区分：1）聊天仅临时会话，不支持分工、不可打开预览栏和文件栏，属即用即走；2）项目支持四分栏展示、分工、引用功能等。",
       "v0.2.28",
       "新增自定义任务功能，支持配置循环触发的功能。",
       "优化模型调用状态指示及修复 Effort 一处异常 bug。",

@@ -259,12 +259,15 @@ export function withoutModelSwitchNotes(text: string): string {
   return text
     .split("\n")
     .map((line) => {
+      // The engine appends its own note after a model change, naming both models and explaining
+      // that the persona only changes on the next session. Name the destination and the timing;
+      // the old name is noise — the reader just made the switch and knows what it was.
       const zh = line.match(
         /(?:模型已从|已从)\s*(.+?)\s*更改为\s*(.+?)\s*(?:（[^）]*）|\([^)]*\))?\s*$/
       )
-      if (zh !== null) return `—— 模型已从 ${zh[1]?.trim() ?? ""} 更改为 ${zh[2]?.trim() ?? ""} ——`
+      if (zh !== null) return `—— 模型切换到 ${zh[2]?.trim() ?? ""} 下次会话开始生效 ——`
       const en = line.match(/(?:model\s+)?switched from\s+(.+?)\s+to\s+(.+?)\s*(?:\([^)]*\))?\s*$/i)
-      if (en !== null) return `—— switched from ${en[1]?.trim() ?? ""} to ${en[2]?.trim() ?? ""} ——`
+      if (en !== null) return `—— switched to ${en[2]?.trim() ?? ""}; takes effect next session ——`
       return line
     })
     .join("\n")

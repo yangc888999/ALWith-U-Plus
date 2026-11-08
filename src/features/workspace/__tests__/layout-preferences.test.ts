@@ -75,13 +75,14 @@ test("editing a share has no per-column floor; the preview buffer keeps the tota
   expect(Math.round(nav.previewRatio * 100)).toBe(32)
   expect(total(nav)).toBeCloseTo(1, 10)
 
-  // Editing the preview itself rebalances nav/chat/tree proportionally.
+  // Editing the preview takes its room from the sidebar and the file tree only: chat keeps the
+  // width Settings gave it, so widening the preview never squeezes the conversation.
   const fromPreview = withShare(workspaceLayoutDefaults, "preview", 20)
   expect(Math.round(fromPreview.previewRatio * 100)).toBe(20)
-  // nav:chat:tree keep their 12:15:13 ratio across the remaining 80%.
-  expect(Math.round(fromPreview.navigationRatio * 100)).toBeCloseTo(24, 0)
-  expect(Math.round(fromPreview.chatRatio * 100)).toBeCloseTo(30, 0)
-  expect(Math.round(fromPreview.treeRatio * 100)).toBeCloseTo(26, 0)
+  expect(Math.round(fromPreview.chatRatio * 100)).toBe(15)
+  // The remaining 65% splits between nav and tree in their original 12:13 ratio.
+  expect(Math.round(fromPreview.navigationRatio * 100)).toBe(31)
+  expect(Math.round(fromPreview.treeRatio * 100)).toBe(34)
   expect(total(fromPreview)).toBeCloseTo(1, 10)
 })
 
