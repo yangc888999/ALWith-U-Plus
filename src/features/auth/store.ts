@@ -25,6 +25,7 @@ import { createAccountTransition, createManagedProviders } from "./managed-provi
 export const API_BASE_URL = import.meta.env.DEV ? "https://api-dev.alwith.ai/service" : "https://api.alwith.ai/service"
 const STATE_EVENT = "alwith-auth-state"
 const LOGOUT_EVENT = "alwith-auth-logout-request"
+const LOGIN_EVENT = "alwith-auth-login-request"
 const PROVIDERS_REFRESH_EVENT = "alwith-providers-refresh-request"
 const isMain = () => getCurrentWindow().label === "main"
 // 同一个 `appDataDir/<name>.json`,原 tauri-plugin-store 写下的登录态原样读回;每次 set 即原子落盘。
@@ -143,7 +144,10 @@ export function logoutPlatform(): Promise<void> {
 }
 
 export function loginPlatform(response: LoginResponse): Promise<void> {
-  if (!isMain()) return Promise.reject(new Error("ALwith login belongs to the main window"))
+  // Signed-in state, the provider table it unlocks and the refresh timer all live in the main
+  // window, so a settings-window sign-in has to be carried out there. Logout already worked this
+  // way; login refused instead, which is why 设置 → 账户 could never sign in (2026-11-09).
+  if (!isMain()) return emitTo("main", LOGIN_EVENT, response)
   assertActiveLogin(response)
   return transitionAccount(async () => {
     await clearAccountProviders()
@@ -161,6 +165,12 @@ export async function initPlatformAuth(): Promise<void> {
   if (isMain())
     await listen(LOGOUT_EVENT, () => {
       void logoutPlatform().catch(() => console.error("[auth] local logout failed"))
+    })
+  if (isMain())
+    await listen<LoginResponse>(LOGIN_EVENT, (event) => {
+      void loginPlatform(event.payload).catch((error: unknown) =>
+        console.error("[auth] forwarded login failed", error)
+      )
     })
   usePlatformAuth.getState().init()
 }
