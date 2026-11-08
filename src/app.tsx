@@ -1110,11 +1110,16 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     const deleted = (sessionId: string): void => {
       setSelectedId((current) => (current === sessionId ? null : current))
       // A temporary chat owns its folder, so deleting the conversation takes it along. Only the
-      // conversation on screen is known here; a background one was already released, and removing
-      // the wrong directory is worse than leaving an empty one.
-      if (session !== null && session.id === sessionId && isTemporaryChatDir(session.cwd)) {
-        const path = session.cwd
-        if (path !== null) void commands.deleteChatDirectory({ path }).catch(() => {})
+      // conversation on screen is known here: a background one was released before this callback
+      // and its cwd is gone. Say so instead of deleting a guessed path — and tell the reader how to
+      // get the folder cleaned up, which is to open that conversation and delete it from there.
+      if (session !== null && session.id === sessionId) {
+        if (isTemporaryChatDir(session.cwd) && session.cwd !== null) {
+          const path = session.cwd
+          void commands.deleteChatDirectory({ path }).catch(() => {})
+        }
+      } else if (draftSessions[sessionId] === undefined) {
+        toast.info(t("chat.folderLeftBehind"), { id: "chat-folder-left", duration: 8000 })
       }
     }
     if (session !== null && !draftSessions[session.id] && submittingDraftId !== session.id)

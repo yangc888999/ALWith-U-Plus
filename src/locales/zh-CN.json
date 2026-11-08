@@ -516,7 +516,8 @@
     "routerRecovering": "内置路由刚重启过，重新打开这个会话就好。",
     "mermaidCopied": "Mermaid 源码已复制",
     "providerSwitching": "这条会话需要用 {{from}}，正在把内核从 {{to}} 切换过去…",
-    "modelRetired": "模型「{{from}}」已被服务方下架，已切换到「{{to}}」。"
+    "modelRetired": "模型「{{from}}」已被服务方下架，已切换到「{{to}}」。",
+    "folderLeftBehind": "这个会话在后台，它的文件夹没有一起清掉。打开这个会话再删除，就能连文件夹一起删。"
   },
   "composer": {
     "mode": "权限",

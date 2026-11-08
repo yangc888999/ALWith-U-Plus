@@ -516,7 +516,8 @@
     "routerRecovering": "The built-in router just restarted — reopen this conversation.",
     "mermaidCopied": "Mermaid source copied",
     "providerSwitching": "This chat needs {{from}}; switching the engine from {{to}}…",
-    "modelRetired": "“{{from}}” is no longer offered by the model provider; switched to “{{to}}”."
+    "modelRetired": "“{{from}}” is no longer offered by the model provider; switched to “{{to}}”.",
+    "folderLeftBehind": "That conversation was in the background, so its folder stayed. Open it and delete it again to remove the folder too."
   },
   "composer": {
     "mode": "Permissions",
