@@ -293,18 +293,10 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
 
   return (
     <div className="flex flex-col gap-6">
-      {/* The router is not a vendor. It is injected into every engine this app spawns
-          (`-c model_providers.alwith.*`), owns no models, and cannot be selected — adding it to
-          the vendor list would produce an entry with zero models that fails every switch
-          (2026-11-05 rule). A read-only card answers "is it installed?" without that trap. */}
-      <SettingsCard
-        title={t("defaultModel.routerTitle")}
-        desc={t("defaultModel.routerDesc")}
-        action={<ScopeTag>{t("defaultModel.routerBadge")}</ScopeTag>}
-      >
-        <p className="text-xs text-muted-foreground">{t("defaultModel.routerNote")}</p>
-        <p className="text-xs text-muted-foreground">{t("defaultModel.routerEnterprise")}</p>
-      </SettingsCard>
+      {/* The router card lived here. It is injected into every engine this app spawns
+          (`-c model_providers.alwith.*`), owns no models, cannot be selected, and its only content
+          was a note that it exists — nothing the reader could act on, so it is not shown
+          (2026-11-09). The injection itself is unchanged. */}
       <SettingsCard
         title={t("defaultModel.title")}
         desc={t("defaultModel.description")}
