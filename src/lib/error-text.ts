@@ -109,6 +109,51 @@ const RULES: Rule[] = [
     key: "error.driveUnavailable"
   },
   {
+    // Drive resolves shortcuts locally, and each failure mode is its own English sentence. Fold
+    // the four "the shortcut itself is broken" ones together: the remedy is the same.
+    match: /Drive shortcut (?:chain exceeds the limit|exceeds the size limit|loop detected|is damaged)/i,
+    key: "error.driveShortcutBroken"
+  },
+  {
+    match: /Drive shortcut (?:has no safe web destination|target is unavailable locally and has no web destination)/i,
+    key: "error.driveShortcutNoDestination"
+  },
+  {
+    match: /Drive link is unavailable locally and has no web destination/i,
+    key: "error.driveLinkUnavailable"
+  },
+  {
+    match: /Drive archive preference is still loading/i,
+    key: "error.driveStillLoading"
+  },
+  {
+    match: /Drive configuration changed while preparing this session/i,
+    key: "error.driveConfigChanged"
+  },
+  {
+    match: /Drive credentials are unavailable/i,
+    key: "error.driveCredentialsUnavailable"
+  },
+  {
+    match: /Drive project is unavailable|This path does not belong to an indexed Drive project/i,
+    key: "error.driveProjectUnavailable"
+  },
+  {
+    match: /Drive web address is unavailable/i,
+    key: "error.driveWebUnavailable"
+  },
+  {
+    match: /The selected Drive entry no longer exists/i,
+    key: "error.driveEntryGone"
+  },
+  {
+    // Internal protocol assertions. The reader cannot act on "Invalid Drive snapshot", and there
+    // are a dozen such sentences; one honest line beats twelve English names. Placed after the
+    // specific Drive rules above so those still win.
+    match: /Invalid (?:ALWith L )?Drive|Invalid plugin|Invalid private session list|Knowledge plugin configuration must be an object|Plugin sync state must be an object|Session archival is managed by Drive|is unavailable in this permissions dialog|Pinned documents belong to the|Project browsing belongs to the|Project navigation belongs to the|Projects cannot be opened from sync status|Drive requires a workspace host/i,
+    key: "error.driveInvalidResponse"
+  },
+  {
     // AbortController cancellation is routine (closing a panel, replacing a request). Showing the
     // DOMException's English sentence makes it look like a failure.
     match: /The operation was aborted|AbortError|signal is aborted/i,
@@ -261,6 +306,20 @@ const RULES: Rule[] = [
   {
     match: /thread \S+ already has an active writer/,
     key: "error.activeWriter"
+  },
+  {
+    // The engine re-reads a file between preparing a patch and writing it. Inside a cloud-synced
+    // folder (YUP Drive, iCloud, OneDrive) the sync daemon rewrites the file in that window, so the
+    // engine refuses the edit instead of clobbering a concurrent change. Nothing is broken — the
+    // reader only has to reopen the file, which is not obvious from the English line.
+    match: /File changed while opening;? reopen it/i,
+    key: "error.fileChangedWhileOpening"
+  },
+  {
+    // Two causes share this sentence: a real read-only bit, or another writer holding the file
+    // (collaborative editors and cloud clients both take one). Both are actionable, so name both.
+    match: /This file is read-only or being collaboratively edited/i,
+    key: "error.fileReadOnlyOrLocked"
   },
   {
     match: /Wait for (?:affected sessions|the current turn)/,

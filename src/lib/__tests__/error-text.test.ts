@@ -233,8 +233,33 @@ test("a missing internal router is not reported as a vendor the reader deleted",
   )
 })
 
-test("the router message is localized whatever quoting the engine uses", async () => {
+test("engine file-edit and Drive failures never reach the reader in English", async () => {
   await chinese()
+
+  // The two the reader reported on 2026-11-08 while opening a conversation inside a cloud-synced
+  // project folder. Both come from the engine's file checks and used to pass through verbatim,
+  // because `describeError` falls back to the raw message when no rule matches.
+  const cases: [raw: string, hint: string][] = [
+    ["File changed while opening; reopen it", "重新打开"],
+    ["This file is read-only or being collaboratively edited", "只读"],
+    // Drive's own sentences, which `label()` does not cover because they are thrown, not rendered.
+    ["The selected Drive entry no longer exists", "云盘"],
+    ["Drive shortcut loop detected", "快捷方式"],
+    ["Drive link is unavailable locally and has no web destination", "云盘链接"],
+    ["Drive credentials are unavailable", "凭据"],
+    ["This path does not belong to an indexed Drive project", "云盘项目"],
+    // Protocol assertions collapse into one honest line rather than a dozen English names.
+    ["Invalid Drive snapshot", "云盘"],
+    ["Pinned documents belong to the main window", "云盘"],
+  ]
+  for (const [raw, hint] of cases) {
+    const message = describeError(new Error(raw))
+    expect(message, raw).not.toBe(raw)
+    expect(message, raw).toContain(hint)
+  }
+})
+
+test("the router message is localized whatever quoting the engine uses", async () => {  await chinese()
 
   // codex-cli 0.167.0 prints single quotes; older builds used backticks; a future one may use
   // double quotes. Matching only backticks let the raw English line reach the window on
