@@ -89,7 +89,7 @@ test("download passes the exact payload to the native save dialog and reports fa
   expect(error).not.toHaveBeenCalled()
   invoke.mockRejectedValue(new Error("Disk full"))
   fireEvent.click(button)
-  await waitFor(() => expect(error).toHaveBeenCalledWith("Disk full"))
+  await waitFor(() => expect(error).toHaveBeenCalledWith(expect.stringContaining("Disk full")))
   await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false))
 })
 

@@ -585,8 +585,12 @@ export function describeError(error: unknown): string {
       return typeof translated === "string" && translated !== "" ? translated : message
     }
   }
-  // Unknown failure: keep the engine's text, but never show the transport prefix or the JSON.
-  return message
+  // Unknown failure: the engine's own sentence is kept — it is the only thing that makes a bug
+  // report actionable — but it is led by a localized line so the screen never reads as English
+  // only. 189 `throw new Error("…")` sites are internal assertions; translating each one is neither
+  // feasible nor useful, and this covers every one of them at the exit (2026-11-09).
+  const lead = i18n.t("errors.didNotFinish")
+  return typeof lead === "string" && lead !== "" ? `${lead}：${message}` : message
 }
 
 /** The chat package renders engine text itself and cannot translate it; it asks the app. */

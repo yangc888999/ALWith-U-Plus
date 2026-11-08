@@ -2474,5 +2474,8 @@
     "botNoApp": "尚未配置应用凭证，机器人身份还不可用。",
     "checking": "正在检测…",
     "qrExpiredBadge": "已过期"
+  },
+  "errors": {
+    "didNotFinish": "操作没有完成"
   }
 }

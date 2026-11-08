@@ -27,11 +27,13 @@ test("a missing vendor keeps the vendor's name", async () => {
   expect(message).not.toContain("router:")
 })
 
-test("an unknown failure keeps its sentence and loses the transport prefix", async () => {
+test("an unknown failure keeps its sentence, loses the transport prefix and leads in Chinese", async () => {
   await chinese()
 
-  expect(describeError(new Error("acpRequest: something odd happened"))).toBe("something odd happened")
-  expect(describeError('{"detail":"Input must be a list"}')).toBe("Input must be a list")
+  // The engine's own words are what make a bug report actionable, so they stay — behind a
+  // localized line, so no screen reads as English-only.
+  expect(describeError(new Error("acpRequest: something odd happened"))).toBe("操作没有完成：something odd happened")
+  expect(describeError('{"detail":"Input must be a list"}')).toBe("操作没有完成：Input must be a list")
 })
 
 test("a Drive deadline is not reported as a model timeout", async () => {
@@ -63,7 +65,7 @@ test("the chat package formats turn errors through the same table", async () => 
   const formatter = (globalThis as { __alwithFormatError?: (message: string) => string }).__alwithFormatError
 
   expect(formatter?.('{"error":{"message":"router: model gpt-6 names no gateway"}}')).toContain("gpt-6")
-  expect(formatter?.("plain text")).toBe("plain text")
+  expect(formatter?.("plain text")).toBe("操作没有完成：plain text")
 })
 
 test("a provider that rejects the model-list key keeps only what the reader can act on", async () => {

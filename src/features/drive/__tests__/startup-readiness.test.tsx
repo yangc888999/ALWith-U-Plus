@@ -101,7 +101,7 @@ test("configuration failures after attachment remain visible", async () => {
   await drive.attach()
   mock.request.mockRejectedValue(new Error("Configuration unavailable"))
   renderHook(() => useDriveContentHost(save))
-  await waitFor(() => expect(mock.error).toHaveBeenCalledWith("Configuration unavailable"))
+  await waitFor(() => expect(mock.error).toHaveBeenCalledWith(expect.stringContaining("Configuration unavailable")))
 })
 
 test("integration settings stay pending until attachment and then enable controls", async () => {

@@ -344,7 +344,7 @@ test("a rejected provider switch reports the failure and keeps the confirmed mod
     Promise.try(() => fireEvent.click(view.getByText("DeepSeek-Flash"))),
   );
   await waitFor(() =>
-    expect(controls.error).toHaveBeenCalledWith("DeepSeek unavailable"),
+    expect(controls.error).toHaveBeenCalledWith(expect.stringContaining("DeepSeek unavailable")),
   );
   expect(view.getByTestId("model-trigger")).toHaveTextContent(/^6-Astra$/);
 });
@@ -719,7 +719,7 @@ test("the more models footer opens provider configuration and reports opening fa
   );
   expect(controls.openSettings).toHaveBeenCalledWith("provider");
   await waitFor(() =>
-    expect(controls.error).toHaveBeenCalledWith("Settings unavailable"),
+    expect(controls.error).toHaveBeenCalledWith(expect.stringContaining("Settings unavailable")),
   );
   expect(controls.setConfig).not.toHaveBeenCalled();
 });

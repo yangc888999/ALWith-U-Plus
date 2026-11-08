@@ -2474,5 +2474,8 @@
     "botNoApp": "No app credentials configured yet; the bot identity isn't available.",
     "checking": "Checking…",
     "qrExpiredBadge": "Expired"
+  },
+  "errors": {
+    "didNotFinish": "That did not finish"
   }
 }

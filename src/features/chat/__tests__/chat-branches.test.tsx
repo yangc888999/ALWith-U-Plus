@@ -100,7 +100,7 @@ test("a fork failure keeps the current chat and allows retry", async () => {
       fireEvent.click(view.getByRole("button", { name: "Create chat branch" }))
     })
   })
-  await waitFor(() => expect(error).toHaveBeenCalledWith("Cannot fork this turn"))
+  await waitFor(() => expect(error).toHaveBeenCalledWith(expect.stringContaining("Cannot fork this turn")))
   expect(selected).toEqual([])
   await waitFor(() =>
     expect((view.getByRole("button", { name: "Create chat branch" }) as HTMLButtonElement).disabled).toBe(false)

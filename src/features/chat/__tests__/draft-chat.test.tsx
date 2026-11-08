@@ -616,7 +616,7 @@ test("initial preparation failure keeps the composer visible and retry preserves
     />
   )
   try {
-    await waitFor(() => expect(view.getByText("Preparation failed")).toBeTruthy())
+    await waitFor(() => expect(view.getByText(/Preparation failed/)).toBeTruthy())
     expect((view.getByRole("textbox") as HTMLTextAreaElement).value).toBe("retry input")
     expect((view.getByRole("textbox") as HTMLTextAreaElement).disabled).toBe(false)
     expect(view.getByRole("button", { name: "Send" }).hasAttribute("disabled")).toBe(true)
