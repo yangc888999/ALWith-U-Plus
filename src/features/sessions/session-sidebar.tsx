@@ -58,6 +58,7 @@ import { automationSessionRows, automationTitleOf, subscribeAutomationSessionRow
 import { cn } from "@/lib/utils"
 
 import { ActivityPanel } from "./activity-panel"
+import { openSettingsWindow } from "@/lib/window-manager"
 import { GroupPanel } from "@/features/groups/group-panel"
 import { SessionListHostProvider } from "./session-list-host"
 import { SidebarAccountMenu } from "./sidebar-account-menu"
@@ -370,17 +371,24 @@ function SidebarPanels({
             active={screen === "leading" && leadingPage === "automation"}
             onPrimary={() => (screen === "leading" && leadingPage === "automation" ? onSwitchScreen() : onOpenAutomation())}
           />
-          {driveVisible && (
-            <SidebarMenuRow
-              label={t("sidebar.driveLibrary")}
-              icon={CloudIcon}
-              active={view === "drive"}
-              onPrimary={() => {
-                closePreviewExtension()
-                setView(view === "drive" ? "sessions" : "drive")
-              }}
-            />
-          )}
+          {/* Kept in place without an account: hiding it made a working destination look broken.
+              Dimmed, with the reason on hover, and a click lands on the page that can fix it —
+              opening the panel itself would only show a wall of failed requests. */}
+          <SidebarMenuRow
+            label={t("sidebar.driveLibrary")}
+            icon={CloudIcon}
+            active={view === "drive"}
+            muted={!driveVisible}
+            hint={driveVisible ? undefined : t("sidebar.driveNeedsAccount")}
+            onPrimary={() => {
+              if (!driveVisible) {
+                void openSettingsWindow("account")
+                return
+              }
+              closePreviewExtension()
+              setView(view === "drive" ? "sessions" : "drive")
+            }}
+          />
           {/* 在线 BI replaced the BI 指标 extension entry. It opens in the preview column; the
               frame gets its session from the token in 设置 → 在线 BI, because a cross-site frame
               never receives the sign-in cookie. */}

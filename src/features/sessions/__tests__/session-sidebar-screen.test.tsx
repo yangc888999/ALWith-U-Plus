@@ -267,9 +267,14 @@ test("the sidebar keeps 资料库 and no longer carries a BI Metrics row", async
   expect(library.hasAttribute("aria-current")).toBe(false)
   // BI Metrics now lives in the preview pane, not as a sidebar row.
   expect(view.queryByRole("button", { name: "BI Metrics" })).toBeNull()
-  // Without company access the 资料库 row goes away.
+  // Without company access the 资料库 row stays visible but dimmed, with the reason on hover: a
+  // destination the reader knows about must not disappear, and clicking it leads to the page that
+  // can actually fix it (2026-11-08).
   await act(() => Promise.try(() => usePlatformAuth.setState({ isAuthenticated: false })))
-  expect(view.queryByRole("button", { name: "YUP Drive" })).toBeNull()
+  const driveRow = view.queryByRole("button", { name: "YUP Drive" })
+  expect(driveRow).not.toBeNull()
+  expect(driveRow?.getAttribute("aria-disabled")).toBe("true")
+  expect(driveRow?.getAttribute("title")).toContain("company account")
 })
 
 test("the quick-chat group carries its count while project rows stay uncounted", () => {

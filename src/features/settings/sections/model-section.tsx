@@ -303,6 +303,7 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
         action={<ScopeTag>{t("defaultModel.routerBadge")}</ScopeTag>}
       >
         <p className="text-xs text-muted-foreground">{t("defaultModel.routerNote")}</p>
+        <p className="text-xs text-muted-foreground">{t("defaultModel.routerEnterprise")}</p>
       </SettingsCard>
       <SettingsCard
         title={t("defaultModel.title")}

@@ -39,7 +39,9 @@ export function SidebarMenuRow({
   icon: Icon,
   active,
   onPrimary,
-  destinations = []
+  destinations = [],
+  muted = false,
+  hint
 }: {
   label: string
   icon: LucideIcon
@@ -48,6 +50,10 @@ export function SidebarMenuRow({
   onPrimary: () => void
   /** Related pages offered on hover. Empty means this row is a plain button. */
   destinations?: SidebarMenuDestination[]
+  /** Present but unusable right now: dim it and explain why, instead of hiding it. A destination
+   *  the reader knows about must not vanish — they need to see where it went and what it needs. */
+  muted?: boolean
+  hint?: string
 }): ReactElement {
   const rowRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -128,7 +134,9 @@ export function SidebarMenuRow({
         aria-haspopup={hasDestinations ? "menu" : undefined}
         aria-expanded={hasDestinations ? rect !== null : undefined}
         aria-controls={hasDestinations && rect !== null ? menuId : undefined}
-        className={cn(MENU_HIGHLIGHT, "h-8 gap-2 px-2")}
+        aria-disabled={muted || undefined}
+        title={hint}
+        className={cn(MENU_HIGHLIGHT, "h-8 gap-2 px-2", muted && "opacity-55")}
         onClick={() => {
           close(true)
           onPrimary()
