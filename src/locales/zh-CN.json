@@ -1829,6 +1829,7 @@
   },
   "voice": {
     "configureKey": "请配置 API Key",
+    "enableNeedsKey": "语音已打开，但还没填 API Key —— 现在点麦克风会失败。在下面「语音引擎」里填豆包（或 VUI）的 Key 才能用。",
     "enabled": "启用语音输入",
     "start": "语音输入",
     "stop": "结束录音",

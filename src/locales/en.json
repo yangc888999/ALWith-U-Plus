@@ -1828,6 +1828,7 @@
   },
   "voice": {
     "configureKey": "Please configure an API Key",
+    "enableNeedsKey": "Voice is on, but no API Key is set yet — the microphone will fail. Add a Doubao (or VUI) key under Voice engine below.",
     "enabled": "Enable voice input",
     "start": "Voice input",
     "stop": "Finish recording",

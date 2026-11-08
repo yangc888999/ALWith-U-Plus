@@ -93,6 +93,13 @@ export function VoiceSection(): ReactNode {
     setSaving(true)
     try {
       await saveVoiceEnabled(value)
+      // Turning it on without a key produces a switch that says "on" and a microphone that always
+      // fails. Say it at the moment it becomes true, not later (2026-11-08: 「我打开了也不行」).
+      if (value) {
+        const settings = await loadVoiceSettings()
+        const profiles = await voiceProfiles()
+        if (!profiles[settings.provider]) toast.info(t("voice.enableNeedsKey"))
+      }
     } catch (error: unknown) {
       toast.error(describeError(error))
     } finally {
