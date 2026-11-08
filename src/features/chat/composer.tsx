@@ -20,6 +20,7 @@ import { chatModelMenu } from "./composer/model-catalog"
 import { withoutWaitingForTurn } from "./composer/detach-submit"
 import { nativeAttachmentPolicy, NativeFileDrop } from "./composer/native-file-drop"
 import { OrchestrationControl } from "./composer/orchestration-control"
+import { isQuickChatDirectory } from "@alwith/module-chat/session-list"
 import { PendingModelChip } from "./composer/pending-model-chip"
 import { predictionPreference } from "./composer/prediction-preference"
 import { QueuedPromptChip } from "./composer/queued-prompt-chip"
@@ -166,8 +167,10 @@ export function ChatComposer({
   const [menu, setMenu] = useState<ContextMenuTarget | null>(null)
   const shellRef = useRef<HTMLDivElement>(null)
   const sessionId = props.session.id
-  // Projects get the 分工 entry; a plain chat is a throwaway conversation and does not.
-  const project = groupByDirectory(props.session.cwd)
+  // A chat lives in the quick-chat folder; anything else is a project. `groupByDirectory` looked
+  // right but only matches directories the reader registered as a group, so a normal project
+  // folder fell through and lost its 分工 entry (2026-11-08).
+  const project = isQuickChatDirectory(props.session.cwd ?? "") ? null : props.session.cwd
   /**
    * Hands the send to the background instead of awaiting it.
    *
