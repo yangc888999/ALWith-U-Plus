@@ -5,7 +5,8 @@ import { toast } from "sonner"
 import { describeError } from "@/lib/error-text"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { logoutPlatform } from "@/features/auth/store"
+import { PlatformLogin } from "@/features/auth/auth-gate"
+import { logoutPlatform, usePlatformAuth } from "@/features/auth/store"
 import { AvatarPicker } from "@/features/profile/avatar-picker"
 import { saveProfileAvatar, saveProfileNickname } from "@/features/profile/profile-store"
 import { useDisplayProfile } from "@/features/profile/use-display-profile"
@@ -19,6 +20,16 @@ export function AccountSection() {
   /** null until the user types, so a save can drop back to the stored value. */
   const [draft, setDraft] = useState<string | null>(null)
   const [savingName, setSavingName] = useState(false)
+  const authenticated = usePlatformAuth((state) => state.isAuthenticated)
+  // Signed out, this page used to render nothing — and it is the only place to sign in. Host the
+  // form here instead of gating the whole settings window behind it (2026-11-08).
+  if (!authenticated) {
+    return (
+      <SettingsCard title={t("settings.account")} desc={t("platformAuth.intro")}>
+        <PlatformLogin embedded />
+      </SettingsCard>
+    )
+  }
   if (!profile) return null
 
   const nickname = draft ?? profile.displayName

@@ -53,20 +53,20 @@ export function AuthGate({ children, auxiliary = false }: { children: ReactNode;
   if (authenticated || skipped) return children
   // Auxiliary windows render nothing until signed in — correct for the chat bubble, which has
   // nothing to say without an account. Settings is different: it is a page the reader asked for,
-  // and it is where signing in happens. Returning `null` there produced a blank grey window when
-  // the Drive row sent them to 设置 → 账号 (2026-11-08).
-  const ownPage = !auxiliary || getCurrentWindow().label === "settings"
-  return ownPage ? (
+  // and 设置 → 账号 renders the sign-in form itself. Gating the window put the form in front of
+  // every section, so the reader could not reach any of them (2026-11-08).
+  if (getCurrentWindow().label === "settings") return children
+  return auxiliary ? null : (
     <PlatformLogin
       onSkip={() => {
         rememberSkipped()
         setSkipped(true)
       }}
     />
-  ) : null
+  )
 }
 
-function PlatformLogin({ onSkip }: { onSkip: () => void }) {
+export function PlatformLogin({ onSkip, embedded = false }: { onSkip?: () => void; embedded?: boolean }) {
   const { t } = useTranslation()
   const [mode, setMode] = useState<Mode>("code")
   const [email, setEmail] = useState("")
@@ -121,9 +121,19 @@ function PlatformLogin({ onSkip }: { onSkip: () => void }) {
     await loginPlatform(response)
   }
   return (
-    <main className="flex h-dvh flex-col overflow-auto bg-background text-foreground">
-      <div data-tauri-drag-region className="h-10 shrink-0" />
-      <div className="m-auto flex w-full max-w-md flex-col gap-6 px-6 py-8">
+    <div
+      className={
+        embedded
+          ? "flex flex-col gap-4"
+          : "flex h-dvh flex-col overflow-auto bg-background text-foreground"
+      }
+    >
+      {embedded ? null : <div data-tauri-drag-region className="h-10 shrink-0" />}
+      <div
+        className={
+          embedded ? "flex w-full flex-col gap-4" : "m-auto flex w-full max-w-md flex-col gap-6 px-6 py-8"
+        }
+      >
         <header className="flex flex-col gap-2">
           <h1 className="text-xl font-semibold">{t("app.name")}</h1>
           <p className="text-sm text-muted-foreground">{t("platformAuth.intro")}</p>
@@ -225,13 +235,15 @@ function PlatformLogin({ onSkip }: { onSkip: () => void }) {
         <p className="text-xs text-muted-foreground">{t("platformAuth.independent")}</p>
         {/* The account service only answers inside the company network, so a reader away from it
             would otherwise face a wall they cannot pass. Local features do not need an account. */}
-        <div className="flex flex-col items-center gap-1">
-          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onSkip}>
-            {t("platformAuth.skip")}
-          </Button>
-          <p className="text-center text-xs text-muted-foreground">{t("platformAuth.skipHint")}</p>
-        </div>
+        {onSkip && (
+          <div className="flex flex-col items-center gap-1">
+            <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onSkip}>
+              {t("platformAuth.skip")}
+            </Button>
+            <p className="text-center text-xs text-muted-foreground">{t("platformAuth.skipHint")}</p>
+          </div>
+        )}
       </div>
-    </main>
+    </div>
   )
 }

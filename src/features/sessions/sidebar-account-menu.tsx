@@ -38,7 +38,21 @@ export function SidebarAccountMenu({
   const [busy, setBusy] = useState(false)
   const [open, setOpen] = useState(false)
   useSidebarOverlay(open)
-  if (!profile) return null
+  if (!profile) {
+    // Signed out, the whole menu used to disappear — which took the only 设置 entry with it, so a
+    // reader who chose 「暂不登录」 had no way to reach settings at all (2026-11-08). Keep a plain
+    // button instead: the label is the page it opens.
+    return (
+      <Button
+        variant="ghost"
+        className="h-8 w-full justify-start gap-2 rounded-[10px] px-2 font-normal text-muted-foreground [corner-shape:superellipse(1.5)] hover:bg-foreground/5"
+        onClick={onOpenSettings}
+      >
+        <SettingsIcon className="size-4" />
+        {t("sidebar.settings")}
+      </Button>
+    )
+  }
 
   const displayName = profile.displayName
   const avatar = (
