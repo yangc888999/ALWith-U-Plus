@@ -47,6 +47,7 @@ import { CollectionPanel } from "@/features/collection/collection-panel"
 import { dispatchCollection, reportCollection } from "@/features/collection/store"
 import { DriveArchiveAction } from "@/features/drive/archive-action"
 import { useDriveVisible } from "@/features/drive/use-drive-visible"
+import { useYupDriveEnabled } from "@/features/drive/yup-drive-preference"
 import { usePreviewExtension } from "@/features/workspace/preview-extension"
 import { GuideButton } from "@/features/guide/guide-button"
 import type { MainScreen } from "@/features/layout/components/main-sidebar-layout"
@@ -218,6 +219,11 @@ function SidebarPanels({
   // 收藏 / 活动 are title-bar buttons now; the panel still clears the badge when it is opened.
   useActivityNotification(view)
   const driveVisible = useDriveVisible()
+  // Two different reasons the row can be unusable, and they need opposite treatments: the reader
+  // switching Drive off means "I do not want this here" → hide it. Missing an account means "this
+  // exists but you cannot use it yet" → keep it, dimmed. Collapsing both into one flag left the row
+  // sitting in the sidebar after the switch was turned off (2026-11-08).
+  const driveEnabled = useYupDriveEnabled()
   const previewExtension = usePreviewExtension((state) => state.id)
   const openPreviewExtension = usePreviewExtension((state) => state.open)
   const closePreviewExtension = usePreviewExtension((state) => state.close)
@@ -374,21 +380,23 @@ function SidebarPanels({
           {/* Kept in place without an account: hiding it made a working destination look broken.
               Dimmed, with the reason on hover, and a click lands on the page that can fix it —
               opening the panel itself would only show a wall of failed requests. */}
-          <SidebarMenuRow
-            label={t("sidebar.driveLibrary")}
-            icon={CloudIcon}
-            active={view === "drive"}
-            muted={!driveVisible}
-            hint={driveVisible ? undefined : t("sidebar.driveNeedsAccount")}
-            onPrimary={() => {
-              if (!driveVisible) {
-                void openSettingsWindow("account")
-                return
-              }
-              closePreviewExtension()
-              setView(view === "drive" ? "sessions" : "drive")
-            }}
-          />
+          {driveEnabled && (
+            <SidebarMenuRow
+              label={t("sidebar.driveLibrary")}
+              icon={CloudIcon}
+              active={view === "drive"}
+              muted={!driveVisible}
+              hint={driveVisible ? undefined : t("sidebar.driveNeedsAccount")}
+              onPrimary={() => {
+                if (!driveVisible) {
+                  void openSettingsWindow("account")
+                  return
+                }
+                closePreviewExtension()
+                setView(view === "drive" ? "sessions" : "drive")
+              }}
+            />
+          )}
           {/* 在线 BI replaced the BI 指标 extension entry. It opens in the preview column; the
               frame gets its session from the token in 设置 → 在线 BI, because a cross-site frame
               never receives the sign-in cookie. */}
