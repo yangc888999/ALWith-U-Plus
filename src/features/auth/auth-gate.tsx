@@ -10,6 +10,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 import { authClient, loginPlatform, usePlatformAuth } from "./store"
+import { createLocalAccount, hasLocalAccount, verifyLocalPassword } from "./local-account"
 
 type Mode = "code" | "password" | "register"
 
@@ -40,6 +41,9 @@ export function AuthGate({ children, auxiliary = false }: { children: ReactNode;
   const authenticated = usePlatformAuth((s) => s.isAuthenticated)
   const loading = usePlatformAuth((s) => s.isLoading)
   const [skipped, setSkipped] = useState(readSkipped)
+  // Local unlock is intentionally not persisted: it is a door for this machine, and re-entering the
+  // password once per launch is the whole point of having set one.
+  const [unlocked, setUnlocked] = useState(false)
   if (loading)
     return (
       <div className="flex h-dvh items-center justify-center">
@@ -49,9 +53,10 @@ export function AuthGate({ children, auxiliary = false }: { children: ReactNode;
   // Skipping does not fake a login: `isAuthenticated` stays false, so Drive and the account-managed
   // ALwith provider stay hidden exactly as they should, while the Codex engine and every other
   // vendor's models keep working.
-  if (authenticated || skipped) return children
+  if (authenticated || skipped || unlocked) return children
   return auxiliary ? null : (
     <PlatformLogin
+      onUnlock={() => setUnlocked(true)}
       onSkip={() => {
         rememberSkipped()
         setSkipped(true)
@@ -60,8 +65,9 @@ export function AuthGate({ children, auxiliary = false }: { children: ReactNode;
   )
 }
 
-function PlatformLogin({ onSkip }: { onSkip: () => void }) {
+function PlatformLogin({ onSkip, onUnlock }: { onSkip: () => void; onUnlock: () => void }) {
   const { t } = useTranslation()
+  const [localView, setLocalView] = useState(false)
   const [mode, setMode] = useState<Mode>("code")
   const [email, setEmail] = useState("")
   const [code, setCode] = useState("")
@@ -114,6 +120,7 @@ function PlatformLogin({ onSkip }: { onSkip: () => void }) {
           : await authClient.loginWithCode(email.trim(), code.trim())
     await loginPlatform(response)
   }
+  if (localView) return <LocalLogin onBack={() => setLocalView(false)} onUnlock={onUnlock} />
   return (
     <main className="flex h-dvh flex-col overflow-auto bg-background text-foreground">
       <div data-tauri-drag-region className="h-10 shrink-0" />
@@ -219,12 +226,140 @@ function PlatformLogin({ onSkip }: { onSkip: () => void }) {
         <p className="text-xs text-muted-foreground">{t("platformAuth.independent")}</p>
         {/* The account service only answers inside the company network, so a reader away from it
             would otherwise face a wall they cannot pass. Local features do not need an account. */}
-        <div className="flex flex-col items-center gap-1">
+        <div className="flex flex-col items-center gap-2">
+          <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setLocalView(true)}>
+            {t("platformAuth.localEntry")}
+          </Button>
           <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={onSkip}>
             {t("platformAuth.skip")}
           </Button>
           <p className="text-center text-xs text-muted-foreground">{t("platformAuth.skipHint")}</p>
         </div>
+      </div>
+    </main>
+  )
+}
+
+/** Local sign-in: a door for this machine when the account service is unreachable.
+ *
+ *  Deliberately separate from the account flow — it never sets `isAuthenticated`. Anything that
+ *  needs a real token (Drive, the account-managed ALwith provider) therefore stays hidden instead
+ *  of half-initializing, which is what "打开限制" can honestly mean here: both are visible once a
+ *  company account is signed in, and neither can be faked by a local password. */
+function LocalLogin({ onBack, onUnlock }: { onBack: () => void; onUnlock: () => void }) {
+  const { t } = useTranslation()
+  const [registered, setRegistered] = useState<boolean | null>(null)
+  const [name, setName] = useState("")
+  const [password, setPassword] = useState("")
+  const [confirm, setConfirm] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    void hasLocalAccount()
+      .then(setRegistered)
+      .catch(() => setRegistered(false))
+  }, [])
+
+  async function submit() {
+    if (busy || registered === null) return
+    setBusy(true)
+    setError("")
+    try {
+      if (registered) {
+        if (!(await verifyLocalPassword(password))) {
+          setError(t("platformAuth.localWrong"))
+          return
+        }
+      } else {
+        if (password.length < 6) {
+          setError(t("platformAuth.localTooShort"))
+          return
+        }
+        if (password !== confirm) {
+          setError(t("platformAuth.localMismatch"))
+          return
+        }
+        await createLocalAccount(name, password)
+      }
+      onUnlock()
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <main className="flex h-dvh flex-col overflow-auto bg-background text-foreground">
+      <div data-tauri-drag-region className="h-10 shrink-0" />
+      <div className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center gap-4 px-6 pb-16">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-lg font-semibold">{t("platformAuth.localTitle")}</h1>
+          <p className="text-xs text-muted-foreground">
+            {registered ? t("platformAuth.localDescUnlock") : t("platformAuth.localDesc")}
+          </p>
+        </div>
+        {registered === null ? (
+          <div className="flex justify-center py-6">
+            <Spinner />
+          </div>
+        ) : (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault()
+              void submit()
+            }}
+          >
+            <FieldGroup>
+              {!registered && (
+                <Field data-disabled={busy}>
+                  <FieldLabel htmlFor="local-name">{t("platformAuth.localName")}</FieldLabel>
+                  <Input id="local-name" disabled={busy} value={name} onChange={(event) => setName(event.target.value)} />
+                </Field>
+              )}
+              <Field data-disabled={busy}>
+                <FieldLabel htmlFor="local-password">{t("platformAuth.localPassword")}</FieldLabel>
+                <Input
+                  id="local-password"
+                  type="password"
+                  autoComplete={registered ? "current-password" : "new-password"}
+                  required
+                  disabled={busy}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+              </Field>
+              {!registered && (
+                <Field data-disabled={busy}>
+                  <FieldLabel htmlFor="local-confirm">{t("platformAuth.localConfirm")}</FieldLabel>
+                  <Input
+                    id="local-confirm"
+                    type="password"
+                    autoComplete="new-password"
+                    required
+                    disabled={busy}
+                    value={confirm}
+                    onChange={(event) => setConfirm(event.target.value)}
+                  />
+                </Field>
+              )}
+              {error && (
+                <Alert variant="destructive">
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+              <Button type="submit" disabled={busy}>
+                {busy && <Spinner data-icon="inline-start" />}
+                {registered ? t("platformAuth.localUnlock") : t("platformAuth.localSetup")}
+              </Button>
+            </FieldGroup>
+          </form>
+        )}
+        <p className="text-xs text-muted-foreground">{t("platformAuth.localNote")}</p>
+        <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={onBack}>
+          {t("platformAuth.localBack")}
+        </Button>
       </div>
     </main>
   )
