@@ -23,3 +23,6 @@ src-tauri/resources/computer/
 src-tauri/resources/licenses/alwith-native-*/
 
 src-tauri/resources/chrome-bridge/
+
+# 项目记忆与本地工作记录，不进版本库
+.workbuddy/
