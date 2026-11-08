@@ -75,13 +75,17 @@ function refreshAccountProviders(): void {
   const user = usePlatformAuth.getState().user
   if (!user || user.user_uuid !== validatedAccount) return
   void managedProviders.refresh(user.user_uuid).catch((error: unknown) => {
+    // A failed refresh means the account service is unreachable from this network, or the token
+    // could not be renewed — both are conditions the reader resolves in 设置 → 账号, and both are
+    // normal outside the company network. A red toast on every launch sent the reader chasing a
+    // failure they could not act on, and it vanished in a second (2026-11-08). Log it instead.
     const message =
       error instanceof Error
         ? error.message
         : typeof error === "object" && error !== null && "message" in error
           ? String(error.message)
           : String(error)
-    toast.error(message)
+    console.warn("[auth] managed provider refresh failed:", message)
   })
 }
 export function requestAccountProviderRefresh(): Promise<void> {
