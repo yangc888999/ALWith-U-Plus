@@ -1304,10 +1304,9 @@ body::after {
 }
 
 
-/* 隐藏输入框左侧的「+」（attachImage）。
-   它只用于添加图片/文件，L 这个界面不走附件流程；按钮由 @alwith/module-chat 硬编码渲染，
-   没有开关属性，所以按工具栏的结构定位。若上游改了工具栏层级，这条会失效而不是隐藏错东西
-   —— 它只作用于 `.chat-composer-toolbar` 内的第一个按钮。 */
-.chat-composer-toolbar > div > div:first-child > button:first-child {
+/* 仅在聊天模式隐藏输入框左侧的「+」（attachImage）。项目对话保留它——那里附件是常规操作。
+   按钮由 @alwith/module-chat 硬编码渲染、没有开关属性，所以按工具栏结构 + 模式标记定位；
+   上游改层级时这条会失效而不是隐藏错东西。 */
+[data-composer-mode="chat"] .chat-composer-toolbar > div > div:first-child > button:first-child {
   display: none;
 }

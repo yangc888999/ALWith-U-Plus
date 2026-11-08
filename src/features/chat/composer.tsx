@@ -234,7 +234,7 @@ export function ChatComposer({
   // hover check cost a `session/set_config_option` round trip (0.1–8s) on every menu open and left
   // the picker spinning for the duration, for an answer the session's own catalog already had.
   return (
-    <div data-composer ref={shellRef} className="relative" onContextMenu={openMenu}>
+    <div data-composer data-composer-mode={project === null ? "chat" : "project"} ref={shellRef} className="relative" onContextMenu={openMenu}>
       <ComposerResizeHandle shellRef={shellRef} />
       <Composer
         modelMenu={chatModelMenu}
@@ -243,25 +243,40 @@ export function ChatComposer({
         onHandOff={handOff}
         inputHeader={
           props.inputHeader ?? (
-            // One row inside the card. The model-call notice used to sit on its own line above,
-            // which pushed the file chip and the model controls down and left a mostly empty band
-            // (2026-11-08). It now shares the row and takes whatever the chips leave.
-            <div className="flex w-full min-w-0 items-center justify-between gap-2">
-              {/* A quoted document's name is a reference, not the subject: it never takes more
-                  than a third of the row, and the rest goes to the model controls. */}
-              <div className="flex min-w-0 max-w-[33%] shrink-0 items-center gap-2 overflow-hidden">
-                <ActivePreviewChip />
-                <QueuedPromptChip session={props.session} />
-              </div>
-              <div className="min-w-0 flex-1">
-                <TurnProgressBar session={props.session} />
-              </div>
-              {/* 分工 belongs to projects: a chat is a throwaway conversation with no plan/execute
-                  flow. `groupByDirectory` is the same test the sidebar groups use, so the entry
-                  appears exactly under the conversations that live in a project folder. */}
-              <div className="flex shrink-0 items-center gap-1">
-                <PendingModelChip session={props.session} />
-                {project === null ? null : <OrchestrationControl session={props.session} />}
+            // Chat merges the model-call notice into the chip row; a project keeps the two-row
+            // arrangement it has always had, because its row also carries 分工 and the file chips.
+            <div
+              className={
+                project === null
+                  ? "flex w-full min-w-0 items-center justify-between gap-2"
+                  : "flex w-full min-w-0 flex-col gap-1"
+              }
+            >
+              {project === null ? null : <TurnProgressBar session={props.session} />}
+              <div
+                className={
+                  project === null
+                    ? "contents"
+                    : "flex w-full min-w-0 items-center justify-between gap-2"
+                }
+              >
+                {/* A quoted document's name is a reference, not the subject: it never takes more
+                    than a third of the row, and the rest goes to the model controls. */}
+                <div className="flex min-w-0 max-w-[33%] shrink-0 items-center gap-2 overflow-hidden">
+                  <ActivePreviewChip />
+                  <QueuedPromptChip session={props.session} />
+                </div>
+                {project === null && (
+                  <div className="min-w-0 flex-1">
+                    <TurnProgressBar session={props.session} />
+                  </div>
+                )}
+                {/* 分工 belongs to projects: a chat is a throwaway conversation with no plan/execute
+                    flow. `groupByDirectory` is the same test the sidebar groups use. */}
+                <div className="flex shrink-0 items-center gap-1">
+                  <PendingModelChip session={props.session} />
+                  {project === null ? null : <OrchestrationControl session={props.session} />}
+                </div>
               </div>
             </div>
           )

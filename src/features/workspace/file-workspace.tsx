@@ -58,7 +58,7 @@ import { listen } from "@tauri-apps/api/event"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
 import { revealItemsInDir } from "@tauri-apps/plugin-opener"
-import { ChartColumn, FolderTree, MessageSquare } from "lucide-react"
+import { ChartColumn, FolderTree, FolderOpen, MessageSquare, RefreshCw } from "lucide-react"
 import {
   lazy,
   type MouseEvent as ReactMouseEvent,
@@ -1596,13 +1596,18 @@ export function FileWorkspace({
                               setBiReload((count) => count + 1)
                             }}
                           >
+                            <RefreshCw aria-hidden="true" />
                             {t("workspace.refresh")}
                           </Button>
                         )}
                         <Button variant="ghost" size="sm" onClick={closePreviewExtension}>
+                          <FolderOpen aria-hidden="true" />
                           {t("workspace.backToFiles")}
                         </Button>
-                        {trailing}
+                        {/* `trailing` carries the editor's own 最大化 and close buttons. Neither
+                            behaved for the BI panel — maximize left the native view mis-sized and
+                            close could not dismiss it — and 返回文件 already closes the panel, so
+                            they are simply not rendered here (2026-11-08). */}
                       </div>
                     </div>
                     <div className="flex min-h-0 flex-1 flex-col">
