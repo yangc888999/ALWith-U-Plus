@@ -1,4 +1,4 @@
-import { reportBackgroundError } from "@/lib/background-errors"
+import { logBackgroundError, reportBackgroundError } from "@/lib/background-errors"
 import { describeError } from "@/lib/error-text"
 
 import { drive } from "./controller"
@@ -61,7 +61,9 @@ export function useDriveConnection(start = true): void {
         }
       })
       .catch((error: unknown) => {
-        if (!disposed) reportBackgroundError("drive-startup", error)
+        // A background sync that the reader did not ask for keeps its details in the log; putting
+        // it on screen produced a red flash that named nothing actionable.
+        if (!disposed) logBackgroundError("drive-startup", error)
       })
     return () => {
       disposed = true
