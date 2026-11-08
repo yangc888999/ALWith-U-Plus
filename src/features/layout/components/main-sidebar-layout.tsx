@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { useWorkspaceLayout } from "@/features/workspace/use-workspace-layout"
+import { saveChatLayout, useChatLayout } from "@/features/workspace/chat-layout"
 import { PanelDivider } from "@/features/workspace/panel-divider"
 import {
   NAVIGATION_PX_MIN,
@@ -47,7 +48,8 @@ export function MainSidebarLayout({
   leadingActions,
   headerTrailing,
   statusBar,
-  children
+  children,
+  chatMode
 }: {
   initialPinned: boolean
   screen: MainScreen
@@ -64,9 +66,12 @@ export function MainSidebarLayout({
   leadingActions?: ReactNode
   statusBar?: ReactNode
   children?: ReactNode
+  /** A chat surface has two columns and its own sidebar width; a project reads the four-column store. */
+  chatMode?: boolean
 }) {
   const { t } = useTranslation()
   const layout = useWorkspaceLayout()
+  const chatLayout = useChatLayout()
   const zoom = useStore(zoomStore, (state) => state.level)
   // The sidebar is stored as a window fraction so it adapts to any window size; resolve it to a
   // pixel width clamped to a usable range before handing it to the canvas.
@@ -81,7 +86,8 @@ export function MainSidebarLayout({
   }, [])
   // No pixel ceiling: the Settings percentage has to describe the real column even on a wide
   // window. The old 460px cap turned 18% into 16% there and made the numbers look wrong.
-  const sidebarPx = resolveRatioToPixels(layout.navigationRatio, viewportWidth, 0, viewportWidth)
+  const navigationRatio = chatMode === true ? chatLayout.navigationRatio : layout.navigationRatio
+  const sidebarPx = resolveRatioToPixels(navigationRatio, viewportWidth, 0, viewportWidth)
   // A drag owns the pixel width until release; the persisted share takes over afterwards, so the
   // next launch (or the Settings number) decides the column again.
   const [dragPx, setDragPx] = useState<number | null>(null)
@@ -290,8 +296,13 @@ export function MainSidebarLayout({
                         onEnd={() => {
                           // Persist the settled share: the four-column model keeps chat/tree put and
                           // lets the preview absorb the difference, so the total stays 100%.
-                          if (viewportWidth > 0)
-                            saveLayoutShare("navigation", (dragPxRef.current / viewportWidth) * 100)
+                          if (viewportWidth > 0) {
+                            const percent = (dragPxRef.current / viewportWidth) * 100
+                            // A chat stores its own sidebar width; a project writes the four-column
+                            // budget. Keeping them apart is what lets the two surfaces differ.
+                            if (chatMode === true) saveChatLayout({ navigationRatio: percent / 100 })
+                            else saveLayoutShare("navigation", percent)
+                          }
                           setDragPx(null)
                         }}
                       />

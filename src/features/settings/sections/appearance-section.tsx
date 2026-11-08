@@ -33,6 +33,7 @@ import {
   workspaceLayoutDefaults
 } from "@/features/workspace/layout-preferences"
 import { useWorkspaceLayout } from "@/features/workspace/use-workspace-layout"
+import { chatLayoutDefaults, saveChatLayout, useChatLayout } from "@/features/workspace/chat-layout"
 import {
   getConversationDetail,
   getQueueSendMode,
@@ -164,6 +165,11 @@ export function AppearanceSection() {
   const layout = useWorkspaceLayout()
   // Whole percentages that always add up to 100, so the four rows read as one budget.
   const percents = sharePercents(layout)
+  const chatLayout = useChatLayout()
+  const chatPercents = {
+    navigation: Math.round(chatLayout.navigationRatio * 100),
+    chat: Math.round(chatLayout.chatRatio * 100)
+  }
   const queueMode = useSyncExternalStore(subscribeChatDisplayPreferences, getQueueSendMode, getQueueSendMode)
   const detail = useSyncExternalStore(subscribeChatDisplayPreferences, getConversationDetail, getConversationDetail)
   const { theme, setTheme } = useTheme()
@@ -329,6 +335,49 @@ export function AppearanceSection() {
         <div className="border-t border-border/60">
           <FourColumnsRow compact />
         </div>
+      </SettingsCard>
+
+      <SettingsCard
+        title={t("settings.chatLayoutSection")}
+        desc={t("settings.chatLayoutSectionDesc")}
+        action={
+          <button
+            type="button"
+            className="rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            onClick={() => saveChatLayout(chatLayoutDefaults)}
+          >
+            {t("settings.resetLayout")}
+          </button>
+        }
+      >
+        <div className="px-4 pb-2">
+          <div className="flex h-2.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+            <LayoutSegment pct={chatPercents.navigation} mix="26%" />
+            <LayoutSegment pct={chatPercents.chat} mix="46%" />
+          </div>
+          <div
+            className="mt-2 grid"
+            style={{ gridTemplateColumns: `${chatPercents.navigation}fr ${chatPercents.chat}fr` }}
+          >
+            <LayoutLegend mix="26%" label={t("settings.layoutNavigation")} />
+            <LayoutLegend mix="46%" label={t("settings.layoutChat")} />
+          </div>
+        </div>
+        <div className="border-t border-border/60">
+          <LayoutShareRow
+            name={t("settings.layoutNavigation")}
+            value={chatPercents.navigation}
+            onCommit={(value) => saveChatLayout({ navigationRatio: value / 100 })}
+          />
+          <LayoutShareRow
+            name={t("settings.layoutChat")}
+            value={chatPercents.chat}
+            onCommit={(value) => saveChatLayout({ chatRatio: value / 100 })}
+          />
+        </div>
+        <p className="px-4 pt-1 pb-2 text-[11.5px] leading-[18px] text-muted-foreground">
+          {t("settings.chatLayoutShareNote")}
+        </p>
       </SettingsCard>
 
       <SettingsCard title={t("settings.soundSection")}>

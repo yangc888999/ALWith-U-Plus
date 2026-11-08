@@ -1178,6 +1178,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     <div className="h-full" inert={busy} aria-busy={busy}>
       <WallpaperBackground onError={reportExtensionError}>
         <MainSidebarLayout
+          chatMode={isTemporaryChat}
           initialPinned={initialPreferences.sidebarPinned}
           screen={leading ? "leading" : "main"}
           onScreenChange={(screen) => {
