@@ -2,7 +2,7 @@
   "platformAuth": {
     "code": "Kode verifikasi",
     "signIn": "Masuk",
-    "signOut": "Keluar dari ALwith U"
+    "signOut": "Keluar dari ALWith L"
   },
   "guide": {
     "help": "Dapatkan bantuan"
@@ -116,7 +116,7 @@
         "name": "Akses penuh",
         "description": "Gunakan dengan hati-hati: Codex dapat mengedit berkas di luar ruang kerja ini dan mengakses internet tanpa persetujuan"
       },
-      "heading": "Bagaimana tindakan ALwith U disetujui?"
+      "heading": "Bagaimana tindakan ALWith L disetujui?"
     }
   },
   "composer": {
@@ -134,7 +134,6 @@
     "reset": "Atur ulang"
   },
   "settings": {
-    "gamepad": "Gamepad",
     "general": "Umum",
     "versionLabel": "Versi",
     "title": "Pengaturan",
@@ -359,13 +358,8 @@
     "emptyNewTab": "Tab baru",
     "more": "Tindakan lainnya"
   },
-  "pet": {
-    "retry": "Coba lagi",
-    "lounge": "Ruang istirahat Vibémon",
-    "recall": "Kembalikan ke ruang istirahat"
-  },
   "app": {
-    "name": "ALwith U"
+    "name": "ALWith L"
   },
   "notify": {
     "needsInput": "Masukan Anda diperlukan",

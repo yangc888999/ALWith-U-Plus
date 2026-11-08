@@ -2,7 +2,18 @@ import { resolveManifestText } from "@alwith/module-extension"
 import type { HostSnapshot, RuntimeSnapshot, ViewContribution } from "@alwith/module-extension/host"
 import { sortContributions } from "@alwith/module-extension/host"
 import type { Request } from "@alwith/module-extension/tauri"
-import { CircleArrowUpIcon, MoreVerticalIcon, PlusIcon, RefreshCwIcon, Trash2Icon, XIcon } from "lucide-react"
+import {
+  BookOpenIcon,
+  ChartColumnIcon,
+  CircleArrowUpIcon,
+  DownloadIcon,
+  MoreVerticalIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  ShieldCheckIcon,
+  Trash2Icon,
+  XIcon
+} from "lucide-react"
 import { type ReactNode, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -25,6 +36,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { openExternal } from "@/lib/open"
 
+import { COMPANY_APPS, type CompanyApp } from "./company-apps"
 import { ExtensionIcon } from "./extension-icon"
 import { EXTENSION_ICONS } from "./extension-icons"
 import { findLegacyProfile, LEGACY_SOURCE } from "./legacy/profiles"
@@ -37,7 +49,10 @@ interface ExtensionsManagerProps {
   host: HostSnapshot
   busy: boolean
   installPhase?: ExtensionInstallPhase | null
+  /** The company app whose download is in flight, so only that row shows a spinner. */
+  installingApp?: string | null
   onInstall: (id?: string) => void
+  onInstallApp: (app: CompanyApp) => void
   onRequest: (request: Request) => void
   onReload?: (id: string) => void
   onRetry?: () => void
@@ -52,7 +67,9 @@ export function ExtensionsManager({
   host,
   busy,
   installPhase,
+  installingApp,
   onInstall,
+  onInstallApp,
   onRequest,
   onUninstall,
   onReload,
@@ -65,6 +82,10 @@ export function ExtensionsManager({
   const [dismissedNotices, setDismissedNotices] = useState<Set<string>>(() => new Set())
   const search = query.trim().toLocaleLowerCase()
   const installations = state.native?.installations ?? []
+  // Published apps the user has not installed yet keep their own section: the list above only
+  // ever mirrors what is actually installed.
+  const published = COMPANY_APPS.filter((app) => !installations.some((item) => item.id === app.id))
+  const language = i18n.language.startsWith("zh") ? "zh-CN" : "en"
   const matches = installations
     .map((item) => ({ item, ...resolveManifestText(item.manifest, i18n.language) }))
     .filter(({ item, name, description }) =>
@@ -79,7 +100,7 @@ export function ExtensionsManager({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <h1 className="text-2xl font-semibold">{t("sidebar.extensions")}</h1>
-          <Badge className="bg-primary/10 text-[10px] text-primary">BETA</Badge>
+          <Badge className="bg-[var(--settings-accent-soft)] text-[10px] text-[var(--settings-accent-ink)]">BETA</Badge>
         </div>
         <Button variant="outline" size="sm" disabled={unavailable} onClick={() => onInstall()}>
           {installPhase ? <Spinner aria-hidden="true" /> : <PlusIcon />}
@@ -104,6 +125,41 @@ export function ExtensionsManager({
           </AlertDescription>
         </Alert>
       )}
+      {published.length > 0 && (
+        <section aria-label={t("extensions.company.title")} className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span aria-hidden="true" className="inline-block h-3.5 w-1 shrink-0 rounded-full bg-[var(--settings-accent)]" />
+            <h2 className="text-sm font-medium text-[var(--settings-accent-ink)]">{t("extensions.company.title")}</h2>
+            <span className="text-xs text-muted-foreground">{t("extensions.company.description")}</span>
+          </div>
+          <PanelList className="grid grid-cols-1 gap-x-4 gap-y-3 @2xl:grid-cols-2">
+            {published.map((app) => (
+              <PanelItem key={app.id} className="items-start gap-3 rounded-md border-0 p-4">
+                <ItemMedia>
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-[var(--settings-accent-soft)] text-[var(--settings-accent-ink)]">
+                    <CompanyAppIcon id={app.id} />
+                  </div>
+                </ItemMedia>
+                <ItemContent className="min-w-0">
+                  <PanelItemTitle className="mb-0.5 text-sm font-medium">{app.name}</PanelItemTitle>
+                  <ItemDescription className="text-xs leading-5">{app.description[language]}</ItemDescription>
+                </ItemContent>
+                <ItemActions>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={unavailable || (installingApp != null && installingApp !== app.id)}
+                    onClick={() => onInstallApp(app)}
+                  >
+                    {installingApp === app.id ? <Spinner aria-hidden="true" /> : <DownloadIcon />}
+                    {t("extensions.company.install")}
+                  </Button>
+                </ItemActions>
+              </PanelItem>
+            ))}
+          </PanelList>
+        </section>
+      )}
       <div className="space-y-4">
         <Input
           type="search"
@@ -118,7 +174,7 @@ export function ExtensionsManager({
             {t("extensions.loading")}
           </div>
         )}
-        {state.native !== null && matches.length === 0 && (
+        {state.native !== null && matches.length === 0 && (published.length === 0 || search !== "") && (
           <p className="py-12 text-center text-sm text-muted-foreground">
             {t(installations.length === 0 ? "extensions.empty" : "extensions.noMatches")}
           </p>
@@ -149,7 +205,7 @@ export function ExtensionsManager({
               <section key={item.installationId} aria-label={name} className="min-w-0">
                 <PanelItem className="group/extension items-start gap-3 rounded-md border-0 p-4">
                   <ItemMedia>
-                    <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+                    <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-[var(--settings-accent-soft)] text-[var(--settings-accent-ink)]">
                       <ExtensionIcon key={item.manifest.icon} src={item.manifest.icon} contribution={entryIcon} />
                     </div>
                   </ItemMedia>
@@ -310,4 +366,11 @@ export function ExtensionsManager({
       </div>
     </div>
   )
+}
+
+/** Published apps carry their own marks; the manifest icon only exists after installation. */
+function CompanyAppIcon({ id }: { id: string }): ReactNode {
+  if (id === "yup-kb") return <BookOpenIcon aria-hidden="true" className="size-5" />
+  if (id === "etms-strategy-review") return <ShieldCheckIcon aria-hidden="true" className="size-5" />
+  return <ChartColumnIcon aria-hidden="true" className="size-5" />
 }

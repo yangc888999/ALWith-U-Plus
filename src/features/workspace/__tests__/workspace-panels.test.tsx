@@ -9,7 +9,10 @@ import { PreviewSurface } from "../preview-surface"
 import { WorkspacePanels } from "../workspace-panels"
 
 await initI18n("en")
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  localStorage.clear()
+})
 
 test("dragging past the minimum keeps preview open on the next screen and reversing restores shared layout", () => {
   const onVisibleChange = vi.fn()
@@ -41,16 +44,19 @@ test("dragging past the minimum keeps preview open on the next screen and revers
   divider.setPointerCapture = vi.fn()
   fireEvent.pointerDown(divider, { button: 0, clientX: 500, pointerId: 1 })
   fireEvent.pointerMove(divider, { clientX: 650, pointerId: 1 })
-  expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 1000, preview: 1256, visible: true, maximized: false })
+  expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 470, preview: 530, visible: true, maximized: false })
   expect(onVisibleChange).not.toHaveBeenCalledWith(false)
   expect(view.getByRole("textbox")).toHaveValue("Retained draft")
   fireEvent.pointerMove(divider, { clientX: 550, pointerId: 1 })
-  expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 550, preview: 450, visible: true, maximized: false })
+  expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 370, preview: 630, visible: true, maximized: false })
   fireEvent.pointerUp(divider, { pointerId: 1 })
-  for (let index = 0; index < 3; index++) fireEvent.keyDown(divider, { key: "ArrowRight" })
+  // ArrowLeft grows the preview past chat's floor, which keeps the preview open on the next screen.
+  for (let index = 0; index < 6; index++) fireEvent.keyDown(divider, { key: "ArrowLeft" })
   expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 1000, preview: 1256, visible: true, maximized: false })
-  fireEvent.keyDown(divider, { key: "ArrowLeft" })
-  expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 590, preview: 410, visible: true, maximized: false })
+  // At the maximum a further ArrowRight cannot shrink the preview past the band — it clamps
+  // instead of tearing the layout apart, keeping the preview open on its own screen.
+  fireEvent.keyDown(divider, { key: "ArrowRight" })
+  expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 1000, preview: 1256, visible: true, maximized: false })
 })
 
 test("hiding navigation preserves a manual split until the divider is adjusted again", () => {
@@ -80,12 +86,14 @@ test("hiding navigation preserves a manual split until the divider is adjusted a
   )
   const view = render(renderPanels(1000))
   const divider = view.getByRole("separator")
-  for (let index = 0; index < 6; index++) fireEvent.keyDown(divider, { key: "ArrowRight" })
+  fireEvent.keyDown(divider, { key: "ArrowLeft" })
   expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 1000, preview: 1256, visible: true, maximized: false })
   view.rerender(renderPanels(1256))
   expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 1256, preview: 1256, visible: true, maximized: false })
-  fireEvent.keyDown(divider, { key: "ArrowLeft" })
-  expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 856, preview: 400, visible: true, maximized: false })
+  // At the maximum the keyboard clamps rather than shrinking the preview below the band, so the
+  // divider stays functional and the preview remains open on its own screen.
+  fireEvent.keyDown(divider, { key: "ArrowRight" })
+  expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 1256, preview: 1256, visible: true, maximized: false })
 })
 
 test("dragging left hides chat and reversing the same pointer gesture restores the draft", () => {
@@ -125,11 +133,11 @@ test("dragging left hides chat and reversing the same pointer gesture restores t
   expect(view.container.querySelector(".file-workspace-preview-slide")).toHaveStyle({ width: "1000px" })
   fireEvent.pointerMove(divider, { clientX: 500, pointerId: 1 })
   expect(view.getByRole("textbox")).toHaveValue("Preserved draft")
-  expect(view.container.querySelector(".file-workspace-slide")).toHaveStyle({ width: "500px" })
+  expect(view.container.querySelector(".file-workspace-slide")).toHaveStyle({ width: "320px" })
   fireEvent.pointerUp(divider, { pointerId: 1 })
 })
 
-test.each([-250, 150])("preview restore after dragging %ipx resets the actual layout", (delta) => {
+test.each([-250, -150])("preview restore after dragging %ipx resets the actual layout", (delta) => {
   const setWorkspace = vi.fn()
   const navigate = vi.fn()
   function Fixture() {
@@ -183,7 +191,7 @@ test.each([-250, 150])("preview restore after dragging %ipx resets the actual la
   fireEvent.pointerUp(divider, { pointerId: 1 })
   expect(view.getByRole("button", { name: "Restore" })).toHaveAttribute("aria-pressed", "true")
   fireEvent.click(view.getByRole("button", { name: "Restore" }))
-  expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 500, preview: 500, visible: true, maximized: false })
+  expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 320, preview: 680, visible: true, maximized: false })
   expect(view.getByRole("button", { name: "Maximize" })).toHaveAttribute("aria-pressed", "false")
   expect(view.getByRole("textbox", { name: "" })).toHaveValue("Preserved draft")
   expect(view.getByRole("textbox", { name: "Editor" })).toHaveValue("Preserved edit")

@@ -135,9 +135,10 @@ export function ActivityPanel({
     const handler = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.isComposing || e.repeat || e.shiftKey || e.altKey) return
       if (isMac() ? !e.metaKey || e.ctrlKey : !e.ctrlKey || e.metaKey) return
-      if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return
       const n = Number(e.key)
       if (!Number.isInteger(n) || n < 1 || n > 9) return
+      // Only scan the DOM once we know a 1–9 shortcut was actually pressed, not on every Cmd/Ctrl.
+      if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return
       const row = flatRows[n - 1]
       if (!row) return
       e.preventDefault()

@@ -1,6 +1,8 @@
 import type * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { expect, test, vi } from "vitest"
 
+import { setSandboxSettings } from "@/lib/sandbox-preference"
+
 import { CodexClient } from "../client"
 import type { ClientOptions } from "../client"
 import { createFakeAgent } from "./fake-agent"
@@ -22,6 +24,7 @@ test("host session context is resolved for each explicit session operation witho
       appendSystemPrompt: `Knowledge for ${cwd}`
     })
   )
+  setSandboxSettings({ enabled: false })
   const client = new CodexClient(() => Promise.resolve(port), {
     agentId: "codex",
     launch: { engine: "codex" },
@@ -36,7 +39,7 @@ test("host session context is resolved for each explicit session operation witho
       mcpServers: [server],
       systemPrompt: { mode: "append", content: [{ type: "text", text: "Knowledge for /tmp/project" }] }
     })
-    expect(created).not.toHaveProperty("_meta")
+    expect(created).toMatchObject({ _meta: { codex: { mode: "agent-full-access" } } })
     await client.fork(id, "/tmp/other")
     const fork = request.mock.calls.find((call) => call[1] === "session/fork")?.[2]
     expect(fork).toMatchObject({

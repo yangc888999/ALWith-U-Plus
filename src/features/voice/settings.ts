@@ -35,7 +35,8 @@ function encode(settings: VoiceSettings): Record<string, unknown> {
 }
 export async function loadVoiceEnabled(): Promise<boolean> {
   await settingsStore.read()
-  return settingsStore.get<boolean>("voice.enabled") ?? true
+  // Voice input ships off: users opt in from Settings → Voice.
+  return settingsStore.get<boolean>("voice.enabled") ?? false
 }
 export async function saveVoiceEnabled(enabled: boolean): Promise<void> {
   await updateSettings({ "voice.enabled": enabled })
@@ -43,7 +44,7 @@ export async function saveVoiceEnabled(enabled: boolean): Promise<void> {
 export function subscribeVoiceEnabled(changed: (enabled: boolean) => void): Promise<() => void> {
   return Promise.try(() => {
     return settingsStore.subscribe((keys) => {
-      if (keys.includes("voice.enabled")) changed(settingsStore.get<boolean>("voice.enabled") ?? true)
+      if (keys.includes("voice.enabled")) changed(settingsStore.get<boolean>("voice.enabled") ?? false)
     })
   })
 }

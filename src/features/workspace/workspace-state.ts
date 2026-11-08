@@ -88,3 +88,58 @@ export function createWorkspaceStateStore(storage: Storage = localStorage): {
     }
   }
 }
+
+/** Which document a conversation is looking at. */
+export interface WorkspaceSessionState {
+  tabs: { path: string; pinned: boolean }[]
+  activePath: string | null
+}
+
+/**
+ * The part of the workspace that belongs to one conversation rather than to the project.
+ *
+ * There is exactly one workspace instance per project — that is what keeps the tree, the editor
+ * and any unsaved buffers alive while the reader switches chats, and it must stay that way. The
+ * cost was that the persisted state was keyed by project alone, so every conversation in a project
+ * reopened on the same tabs: starting a second chat showed the first chat's document, and going
+ * back replaced it. Which files a conversation has open is conversation-scoped, so it is kept in
+ * this second store and applied whenever the active conversation changes.
+ *
+ * Only `tabs` and `activePath` live here. The rest of `WorkspaceState` — expanded folders, the
+ * hidden/ignored toggles, the icon theme, the editor split layout — is a project preference and
+ * must not jump around when the reader moves between chats.
+ */
+export function createWorkspaceSessionStore(storage: Storage = localStorage): {
+  load: (root: string, session: string) => Promise<WorkspaceSessionState | null>
+  save: (root: string, session: string, state: WorkspaceSessionState) => Promise<void>
+} {
+  const key = (root: string, session: string): string => `workspace-session:${root}#${session}`
+  return {
+    load(root, session) {
+      return Promise.try(() => {
+        const raw = storage.getItem(key(root, session))
+        if (raw === null) return null
+        const value: unknown = JSON.parse(raw)
+        if (typeof value !== "object" || value === null) return null
+        const state = value as Record<string, unknown>
+        if (!Array.isArray(state.tabs)) return null
+        const tabs = state.tabs.filter((tab): tab is { path: string; pinned: boolean } => {
+          if (typeof tab !== "object" || tab === null) return false
+          const entry = tab as { path?: unknown; pinned?: unknown }
+          return typeof entry.path === "string" && containsPath(root, entry.path) && typeof entry.pinned === "boolean"
+        })
+        // A conversation that never opened anything stores no active path; a path the project has
+        // since lost (moved, renamed, unshared) is dropped rather than replayed as a broken tab.
+        const activePath =
+          typeof state.activePath === "string" && containsPath(root, state.activePath) ? state.activePath : null
+        return { tabs, activePath }
+      })
+    },
+    save(root, session, state) {
+      return Promise.try(() => {
+        const tabs = state.tabs.filter((tab) => containsPath(root, tab.path))
+        storage.setItem(key(root, session), JSON.stringify({ tabs, activePath: state.activePath }))
+      })
+    }
+  }
+}

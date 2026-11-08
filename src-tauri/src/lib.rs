@@ -10,7 +10,10 @@ mod dropped_file_url_tests;
 mod appearance;
 mod auth;
 mod autostart;
+mod bridge;
 mod bundled_extensions;
+mod chatgpt_auth;
+mod codex_update;
 mod chat_files;
 mod chat_window;
 mod computer;
@@ -21,7 +24,6 @@ mod extension_inbox;
 mod extension_wire;
 #[cfg(target_os = "macos")]
 mod fullscreen_controls;
-mod gamepad;
 mod html_preview;
 mod installed_apps;
 mod legacy_extensions;
@@ -32,15 +34,23 @@ mod native;
 #[cfg(target_os = "macos")]
 mod panel;
 mod panic_report;
+mod project_memory;
 mod providers;
 mod runtime;
 mod secret_store;
 mod settings;
+mod online_bi;
+mod online_bi_embed;
+mod session_origin;
 mod settings_store;
+mod groups;
+mod skills;
 use atlas_tauri as trackpad;
 mod tray;
 mod updater;
-mod vibemon;
+mod usage;
+mod lark_cli;
+mod support_components;
 mod voice;
 mod voice_credentials;
 mod window;
@@ -56,22 +66,9 @@ fn application_context() -> tauri::Context {
 }
 
 pub fn run() {
-    let login_launch = autostart::LoginLaunch::new(std::env::args());
-    let mut context = application_context();
-    if login_launch.started_hidden() {
-        let main = context
-            .config_mut()
-            .app
-            .windows
-            .iter_mut()
-            .find(|window| window.label == "main")
-            .expect("main window is configured");
-        main.visible = false;
-        main.focus = false;
-    }
+    let context = application_context();
 
     let builder = tauri::Builder::default()
-        .manage(login_launch)
         .register_asynchronous_uri_scheme_protocol("preview-html", html_preview::handle_protocol)
         .runtime(tauri_runtime_wry::Wry::default())
         // Second launch: focus the running instance instead of starting a second alwith-runtime
@@ -79,9 +76,6 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             log::info!("second instance argv={argv:?} cwd={cwd:?}");
             if window::is_closing(app) {
-                return;
-            }
-            if argv.iter().any(|argument| argument == autostart::ARGUMENT) {
                 return;
             }
             if let Err(error) = window::show_main_window(app.clone()) {
@@ -111,10 +105,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec![autostart::ARGUMENT]),
-        ))
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         // Chat is created hidden before converting it to NSPanel. Restoring visibility here
         // would focus an unprepared NSWindow and break AppKit's keyboard/KVO lifecycle.
         // Settings has a fixed logical size; cached physical sizes must not override it.
@@ -125,7 +116,7 @@ pub fn run() {
                 .with_state_flags(
                     tauri_plugin_window_state::StateFlags::all() - tauri_plugin_window_state::StateFlags::VISIBLE,
                 )
-                .with_denylist(&["chat", "settings", "vibemon", "bubble-menu-vibemon"])
+                .with_denylist(&["chat", "settings"])
                 // Windows guide windows must not restore their legacy undecorated state.
                 .map_label(|label| if cfg!(target_os = "windows") && label == "guide" { "guide-native" } else { label })
                 .build(),
@@ -134,8 +125,7 @@ pub fn run() {
         .manage(legacy_extensions::importer::LegacyImports::default())
         .manage(runtime::RuntimeState::default())
         .manage(power::PreventSleep::default())
-        .manage(extension_inbox::InboxState::default())
-        .manage(vibemon::BubblePresentation::default());
+        .manage(extension_inbox::InboxState::default());
 
     #[cfg(feature = "hasgard-testing")]
     let builder = builder.plugin(tauri_plugin_hasgard::init());
@@ -147,6 +137,18 @@ pub fn run() {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 voice::detach(window.app_handle(), window.label());
             }
+            if window.label() == "main" {
+                match event {
+                    // A drag that lands the window on another display rebuilds its size for that
+                    // display (debounced). Same-display moves are a no-op.
+                    tauri::WindowEvent::Moved(_) => window::on_main_window_moved(window.app_handle()),
+                    // Keep each display's remembered footprint in step with user resizes. This is
+                    // intentionally NOT done on Moved: a cross-display drag has not been resized
+                    // yet, so recording it would write the old size against the new work area.
+                    tauri::WindowEvent::Resized(_) => window::note_main_window_geometry(window.app_handle()),
+                    _ => {}
+                }
+            }
         })
         .on_menu_event(|app, event| {
             if event.id().0 == menu::QUIT_ID {
@@ -154,10 +156,6 @@ pub fn run() {
                 return;
             }
             if window::is_closing(app) {
-                return;
-            }
-            if event.id().0 == "vibemon-close" {
-                let _ = app.emit_to("main", "vibemon:close", ());
                 return;
             }
             let Some(event_name) = menu::event_name(event.id().0.as_str()) else {
@@ -178,20 +176,26 @@ pub fn run() {
             settings::initialize(app.handle())?;
             voice::initialize(app.handle())?;
             app.manage(providers::Providers::load(app.handle())?);
+            // The sanitizing proxy must be listening before the first provider apply rewrites a
+            // gateway's base_url to point at it.
+            if let Err(error) = bridge::start(app.handle().clone()) {
+                log::warn!("Sanitizing bridge unavailable; gateways fall back to direct connections: {error}");
+            }
+            // Before any window can ask the engine to start: a config.toml that names the router
+            // without defining it makes Codex exit 1 on launch, and the repair that runs on the
+            // first request can never be reached. The port is known now, so write it here.
+            providers::repair_router_provider();
             drive::initialize(app.handle())?;
-            gamepad::initialize(app.handle())?;
             trackpad::install(app.handle())?;
             computer::initialize(app.handle())?;
-            log::info!("ALwith U {} starting", env!("CARGO_PKG_VERSION"));
-            // Native materials paint behind the transparent page. Panels that must stay
-            // opaque paint their own background in CSS.
-            #[cfg(target_os = "macos")]
-            {
-                use tauri::window::{Effect, EffectsBuilder};
-                app.get_webview_window("main")
-                    .expect("main window exists at setup")
-                    .set_effects(EffectsBuilder::new().effect(Effect::UnderWindowBackground).build())?;
+            // Ship the operator personas with the app and drop them into `$CODEX_HOME/rob_models`
+            // on launch. Additive only: a persona the user deleted stays deleted.
+            match groups::release_rob_models(app.handle()) {
+                Ok(0) => {}
+                Ok(count) => log::info!("Released {count} operator personas into rob_models"),
+                Err(error) => log::warn!("Could not release operator personas: {error}"),
             }
+            log::info!("ALWith L {} starting", env!("CARGO_PKG_VERSION"));
             #[cfg(target_os = "windows")]
             {
                 use tauri::window::{Effect, EffectsBuilder};
@@ -205,6 +209,9 @@ pub fn run() {
             #[cfg(not(target_os = "windows"))]
             app.set_menu(menu::build_app_menu(app.handle())?)?;
             tray::initialize(app.handle())?;
+            // Re-validate the main window against the current displays so a corrupt/legacy saved
+            // size (or a monitor rearrange) can never leave it off-screen or screen-filling.
+            window::install_main_window_monitoring(app.handle());
             updater::init(app);
             Ok(())
         })
@@ -220,12 +227,6 @@ pub fn run() {
             }
             if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
                 extension_inbox::window_closed(webview.app_handle(), webview.label());
-            }
-            if webview.label() == "bubble-menu-vibemon"
-                && matches!(payload.event(), tauri::webview::PageLoadEvent::Started)
-                && let Some(window) = webview.app_handle().get_webview_window(webview.label())
-            {
-                vibemon::reset_bubble_on_navigation(window);
             }
             log::info!("page {:?} {}", payload.event(), payload.url());
             let _ = webview;
@@ -250,7 +251,7 @@ pub fn run() {
             }
         })
         .build(context)
-        .expect("error while building ALwith U");
+        .expect("error while building ALWith L");
     app.run(|app, event| match event {
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen { .. } if !window::is_closing(app) => {
@@ -258,31 +259,30 @@ pub fn run() {
                 log::error!("Cannot reopen main window: {error}");
             }
         }
-        // The main webview hosts background services and remains alive when closed.
+        // Closing the main window quits the app. Hiding it instead (the old behaviour) left the
+        // process — and, in native fullscreen, the black Space it owned — alive after the user
+        // believed they had quit. Leave fullscreen first so no empty Space is left behind, then
+        // run the normal exit path, which drains the background services with a bounded wait.
         tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::CloseRequested { api, .. }, .. }
             if label == "main" =>
         {
             api.prevent_close();
-            let window = app.get_webview_window("main").expect("main window exists on close");
-            if let Err(error) = window.hide() {
-                log::error!("Cannot hide main window: {error}");
+            window::leave_fullscreen_all(app);
+            // A dirty buffer owns the exit: the workspace asks the user to save first, so no
+            // watchdog may cut that prompt short. Only a clean exit gets the hard deadline.
+            if !workspace::is_dirty() {
+                window::arm_exit_watchdog(8);
             }
+            app.exit(0);
         }
         // Unexpected destruction cannot leave background services without their host.
         tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::Destroyed, .. } if label == "main" => {
             app.exit(0);
         }
         tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::Destroyed, .. } => {
-            if label == "vibemon" {
-                tray::set_pet_checked(app, false);
-            }
             #[cfg(target_os = "macos")]
             panel::closed(app, &label);
             extension_inbox::window_closed(app, &label);
-            gamepad::window_destroyed(app, &label);
-        }
-        tauri::RunEvent::WindowEvent { label, event: tauri::WindowEvent::Focused(false), .. } => {
-            gamepad::window_inactive(app, &label);
         }
         tauri::RunEvent::ExitRequested { api, code, .. } => {
             let closing = window::is_closing(app);
@@ -291,12 +291,22 @@ pub fn run() {
                 || runtime::prevent_exit(app, code)
             {
                 api.prevent_exit();
+            } else if window::take_fullscreen_exit_delay() {
+                // The Drive/Runtime drains finish in a few milliseconds, far shorter than
+                // macOS's animated fullscreen → desktop transition. Hold the final exit long
+                // enough for the Space to be retired, otherwise the display stays black.
+                api.prevent_exit();
+                let handle = app.clone();
+                let exit_code = code.unwrap_or(0);
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(600));
+                    handle.exit(exit_code);
+                });
             }
         }
         tauri::RunEvent::Exit => {
             app.state::<alwith_computer::ComputerHost>().kill_on_exit();
             voice::shutdown(app);
-            gamepad::shutdown(app);
             power::sync(app, false);
             app.state::<runtime::RuntimeState>().kill_on_exit();
         }
@@ -315,7 +325,28 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 named_store::store_delete,
                 named_store::store_clear,
                 named_store::store_reload,
+                project_memory::project_memory_ensure,
+                project_memory::project_memory_append,
+                project_memory::project_memory_snapshot,
                 autostart::autostart_status,
+                usage::usage_report,
+                usage::usage_report_refresh,
+                usage::fetch_text,
+                lark_cli::lark_cli_status,
+                lark_cli::lark_cli_targets,
+                lark_cli::lark_cli_send,
+                lark_cli::lark_cli_install,
+                lark_cli::lark_cli_check_update,
+                lark_cli::lark_cli_update,
+                lark_cli::lark_cli_auth_status,
+                lark_cli::lark_cli_auth_login,
+                lark_cli::lark_cli_auth_complete,
+                lark_cli::lark_cli_auth_logout,
+                lark_cli::lark_cli_user_profile,
+                support_components::node_status,
+                support_components::node_install,
+                support_components::brew_status,
+                support_components::brew_install,
                 computer::computer_status,
                 computer::computer_start,
                 computer::computer_reconnect,
@@ -330,10 +361,7 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 computer::computer_unsubscribe,
                 computer::computer_request_permissions,
                 autostart::autostart_set,
-                autostart::autostart_launch,
-                autostart::autostart_complete,
                 window::show_main_window,
-                tray::tray_pet_ready,
                 extension_inbox::extension_inbox_scan,
                 extension_inbox::extension_inbox_scan_extension,
                 extension_inbox::extension_inbox_finish,
@@ -346,11 +374,6 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 voice::voice_profiles,
                 voice::voice_save_credential,
                 voice::voice_delete_credential,
-                gamepad::gamepad_request,
-                gamepad::gamepad_permission,
-                gamepad::gamepad_capture,
-                gamepad::gamepad_catalog,
-                providers::gamepad_ai_prepare,
                 drive::drive_request,
                 drive::drive_path_exists,
                 chat_files::chat_save_file,
@@ -370,6 +393,7 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 workspace_move::workspace_move_to,
                 bundled_extensions::extension_bundles,
                 legacy_extensions::importer::extension_prepare_install,
+                legacy_extensions::importer::extension_install_from_url,
                 legacy_extensions::importer::legacy_stage_import,
                 legacy_extensions::importer::legacy_take_initial_data,
                 legacy_extensions::importer::legacy_ack_initial_data,
@@ -388,15 +412,54 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 appearance::wallpaper::wallpaper_import,
                 appearance::wallpaper::wallpaper_remove,
                 auth::refresh_tokens,
-                vibemon::vibemon_window,
-                vibemon::vibemon_resource,
-                vibemon::vibemon_download,
-                vibemon::vibemon_claim,
                 chat_window::plugin::present_chat_window,
                 chat_window::plugin::resize_chat_window,
                 runtime::runtime_start,
                 runtime::runtime_send,
+                runtime::restart_runtime_engine,
                 runtime::codex_version,
+                runtime::codex_bundled_models,
+                skills::skills_list,
+                skills::skills_set_enabled,
+                skills::skills_install,
+                skills::skills_open_folder,
+                skills::skills_pick_directory,
+                skills::skills_uninstall,
+                skills::global_prompt_read,
+                skills::global_prompt_write,
+                groups::group_directory_create,
+                groups::group_directory_attach,
+                groups::pick_group_directory,
+                groups::group_copy_materials,
+                groups::group_document_read,
+                groups::group_document_write,
+                groups::read_text_file,
+                groups::rob_models_open_folder,
+                groups::rob_models_read_config,
+                groups::rob_models_write_config,
+                groups::pick_role_document,
+                groups::skill_document_read,
+                session_origin::session_origin,
+                session_origin::repair_session_rollout,
+                session_origin::migrate_threads_to_router,
+                online_bi::online_bi_credentials_save,
+                online_bi::online_bi_credentials_load,
+                online_bi::online_bi_credentials_clear,
+                online_bi::online_bi_autofill,
+                online_bi::online_bi_window_url,
+                online_bi::online_bi_embed_url,
+                online_bi::online_bi_credentials_save_token,
+                online_bi_embed::online_bi_embed_mount,
+                online_bi_embed::online_bi_embed_navigate,
+                online_bi_embed::online_bi_embed_set_visible,
+                online_bi_embed::online_bi_embed_close,
+                session_origin::apply_session_provider,
+                session_origin::restart_app,
+                session_origin::append_diagnostic,
+                skills::quick_chat_directory,
+                skills::pick_project_directory,
+                codex_update::codex_check_engine_update,
+                codex_update::codex_install_engine_update,
                 mobile::mobile_set_draft_sessions,
                 mobile::mobile_bridge_start,
                 mobile::mobile_bridge_stop,
@@ -411,7 +474,15 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 providers::providers_save_custom,
                 providers::providers_remove_custom,
                 providers::providers_test,
+                providers::providers_test_model,
+                providers::providers_discover_models,
                 providers::providers_apply,
+                providers::providers_save_built_in_models,
+                // Account-managed ALwith models (upstream 8f7f701e). The provider id is `litellm`,
+                // so these never touch the `alwith` router table.
+                providers::managed::providers_account_bind,
+                providers::managed::providers_refresh_managed,
+                providers::managed::providers_clear_managed,
                 updater::commands::updater_get_state,
                 updater::commands::updater_install_and_relaunch,
                 window::attach_window_to_main,
@@ -429,6 +500,7 @@ pub fn bindings() -> tauri3_specta::Bindings {
             .event::<computer::ComputerPreview>()
             .event::<runtime::RuntimeExit>()
             .event::<providers::Snapshot>()
+            .event::<providers::managed::RevokedSessions>()
             .event::<updater::state::State>()
             .event::<menu::OpenSettings>()
             .event::<menu::NewChat>()

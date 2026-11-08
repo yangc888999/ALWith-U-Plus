@@ -108,7 +108,7 @@ test("quick chats update their empty state as windows hide and keep the current 
   const view = render(
     <ChatProjectMenu cwd={cwd} currentSessionId={main.sessionId} onSelect={() => {}} onNewChat={() => {}} />
   )
-  await act(() => Promise.resolve(fireEvent.click(view.getByRole("button", { name: "Quick chats" }))))
+  await act(() => Promise.resolve(fireEvent.click(view.getByRole("button", { name: "Chats" }))))
   expect(view.getByText("0 chats")).toBeVisible()
   expect(view.getByText("No chats found")).toBeVisible()
   expect(view.queryByRole("button", { name: "Show more" })).toBeNull()
@@ -142,11 +142,11 @@ test("quick chats use the sidebar grouping and ordering before the default direc
       <span>Actions</span>
     </ChatHeader>
   )
-  const folder = view.getByRole("button", { name: "Quick chats" })
+  const folder = view.getByRole("button", { name: "Chats" })
   expect(folder.querySelector(".lucide-folder-closed")).not.toBeNull()
   await act(() => Promise.try(() => fireEvent.click(folder)))
-  expect(view.getByRole("dialog", { name: "Quick chats" })).toBeVisible()
-  expect(view.getByText("Quick chats")).toBeVisible()
+  expect(view.getByRole("dialog", { name: "Chats" })).toBeVisible()
+  expect(view.getByText("Chats")).toBeVisible()
   expect(view.getByText("3 chats")).toBeVisible()
   expect(
     view.getAllByRole("button", { name: /^(ALwith|Codex|Windows) chat$/ }).map((item) => item.textContent)
@@ -161,8 +161,8 @@ test("quick chats use the sidebar grouping and ordering before the default direc
   expect(view.getByRole("status")).toBeVisible()
   await act(() => Promise.try(() => pending.resolve(defaultCwd)))
   expect(resolveDirectory).toHaveBeenCalledWith({ cwd: null })
-  expect(view.getByRole("button", { name: "Quick chats" })).toBe(folder)
-  expect(folder).toHaveAttribute("title", "Quick chats")
+  expect(view.getByRole("button", { name: "Chats" })).toBe(folder)
+  expect(folder).toHaveAttribute("title", "Chats")
   expect(view.getByText(defaultCwd)).toBeVisible()
   expect(view.getByText("3 chats")).toBeVisible()
   await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "ALwith chat" }))))
@@ -177,14 +177,14 @@ test.each([
 ])("quick-chat directory %s keeps the default-folder and new-chat actions", async (cwd) => {
   const newChat = vi.fn()
   const view = render(<ChatProjectMenu cwd={cwd} onSelect={() => {}} onNewChat={newChat} />)
-  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Quick chats" }))))
+  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Chats" }))))
   await waitFor(() => expect(view.getByText(defaultCwd)).toBeVisible())
   expect(view.getByText("No chats found")).toBeVisible()
   await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Open project folder" }))))
   expect(openDirectory).toHaveBeenCalledWith(defaultCwd)
   expect(newChat).not.toHaveBeenCalled()
   await waitFor(() => expect(view.queryByRole("dialog")).toBeNull())
-  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Quick chats" }))))
+  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Chats" }))))
   await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "New chat" }))))
   expect(newChat).toHaveBeenCalledOnce()
 })
@@ -208,14 +208,14 @@ test("a delayed default-directory result cannot replace a newly selected project
   view.rerender(<ChatProjectMenu cwd="/tmp/project" onSelect={() => {}} onNewChat={() => {}} />)
   await act(() => Promise.try(() => pending.resolve(defaultCwd)))
   expect(view.getByRole("button", { name: "project" })).toHaveAttribute("title", "/tmp/project")
-  expect(view.queryByRole("button", { name: "Quick chats" })).toBeNull()
+  expect(view.queryByRole("button", { name: "Chats" })).toBeNull()
 })
 
 test("directory errors leave quick chats available and support retry without inventing a path", async () => {
   resolveDirectory.mockRejectedValueOnce(new Error("Documents directory unavailable"))
   client.store.setState({ sessionList: [sessionRow("Existing quick chat", "/Users/mac/Documents/Codex")] })
   const view = render(<ChatProjectMenu cwd={null} onSelect={() => {}} onNewChat={() => {}} />)
-  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Quick chats" }))))
+  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Chats" }))))
   expect(view.getByRole("alert")).toHaveTextContent("Documents directory unavailable")
   expect(view.getByRole("button", { name: "Existing quick chat" })).toBeVisible()
   expect(view.queryByRole("button", { name: "Open project folder" })).toBeNull()
@@ -232,8 +232,8 @@ test("clearing a project switches the open menu to localized quick chats and fol
   await act(() =>
     Promise.try(() => view.rerender(<ChatProjectMenu cwd={null} onSelect={() => {}} onNewChat={() => {}} />))
   )
-  expect(view.getByRole("dialog", { name: "随聊" })).toBeVisible()
-  expect(view.getByText("随聊")).toBeVisible()
+  expect(view.getByRole("dialog", { name: "聊天" })).toBeVisible()
+  expect(view.getByText("聊天")).toBeVisible()
   expect(view.queryByRole("button", { name: "Project chat" })).toBeNull()
   await act(() =>
     Promise.try(() =>
@@ -254,7 +254,7 @@ test("the sidebar quick-chat hover shares the header list and default folder whi
   const newChat = vi.fn()
   const newProjectChat = vi.fn()
   const header = render(<ChatProjectMenu cwd={null} onSelect={select} onNewChat={newChat} />)
-  await act(() => Promise.try(() => fireEvent.click(header.getByRole("button", { name: "Quick chats" }))))
+  await act(() => Promise.try(() => fireEvent.click(header.getByRole("button", { name: "Chats" }))))
   const headerChats = header
     .getAllByRole("button", { name: /^(ALwith|Codex) chat$/ })
     .map((button) => button.textContent)
@@ -271,15 +271,18 @@ test("the sidebar quick-chat hover shares the header list and default folder whi
         onNewChat={newChat}
         onNewProjectChat={newProjectChat}
         onSearch={() => {}}
-        onOpenWindow={() => {}}
         onOpenSettings={() => {}}
         onOpenPlugins={() => {}}
         onOpenExtensions={() => {}}
+        onOpenAutomation={() => {}}
         onSwitchScreen={() => {}}
       />
     </SidebarProvider>
   )
-  const group = sidebar.getByRole("button", { name: "Quick chats" })
+  // The sidebar group carries its chat count in the accessible name.
+  const group = sidebar.getByRole("button", { name: "Chats (2)" })
+  // Groups start expanded now, so a click collapses; click again to prove it expands.
+  await act(() => Promise.try(() => fireEvent.click(group)))
   await act(() => Promise.try(() => fireEvent.click(group)))
   expect(group).toHaveAttribute("aria-expanded", "true")
   expect(sidebar.queryByRole("dialog")).toBeNull()
@@ -292,7 +295,7 @@ test("the sidebar quick-chat hover shares the header list and default folder whi
         fireEvent.mouseMove(trigger)
       })
     })
-    return within(await sidebar.findByRole("dialog", { name: "Quick chats" }))
+    return within(await sidebar.findByRole("dialog", { name: "Chats" }))
   }
   const popup = await open()
   expect(popup.getAllByRole("button", { name: /^(ALwith|Codex) chat$/ }).map((button) => button.textContent)).toEqual(

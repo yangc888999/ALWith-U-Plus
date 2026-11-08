@@ -12,7 +12,7 @@ import { computerContextRevision, hostSessionContext, prepareComputerTools } fro
 import { RemoteChatClient } from "@/lib/chat-window-client"
 import { DesktopCodexClient } from "@/lib/desktop-client"
 import { isMac } from "@/lib/platform"
-import { applyProvidersWhenIdle, resolveSessionModel } from "@/lib/providers"
+import { applyProvidersWhenIdle, getProviderSnapshot, loadProviders, resolveSessionModel } from "@/lib/providers"
 import { CODEX_AGENT_ID, runtimeClient } from "@/lib/runtime"
 
 export const client =
@@ -23,9 +23,12 @@ export const client =
         launch: { engine: "codex", env: computerRuntimeEnv },
         projectPaths: isMac() ? macProjectPaths : undefined,
         resolveModel: async (model) => {
-          const providers = await applyProvidersWhenIdle()
-          // Create a reusable draft on the currently applied catalog. Prompt admission retries
-          // the saved provider revision after active turns have finished.
+          // Read the last applied catalog from the cache (fast path), warmed by useProviders and
+          // loadProviders, instead of a write round-trip (providersApply) on every session. A
+          // pending catalog means a saved change has not reached the adapter yet: apply it now (if
+          // idle) rather than resolving against a stale snapshot, preserving the previous contract.
+          let providers = getProviderSnapshot() ?? (await loadProviders())
+          if (providers.status === "pending") providers = await applyProvidersWhenIdle()
           return providers.status === "pending" ? null : resolveSessionModel(model, providers)
         },
         sessionContext: hostSessionContext,

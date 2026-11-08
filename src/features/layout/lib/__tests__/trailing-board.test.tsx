@@ -5,7 +5,7 @@ import { TrailingBoard } from "../../components/trailing-board"
 
 const open = vi.hoisted(() => vi.fn(() => Promise.resolve()))
 vi.mock("@/lib/chat-window", () => ({ openChatWindow: vi.fn() }))
-vi.mock("@/features/vibemon/transport", () => ({ requestPet: vi.fn() }))
+vi.mock("@/lib/background-errors", () => ({ reportBackgroundError: vi.fn() }))
 vi.mock("@/bindings", () => ({
   commands: {
     openAppById: open,
@@ -14,14 +14,18 @@ vi.mock("@/bindings", () => ({
     setChromeBridgeEnabled: () => Promise.resolve(null)
   }
 }))
-vi.mock("@/features/auth/store", () => ({ usePlatformAuth: () => null }))
-vi.mock("@/features/vibemon/main-host", () => ({ initializeVibemonMain: vi.fn() }))
-vi.mock("@/features/vibemon/use-lounge-drop", () => ({ useLoungeDrop: () => false }))
 vi.mock("../use-running-apps", () => ({
   useRunningApps: () => [{ name: "Google Chrome", bundle_id: "com.google.Chrome", icon: null }]
 }))
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true }))
 vi.mock("@tauri-apps/api/event", () => ({ listen: () => Promise.resolve(() => {}) }))
+vi.mock("@tauri-apps/api/window", async () => {
+  // 生产代码用窗口级 API（`getCurrentWindow`）：子 webview 有焦点时 `getCurrentWebviewWindow()`
+  // 会抛 "current webview is not a WebviewWindow"。测试里两者指向同一个假窗口。
+  const webviewWindow = await import("@tauri-apps/api/webviewWindow")
+  return { ...webviewWindow, getCurrentWindow: () => webviewWindow.getCurrentWebviewWindow() }
+})
+
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   WebviewWindow: { getAll: () => Promise.resolve([]) },
   getCurrentWebviewWindow: () => ({ onFocusChanged: () => Promise.resolve(() => {}) })
@@ -33,7 +37,7 @@ afterEach(() => {
 })
 
 test("Chrome card opens the browser while its corner badge opens the bridge guide", async () => {
-  render(<TrailingBoard onOpenVibemon={() => {}} />)
+  render(<TrailingBoard />)
   fireEvent.click(screen.getByRole("button", { name: "Google Chrome" }))
   await waitFor(() => expect(open).toHaveBeenCalledWith({ bundleId: "com.google.Chrome" }))
   expect(screen.queryByRole("switch")).not.toBeInTheDocument()

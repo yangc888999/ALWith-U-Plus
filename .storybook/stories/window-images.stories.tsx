@@ -2,12 +2,10 @@ import { CodexActivityGroup } from "@alwith/module-chat/activity"
 import { type ActivityHost, ActivityHostProvider } from "@alwith/module-chat/activity-host"
 import type { ToolUseBlock } from "@alwith/module-chat/group-blocks"
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { useEffect } from "react"
 import { expect, waitFor, within } from "storybook/test"
 
 import { Button } from "../../src/components/ui/button"
 import { ImageLightbox, openImageGallery, openImageLightbox } from "../../src/features/chat/dialogs/image-lightbox"
-import { preventVibemonImageDragging } from "../../src/features/vibemon/image-drag"
 import i18n from "../../src/lib/i18n"
 
 const image = `data:image/svg+xml,${encodeURIComponent(
@@ -23,11 +21,6 @@ function ImagePreviewExample() {
       <ImageLightbox />
     </>
   )
-}
-
-function PetImageExample() {
-  useEffect(() => preventVibemonImageDragging(), [])
-  return <img src={image} alt="Pet image" />
 }
 
 const meta = { title: "Windows/Images", component: ImagePreviewExample } satisfies Meta<typeof ImagePreviewExample>
@@ -55,15 +48,6 @@ export const PreviewCloseButton: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Preview image" }))
     await userEvent.keyboard("{Escape}")
     await waitFor(async () => expect(body.queryByRole("dialog")).toBeNull())
-  }
-}
-
-export const PetImagesDoNotDrag: Story = {
-  render: () => <PetImageExample />,
-  play: async ({ canvas }) => {
-    const image = canvas.getByRole("img", { name: "Pet image" })
-    await waitFor(async () => expect(getComputedStyle(image).getPropertyValue("-webkit-user-drag")).toBe("none"))
-    await expect(image.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true }))).toBe(false)
   }
 }
 

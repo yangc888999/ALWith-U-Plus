@@ -5,7 +5,7 @@
 import { create } from "zustand"
 
 /** Sidebar panels supported by this client. */
-export type SidebarView = "sessions" | "activity" | "drive" | "collections"
+export type SidebarView = "sessions" | "activity" | "drive" | "collections" | "groups"
 
 interface SessionsUiState {
   /** Current sidebar panel. */
@@ -19,6 +19,7 @@ interface SessionsUiState {
   setProjectOpen: (next: Map<string, boolean>) => void
   revealed: Map<string, number>
   reveal: (key: string, count: number) => void
+  revealMany: (entries: Array<[string, number]>) => void
   /** Collapsed Activity groups (foreground / background); preserved across panel switches, reset on restart. */
   activityCollapsedGroups: ReadonlySet<string>
   setActivityCollapsedGroups: (next: ReadonlySet<string>) => void
@@ -33,6 +34,12 @@ export const useSessionsUiStore = create<SessionsUiState>((set) => ({
   setProjectOpen: (next) => set({ projectOpen: next }),
   revealed: new Map(),
   reveal: (key, count) => set((state) => ({ revealed: new Map(state.revealed).set(key, count) })),
+  revealMany: (entries) =>
+    set((state) => {
+      const revealed = new Map(state.revealed)
+      for (const [key, count] of entries) revealed.set(key, count)
+      return { revealed }
+    }),
   activityCollapsedGroups: new Set(),
   setActivityCollapsedGroups: (next) => set({ activityCollapsedGroups: next })
 }))

@@ -1,5 +1,3 @@
-import { PetLounge } from "@alwith/module-auth/pets/react"
-import { stationDefaults } from "@nyssance/atlas/station"
 import { ChatRoundDotsIcon as MessageSquareIcon } from "@solar-icons/react/bold-duotone/chat-round-dots"
 import { GamepadIcon as Gamepad2Icon } from "@solar-icons/react/bold-duotone/gamepad"
 import { LibraryIcon as BookOpenIcon } from "@solar-icons/react/bold-duotone/library"
@@ -12,11 +10,6 @@ import { useCallback, useContext, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { commands } from "@/bindings"
-import { usePlatformAuth } from "@/features/auth/store"
-import { reportPetError } from "@/features/vibemon/display-error"
-import { initializeVibemonMain } from "@/features/vibemon/main-host"
-import { requestPet } from "@/features/vibemon/transport"
-import { useLoungeDrop } from "@/features/vibemon/use-lounge-drop"
 import { openChatWindow } from "@/lib/chat-window"
 
 import { CanvasContext } from "../lib/canvas-context"
@@ -36,14 +29,17 @@ interface ToolWindow {
   window: WebviewWindow
 }
 
-export function TrailingBoard({ onOpenVibemon }: { onOpenVibemon: () => void }) {
+/** Window enumeration can fail while a window is closing; keep it out of the user's way. */
+const reportTrailingError = (error: unknown): void => {
+  console.error("[trailing-board]", error)
+}
+
+/** Right rail: running apps and tool windows. The pet lounge that used to live here is gone. */
+export function TrailingBoard() {
   const { t } = useTranslation()
   const canvas = useContext(CanvasContext)
-  const user = usePlatformAuth((state) => state.user)
-  const [ready, setReady] = useState(false)
   const [windows, setWindows] = useState<ToolWindow[]>([])
   const pane = useRef<HTMLDivElement>(null)
-  const dropTarget = useLoungeDrop(pane)
   const active = canvas?.trailingActive ?? false
   const runningApps = useRunningApps(active)
   const refresh = useCallback(async () => {
@@ -67,7 +63,7 @@ export function TrailingBoard({ onOpenVibemon }: { onOpenVibemon: () => void }) 
         const next = await refresh()
         if (!disposed) setWindows(next)
       } catch (error) {
-        if (!disposed) reportPetError(error)
+        if (!disposed) reportTrailingError(error)
       } finally {
         checking = false
       }
@@ -83,47 +79,23 @@ export function TrailingBoard({ onOpenVibemon }: { onOpenVibemon: () => void }) 
     return () => {
       disposed = true
       clearInterval(timer)
-      for (const stop of stops) void stop.then((unlisten) => unlisten()).catch(reportPetError)
+      for (const stop of stops) void stop.then((unlisten) => unlisten()).catch(reportTrailingError)
     }
   }, [active, refresh])
-  useEffect(() => {
-    let disposed = false
-    if (user !== null)
-      void initializeVibemonMain()
-        .then(() => {
-          if (!disposed) setReady(true)
-        })
-        .catch(reportPetError)
-    return () => {
-      disposed = true
-    }
-  }, [user])
-  const send = async (petId: string, center?: { x: number; y: number }) => {
-    const origin = center ? await getCurrentWebviewWindow().innerPosition() : null
-    const dropCenter =
-      center && origin
-        ? {
-            x: Math.round(origin.x + center.x * devicePixelRatio),
-            y: Math.round(origin.y + center.y * devicePixelRatio)
-          }
-        : undefined
-    const result = await requestPet<"shown" | "unavailable">("open-from-lounge", { petId, dropCenter })
-    if (result !== "shown") throw new Error(t("common:petMode.failed"))
-  }
   return (
     <div
       ref={pane}
-      className="relative flex h-full min-h-0 flex-col select-none [&_[data-testid=pet-lounge-drop]]:border-white [&_[data-testid=pet-lounge-drop]]:bg-white/10"
-      aria-label={t("pet.lounge")}
+      className="relative flex h-full min-h-0 flex-col select-none"
+      aria-label={t("sidebar.leadingNavigation")}
     >
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-48">
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-4">
         {runningApps.map((app) => {
           const icon = app.icon ? (
             <img src={app.icon} alt="" draggable={false} className="object-contain" />
           ) : (
             <GlobeIcon className="size-12" />
           )
-          const onOpen = () => void commands.openAppById({ bundleId: app.bundle_id }).catch(reportPetError)
+          const onOpen = () => void commands.openAppById({ bundleId: app.bundle_id }).catch(reportTrailingError)
           return /chrome/i.test(`${app.bundle_id} ${app.name}`) ? (
             <BrowserBridgeCard key={app.bundle_id} title={app.name} icon={icon} onOpen={onOpen} active={active} />
           ) : (
@@ -147,23 +119,13 @@ export function TrailingBoard({ onOpenVibemon }: { onOpenVibemon: () => void }) 
                     await item.window.show()
                     await item.window.setFocus()
                   }
-                })().catch(reportPetError)
+                })().catch(reportTrailingError)
               }}
-              onClose={() => void item.window.close().then(refresh).then(setWindows).catch(reportPetError)}
+              onClose={() => void item.window.close().then(refresh).then(setWindows).catch(reportTrailingError)}
             />
           )
         })}
       </div>
-      {ready && user !== null && (
-        <PetLounge
-          key={user.user_uuid}
-          active={active}
-          nest={stationDefaults}
-          onOpenCenter={onOpenVibemon}
-          onSend={send}
-          dropTarget={dropTarget}
-        />
-      )}
     </div>
   )
 }

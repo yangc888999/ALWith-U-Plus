@@ -120,7 +120,7 @@ test("an account change while resolving discards the previous account's local pa
   })
   expect(open).not.toHaveBeenCalled()
   expect(mock.external).not.toHaveBeenCalled()
-  expect(mock.error).toHaveBeenCalledWith(expect.stringContaining("profile changed"))
+  expect(mock.error).toHaveBeenCalledWith(expect.stringContaining("Drive"))
 })
 
 test("ordinary browser renders never call native deep-link APIs", () => {

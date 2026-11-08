@@ -4,10 +4,17 @@
 @import "@fontsource-variable/inter";
 @import "diff2html/bundles/css/diff2html.min.css";
 @import "./features/chat/codex/styles.css";
-@import "@alwith/module-auth/pets/styles.css";
 
 @source "../node_modules/@alwith/module-chat/dist";
 @source "../node_modules/@alwith/module-drive/dist";
+
+/* The turn rail down the transcript's leading edge is the library's own: it follows the scroll
+   position, previews a turn on hover and scrubs on drag. Do not hide or re-implement it. It only
+   renders once the transcript leaves it a 48px gutter, so cap the column a little short of the
+   pane instead of letting `max-w-3xl` fill it edge to edge. */
+[data-timeline-user-message-navigation-content] {
+  max-width: min(48rem, 100% - 4.5rem);
+}
 
 /* Isolate technical notation from the interface direction. */
 [data-slot="kbd"],
@@ -40,9 +47,13 @@ pre,
   background-color: color-mix(in oklab, var(--link) 14%, transparent);
   text-decoration: underline;
 }
-/* Published pet components also live in shared chunks at the dist root. */
-@source "../node_modules/@alwith/module-auth/dist";
 
+/* The package gives the header cell a 1rem line box on a 0.875rem font while body cells sit on
+   1.5rem. The header row therefore ends up shorter than its own cells and the two baselines drift
+   apart, which shows up as a cramped label above airy rows. Share the body rhythm instead. */
+.codex-markdown-table-header {
+  line-height: 1.5;
+}
 @custom-variant dark (&:is(.dark *));
 
 .permission-mode-menu [role="menuitemradio"] > svg {
@@ -198,12 +209,11 @@ pre,
   html {
     @apply font-sans;
   }
-  /* Glass: html+body are transparent so the window's native vibrancy shows through (ALwith
-     Desktop's App.css). The shadcn sidebar containers are cleared the same way; the chat pane
-     paints bg-background itself. */
+  /* The window is opaque (no vibrancy), so the page paints the theme background itself.
+     Keeping a real color also prevents a white flash in dark mode and black ghost frames. */
   html,
   body {
-    background: transparent;
+    background: var(--background);
   }
 }
 /* Stabilize contrast over Windows Acrylic while retaining the native backdrop texture. */
@@ -214,20 +224,31 @@ html[data-window-backdrop="acrylic"] {
   --tauri-plugin-decoration-z-index: 60;
 }
 /* The native recovery frame already supplies its own title bar. */
-html[data-window-backdrop="acrylic"]:not(:has([data-tauri-plugin-decoration-active])) .windows-main-titlebar {
+html[data-window-backdrop="acrylic"]:not(
+    :has([data-tauri-plugin-decoration-active])
+  )
+  .windows-main-titlebar {
   display: none;
 }
-html[data-window-backdrop="acrylic"] [data-tauri-plugin-decoration-root] [data-tauri-decoration-control] {
+html[data-window-backdrop="acrylic"]
+  [data-tauri-plugin-decoration-root]
+  [data-tauri-decoration-control] {
   width: calc(46px / var(--main-window-zoom, 1));
   min-width: 0;
   height: var(--tauri-plugin-decoration-titlebar-height, 32px);
   color: var(--foreground);
 }
-html[data-window-backdrop="acrylic"] [data-tauri-plugin-decoration-root] [data-tauri-decoration-control]:hover,
-html[data-window-backdrop="acrylic"] [data-tauri-plugin-decoration-root] [data-tauri-decoration-hover] {
+html[data-window-backdrop="acrylic"]
+  [data-tauri-plugin-decoration-root]
+  [data-tauri-decoration-control]:hover,
+html[data-window-backdrop="acrylic"]
+  [data-tauri-plugin-decoration-root]
+  [data-tauri-decoration-hover] {
   background: color-mix(in srgb, var(--foreground) 10%, transparent);
 }
-html[data-window-backdrop="acrylic"] [data-tauri-plugin-decoration-root] [data-tauri-decoration-control="close"]:hover,
+html[data-window-backdrop="acrylic"]
+  [data-tauri-plugin-decoration-root]
+  [data-tauri-decoration-control="close"]:hover,
 html[data-window-backdrop="acrylic"]
   [data-tauri-plugin-decoration-root]
   [data-tauri-decoration-control="close"][data-tauri-decoration-hover] {
@@ -297,6 +318,22 @@ html[data-window-backdrop="acrylic"]
   border-radius: var(--main-surface-radius);
   background-color: var(--background);
   box-shadow: none;
+}
+
+/* Pure-chat single column. The vendored chat package hard-caps every row — timeline, composer,
+   session actions — at `max-w-3xl` (48rem). On a wide window that leaves a dead band either side,
+   which reads as "the chat is too narrow" once the preview and file columns are closed. One shared
+   measure keeps all rows aligned; in split view the pane is narrower than the cap, so `w-full`
+   simply fills it and nothing changes. */
+:root {
+  --chat-column-width: 70rem; /* 1120px at the default 16px root */
+}
+[data-timeline-user-message-navigation-content],
+[data-session-actions],
+[data-chat-drop-zone],
+[data-turn-progress],
+[data-group-bar] {
+  max-width: var(--chat-column-width);
 }
 /* Docked navigation already supplies the 4px inset at the content-facing edge. */
 [data-sidebar-mode="pinned"] .main-screen-content > .main-chat-surface {
@@ -385,9 +422,15 @@ html[data-window-backdrop="acrylic"]
   height: 100%;
   transition: width var(--sidebar-resize-duration) ease-in-out;
 }
+/* A drag owns the width: skip the open/close easing so the edge follows the pointer. */
+.main-sidebar-shell[data-resizing] {
+  transition: none;
+}
 /* Measure from the chat surface's visible edge, including its gutter and border. */
 [data-sidebar-mode="pinned"] .main-sidebar-shell {
-  --sidebar-scrollbar-extension: calc(var(--main-surface-gutter) / 2 + var(--main-surface-border-width));
+  --sidebar-scrollbar-extension: calc(
+    var(--main-surface-gutter) / 2 + var(--main-surface-border-width)
+  );
 }
 /* Clip a full-width sidebar instead of squeezing its contents during resize. */
 .main-sidebar-viewport {
@@ -406,10 +449,21 @@ html[data-window-backdrop="acrylic"]
   inset-inline-start: 0;
   width: var(--sidebar-width);
 }
+/* Resize handle on the pinned sidebar's trailing edge. The divider itself is shared with the
+   workspace panes, so the drag affordance and hover ring match the other three columns. */
+.main-sidebar-resize {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  z-index: 31;
+  width: 0;
+}
 [data-sidebar-mode="hidden"] .main-sidebar-viewport {
   pointer-events: none;
 }
-[data-sidebar-mode="floating"] .main-sidebar-shell[data-atlas-floating] > .main-sidebar-viewport {
+[data-sidebar-mode="floating"]
+  .main-sidebar-shell[data-atlas-floating]
+  > .main-sidebar-viewport {
   /* Atlas paints this outer surface; include the canvas's 4px window gutter. */
   inset-inline-start: 4px;
   padding-inline: 0;
@@ -428,6 +482,22 @@ html[data-window-backdrop="acrylic"]
   50% {
     opacity: 0.7;
   }
+}
+/* A document name too long for its chip slides instead of truncating: two copies with a trailing
+   gap, moved by exactly one copy's width, so the loop has no seam. Paused on hover. */
+@keyframes alwith-marquee-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+.alwith-marquee {
+  animation: alwith-marquee-scroll 9s linear infinite;
+}
+.alwith-marquee:hover {
+  animation-play-state: paused;
 }
 
 .main-sidebar-toggle {
@@ -460,18 +530,16 @@ html[data-window-backdrop="acrylic"]
 .windows-sidebar-toggle [data-slot="button"] {
   background-color: transparent;
 }
-/* Application controls use a hover overlay; conversations and Vibemon keep their own presentation. */
+/* Application controls use a hover overlay; conversations keep their own presentation. */
 @media (hover: hover) {
-  :is(button, [role="button"], [class~="group/button"]):not(:disabled):not([aria-disabled="true"]):not(
-      [data-disabled]
-    ):not(
+  :is(button, [role="button"], [class~="group/button"]):not(:disabled):not(
+      [aria-disabled="true"]
+    ):not([data-disabled]):not(
       :where(
         .codex-timeline-content *,
         .timeline-user-message-navigation *,
         .codex-assistant-turn *,
         .chat-project-picker *,
-        .vibemon-content *,
-        .vibemon-lounge-pet,
         .window-card-hit,
         .canvas-dots *
       )
@@ -519,7 +587,11 @@ html[data-window-backdrop="acrylic"]
   --native-viewport-width: 100vw;
   /* The renderer updates 100vw with native page zoom; no React/IPC timing participates in compensation. */
   --window-zoom-correction: calc(100vw / var(--native-viewport-width));
-  --chrome-hover-background: color-mix(in oklab, var(--foreground) 8%, transparent);
+  --chrome-hover-background: color-mix(
+    in oklab,
+    var(--foreground) 8%,
+    transparent
+  );
 }
 /* Trigger composition replaces data-slot, but preserves the shadcn button class. */
 .main-sidebar-panel :is([class~="group/button"], .chrome-hover):hover,
@@ -529,7 +601,8 @@ html[data-window-backdrop="acrylic"]
 .main-extension-toolbar button:hover,
 .windows-extension-controls button:hover,
 .main-workspace-toolbar .file-workspace-toolbar button:hover,
-.main-window-statusbar button:not(.canvas-dots button):is(:hover, [aria-expanded="true"]) {
+.main-window-statusbar
+  button:not(.canvas-dots button):is(:hover, [aria-expanded="true"]) {
   background-color: var(--chrome-hover-background);
 }
 
@@ -555,7 +628,8 @@ html[data-window-backdrop="acrylic"]
 }
 :root {
   --chat-font-size: 14px;
-  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --font-mono:
+    ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 html,
@@ -570,9 +644,14 @@ body,
   user-select: none;
 }
 
-[data-vibemon-window] img {
-  -webkit-user-drag: none;
-  user-select: none;
+/* The session list labels its sections in order. Every project group carries the "项目" label so
+   the first one always has it (the list re-renders on its own, so first-call state cannot be
+   trusted); only the first labelled group may show it. */
+.session-list-scroll
+  div:has(> [data-project-label])
+  ~ div
+  [data-project-label] {
+  display: none;
 }
 
 /* Keep native scrollers compact, including containers supplied by shared modules. */
@@ -580,8 +659,31 @@ body,
   --app-scrollbar-size: 6px;
   --app-scrollbar-edge-gap: 2px;
   --app-scrollbar-track-size: 10px;
-  --app-scrollbar-thumb: color-mix(in oklab, var(--foreground) 18%, transparent);
-  --app-scrollbar-thumb-hover: color-mix(in oklab, var(--foreground) 32%, transparent);
+  /* Kept faint on purpose: the rail sits next to dense rows and a strong colour reads as a
+     status marker instead of a scrollbar. Dark mode needs a little more because the foreground
+     there is light and mixes down faster against the surface. */
+  --app-scrollbar-thumb: color-mix(
+    in oklab,
+    var(--foreground) 12%,
+    transparent
+  );
+  --app-scrollbar-thumb-hover: color-mix(
+    in oklab,
+    var(--foreground) 22%,
+    transparent
+  );
+}
+.dark {
+  --app-scrollbar-thumb: color-mix(
+    in oklab,
+    var(--foreground) 16%,
+    transparent
+  );
+  --app-scrollbar-thumb-hover: color-mix(
+    in oklab,
+    var(--foreground) 28%,
+    transparent
+  );
 }
 * {
   scrollbar-width: thin;
@@ -613,13 +715,52 @@ body,
   display: none;
 }
 
+/* Preview pane scrollbar: track stays a constant 10px so the layout never shifts, but the thumb
+   fattens when the pointer is on the bar itself (via a shrinking transparent border) so it is easy
+   to grab. Hovering the pane is not enough: wheeling through a long document put the pointer over
+   the text, and the bar grew on every scroll. The track is inset a little so the run — and with it
+   the thumb — stays short instead of spanning the whole pane. */
+.alwith-markdown-scroll,
+.alwith-markdown-scroll * {
+  scrollbar-width: thin;
+}
+.alwith-markdown-scroll::-webkit-scrollbar,
+.alwith-editor ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.alwith-markdown-scroll::-webkit-scrollbar-track,
+.alwith-editor ::-webkit-scrollbar-track {
+  margin-block: 28px;
+}
+.alwith-markdown-scroll::-webkit-scrollbar-thumb,
+.alwith-editor ::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+  background-color: var(--app-scrollbar-thumb);
+}
+.alwith-markdown-scroll::-webkit-scrollbar-thumb:hover,
+.alwith-editor ::-webkit-scrollbar-thumb:hover {
+  border-width: 1px;
+  background-color: var(--app-scrollbar-thumb-hover);
+}
+
+/* Active (open) file in the tree reads heavier so the document you are looking at stands out. */
+.alwith-tree-row[data-active="true"] .alwith-tree-name,
+.alwith-tree-row[aria-selected="true"] .alwith-tree-name {
+  font-weight: 700;
+}
+
 /* Extend only the scroll track into the adjacent gutter; keep tabs and rows aligned. */
 .session-list-content {
   margin-inline-end: calc(-1 * var(--sidebar-scrollbar-extension, 0px));
   padding-inline-end: var(--sidebar-scrollbar-extension, 0px);
 }
 .session-list-scroll {
-  --app-scrollbar-track-size: calc(var(--app-scrollbar-size) + 2 * var(--app-scrollbar-edge-gap));
+  --app-scrollbar-track-size: calc(
+    var(--app-scrollbar-size) + 2 * var(--app-scrollbar-edge-gap)
+  );
   margin-inline-end: calc(-1 * var(--sidebar-scrollbar-extension, 0px));
   padding-inline-end: calc(8px + var(--sidebar-scrollbar-extension, 0px));
 }
@@ -642,7 +783,8 @@ body,
   background: var(--app-scrollbar-thumb);
 }
 [data-slot="scroll-area-thumb"]:hover,
-[data-slot="scroll-area-scrollbar"][data-dragging] [data-slot="scroll-area-thumb"] {
+[data-slot="scroll-area-scrollbar"][data-dragging]
+  [data-slot="scroll-area-thumb"] {
   background: var(--app-scrollbar-thumb-hover);
 }
 [data-slot="scroll-area-scrollbar"][data-hovering],
@@ -683,19 +825,47 @@ body,
   background: color-mix(in srgb, var(--background) 88%, transparent);
 }
 
-/* ALwith U agent identity, shared with the compiled native cursor artwork. */
+/* ALWith L agent identity, shared with the compiled native cursor artwork. */
 :root {
   --computer-cursor-body: rgb(97 92 89);
   --computer-cursor-outline: rgb(230 230 230);
 }
 .computer-agent-cursor {
-  filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--foreground) 25%, transparent));
+  filter: drop-shadow(
+    0 1px 2px color-mix(in srgb, var(--foreground) 25%, transparent)
+  );
 }
 /* Inset chrome hover surfaces within the 32px title and status rows. */
 .main-sidebar-toggle {
   height: 32px;
   align-items: center;
   padding-inline: 4px;
+}
+
+/* 收藏 / 活动 sit on the window's title row, clear of the extension toolbar in the middle. */
+.main-window-header-actions {
+  position: absolute;
+  top: 0;
+  inset-inline-end: 8px;
+  z-index: 31;
+  display: flex;
+  height: 32px;
+  align-items: center;
+  gap: 6px;
+  -webkit-app-region: no-drag;
+}
+/* The workspace toggle shares this row instead of anchoring to the same corner. */
+.main-window-header-actions > .main-workspace-toolbar {
+  position: static;
+  height: 100%;
+  inset-inline-end: auto;
+  z-index: auto;
+}
+/* When docked in the leading cluster, the toggle must flow inline rather than anchor absolutely. */
+.main-sidebar-toggle > .main-workspace-toolbar {
+  position: static;
+  height: 100%;
+  inset-inline-end: auto;
 }
 
 /* One canvas owns all screen translation; anchors describe legal stops without duplicating content. */
@@ -747,4 +917,388 @@ body,
   width: var(--sidebar-width);
   height: 100%;
   padding-inline: 4px;
+}
+
+/* Selected provider pill: a halo instead of a neutral outline. Light surfaces get a cyan glow;
+   on a dark surface a coloured halo reads as "loading", so it turns into a soft white one. */
+.provider-tab-active {
+  border-color: color-mix(in oklab, var(--settings-accent) 60%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--settings-accent) 40%, transparent),
+    0 0 10px 1px color-mix(in oklab, var(--settings-accent) 26%, transparent),
+    0 1px 2px rgb(0 0 0 / 0.05);
+}
+.dark .provider-tab-active {
+  border-color: rgb(255 255 255 / 0.55);
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.4),
+    0 0 12px 2px rgb(255 255 255 / 0.22);
+}
+
+/* Compact model pickers flatten every provider into one list. Catalog icons mark the first
+   model from each provider, letting this host stylesheet restore equal group headings without
+   changing the shared package. Native and gateway models deliberately share the same row rhythm. */
+[data-slot="dropdown-menu-content"]:has([data-model-menu-list]) {
+  --model-picker-row-background: color-mix(
+    in oklab,
+    var(--background) 76%,
+    var(--muted)
+  );
+  --model-picker-selected-background: color-mix(
+    in oklab,
+    var(--settings-accent) 12%,
+    var(--background)
+  );
+}
+[data-model-menu-list] [role="menuitemradio"] {
+  position: relative;
+  min-height: 2.25rem;
+  margin-inline: 0.125rem;
+  border-radius: calc(var(--radius) * 0.8);
+  padding-inline: 0.625rem;
+  color: var(--foreground);
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+[data-model-menu-list] [role="menuitemradio"]:hover {
+  background-color: var(--model-picker-row-background);
+}
+[data-model-menu-list] [role="menuitemradio"][aria-checked="true"] {
+  background-color: var(--model-picker-selected-background);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in oklab, var(--settings-accent) 22%, transparent);
+  font-weight: 500;
+}
+[data-model-menu-list]
+  [role="menuitemradio"]:has(.model-picker-icon[data-model-group-title]) {
+  margin-top: 1.5rem;
+}
+.model-picker-icon {
+  display: inline-flex;
+  width: 1.25rem;
+  height: 1.25rem;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in oklab, var(--foreground) 9%, transparent);
+  border-radius: calc(var(--radius) * 0.7);
+  background: color-mix(in oklab, var(--background) 82%, var(--muted));
+  color: var(--muted-foreground);
+}
+.model-picker-icon :is(img, svg) {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: none;
+  object-fit: contain;
+}
+/* The provider heading belongs to the menu list only: the same icon is reused by the trigger, and
+   an unscoped rule painted "DEEPSEEK" above the model name, making the trigger read as two lines. */
+[data-model-menu-list] .model-picker-icon[data-model-group-title]::before {
+  position: absolute;
+  inset-block-start: -1.125rem;
+  inset-inline-start: 0.625rem;
+  content: attr(data-model-group-title);
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1rem;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+[data-model-menu-list]
+  [role="menuitemradio"][aria-checked="true"]
+  .model-picker-icon {
+  border-color: color-mix(in oklab, var(--settings-accent) 28%, transparent);
+  background: color-mix(in oklab, var(--settings-accent) 14%, var(--background));
+  color: var(--foreground);
+}
+.dark .model-picker-icon {
+  border-color: rgb(255 255 255 / 0.12);
+  background: rgb(255 255 255 / 0.06);
+}
+.dark [data-model-menu-list] [role="menuitemradio"][aria-checked="true"] {
+  background-color: color-mix(in oklab, var(--settings-accent) 16%, var(--background));
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.16);
+}
+
+/* A quiet accent tint marks the draft as a temporary chat: colour without reading as a
+   warning or a promotion. It now follows the chosen 主题色 preset via --settings-accent,
+   so it stays consistent with the settings page instead of being locked to a fixed sky tint. */
+.chat-mode-badge {
+  border: 1px solid color-mix(in oklab, var(--settings-accent) 26%, transparent);
+  background: color-mix(in oklab, var(--settings-accent) 9%, var(--background));
+  color: var(--settings-accent-ink);
+  box-shadow: 0 1px 1px rgb(0 0 0 / 0.025);
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    color 150ms ease;
+}
+.chat-mode-badge:hover {
+  border-color: color-mix(in oklab, var(--settings-accent) 42%, transparent);
+  background: color-mix(in oklab, var(--settings-accent) 14%, var(--background));
+  color: var(--settings-accent-ink);
+}
+.dark .chat-mode-badge {
+  border-color: color-mix(in oklab, var(--settings-accent) 34%, transparent);
+  background: color-mix(in oklab, var(--settings-accent) 14%, var(--background));
+  color: var(--settings-accent-ink);
+  box-shadow: inset 0 1px rgb(255 255 255 / 0.035);
+}
+.dark .chat-mode-badge:hover {
+  border-color: color-mix(in oklab, var(--settings-accent) 50%, transparent);
+  background: color-mix(in oklab, var(--settings-accent) 20%, var(--background));
+  color: var(--settings-accent-ink);
+}
+
+/* ===========================================================================
+   App-wide accent tokens
+   The settings "主题色" picker writes data-accent on <html> (see accent-store); these
+   variables then re-theme the whole app — settings pages included, since they cascade
+   in from :root. Default = YUP红 (sampled from the YUP logo orange→red→pink gradient).
+   The soft tint recomputes from --settings-accent via color-mix, so it follows per preset.
+   =========================================================================== */
+:root {
+  --settings-accent: oklch(0.62 0.21 28);
+  --settings-accent-ink: oklch(0.49 0.19 26);
+  --settings-accent-soft: color-mix(in oklab, var(--settings-accent) 12%, var(--card));
+}
+
+.dark {
+  --settings-accent: oklch(0.74 0.18 30);
+  --settings-accent-ink: oklch(0.85 0.15 30);
+  --settings-accent-soft: color-mix(in oklab, var(--settings-accent) 16%, var(--card));
+}
+
+:root[data-accent="lemon-green"] {
+  --settings-accent: oklch(0.76 0.18 128);
+  --settings-accent-ink: oklch(0.52 0.15 128);
+}
+.dark[data-accent="lemon-green"] {
+  --settings-accent: oklch(0.82 0.16 128);
+  --settings-accent-ink: oklch(0.86 0.13 128);
+}
+
+:root[data-accent="girly-pink"] {
+  --settings-accent: oklch(0.70 0.17 350);
+  --settings-accent-ink: oklch(0.52 0.15 350);
+}
+.dark[data-accent="girly-pink"] {
+  --settings-accent: oklch(0.80 0.13 352);
+  --settings-accent-ink: oklch(0.85 0.12 352);
+}
+
+:root[data-accent="linen-gray"] {
+  --settings-accent: oklch(0.71 0.03 85);
+  --settings-accent-ink: oklch(0.45 0.025 85);
+}
+.dark[data-accent="linen-gray"] {
+  --settings-accent: oklch(0.78 0.02 88);
+  --settings-accent-ink: oklch(0.85 0.015 90);
+}
+
+:root[data-accent="warm-brown"] {
+  --settings-accent: oklch(0.58 0.12 55);
+  --settings-accent-ink: oklch(0.44 0.10 52);
+}
+.dark[data-accent="warm-brown"] {
+  --settings-accent: oklch(0.70 0.11 58);
+  --settings-accent-ink: oklch(0.82 0.09 58);
+}
+
+:root[data-accent="sky-blue"] {
+  --settings-accent: oklch(0.62 0.16 242);
+  --settings-accent-ink: oklch(0.46 0.15 242);
+}
+.dark[data-accent="sky-blue"] {
+  --settings-accent: oklch(0.74 0.14 242);
+  --settings-accent-ink: oklch(0.84 0.12 242);
+}
+
+:root[data-accent="emerald"] {
+  --settings-accent: oklch(0.64 0.15 170);
+  --settings-accent-ink: oklch(0.46 0.13 170);
+}
+.dark[data-accent="emerald"] {
+  --settings-accent: oklch(0.76 0.13 170);
+  --settings-accent-ink: oklch(0.85 0.11 170);
+}
+
+/* Welcome hero focal chip: same design language as .settings-icon-chip (soft accent tint,
+   ink-coloured glyph, inset accent ring) but a touch larger so it anchors the empty state.
+   Driven by the global --settings-accent tokens, so it follows the chosen 主题色 preset. */
+.welcome-accent-chip {
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  flex-shrink: 0;
+  border-radius: 0.75rem;
+  background: var(--settings-accent-soft);
+  color: var(--settings-accent-ink);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--settings-accent) 22%, transparent);
+}
+
+/* The composer is ONE neutral card. It used to carry a theme-tinted gradient, which turned the
+   header row and the textarea into two different colours and, stacked under the amber running
+   strip, read as three separate slabs. The accent now lives on controls only. */
+.codex-composer-surface {
+  background-image: none;
+  background-color: var(--card);
+}
+
+/* Model rows are reordered with pointer events; never let WebKit start a native drag image. */
+.model-drag-handle {
+  -webkit-user-drag: none;
+  touch-action: none;
+}
+
+/* Composer input height: the drag handle on the card's top edge writes this variable. Unset, the
+   textarea keeps its content height (2.5rem floor); set, it is pinned to that height and scrolls. */
+[data-composer] .alwith-composer-textarea {
+  min-height: var(--composer-input-height, 2.5rem);
+  max-height: var(--composer-input-height, none);
+  overflow-y: auto;
+}
+
+/* Images enlarge where they sit, and snap back when the pointer leaves. The thumbnail's own box
+   clips to 20px, so the frame is released for the duration of the hover. */
+.composer-attachment-zoom:hover {
+  overflow: visible;
+}
+.composer-attachment-zoom img {
+  transition: transform 140ms ease-out;
+  transform-origin: left center;
+}
+.composer-attachment-zoom:hover img {
+  position: relative;
+  z-index: 40;
+  transform: scale(7);
+  border-radius: 6px;
+  box-shadow: 0 10px 30px -8px rgb(0 0 0 / 45%);
+}
+
+/* Message images: a slight lift so the one under the pointer is obvious, still clickable for the
+   full-size viewer. */
+[data-chat-content] img {
+  cursor: zoom-in;
+  transition: transform 140ms ease-out, box-shadow 140ms ease-out;
+}
+[data-chat-content] img:hover {
+  position: relative;
+  z-index: 30;
+  transform: scale(1.02);
+  box-shadow: 0 12px 32px -12px rgb(0 0 0 / 40%);
+}
+
+/* Model trigger: plain text, no capsule. The composer already reads as one surface, and a tinted
+   pill around two rows of content turned into a box taller than everything beside it. Only the
+   hover tint survives, so the trigger still looks clickable. */
+.alwith-model-pill[data-testid="model-trigger"] {
+  height: auto;
+  padding-inline: 6px;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  white-space: nowrap;
+  /* The name sets the width: the trigger refuses to shrink, so a long model id is shown whole
+     instead of being clipped to whatever the toolbar has left. */
+  flex: 0 0 auto;
+  max-width: none;
+}
+.alwith-model-pill[data-testid="model-trigger"]:hover {
+  background: color-mix(in oklab, var(--settings-accent) 10%, transparent);
+}
+/* One line for the name, dots underneath it. The trigger takes the width the name needs and never
+   wraps: truncating it turned "4.1-Flash" into "Flash" with no way to read the rest. */
+.alwith-model-pill > span {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: none;
+}
+.alwith-model-pill > span > span:first-child {
+  display: block;
+  max-width: none;
+  overflow: visible;
+  white-space: nowrap;
+}
+
+/* Same "only the first one shows" trick as the project label, for the 群聊 section heading. */
+.session-list-scroll div:has(> [data-group-label]) ~ div [data-group-label] {
+  display: none;
+}
+/* ── 主题色融入整扇窗（整窗叠加，一次到位）────────────────────────────────────
+   以前是逐元素贴渐变：每块卡片、编辑器、文件树都有自己的不透明底色，漏一个就是一块纯白，
+   而且各块渐变按自身高度衰减，边界对不齐。现在改成**一层固定叠加**：一个覆盖整个窗口、
+   不吃事件的伪元素，把所有像素统一罩住——所以不管下面是卡片、编辑器画布还是文件树，
+   同一高度永远是同一个颜色。
+   两层：常驻 2.2% 底色（没有纯白）+ 顶部 6% 光带，420px 散尽。深色 3% / 8%。 */
+:root {
+  --wash-base: 2.2%;
+  --wash-top: 6%;
+  --overlay-z: 60;
+}
+.dark {
+  --wash-base: 3%;
+  --wash-top: 8%;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: var(--overlay-z);
+  pointer-events: none;
+  background-image:
+    linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--settings-accent) 6%, transparent) 0,
+      transparent 420px
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--settings-accent) 2.2%, transparent) 0,
+      color-mix(in oklab, var(--settings-accent) 2.2%, transparent) 100%
+    );
+}
+.dark body::after {
+  background-image:
+    linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--settings-accent) 8%, transparent) 0,
+      transparent 420px
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--settings-accent) 3%, transparent) 0,
+      color-mix(in oklab, var(--settings-accent) 3%, transparent) 100%
+    );
+}
+
+/* 选中项是主题色唯一「实色」的落脚点。 */
+[data-slot="sidebar-menu-button"][data-active] {
+  background: color-mix(in oklab, var(--settings-accent) 8%, var(--sidebar));
+  color: color-mix(in oklab, var(--settings-accent-ink) 55%, var(--sidebar-foreground));
+}
+[data-slot="sidebar-menu-button"][data-active] svg {
+  color: color-mix(in oklab, var(--settings-accent-ink) 70%, var(--sidebar-foreground));
+}
+
+/* 快进模式的闪电：行内，排在模型名之后、箭头之前。 */
+.alwith-model-pill > svg[fill="currentColor"] {
+  position: static;
+  order: 3;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-inline-start: 1px;
+  flex: none;
+}
+.alwith-model-pill > span {
+  order: 2;
+}
+.alwith-model-pill > svg:last-child {
+  order: 4;
 }

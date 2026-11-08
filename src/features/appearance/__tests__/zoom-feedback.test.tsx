@@ -14,6 +14,13 @@ const { listeners, stop, setZoom, save } = vi.hoisted(() => ({
   setZoom: vi.fn(async (_level: number) => {}),
   save: vi.fn(async () => {})
 }))
+vi.mock("@tauri-apps/api/window", async () => {
+  // 生产代码用窗口级 API（`getCurrentWindow`）：子 webview 有焦点时 `getCurrentWebviewWindow()`
+  // 会抛 "current webview is not a WebviewWindow"。测试里两者指向同一个假窗口。
+  const webviewWindow = await import("@tauri-apps/api/webviewWindow")
+  return { ...webviewWindow, getCurrentWindow: () => webviewWindow.getCurrentWebviewWindow() }
+})
+
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   getCurrentWebviewWindow: () => ({
     setZoom,

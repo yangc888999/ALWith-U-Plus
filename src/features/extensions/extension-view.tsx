@@ -68,7 +68,7 @@ export function ExtensionPage({ id, onClose }: { id: string; onClose: () => void
   const { host } = useExtensions()
   const view = host.views.find((item) => item.id === id && (item.kind === "surfaces" || item.kind === "settingsPages"))
   return (
-    <section className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col gap-4 overflow-hidden px-6 pt-8 pb-6">
+    <section className="flex min-h-0 w-full flex-1 flex-col gap-4 overflow-hidden px-6 pt-8 pb-6">
       <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold">{view?.title ?? t("extensions.unavailable")}</h1>
         <Button variant="outline" onClick={onClose}>

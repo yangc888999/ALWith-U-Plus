@@ -20,7 +20,7 @@ pub fn install(path: PathBuf) {
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current();
         let report = format!(
-            "\nALwith U {} | {:?} | thread {:?} {:?}\n{info}\n{}\n",
+            "\nALWith L {} | {:?} | thread {:?} {:?}\n{info}\n{}\n",
             env!("CARGO_PKG_VERSION"),
             std::time::SystemTime::now(),
             thread.name(),

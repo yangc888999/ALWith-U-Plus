@@ -10,6 +10,7 @@ import type { ForkOrigin, SessionSummary } from "@/agent/client"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { client, useApp } from "@/lib/client"
+import { describeError } from "@/lib/error-text"
 
 type BranchActions = {
   canFork: boolean
@@ -37,10 +38,13 @@ export function ChatBranchProvider({
   const features = codexExtensionCapabilities(agent)
   const origin = useApp((state) => state.forkOrigins[session.id])
   // A native turn may contain several user messages and therefore several UI batches.
-  // Only its final item owns the marker, not every batch with the same turn id.
-  const boundaryItem = session.items.findLast(
-    (item) => origin?.boundaryTurnId != null && codexTurnId(item._meta) === origin.boundaryTurnId
-  )
+  // Only its final item owns the marker, not every batch with the same turn id. Most sessions are
+  // not forks, so skip the scan entirely rather than walking every item on every render — a
+  // transcript being replayed re-renders once per item.
+  const boundaryItem =
+    origin?.boundaryTurnId == null
+      ? undefined
+      : session.items.findLast((item) => codexTurnId(item._meta) === origin.boundaryTurnId)
   const { t } = useTranslation()
   const [openingSource, setOpeningSource] = useState(false)
   const sourceBusy = useRef(false)
@@ -71,7 +75,7 @@ export function ChatBranchProvider({
         onSelect(sessionRow)
       })
       .catch((error: unknown) => {
-        if (mounted.current) toast.error(error instanceof Error ? error.message : String(error))
+        if (mounted.current) toast.error(describeError(error))
       })
       .finally(() => {
         sourceBusy.current = false
@@ -89,7 +93,7 @@ export function ChatBranchProvider({
         if (!sessionRow) throw new Error("Forked chat is missing from the session list")
         if (mounted.current) onSelect?.(sessionRow)
       })
-      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))
+      .catch((error: unknown) => toast.error(describeError(error)))
       .finally(() => {
         busy.current = false
         if (mounted.current) setPending(false)

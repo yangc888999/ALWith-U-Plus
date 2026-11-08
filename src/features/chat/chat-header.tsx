@@ -1,6 +1,9 @@
 import { OverflowMarquee } from "@alwith/module-chat/session-list"
+
+
 import type { ReactNode } from "react"
 import { createPortal } from "react-dom"
+import { useTranslation } from "react-i18next"
 
 import { cn } from "@/lib/utils"
 
@@ -9,13 +12,17 @@ export function ChatHeader({
   target,
   title,
   project,
+  turnCount,
   children
 }: {
   target?: HTMLElement | null
   title: string
   project?: ReactNode
+  /** Number of chat rounds (user prompts) in the session; shown as a compact badge. */
+  turnCount?: number
   children: ReactNode
 }) {
+  const { t } = useTranslation()
   const floating = target !== undefined
   const content = (
     <>
@@ -30,6 +37,16 @@ export function ChatHeader({
         >
           {title}
         </OverflowMarquee>
+        {turnCount !== undefined && turnCount > 0 && (
+          // No frame: the header already carries a title and two icon actions, and a boxed badge
+          // read as a third button.
+          <span
+            className="text-muted-foreground shrink-0 px-1 text-xs font-medium tabular-nums select-none"
+            title={t("chat.turnCountTitle", { count: turnCount })}
+          >
+            {t("chat.turnCountBadge", { count: turnCount })}
+          </span>
+        )}
       </div>
       {children}
     </>

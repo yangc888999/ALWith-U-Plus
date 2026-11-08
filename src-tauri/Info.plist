@@ -1,3 +1,26 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>NSMicrophoneUsageDescription</key><string>ALwith U uses your microphone to transcribe speech into the chat input and for voice calls with Codex.</string></dict></plist>
+<plist version="1.0"><dict>
+  <key>NSMicrophoneUsageDescription</key><string>ALWith L uses your microphone to transcribe speech into the chat input and for voice calls with Codex.</string>
+  <!-- WKWebView derives navigator.language from the bundle's declared localizations, not from the
+       user's system language. With only CFBundleDevelopmentRegion = English, macOS hands the
+       webview "en-US" even on a Chinese Mac, so a first launch with no saved preference booted
+       in English. Listing the shipped languages fixes the webview side; main.tsx also asks the
+       OS directly so first-launch language never depends on the webview at all. -->
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>en</string>
+    <string>zh-Hans</string>
+    <string>fr</string>
+    <string>de</string>
+    <string>it</string>
+    <string>es</string>
+    <string>ja</string>
+    <string>ko</string>
+    <string>ru</string>
+    <string>ar</string>
+    <string>pt-BR</string>
+    <string>hi</string>
+    <string>id</string>
+  </array>
+</dict></plist>

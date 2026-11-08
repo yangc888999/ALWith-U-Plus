@@ -76,7 +76,6 @@ const meta = {
           <>
             <LeadingNavigation
               activePage="archives"
-              onOpenVibemon={() => {}}
               onOpenPlugins={() => {}}
               onOpenExtensions={() => {}}
               onOpenArchives={() => {}}

@@ -11,6 +11,11 @@ const debug = process.env.TAURI_ENV_DEBUG === "true"
 
 export const config = (): UserConfig => ({
   plugins: [react(), tailwindcss(), productionJsxGuard()],
+  define: {
+    // Frozen at bundle time: the About page shows when this build was made, and the packaged
+    // file name carries a yymmddhhmm stamp of the same moment.
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString())
+  },
   resolve: {
     dedupe: ["react", "react-dom", "@base-ui/react"],
     alias: {
@@ -22,7 +27,6 @@ export const config = (): UserConfig => ({
   optimizeDeps: {
     exclude: [
       "@alwith/module-chat",
-      "@alwith/module-gamepad",
       "@alwith/module-fs",
       "@alwith/module-file-tree",
       "@alwith/module-editor",
@@ -63,9 +67,6 @@ export const config = (): UserConfig => ({
       input: {
         main: path.resolve(import.meta.dirname, "index.html"),
         chat: path.resolve(import.meta.dirname, "chat.html"),
-        vibemon: path.resolve(import.meta.dirname, "vibemon.html"),
-        vibemonBubble: path.resolve(import.meta.dirname, "vibemon-bubble.html"),
-        gamepad: path.resolve(import.meta.dirname, "gamepad.html"),
         settings: path.resolve(import.meta.dirname, "settings.html"),
         guide: path.resolve(import.meta.dirname, "guide.html")
       }

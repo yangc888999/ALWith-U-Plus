@@ -3,7 +3,7 @@
     "email": "メールアドレス",
     "code": "認証コード",
     "signIn": "サインイン",
-    "signOut": "ALwith U からログアウト"
+    "signOut": "ALWith L からログアウト"
   },
   "guide": {
     "help": "ヘルプを取得"
@@ -124,7 +124,7 @@
         "name": "フルアクセス",
         "description": "注意して使用してください：Codex は承認なしでワークスペース外のファイルを編集し、インターネットにアクセスできます"
       },
-      "heading": "ALwith U の操作をどのように承認しますか？"
+      "heading": "ALWith L の操作をどのように承認しますか？"
     }
   },
   "composer": {
@@ -143,7 +143,6 @@
     "reset": "リセット"
   },
   "settings": {
-    "gamepad": "Gamepad",
     "general": "一般",
     "versionLabel": "バージョン",
     "engine": "エンジン",
@@ -373,13 +372,8 @@
     "emptyNewTab": "新しいタブ",
     "more": "その他の操作"
   },
-  "pet": {
-    "retry": "再試行",
-    "lounge": "Vibémon 休憩室",
-    "recall": "休憩室に戻す"
-  },
   "app": {
-    "name": "ALwith U"
+    "name": "ALWith L"
   },
   "notify": {
     "needsInput": "入力が必要です",

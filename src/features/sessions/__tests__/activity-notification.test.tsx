@@ -6,7 +6,7 @@ import { SidebarProvider } from "@/components/ui/sidebar"
 import { client } from "@/lib/client"
 import { initI18n } from "@/lib/i18n"
 
-import { SessionSidebar } from "../session-sidebar"
+import { TitleBarLeadingActions } from "../title-bar-leading"
 import { useSessionsUiStore } from "../store"
 
 await initI18n("en")
@@ -26,7 +26,6 @@ afterEach(async () => {
 test.each(["done", "requires_action", "running", "idle"] as const)(
   "activity badge acknowledges %s and reappears for new events",
   async (state) => {
-    const onSelect = vi.fn()
     const records: SessionRunState[] = ["background"].map((sessionId) => ({
       sessionId,
       state,
@@ -44,25 +43,14 @@ test.each(["done", "requires_action", "running", "idle"] as const)(
       executionRole: null
     }))
     client.applyRunStates(records)
+    // The badge lives on the title-row button at the start of the title bar; the panel is what
+    // acknowledges it.
     const screen = render(
       <SidebarProvider>
-        <SessionSidebar
-          screen="main"
-          leadingPage="plugins"
-          selectedId="foreground"
-          onSelect={onSelect}
-          onNewChat={() => {}}
-          onNewProjectChat={() => {}}
-          onSearch={() => {}}
-          onOpenWindow={() => {}}
-          onOpenSettings={() => {}}
-          onOpenPlugins={() => {}}
-          onOpenExtensions={() => {}}
-          onSwitchScreen={() => {}}
-        />
+        <TitleBarLeadingActions onOpenWindow={() => {}} />
       </SidebarProvider>
     )
-    const activity = screen.getByRole("tab", { name: "Activity" })
+    const activity = screen.getByRole("button", { name: "Activity" })
     const badge = () => activity.querySelector("[data-activity-notification]")
     if (state === "running" || state === "idle") {
       expect(badge()).not.toBeInTheDocument()
@@ -74,7 +62,7 @@ test.each(["done", "requires_action", "running", "idle"] as const)(
     expect(client.state.runStates.background?.state).toBe(state)
     act(() => client.applyRunStates(records.map((record) => ({ ...record, version: 2, since: 50 }))))
     expect(badge()).not.toBeInTheDocument()
-    await act(() => Promise.try(() => fireEvent.click(screen.getByRole("tab", { name: "Chats" }))))
+    await act(() => Promise.try(() => fireEvent.click(activity)))
     expect(badge()).not.toBeInTheDocument()
     act(() =>
       client.applyRunStates(

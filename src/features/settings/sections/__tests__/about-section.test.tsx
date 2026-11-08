@@ -33,11 +33,13 @@ test("About shows the installed app and executable versions instead of the ACP a
   const view = render(<AboutSection />)
   try {
     await waitFor(() => {
-      expect(view.getByText("Up to date v0.2.0")).toBeDefined()
+      expect(view.getByText(/Version v0\.2\.0/)).toBeDefined()
       expect(view.getByText("Codex CLI 0.159.2")).toBeDefined()
     })
     expect(view.queryByText("Codex 0.7.4")).toBeNull()
     expect(view.queryByText("Version", { exact: true })).toBeNull()
+    // The build carries its author on the same line as the version.
+    expect(view.getByText("@Leo")).toBeDefined()
   } finally {
     view.unmount()
     native.mockRestore()
@@ -61,7 +63,7 @@ test("a failed Codex version check reports the error and still displays the app 
   const view = render(<AboutSection />)
   try {
     await act(async () => {})
-    await waitFor(() => expect(view.getByText("Up to date v0.2.0")).toBeDefined())
+    await waitFor(() => expect(view.getByText(/Version v0\.2\.0/)).toBeDefined())
     expect(view.getByText("Codex CLI —")).toBeDefined()
     expect(error).toHaveBeenCalledWith("Codex version check failed")
   } finally {
@@ -69,5 +71,36 @@ test("a failed Codex version check reports the error and still displays the app 
     native.mockRestore()
     init.mockRestore()
     error.mockRestore()
+  }
+})
+
+test("the update log opens from the version row instead of sitting on the page", async () => {
+  const native = vi.spyOn(core, "isTauri").mockReturnValue(true)
+  const init = vi.spyOn(useUpdaterStore.getState(), "init").mockResolvedValue()
+  mockIPC((command) => {
+    if (command === "plugin:app|version") return "0.2.0"
+    if (command === "codex_version") return "0.159.2"
+    throw new Error(`Unexpected command: ${command}`)
+  })
+  const view = render(<AboutSection />)
+  try {
+    await waitFor(() => expect(view.getByText(/Version v0\.2\.0/)).toBeDefined())
+    // The change bullets are not on the page until the link is used.
+    expect(view.queryByRole("listitem")).toBeNull()
+
+    await act(() =>
+      Promise.try(() => {
+        view.getByRole("button", { name: "Update log" }).click()
+      })
+    )
+    // Opens in a dialog grouped by version; the title and the current version are shown together
+    // with the change bullets.
+    await waitFor(() => expect(view.getByText("Update log:")).toBeDefined())
+    expect(view.getByText("v0.2.0")).toBeDefined()
+    expect(view.getAllByRole("listitem").length).toBeGreaterThan(0)
+  } finally {
+    view.unmount()
+    native.mockRestore()
+    init.mockRestore()
   }
 })

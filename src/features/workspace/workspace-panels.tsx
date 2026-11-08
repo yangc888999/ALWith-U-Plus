@@ -11,14 +11,15 @@ import {
   useRef,
   useState
 } from "react"
-import { flushSync } from "react-dom"
 import { useTranslation } from "react-i18next"
 
 import { Button } from "@/components/ui/button"
 import { CanvasContext } from "@/features/layout/lib/canvas-context"
 
+import { contentShares, requestedPreviewWidth, saveWorkspaceLayout, workspaceLayoutDefaults } from "./layout-preferences"
 import { type PanelControls, PanelControlsContext } from "./panel-controls-context"
 import { PanelDivider } from "./panel-divider"
+import { useWorkspaceLayout } from "./use-workspace-layout"
 import "./workspace.css"
 
 // Desktop's two main Atlas regions, in chat/preview order. Both remain mounted.
@@ -48,7 +49,10 @@ export function WorkspacePanels({
   const previousMaximized = useRef(maximized)
   const [draggingPreview, setDraggingPreview] = useState(false)
   const [viewportWidth, setViewportWidth] = useState(0)
-  const [previewWidth, setPreviewWidth] = useState(0)
+  // While dragging, the pointer owns the width; the persisted store wins once the drag ends.
+  const [dragWidth, setDragWidth] = useState<number | null>(null)
+  const dragWidthRef = useRef(0)
+  const layout = useWorkspaceLayout()
   const [manuallySeparated, setManuallySeparated] = useState(false)
   const [edges, setEdges] = useState({ previous: false, next: false })
   const [edgeZone, setEdgeZone] = useState<"start" | "end" | null>(null)
@@ -62,13 +66,29 @@ export function WorkspacePanels({
   })
   const budget = canvas?.budget ?? viewportWidth
   const fullViewportWidth = canvas?.viewportWidth ?? viewportWidth
-  const widths = resolvePanelWidths(budget, visible, previewWidth, fullViewportWidth, manuallySeparated)
+  // The drag owns a pixel-precise width only while it is happening; once released the share is
+  // what we persist (see onEnd), so there is nothing pixel-based left in storage.
+  const previewWidth = dragWidth ?? 0
+  // A dragged pixel width wins; otherwise the Settings share decides the chat/preview split.
+  const shares = contentShares(layout)
+  // The split-view's "preview" region contains the file tree as well, so its share is tree +
+  // preview. Passing only the preview share made the region too narrow: the tree was squeezed
+  // inside it and chat stole the difference, so the Settings percentages never matched the screen.
+  const previewRegionShare = shares.tree + shares.preview
+  const requestedPreview = requestedPreviewWidth(budget, previewRegionShare, previewWidth)
+  const widths = resolvePanelWidths(budget, visible, requestedPreview, fullViewportWidth, manuallySeparated)
   const chatWidth = maximized ? 0 : widths.chat
   const fileWidth = maximized ? budget : widths.preview
   const expanded = maximized || (visible && budget > 0 && widths.chat + widths.preview > budget)
   const toggleExpanded = (): void => {
     if (expanded) {
-      setPreviewWidth(0)
+      setDragWidth(null)
+      // Restore means "back to the default split", not "reuse the last dragged share".
+      saveWorkspaceLayout({
+        chatRatio: workspaceLayoutDefaults.chatRatio,
+        treeRatio: workspaceLayoutDefaults.treeRatio,
+        previewRatio: workspaceLayoutDefaults.previewRatio
+      })
       setManuallySeparated(false)
       onMaximizedChange(false)
       canvas?.navigate("chat")
@@ -94,16 +114,17 @@ export function WorkspacePanels({
     if (!node || unified) return
     const measure = (): void => setViewportWidth(node.clientWidth)
     measure()
-    const observer = new ResizeObserver(() => flushSync(measure))
+    // Avoid flushSync: React batches the width update to the next frame, so divider dragging
+    // no longer forces a synchronous render that blocks the main thread.
+    const observer = new ResizeObserver(measure)
     observer.observe(node)
     return () => observer.disconnect()
   }, [unified])
 
   useEffect(() => {
-    if (!visible || maximized) {
-      setPreviewWidth(0)
-      setManuallySeparated(false)
-    }
+    // Closing the preview or switching sessions must not discard a manually adjusted split;
+    // only the "panes no longer fit" marker follows visibility.
+    if (!visible || maximized) setManuallySeparated(false)
   }, [visible, maximized])
 
   useEffect(() => {
@@ -187,6 +208,7 @@ export function WorkspacePanels({
                     if (maximized) onMaximizedChange(false)
                     // Keep the requested width when splitting substitutes a full-screen display width.
                     dragStart.current = previewWidth || fileWidth
+                    dragWidthRef.current = dragStart.current
                     dragging.current = true
                     setDraggingPreview(true)
                     canvas?.setDividerDragging(true)
@@ -198,11 +220,32 @@ export function WorkspacePanels({
                     const hideChat = dx > 0 && budget - requested <= 320
                     onMaximizedChange(hideChat)
                     const next = resolvePanelWidths(budget, true, requested, fullViewportWidth)
-                    setPreviewWidth(requested)
+                    dragWidthRef.current = requested
+                    setDragWidth(requested)
                     // A manual split survives navigation and window resizing until another divider adjustment.
                     setManuallySeparated(next.chat + next.preview > budget)
                   }}
                   onEnd={() => {
+                    // Persist only the new share, never a pixel width: the split is derived from
+                    // the live window width at render time, so a width dragged on one monitor can
+                    // never starve the chat column on another.
+                    const settled = dragWidthRef.current
+                    const next = resolvePanelWidths(budget, true, settled, fullViewportWidth)
+                    if (budget > 0) {
+                      // Inside the workspace the three content shares add up to `1 - navigation`,
+                      // so scale them back onto the window-wide 100% budget.
+                      const scale = 1 - layout.navigationRatio
+                      const withinPreview = shares.tree + shares.preview
+                      const treeOfPreview = withinPreview > 0 ? shares.tree / withinPreview : 0.2
+                      const previewShare = next.preview / budget
+                      saveWorkspaceLayout({
+                        chatRatio: (next.chat / budget) * scale,
+                        treeRatio: previewShare * treeOfPreview * scale,
+                        previewRatio: previewShare * (1 - treeOfPreview) * scale
+                      })
+                    }
+                    // The store now owns the width; drop the pointer-owned preview value.
+                    setDragWidth(null)
                     // A manual resize on main overrides preview intent retained from an earlier merged layout.
                     if (canvas?.selected === 1 && !maximized) canvas.navigate("chat")
                     dragging.current = false

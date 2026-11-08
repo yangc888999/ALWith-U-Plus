@@ -11,7 +11,7 @@ await initI18n("en")
 
 test("leading navigation switches pages and is inaccessible on the main screen", () => {
   function Screen() {
-    const [page, setPage] = useState<"vibemon" | "plugins" | "extensions" | "archives">("plugins")
+    const [page, setPage] = useState<"plugins" | "extensions" | "archives">("plugins")
     const [screen, setScreen] = useState<"leading" | "main">("leading")
     return (
       <MainSidebarLayout
@@ -26,7 +26,6 @@ test("leading navigation switches pages and is inaccessible on the main screen",
           <>
             <LeadingNavigation
               activePage={page}
-              onOpenVibemon={() => setPage("vibemon")}
               onOpenPlugins={() => setPage("plugins")}
               onOpenExtensions={() => setPage("extensions")}
               onOpenArchives={() => setPage("archives")}
@@ -41,7 +40,6 @@ test("leading navigation switches pages and is inaccessible on the main screen",
   const view = render(<Screen />)
   expect(view.getByRole("button", { name: "Plugins" })).toHaveAttribute("aria-current", "page")
   for (const [name, page] of [
-    ["Vibémon", "vibemon"],
     ["Extensions", "extensions"],
     ["Plugins", "plugins"],
     ["Archived chats", "archives"]

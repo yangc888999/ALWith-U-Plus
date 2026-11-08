@@ -73,6 +73,9 @@ function setup(
       onInstall={(id?: string): void => {
         actions.push({ install: id ?? null })
       }}
+      onInstallApp={(app): void => {
+        actions.push({ installApp: app.id })
+      }}
       onRequest={(request: Request): void => {
         actions.push(request)
       }}
@@ -497,4 +500,18 @@ test("reload is disabled for an installed but disabled extension", async () => {
   const menu = await view.findByRole("menu")
   expect(within(menu).getByRole("menuitem", { name: "Reload" })).toHaveAttribute("aria-disabled", "true")
   expect(view.actions).toEqual([])
+})
+
+test("published company apps offer an install action until they are installed", async (): Promise<void> => {
+  const view = setup(state())
+  const section = view.getByRole("region", { name: "Company apps" })
+  expect(within(section).getByText("BI Metrics")).toBeTruthy()
+  await act(() => Promise.try(() => fireEvent.click(within(section).getAllByRole("button", { name: "Install" })[0])))
+  expect(view.actions).toEqual([{ installApp: "bi-metrics" }])
+  // An installed app leaves the section: the list above already owns its switch and actions.
+  view.unmount()
+  const installed = state()
+  installed.native.installations.push(installation("bi-metrics", "BI Metrics"))
+  const next = setup(installed)
+  expect(within(next.getByRole("region", { name: "Company apps" })).queryByText("BI Metrics")).toBeNull()
 })

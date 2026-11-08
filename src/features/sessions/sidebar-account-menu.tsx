@@ -1,5 +1,5 @@
 import { useSidebarOverlay } from "@alwith/module-chat/session-list"
-import { Gamepad2Icon, GlobeIcon, LogOutIcon, PawPrintIcon, SettingsIcon } from "lucide-react"
+import { GlobeIcon, LogOutIcon, SettingsIcon, UserPenIcon } from "lucide-react"
 import { type ReactNode, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -21,28 +21,30 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu"
-import { logoutPlatform, usePlatformAuth } from "@/features/auth/store"
-import { useVibemonControl } from "@/features/vibemon/use-vibemon-control"
+import { logoutPlatform } from "@/features/auth/store"
+import { useDisplayProfile } from "@/features/profile/use-display-profile"
 import { LANGUAGES } from "@/lib/i18n"
 import { savePreference } from "@/lib/preferences"
-import { openGamepadWindow } from "@/lib/window-manager"
 
-export function SidebarAccountMenu({ onOpenSettings }: { onOpenSettings: () => void }): ReactNode {
+export function SidebarAccountMenu({
+  onOpenSettings,
+  onEditProfile
+}: {
+  onOpenSettings: () => void
+  onEditProfile?: () => void
+}): ReactNode {
   const { t, i18n } = useTranslation()
-  const user = usePlatformAuth((state) => state.user)
+  const profile = useDisplayProfile()
   const [busy, setBusy] = useState(false)
   const [open, setOpen] = useState(false)
-  const vibemon = useVibemonControl()
   useSidebarOverlay(open)
-  if (!user) return null
+  if (!profile) return null
 
-  const displayName = user.nickname || user.login_email
+  const displayName = profile.displayName
   const avatar = (
     <Avatar className="size-5 after:border-0">
-      <AvatarImage src={user.avatar} alt="" />
-      <AvatarFallback className="bg-primary text-xs text-primary-foreground">
-        {[...displayName].slice(0, 2).join("").toLocaleUpperCase()}
-      </AvatarFallback>
+      {profile.avatarUrl && <AvatarImage src={profile.avatarUrl} alt="" />}
+      <AvatarFallback className="bg-primary text-xs text-primary-foreground">{profile.initials}</AvatarFallback>
     </Avatar>
   )
 
@@ -67,13 +69,17 @@ export function SidebarAccountMenu({ onOpenSettings }: { onOpenSettings: () => v
             <span className="min-w-0 flex-1">
               <span className="block truncate">{displayName}</span>
               <span className="mt-0.5 block truncate text-xs font-normal text-muted-foreground">
-                {user.login_email}
+                {profile.email}
               </span>
             </span>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
         </DropdownMenuGroup>
         <DropdownMenuGroup>
+          <DropdownMenuItem className="h-8 py-0" onClick={onEditProfile ?? onOpenSettings}>
+            <UserPenIcon className="text-muted-foreground" />
+            {t("settings.profileEdit")}
+          </DropdownMenuItem>
           <DropdownMenuItem className="h-8 py-0" onClick={onOpenSettings}>
             <SettingsIcon className="text-muted-foreground" />
             {t("sidebar.settings")}
@@ -103,28 +109,6 @@ export function SidebarAccountMenu({ onOpenSettings }: { onOpenSettings: () => v
               </DropdownMenuRadioGroup>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
-        </DropdownMenuGroup>
-        <DropdownMenuSeparator />
-        <DropdownMenuGroup>
-          <DropdownMenuItem
-            disabled={busy || vibemon.disabled}
-            className="h-8 py-0"
-            onClick={() => void vibemon.toggle()}
-          >
-            <PawPrintIcon className="text-muted-foreground" />
-            {t(vibemon.enabled ? "pet.disable" : "pet.enable")}
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            className="h-8 py-0"
-            onClick={() =>
-              void openGamepadWindow().catch((error: unknown) =>
-                toast.error(error instanceof Error ? error.message : String(error))
-              )
-            }
-          >
-            <Gamepad2Icon className="text-muted-foreground" />
-            {t("settings.gamepad")}
-          </DropdownMenuItem>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>

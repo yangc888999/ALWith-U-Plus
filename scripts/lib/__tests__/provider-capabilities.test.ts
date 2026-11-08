@@ -12,7 +12,7 @@ interface CatalogModel {
   input_modalities: string[]
 }
 
-for (const provider of providers) {
+for (const provider of providers.filter((entry) => entry.native !== true)) {
   test(`${provider.id}: every selectable model has packaged metadata`, () => {
     expect(provider.catalog, `${provider.id}: missing catalog`).toBeString()
     if (!provider.catalog) throw new Error(`${provider.id}: missing catalog`)
@@ -54,4 +54,42 @@ test("Qwen 3.8 exposes its documented levels without compatibility aliases", () 
     expect(model?.supported_reasoning_levels.map((entry) => entry.effort)).toEqual(["none", "low", "medium", "xhigh"])
   }
   expect(tauri.bundle.resources).toHaveProperty("resources/qwen", "qwen")
+})
+
+test("every built-in provider is offered, and Hakimi exposes its three Claude models", () => {
+  // No built-in is retired: DeepSeek, Qwen, X, Kimi, GLM and MiniMax all belong in the picker.
+  // Hakimi sits last — the user's own gateway reads best at the bottom of the list.
+  expect(providers.map((provider) => provider.id)).toEqual([
+    "openai",
+    "deepseek",
+    "openrouter",
+    "qwen",
+    "xai",
+    "kimi",
+    "zhipu",
+    "minimax",
+    "hakimi"
+  ])
+  const provider = providers.find((entry) => entry.id === "hakimi")
+  expect(provider?.baseUrl).toBe("https://vip.aipro.love/v1")
+  expect(provider?.catalog).toBe("hakimi/models.json")
+  const catalog = JSON.parse(
+    readFileSync(resolve(import.meta.dir, "../../../src-tauri/resources/hakimi/models.json"), "utf8")
+  ) as { models: CatalogModel[] }
+  expect(catalog.models.map((model) => model.slug)).toEqual([
+    "claude-opus-5-5",
+    "claude-fable-5-1",
+    "claude-sonnet-5-5"
+  ])
+  for (const model of catalog.models) {
+    expect(model.default_reasoning_level).toBe("medium")
+    expect(model.supported_reasoning_levels.map((level) => level.effort)).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ])
+  }
+  expect(tauri.bundle.resources).toHaveProperty("resources/hakimi", "hakimi")
 })

@@ -18,7 +18,9 @@ async function fixture() {
   mkdirSync(bridge, { recursive: true })
   mkdirSync(join(platform, "licenses"), { recursive: true })
   cpSync(
-    join(dirname(import.meta.resolve("@alwith/native-auth/stage").replace("file://", "")), "stage.js"),
+    // `fileURLToPath`, not a string replace: a checkout under a path with a space resolves to
+    // `%20` and the copy fails only on those machines.
+    join(dirname(fileURLToPath(import.meta.resolve("@alwith/native-auth/stage"))), "stage.js"),
     join(bridge, "stage.mjs")
   )
   const kit = join(root, "node_modules/@alwith/native-kit")

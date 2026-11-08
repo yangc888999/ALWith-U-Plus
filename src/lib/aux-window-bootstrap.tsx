@@ -15,13 +15,19 @@ import { AuthGate } from "@/features/auth/auth-gate"
 import { initPlatformAuth } from "@/features/auth/store"
 import { hydrateNavigationSound } from "@/features/chat/codex/navigation-sound-store"
 import { predictionPreference } from "@/features/chat/composer/prediction-preference"
+import { hydrateProfileOverrides } from "@/features/profile/profile-store"
+import { describeError } from "@/lib/error-text"
 import { initI18n } from "@/lib/i18n"
+import { installToastErrorLocalization } from "@/lib/toast-error"
 import { startPreferenceSync } from "@/lib/preference-sync"
 import { loadPreferences, type Preferences } from "@/lib/preferences"
 import { bootstrapSettings } from "@/lib/settings-store"
 import { hydrateZoom } from "@/lib/zoom"
 import { startZoomViewport } from "@/lib/zoom-viewport"
 import "../index.css"
+
+// Same guard for the settings / floating windows: install before the first rejection can toast.
+installToastErrorLocalization()
 
 export function bootstrapAuxWindow(opts: {
   component: ComponentType<{ preferences: Preferences }>
@@ -38,11 +44,18 @@ export function bootstrapAuxWindow(opts: {
     window.addEventListener("unhandledrejection", (event) => {
       const error: unknown = event.reason
       const message = error instanceof Error ? error.message : String(error)
-      toast.error(message)
+      // This handler used to toast the raw English rejection — "The operation was aborted."
+      // came from here. The log keeps the original; the toast goes through the shared table.
+      toast.error(describeError(error))
       void logError(`[${opts.logTag}] ${message}`).catch((failure: unknown) => console.error(failure))
     })
     const preferences = await loadPreferences()
     predictionPreference.setState({ enabled: preferences.composerPredictions ?? true })
+    hydrateProfileOverrides({
+      owner: preferences.profileOwner,
+      nickname: preferences.profileNickname,
+      avatar: preferences.profileAvatar
+    })
     await initI18n(preferences.language)
     if (opts.zoomControls) await startZoomViewport()
     await hydrateZoom(preferences.zoomLevel)

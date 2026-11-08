@@ -21,6 +21,7 @@ function snapshot(revision: number, status: ProviderSnapshot["status"] = "applie
     appliedRevision: status === "applied" ? revision : null,
     providers: {},
     customProviders: [],
+    builtInModels: {}, managedProviders: [],
     status,
     error: null
   }

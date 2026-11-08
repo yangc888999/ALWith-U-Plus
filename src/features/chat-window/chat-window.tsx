@@ -1,20 +1,19 @@
 import { exportDraft, importDraft } from "@alwith/module-chat/conversation"
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import type { SessionSummary } from "@/agent/client"
+import { getCurrentWindow } from "@tauri-apps/api/window"
 import { events } from "@/bindings"
 import { Button } from "@/components/ui/button"
-import { usePlatformAuth } from "@/features/auth/store"
 import { ChatView } from "@/features/chat/chat-view"
 import { DRAFT_SESSION_ID, DraftChat } from "@/features/chat/draft-chat"
 import { chooseFolder } from "@/features/chat/draft-project-picker"
 import { newChatDirectory } from "@/features/chat/new-chat-directory"
 import { ChatProjectMenu } from "@/features/chat/project-session-popover"
-import { ChatWindowPetButton } from "@/features/vibemon/chat-window-pet-button"
-import { registerPetSurface, restorePetAfterChat, suspendPetForChat } from "@/features/vibemon/window-client"
+import { XIcon } from "lucide-react"
+
 import { useVoiceHandoff } from "@/features/voice/use-voice-handoff"
 import {
   announceChatReady,
@@ -25,7 +24,12 @@ import {
   serveChatSurface
 } from "@/lib/chat-window"
 import { client, useApp, useSession } from "@/lib/client"
+import { describeError } from "@/lib/error-text"
+import { markStartupReady } from "@/lib/startup-window"
+import { useStartupSilent } from "@/lib/use-startup-silent"
 import type { Preferences } from "@/lib/preferences"
+import { ensureProjectMemory } from "@/lib/project-memory"
+import { useProjectMemory } from "@/lib/use-project-memory"
 import { useProviders } from "@/lib/use-providers"
 import { useSurfaceOperation } from "@/lib/use-surface-operation"
 import { useWindowFocus } from "@/lib/window-focus"
@@ -34,7 +38,7 @@ import { openSettingsWindow } from "@/lib/window-manager"
 import { WindowResizeEdges } from "./window-resize-edges"
 
 function report(error: unknown): void {
-  toast.error(error instanceof Error ? error.message : String(error))
+  toast.error(describeError(error))
 }
 
 export function ChatWindow({ preferences }: { preferences: Preferences }) {
@@ -44,12 +48,18 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
   const [cwd, setCwd] = useState<string | null>(preferences.lastProjectDirectory)
   const [generation, setGeneration] = useState(0)
   const voiceHandoff = useVoiceHandoff(selectedId, generation)
+  useProjectMemory()
   const [ready, setReady] = useState(false)
   const [contentMounted, setContentMounted] = useState(false)
   const [headerTarget, setHeaderTarget] = useState<HTMLDivElement | null>(null)
   const current = useRef({ selectedId, cwd })
   current.current = { selectedId, cwd }
   const connection = useApp((state) => state.connection)
+  // 浮窗是独立的 webview，静默窗要在这里单独推进（同一份模块状态，但另一个 JS 上下文）。
+  const startupSilent = useStartupSilent()
+  useEffect(() => {
+    if (connection === "ready") markStartupReady()
+  }, [connection])
   const session = useSession(selectedId)
   const draftSessions = useApp((state) => state.draftSessions)
   // A replacement is published before its retired id disappears and before
@@ -78,16 +88,12 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
     }
   }, [])
 
-  const hide = useCallback(async (restore = true): Promise<void> => {
+  const hide = useCallback(async (): Promise<void> => {
     surfaceRevision.current++
-    await getCurrentWebviewWindow().hide()
+    await getCurrentWindow().hide()
     await publishChatWindowSurface(current.current.selectedId, false)
     // Native hiding keeps the draft mounted so pending replacements still bind
     // their new session and carry the input forward while the window is hidden.
-    if (usePlatformAuth.getState().user !== null) {
-      await registerPetSurface("chat", current.current.selectedId, false)
-      if (restore) await restorePetAfterChat()
-    }
   }, [])
   const returnToMain = useCallback(() => {
     void operation
@@ -109,6 +115,7 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
       .run(async () => {
         const directory = newChatDirectory(current.current.cwd)
         await client.discardDraft("chat")
+        void ensureProjectMemory(directory)
         setCwd(directory)
         setSelectedId(null)
         importDraft(DRAFT_SESSION_ID, null)
@@ -122,6 +129,7 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
       .run(async () => {
         const directory = await chooseFolder(current.current.cwd)
         if (directory === null) return
+        void ensureProjectMemory(directory)
         setCwd(directory)
         if (current.current.selectedId === null || client.state.draftSessions[current.current.selectedId] === "chat")
           return
@@ -156,7 +164,7 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
   useEffect(() => {
     let disposed = false
     let stopSurface: (() => void) | undefined
-    const win = getCurrentWebviewWindow()
+    const win = getCurrentWindow()
     const close = win.onCloseRequested((event) => {
       event.preventDefault()
       void hide().catch(report)
@@ -200,10 +208,6 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
               setContentMounted(true)
               await presentChatWindow()
               await publishChatWindowSurface(current.current.selectedId, true)
-              if (usePlatformAuth.getState().user !== null) {
-                await registerPetSurface("chat", current.current.selectedId, true)
-                await suspendPetForChat()
-              }
               return null
             }
             case "release": {
@@ -211,11 +215,11 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
                 if (client.state.sessionWindows[action.sessionId] !== "chat") return null
                 const target = client.session(action.sessionId)
                 const transfer = { sessionId: target.id, cwd: target.cwd, draft: await exportDraft(target.id) }
-                await hide(false)
+                await hide()
                 return transfer
               }
               const transfer = await capture()
-              await hide(false)
+              await hide()
               surfaceRevision.current++
               current.current = { ...current.current, selectedId: null }
               await publishChatWindowSurface(null, false)
@@ -251,15 +255,13 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
 
   useEffect(() => {
     if (!ready) return
-    const window = getCurrentWebviewWindow()
+    const window = getCurrentWindow()
     let disposed = false
     const refresh = async () => {
       const revision = ++surfaceRevision.current
       const visible = (await window.isVisible()) && !(await window.isMinimized())
       if (disposed || revision !== surfaceRevision.current || current.current.selectedId !== selectedId) return
       await publishChatWindowSurface(current.current.selectedId, visible)
-      if (usePlatformAuth.getState().user !== null)
-        await registerPetSurface("chat", current.current.selectedId, visible)
     }
     void refresh().catch(report)
     const stop = Promise.all([
@@ -304,13 +306,23 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
       inert={busy}
       aria-busy={busy}
       className="relative flex h-dvh flex-col overflow-hidden rounded-2xl border bg-background text-foreground"
+      data-chat-window=""
     >
       <WindowResizeEdges />
       <header className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-3" data-tauri-drag-region>
         <div ref={setHeaderTarget} className="flex min-w-0 flex-1 items-center gap-1" data-tauri-drag-region />
-        <ChatWindowPetButton sessionId={selectedId} />
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={t("chatWindow.close")}
+          title={t("chatWindow.close")}
+          onClick={() => void getCurrentWindow().close().catch(report)}
+        >
+          <XIcon className="size-4" />
+        </Button>
       </header>
       {ready &&
+        !startupSilent &&
         (connection === "disconnected" || connection === "failed" || (selectedId !== null && session === null)) && (
           <div className="flex items-center justify-between gap-2 px-4 py-2 text-sm" role="status">
             <span>{t("connection.disconnected")}</span>
@@ -363,6 +375,7 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
               }
               onNewChat={newChat}
               onNewProject={newProject}
+              onClearContext={() => newChat()}
               onReturnToMain={returnToMain}
               onSelectSession={selectSession}
               onDeleted={deleted}

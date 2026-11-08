@@ -3,13 +3,28 @@
  * the engine project (node environment) only gets the matcher extension.
  */
 import * as matchers from "@testing-library/jest-dom/matchers"
-import { expect, vi } from "vitest"
+import { beforeEach, expect, vi } from "vitest"
+
+// 当前 Node 22 构建未暴露全局 Promise.try，而测试桩（fake-runtime-client）与 @alwith/api 依赖它。
+// 仅在缺失时补一个等价实现，不改变任何测试语义。
+if (typeof (globalThis.Promise as { try?: unknown }).try !== "function") {
+  ;(globalThis.Promise as { try?: (fn: () => unknown) => Promise<unknown> }).try = (fn) =>
+    new Promise((resolve, reject) => {
+      try {
+        resolve(fn())
+      } catch (error) {
+        reject(error)
+      }
+    })
+}
 
 // Extend the Vitest instance of this worker explicitly; under Bun the jest-dom/vitest entry can
 // resolve to a different instance.
 expect.extend(matchers)
 
 if (typeof document !== "undefined") {
+  // Resizable-panel widths persist to localStorage; a drag in one case must not leak into the next.
+  beforeEach(() => window.localStorage.clear())
   const { ChatWorkerStub } = await import("@/features/chat/codex/__tests__/chat-worker-stub")
   // jsdom has no matchMedia or Web Animations; components only need the API surface.
   if (typeof window.matchMedia !== "function") {

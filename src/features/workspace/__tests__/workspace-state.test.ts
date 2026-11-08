@@ -1,8 +1,53 @@
 import { beforeEach, expect, test, vi } from "vitest"
 
-import { createWorkspaceStateStore } from "../workspace-state"
+import { createWorkspaceSessionStore, createWorkspaceStateStore } from "../workspace-state"
 
 beforeEach(() => localStorage.clear())
+
+test("two conversations in one project remember their own tabs", async () => {
+  const sessions = createWorkspaceSessionStore()
+  await sessions.save("/a", "s1", { tabs: [{ path: "/a/one.md", pinned: true }], activePath: "/a/one.md" })
+  await sessions.save("/a", "s2", { tabs: [{ path: "/a/two.md", pinned: false }], activePath: "/a/two.md" })
+
+  // The whole point: opening the second chat must not show the first chat's document.
+  expect(await sessions.load("/a", "s2")).toEqual({
+    tabs: [{ path: "/a/two.md", pinned: false }],
+    activePath: "/a/two.md"
+  })
+  expect(await sessions.load("/a", "s1")).toEqual({
+    tabs: [{ path: "/a/one.md", pinned: true }],
+    activePath: "/a/one.md"
+  })
+  // A conversation that never opened anything has no record, so it inherits the project view.
+  expect(await sessions.load("/a", "s3")).toBeNull()
+  // Same conversation id under another project is a different conversation.
+  expect(await sessions.load("/b", "s1")).toBeNull()
+  // The project record stays a single shared entry.
+  expect(localStorage.getItem("workspace:/a")).toBeNull()
+})
+
+test("drops paths and active selections that left the project", async () => {
+  const sessions = createWorkspaceSessionStore()
+  localStorage.setItem(
+    "workspace-session:/a#s1",
+    JSON.stringify({
+      tabs: [
+        { path: "/a/kept.md", pinned: true },
+        { path: "/b/gone.md", pinned: false }
+      ],
+      activePath: "/b/gone.md"
+    })
+  )
+  expect(await sessions.load("/a", "s1")).toEqual({
+    tabs: [{ path: "/a/kept.md", pinned: true }],
+    activePath: null
+  })
+  // A corrupt record must not break the switch; it reads as "nothing remembered".
+  localStorage.setItem("workspace-session:/a#s2", "{not json")
+  await expect(sessions.load("/a", "s2")).rejects.toThrow()
+  localStorage.setItem("workspace-session:/a#s3", JSON.stringify({ tabs: "nope" }))
+  expect(await sessions.load("/a", "s3")).toBeNull()
+})
 
 test("restores project tabs and tree preferences without persisting document bodies", async () => {
   const store = createWorkspaceStateStore()

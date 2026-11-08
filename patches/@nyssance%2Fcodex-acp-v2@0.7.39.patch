@@ -1,0 +1,1203 @@
+diff --git a/dist/client.js b/dist/client.js
+index 4c9dd86..81277dc 100644
+--- a/dist/client.js
++++ b/dist/client.js
+@@ -284,6 +284,10 @@ function hasPluginStore(agent) {
+   const capabilities = codexExtensionCapabilities(agent);
+   return capabilities.skills || capabilities.plugins;
+ }
++function localizedEngineText(message) {
++  const format = globalThis.__alwithFormatError;
++  return typeof message === "string" && typeof format === "function" ? format(message) : message;
++}
+ function codexTurnError(error) {
+   const data = error.error?.data;
+   const codexData = typeof data === "object" && data !== null ? data.codex : undefined;
+@@ -291,7 +295,7 @@ function codexTurnError(error) {
+   const detail = codexData ?? (typeof codex === "object" && codex !== null ? codex.error : undefined);
+   const fields = typeof detail === "object" && detail !== null ? detail : undefined;
+   return {
+-    message: error.error != null ? error.error.message : typeof fields?.message === "string" ? fields.message : error.stopReason === DISCONNECTED ? "Codex disconnected while this turn was running" : `Turn ended: ${error.stopReason}`,
++    message: localizedEngineText(error.error != null ? error.error.message : typeof fields?.message === "string" ? fields.message : error.stopReason === DISCONNECTED ? "Codex disconnected while this turn was running" : `Turn ended: ${error.stopReason}`),
+     category: typeof fields?.category === "string" ? fields.category : null,
+     retryable: fields?.retryable === true
+   };
+@@ -310,7 +314,7 @@ function codexMessageError(item) {
+     stopReason: typeof detail.stopReason === "string" ? detail.stopReason : "error",
+     error: {
+       code: -32603,
+-      message: textOf2(item.content),
++      message: localizedEngineText(textOf2(item.content)),
+       data: { codex: detail }
+     },
+     meta: item._meta
+diff --git a/dist/index.js b/dist/index.js
+index 9f50c40..3a03ab6 100755
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1,4 +1,5 @@
+ #!/usr/bin/env bun
++import { appendFileSync } from "node:fs";
+ // @bun
+ var __create = Object.create;
+ var __getProtoOf = Object.getPrototypeOf;
+@@ -12296,10 +12297,22 @@ function errorToResult(error) {
+     return RequestError.invalidParams(error.format()).toResult();
+   }
+   const details = errorDetails(error);
++  // Keep the underlying message: dropping it turned "This chat uses hakimi, but your current
++  // provider is openai" into a bare "Internal error", so the client could neither explain nor
++  // auto-switch providers.
++  const message = error instanceof Error && error.message ? error.message : undefined;
+   try {
+-    return RequestError.internalError(details ? JSON.parse(details) : {}).toResult();
++    appendFileSync(`${process.env.HOME}/Library/Logs/ai.alwith.u/adapter-provider.log`, JSON.stringify({
++      at: new Date().toISOString(),
++      step: "acp-error",
++      message: (message ?? "").slice(0, 160),
++      stack: (error instanceof Error ? error.stack ?? "" : "").split("\n").slice(1, 6).join(" | ").slice(0, 500)
++    }) + "\n");
++  } catch {}
++  try {
++    return RequestError.internalError(details ? JSON.parse(details) : {}, message).toResult();
+   } catch {
+-    return RequestError.internalError({ details }).toResult();
++    return RequestError.internalError({ details }, message).toResult();
+   }
+ }
+ function requestCancelledError(reason) {
+@@ -18955,6 +18968,148 @@ class HistoryRead {
+ }
+ 
+ // src/alwith/codex/AppServerClient.ts
++var nativeAccountSnapshot;
++/**
++ * Codex answers `account/read` with `account: null` whenever the process runs on a custom provider,
++ * and this app runs every gateway through one shared provider so that a chat can change vendors.
++ * Ask a throwaway engine pinned to `openai` instead: it only reads the local auth file. The answer
++ * is cached because the settings window and the usage meter poll it.
++ */
++async function readNativeProviderSnapshot() {
++  const cached = nativeAccountSnapshot;
++  if (cached !== undefined && Date.now() - cached.at < NATIVE_SNAPSHOT_TTL_MS)
++    return cached.value;
++  const command = process.env.CODEX_PATH;
++  if (!command)
++    return null;
++  const { spawn } = await import("node:child_process");
++  const value = await new Promise((resolve) => {
++    let settled = false;
++    let child;
++    const account = { value: null };
++    const finish = (result) => {
++      if (settled)
++        return;
++      settled = true;
++      try {
++        child?.kill();
++      } catch {}
++      resolve(result);
++    };
++    try {
++      child = spawn(command, ["-c", 'model_provider="openai"', "app-server"], {
++        stdio: ["pipe", "pipe", "ignore"],
++        env: process.env
++      });
++    } catch {
++      finish(null);
++      return;
++    }
++    let buffer = "";
++    const send = (payload) => {
++      try {
++        child.stdin.write(JSON.stringify(payload) + "\n");
++      } catch {}
++    };
++    child.stdout.on("data", (chunk) => {
++      buffer += chunk.toString();
++      let index;
++      while ((index = buffer.indexOf("\n")) !== -1) {
++        const line = buffer.slice(0, index).trim();
++        buffer = buffer.slice(index + 1);
++        if (line.length === 0)
++          continue;
++        let message;
++        try {
++          message = JSON.parse(line);
++        } catch {
++          continue;
++        }
++        if (message.id === 2) {
++          account.value = message.result ?? null;
++          // Ask for usage only once the account answer is in, so both land in one snapshot.
++          send({ jsonrpc: "2.0", id: 3, method: "account/rateLimits/read" });
++        }
++        if (message.id === 3)
++          finish({ account: account.value, rateLimits: message.result ?? null });
++      }
++    });
++    child.on("error", () => finish(null));
++    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { clientInfo: { name: "alwith-auth", version: "0.0.0", title: "auth" } } });
++    setTimeout(() => send({ jsonrpc: "2.0", id: 2, method: "account/read", params: { refreshToken: false } }), 500);
++    setTimeout(() => finish({ account: account.value, rateLimits: null }), 6000);
++  });
++  nativeAccountSnapshot = value?.account?.account ? { at: Date.now(), value } : undefined;
++  return value;
++}
++/**
++ * The ChatGPT account Codex keeps on disk, read without asking the engine.
++ *
++ * `account/read` answers `account: null` on the shared router provider, and the throwaway-engine
++ * probe above depends on a second Codex starting within six seconds. When it does not, settings
++ * showed "not signed in" while `auth.json` still held a valid ChatGPT token. The file is the
++ * source of truth, so answer from it instead of leaving the login state unknown.
++ */
++async function readLocalChatGptAccount() {
++  try {
++    const home = process.env.CODEX_HOME?.trim() || (process.env.HOME ? process.env.HOME + "/.codex" : null);
++    if (!home)
++      return null;
++    const { readFile } = await import("node:fs/promises");
++    const json = JSON.parse(await readFile(home + "/auth.json", "utf8"));
++    if (json?.auth_mode && json.auth_mode !== "chatgpt")
++      return null;
++    const tokens = json?.tokens;
++    if (!tokens?.access_token)
++      return null;
++    let claims = {};
++    try {
++      const part = String(tokens.id_token ?? "").split(".")[1];
++      if (part)
++        claims = JSON.parse(Buffer.from(part.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
++    } catch {}
++    const email = typeof claims.email === "string" ? claims.email : null;
++    if (!email)
++      return null;
++    const planType = claims["https://api.openai.com/auth"]?.chatgpt_plan_type;
++    return {
++      account: {
++        type: "chatgpt",
++        email,
++        planType: typeof planType === "string" && planType.length > 0 ? planType : "unknown",
++        workspaceName: null
++      },
++      requiresOpenaiAuth: true,
++      workspaceRouting: tokens.account_id ? {
++        chatgptAccountId: tokens.account_id,
++        backendOrigin: "https://chatgpt.com",
++        accountRoutingOverride: "NO_CONSTRAINT"
++      } : null
++    };
++  } catch {
++    return null;
++  }
++}
++/** Applies the native snapshot to an `account/*` answer, leaving every other method untouched. */
++async function withNativeAccountFallback(method, read) {
++  const response = await read();
++  if (method === "account/read") {
++    if (response?.account)
++      return response;
++    const native = await readNativeProviderSnapshot();
++    if (native?.account?.account)
++      return native.account;
++    return await readLocalChatGptAccount() ?? response;
++  }
++  if (method === "account/rateLimits/read") {
++    const empty = response === null || response === undefined || Object.keys(response).length === 0 || !response.rateLimits;
++    if (!empty)
++      return response;
++    const native = await readNativeProviderSnapshot();
++    return native?.rateLimits ?? response;
++  }
++  return response;
++}
+ class AppServerClient {
+   current;
+   signals = new WeakMap;
+@@ -18977,6 +19132,11 @@ class AppServerClient {
+     return signal;
+   }
+   request(method, params) {
++    // Codex hides the ChatGPT account from every provider but the built-in `openai`, and this app
++    // runs all gateways on one shared provider. The `_codex/account_read` extension reaches the
++    // engine through here, so the native fallback has to live on the raw request path too.
++    if (method === "account/read" || method === "account/rateLimits/read")
++      return withNativeAccountFallback(method, () => this.current().connection.sendRequest(method, params));
+     return this.current().connection.sendRequest(method, params);
+   }
+   threadRead(params) {
+@@ -23550,6 +23710,20 @@ function isUnknownThreadError(err) {
+ function isThreadActiveWriterError(err) {
+   return /\bthread \S+ already has an active writer\b/.test(errorText(err));
+ }
++function providerResolutionOf(err) {
++  const text = errorText(err);
++  const data = err !== null && typeof err === "object" ? err.data : null;
++  if (data !== null && typeof data === "object" && typeof data.modelProvider === "string" && data.modelProvider.length > 0)
++    return {
++      provider: data.modelProvider,
++      missing: /no longer configured|not found/i.test(text)
++    };
++  const missing = /This chat uses model provider [“"]([^”"]+)[”"], which is (?:no longer configured|not found)/.exec(text);
++  if (missing !== null)
++    return { provider: missing[1], missing: true };
++  const mismatch = /This chat uses (\S+?), but your current provider is/.exec(text);
++  return mismatch === null ? null : { provider: mismatch[1], missing: false };
++}
+ function threadActiveWriterRequestError(threadId, err) {
+   return RequestError.invalidRequest({ reason: "thread_active_writer", threadId, details: errorText(err) }, "This Codex session is in use by another Codex client (the Codex app, the CLI or an IDE extension). Close the session there or quit that client, then try again.");
+ }
+@@ -24416,7 +24590,14 @@ ${params.turnId}`;
+   }
+   async createTextEvent(event) {
+     const phase = this.agentMessagePhases.get(event.itemId) ?? null;
+-    const meta = createMessagePhaseMeta(phase, this.sessionState.clientCapabilities.airClient);
++    const meta = (() => {
++          // Stamp every streamed assistant message with the model that produced it, so the
++          // timeline can label each answer ("bot: Claude Sonnet 5.5") the way WorkBuddy does.
++          const base = createMessagePhaseMeta(phase, this.sessionState.clientCapabilities.airClient)
++          const modelId = this.sessionState.currentModelId ?? null
++          if (!modelId) return base
++          return { codex: { modelId }, ...(base ?? {}) }
++        })();
+     return createAgentTextMessageChunk(event.delta, event.itemId, meta);
+   }
+   async createConfigWarningEvent(event) {
+@@ -27139,6 +27320,7 @@ class ProviderRouting {
+       this.gateways.clear();
+     this.gateways.set(hints.id, {
+       id: hints.id,
++      runtimeId: hints.runtimeId ?? hints.id,
+       baseUrl,
+       headers: { ...request.headers ?? {} },
+       name: hints.name ?? "Client-configured gateway",
+@@ -27163,6 +27345,46 @@ class ProviderRouting {
+   gatewayIdFor(modelId) {
+     return this.gatewayFor(modelId)?.id ?? null;
+   }
++  runtimeIdForGateway(id) {
++    return this.gateway(id)?.runtimeId ?? null;
++  }
++  runtimeIdFor(modelId) {
++    return this.gatewayFor(modelId)?.runtimeId ?? null;
++  }
++  hasRuntime(id) {
++    if (typeof id !== "string" || id.length === 0)
++      return false;
++    for (const gateway of this.gateways.values())
++      if (gateway.runtimeId === id)
++        return true;
++    return false;
++  }
++  /** True when the gateway shares one Codex provider with the others and needs a routed model name. */
++  routesThroughPeer(gateway) {
++    return gateway !== null && gateway !== undefined && gateway.runtimeId !== gateway.id;
++  }
++  gatewayForModelSlug(slug) {
++    if (typeof slug !== "string" || slug.length === 0)
++      return null;
++    for (const gateway of this.gateways.values()) {
++      if (gateway.models.some((model) => model.id === slug))
++        return gateway.id;
++    }
++    return null;
++  }
++  /** Recovers the gateway from a routed model name (`gatewayId/modelId`) after a resume. */
++  gatewayForRoutedSlug(slug) {
++    if (typeof slug !== "string") return null;
++    const slash = slug.indexOf("/");
++    if (slash <= 0) return null;
++    const gateway = this.gateway(slug.slice(0, slash));
++    if (gateway === null) return null;
++    const model = slug.slice(slash + 1);
++    return gateway.models.some((entry) => entry.id === model) ? gateway.id : null;
++  }
++  nativeModelProvider() {
++    return this.configuredProvider ?? "openai";
++  }
+   isGatewayModel(modelId) {
+     return this.gatewayFor(modelId) !== null;
+   }
+@@ -27176,16 +27398,36 @@ class ProviderRouting {
+     }));
+   }
+   selectionId(modelId, provider) {
+-    return modelId !== null && this.mode === "catalog" && this.hasGateway(provider) ? gatewayModelId(provider, modelId) : modelId;
++    if (modelId === null || this.mode !== "catalog")
++      return modelId;
++    if (this.hasGateway(provider))
++      return gatewayModelId(provider, modelId);
++    // A thread written through the shared router records the routed name ("kimi/kimi-k2.6"),
++    // not the picker id. Left as-is it matched no group, so the model menu grew a stray
++    // "kimi/kimi-k2.6" row inside the ChatGPT group that no click could act on.
++    const routed = this.gatewayForRoutedSlug(modelId);
++    if (routed === null)
++      return modelId;
++    return gatewayModelId(routed, modelId.slice(modelId.indexOf("/") + 1));
+   }
+   upstreamModel(selectionId) {
+     if (!selectionId?.startsWith("gateway:"))
+       return selectionId;
+     const gateway = this.gatewayFor(selectionId);
+     const model = gateway?.models.find((model) => gatewayModelId(gateway.id, model.id) === selectionId);
+-    if (!model)
+-      throw RequestError.invalidParams({ model: selectionId }, "The selected provider connection or model is unavailable");
+-    return model.id;
++    if (!model) {
++      // The gateway is gone: the provider was removed, disabled, or reconfigured. Throwing here
++      // aborted the request outright, which stranded a conversation on "session terminated" and
++      // made both opening it and switching models impossible. Fall back to the bare model part so
++      // opening and switching still work -- routing then treats it as a plain model.
++      const rest = selectionId.slice("gateway:".length);
++      const colon = rest.indexOf(":");
++      const bare = colon === -1 ? rest : rest.slice(colon + 1);
++      return bare.length > 0 ? bare : selectionId;
++    }
++    // A routed gateway shares Codex's single provider with its peers, so the model name must carry
++    // the gateway it belongs to; the local router strips it back off before the vendor sees it.
++    return this.routesThroughPeer(gateway) ? `${gateway.id}/${model.id}` : model.id;
+   }
+   disable(request) {
+     if (request.providerId !== OPENAI_PROVIDER_ID)
+@@ -27241,15 +27483,20 @@ class ProviderRouting {
+     const entry = {
+       name: gateway.name,
+       base_url: gateway.baseUrl,
+-      wire_api: "responses",
++      wire_api: gateway.config?.wire_api ?? "responses",
+       http_headers: { "X-Client-Feature-ID": "codex", ...gateway.headers }
+     };
+     if (gateway.bearerToken !== null)
+       entry["experimental_bearer_token"] = gateway.bearerToken;
++    // `wire_api` belongs to the provider entry only; spreading it into the thread config would
++    // hand Codex an unknown top-level key.
++    const { wire_api: _wireApi, ...gatewayConfigRest } = gateway.config ?? {};
+     return {
+       ...config,
+-      ...gateway.config,
+-      model_providers: { ...existing, [gateway.id]: entry }
++      ...gatewayConfigRest,
++      // Codex resolves the provider by the name it runs on, which is the shared runtime id once a
++      // gateway is routed; keying by the gateway id would leave that name undefined.
++      model_providers: { ...existing, [gateway.runtimeId ?? gateway.id]: entry }
+     };
+   }
+   catalog(codexCatalog) {
+@@ -27324,7 +27571,23 @@ function readHints(meta) {
+   }
+   const catalogPath = config["model_catalog_json"];
+   const catalogEntries = typeof catalogPath === "string" ? readCatalogFile(catalogPath) : new Map;
+-  return { id, models, model, name, bearerToken, config, mode, catalogEntries };
++  // A unified runtime id lets several gateways share one Codex provider, so a thread is no longer
++  // pinned to the vendor that created it. Codex still keys the thread by this single name.
++  const rawRuntimeId = codex["runtimeId"];
++  if (rawRuntimeId !== undefined && (typeof rawRuntimeId !== "string" || !GATEWAY_ID_PATTERN.test(rawRuntimeId))) {
++    throw RequestError.invalidParams({ runtimeId: rawRuntimeId }, "_meta.codex.runtimeId must match [a-z0-9-]+");
++  }
++  return {
++    id,
++    runtimeId: typeof rawRuntimeId === "string" ? rawRuntimeId : null,
++    models,
++    model,
++    name,
++    bearerToken,
++    config,
++    mode,
++    catalogEntries
++  };
+ }
+ function readGatewayId(meta) {
+   const root = isRecord3(meta) ? meta : {};
+@@ -28624,7 +28887,11 @@ function createModelConfigOption(availableModels, currentBaseModelId, recommende
+   const options = availableModels.map((model) => ({
+     value: model.id,
+     name: formatModelDisplayName(model.displayName),
+-    description: model.description
++    description: model.description,
++    _meta: { alwith: {
++      supportedReasoningEfforts: (model.supportedReasoningEfforts ?? []).map((effort) => effort.reasoningEffort),
++      defaultReasoningEffort: model.defaultReasoningEffort ?? null
++    } }
+   }));
+   if (!availableModels.some((model) => model.id === currentBaseModelId)) {
+     options.unshift({
+@@ -28641,7 +28908,7 @@ function createModelConfigOption(availableModels, currentBaseModelId, recommende
+     category: "model",
+     type: "select",
+     currentValue: currentBaseModelId,
+-    options: groups.length === 0 ? options : [
++    options: [
+       { group: "chatgpt", name: "ChatGPT", options: options.filter((option) => !groups.some((group) => group.modelIds.includes(option.value))) },
+       ...groups.map((group) => ({ group: group.id, name: group.name, options: options.filter((option) => group.modelIds.includes(option.value)) }))
+     ].filter((group) => group.options.length > 0),
+@@ -28671,7 +28938,8 @@ var CUSTOM_GATEWAY_PROVIDER_ID = "custom-gateway";
+ var OPENAI_PROVIDER_ID2 = "openai";
+ var DEFAULT_OPENAI_BASE_URL2 = "https://api.openai.com/v1";
+ var SUPPORTED_GATEWAY_PROTOCOLS = {
+-  openai: "responses"
++  openai: "responses",
++  chat: "chat"
+ };
+ 
+ class CodexAcpClient {
+@@ -28686,6 +28954,14 @@ class CodexAcpClient {
+   pendingAccountUpdated = null;
+   readOnlySessions = new Set;
+   sessionNotificationQueues = new Map;
++  availableModelsCache = null;
++  availableModelsAt = 0;
++  // Every new chat used to pay a full `account/read` round trip (~1.8s) before the model list
++  // could appear. The answer only changes when someone signs in or out, so keep a positive
++  // result for a while instead of re-asking on each session. Static on purpose: an engine
++  // restart builds a fresh client, and a per-instance cache would restart the wait with it.
++  static authRequirementCache = null;
++  static authRequirementAt = 0;
+   subagents;
+   skillExtraRoots = [];
+   configPath = null;
+@@ -28708,6 +28984,10 @@ class CodexAcpClient {
+   withAppServer(codexClient) {
+     const client = new CodexAcpClient(codexClient, this.config, this.modelProvider ?? undefined, this.responsesRoutes);
+     client.adoptRoutingFrom(this);
++    // Every client this agent hands out must be able to ask for a provider restart; a recovery
++    // replacement built here used to lose the hook, so its resume hit the provider mismatch with
++    // no way to recover and the new chat vanished.
++    client.restartForProvider = this.restartForProvider;
+     return client;
+   }
+   adoptRoutingFrom(previous) {
+@@ -28791,9 +29071,9 @@ class CodexAcpClient {
+   }
+   async hasWorkingChatGptLogin() {
+     try {
+-      const accountResponse = await this.codexClient.accountRead({
+-        refreshToken: true
+-      });
++      // `getAccount` falls back to an `openai`-provider probe, which is the only way the account
++      // is visible while the engine runs on the shared router provider.
++      const accountResponse = await this.getAccount();
+       return accountResponse.account?.type === "chatgpt";
+     } catch (error) {
+       if (isAccountReadUnavailableError(error)) {
+@@ -28935,13 +29215,25 @@ class CodexAcpClient {
+     if (this.gatewayConfig != null) {
+       return { required: false, account: null };
+     }
++    const cache = this.constructor.authRequirementCache;
++    const now = Date.now();
++    if (cache !== null && now - this.constructor.authRequirementAt < 6e4) {
++      return cache;
++    }
+     const response = await this.codexClient.accountRead({
+       refreshToken: false
+     });
+-    return {
++    const requirement = {
+       required: response.requiresOpenaiAuth && !response.account,
+       account: response
+     };
++    // Only a signed-in answer is worth remembering: a missing login must keep failing fast so
++    // the client is still told to authenticate on the next request.
++    if (!requirement.required) {
++      this.constructor.authRequirementCache = requirement;
++      this.constructor.authRequirementAt = now;
++    }
++    return requirement;
+   }
+   applyGatewayConfig(params, source) {
+     const gatewayConfig = buildGatewayConfig(params);
+@@ -29039,11 +29331,97 @@ class CodexAcpClient {
+       restoredBaseUrl: current.baseUrl
+     });
+   }
++  /**
++   * The ChatGPT account as Codex itself sees it.
++   *
++   * Codex answers `account/read` with `account: null` unless the built-in `openai` provider is the
++   * one the process runs on, and this app runs every gateway through one shared custom provider so
++   * that a chat can change vendors. Ask a throwaway engine pinned to `openai` instead: it only
++   * reads the local auth file, and the answer is cached because settings and usage poll it.
++   */
++  async readNativeProviderSnapshot() {
++    const cached = this.nativeProviderSnapshot;
++    if (cached !== undefined && Date.now() - cached.at < NATIVE_SNAPSHOT_TTL_MS) return cached.value;
++    const command = process.env.CODEX_PATH;
++    if (!command) return null;
++    const { spawn } = await import("node:child_process");
++    const value = await new Promise((resolve) => {
++      let settled = false;
++      let child;
++      const account = { value: null };
++      const finish = (result) => {
++        if (settled) return;
++        settled = true;
++        try {
++          child?.kill();
++        } catch {}
++        resolve(result);
++      };
++      try {
++        child = spawn(command, ["-c", 'model_provider="openai"', "app-server"], {
++          stdio: ["pipe", "pipe", "ignore"],
++          env: process.env
++        });
++      } catch {
++        finish(null);
++        return;
++      }
++      let buffer = "";
++      child.stdout.on("data", (chunk) => {
++        buffer += chunk.toString();
++        let index;
++        while ((index = buffer.indexOf("\n")) !== -1) {
++          const line = buffer.slice(0, index).trim();
++          buffer = buffer.slice(index + 1);
++          if (line.length === 0) continue;
++          let message;
++          try {
++            message = JSON.parse(line);
++          } catch {
++            continue;
++          }
++          if (message.id === 2) {
++            account.value = message.result ?? null;
++            // Ask for usage only once the account answer is in, so both land in one snapshot.
++            send({ jsonrpc: "2.0", id: 3, method: "account/rateLimits/read" });
++          }
++          if (message.id === 3) finish({ account: account.value, rateLimits: message.result ?? null });
++        }
++      });
++      child.on("error", () => finish(null));
++      const send = (payload) => {
++        try {
++          child.stdin.write(JSON.stringify(payload) + "\n");
++        } catch {}
++      };
++      send({
++        jsonrpc: "2.0",
++        id: 1,
++        method: "initialize",
++        params: { clientInfo: { name: "alwith-auth", version: "0.0.0", title: "auth" } }
++      });
++      setTimeout(() => send({ jsonrpc: "2.0", id: 2, method: "account/read", params: { refreshToken: false } }), 500);
++      // No timer for id 3: `account/rateLimits/read` is requested only after `account/read`
++      // answers. Firing both on timers lets the rate-limit reply win the race, which would cache
++      // an empty snapshot and show "not signed in" for the whole TTL.
++      setTimeout(() => finish({ account: account.value, rateLimits: null }), 6000);
++    });
++    this.nativeProviderSnapshot = value?.account?.account ? { at: Date.now(), value } : undefined;
++    return value;
++  }
+   async getAccount() {
+-    return this.codexClient.accountRead({ refreshToken: false });
++    const response = await this.codexClient.accountRead({ refreshToken: false });
++    if (response?.account) return response;
++    const native = await this.readNativeProviderSnapshot();
++    if (native?.account?.account) return native.account;
++    return await readLocalChatGptAccount() ?? response;
+   }
+   async getRateLimits() {
+-    return this.codexClient.accountRateLimitsRead();
++    const limits = await this.codexClient.accountRateLimitsRead();
++    const empty = limits === null || limits === undefined || Object.keys(limits).length === 0;
++    if (!empty) return limits;
++    const native = await this.readNativeProviderSnapshot();
++    return native?.rateLimits ?? limits;
+   }
+   getAuthGatewayProviderName() {
+     return this.gatewayConfigSource === "authentication" ? this.gatewayConfig?.config.name ?? null : null;
+@@ -29062,7 +29440,7 @@ class CodexAcpClient {
+     });
+     return settingsModelProvider?.config?.model_provider ?? null;
+   }
+-  async resumeThread(params, allowReadOnly = false) {
++  async resumeThread(params, allowReadOnly = false, allowProviderRestart = true) {
+     try {
+       const response = await this.codexClient.threadResume(params);
+       return {
+@@ -29080,6 +29458,27 @@ class CodexAcpClient {
+         collaborationMode: response.collaborationMode?.mode ?? null
+       };
+     } catch (err) {
++      const resolution = providerResolutionOf(err);
++      try {
++        appendFileSync(`${process.env.HOME}/Library/Logs/ai.alwith.u/adapter-provider.log`, JSON.stringify({
++          at: new Date().toISOString(),
++          step: "resume-error",
++          message: errorText(err).slice(0, 180),
++          resolution,
++          hasHook: typeof this.restartForProvider === "function",
++          allowProviderRestart
++        }) + "\n");
++      } catch {}
++      if (resolution !== null && allowProviderRestart && typeof this.restartForProvider === "function") {
++        logger.log("This chat uses another provider; restarting Codex for it", {
++          threadId: params.threadId,
++          provider: resolution.provider,
++          missing: resolution.missing
++        });
++        const replacement = await this.restartForProvider(resolution.provider, resolution.missing);
++        if (replacement !== null && replacement !== this)
++          return await replacement.resumeThread(params, allowReadOnly, false);
++      }
+       if (isThreadActiveWriterError(err)) {
+         if (!allowReadOnly)
+           throw threadActiveWriterRequestError(params.threadId, err);
+@@ -29746,23 +30145,82 @@ class CodexAcpClient {
+     }
+     if (typeof selection === "string") {
+       const model = this.providerCatalog.upstreamModel(selection);
+-      const gatewayId = this.providerCatalog.gatewayIdFor(selection);
+-      return {
+-        model,
+-        gatewayId,
+-        modelProvider: gatewayId ?? await this.getResumeModelProvider()
+-      };
++      const gatewayId = this.providerCatalog.gatewayIdFor(selection) ?? this.providerCatalog.gatewayForModelSlug(model);
++      // A hint that no longer resolves to a live gateway (provider removed, renamed, or a stale
++      // id) used to fall straight through to the native provider, which then replayed gateway
++      // history through OpenAI and failed. Only decide here when the hint resolves; otherwise
++      // let the thread's own record below pick the provider it was written with.
++      if (gatewayId !== null || !this.providerCatalog.active) {
++        try {
++          appendFileSync(
++            `${process.env.HOME}/Library/Logs/ai.alwith.u/adapter-route.log`,
++            JSON.stringify({ at: new Date().toISOString(), sid: request.sessionId, cwd: request.cwd, branch: "hint", selection, model, gatewayId: gatewayId ?? null }) + "\n"
++          );
++        } catch {}
++        return {
++          model,
++          gatewayId,
++          modelProvider:
++            gatewayId === null
++              ? this.providerCatalog.nativeModelProvider()
++              : (this.providerCatalog.runtimeIdForGateway(gatewayId) ?? gatewayId)
++        };
++      }
++      // A native pick carries no gateway, so the branch above skipped it and the fresh Session
++      // fell through to a route without a model: Codex then started the thread on its configured
++      // default (gpt-6.1-sol) and the picker snapped back to Sol no matter what was clicked.
++      // Only a thread that already exists may ignore the hint -- it is pinned to the provider it
++      // was written with. A new Session has no such record, so the requested model must survive.
++      if (!request.sessionId) {
++        return {
++          model,
++          gatewayId: null,
++          // Same provider the no-hint path would start on. `nativeModelProvider()` is the bare
++          // upstream id (openai), and a thread created there can never be moved onto the router
++          // later -- the first gateway switch died with "Provider selection and rollback failed".
++          modelProvider: this.getModelProvider()
++        };
++      }
+     }
+     if (request.sessionId && this.providerCatalog.active) {
+       const { thread } = await this.codexClient.threadRead({
+         threadId: request.sessionId
+       });
++      try {
++        appendFileSync(
++          `${process.env.HOME}/Library/Logs/ai.alwith.u/adapter-route.log`,
++          JSON.stringify({ at: new Date().toISOString(), sid: request.sessionId, branch: "thread", threadProvider: thread.modelProvider, threadModel: thread.model }) + "\n"
++        );
++      } catch {}
++      // A thread written by the unified router records the shared runtime id, which is not a
++      // gateway id -- match it first so those threads never fall back to the native provider.
++      if (this.providerCatalog.hasRuntime(thread.modelProvider)) {
++        return {
++          gatewayId: thread.modelProvider,
++          modelProvider: thread.modelProvider
++        };
++      }
+       if (this.providerCatalog.hasGateway(thread.modelProvider)) {
+         return {
+           gatewayId: thread.modelProvider,
+           modelProvider: thread.modelProvider
+         };
+       }
++      const recovered =
++        this.providerCatalog.gatewayForModelSlug(thread.model) ??
++        this.providerCatalog.gatewayForRoutedSlug(thread.model);
++      if (recovered !== null) {
++        return {
++          gatewayId: recovered,
++          modelProvider: recovered
++        };
++      }
++      if (typeof thread.model === "string" && thread.model.length > 0) {
++        return {
++          gatewayId: null,
++          modelProvider: this.providerCatalog.nativeModelProvider()
++        };
++      }
+     }
+     return {
+       gatewayId: null,
+@@ -29883,21 +30341,49 @@ class CodexAcpClient {
+       clientUserMessageId: params.clientUserMessageId
+     });
+   }
+-  async fetchAvailableModels() {
+-    const models = [];
+-    let cursor = null;
+-    do {
+-      const response = await this.codexClient.listModels({
+-        cursor,
+-        limit: null
+-      });
+-      models.push(...response.data);
+-      cursor = response.nextCursor;
+-    } while (cursor);
++  async fetchAvailableModels(force = false) {
++    const now = Date.now();
++    // The online refresh can hang for minutes on a slow network; opening a session must not
++    // wait for it. Serve a fresh-enough cache while a bounded refresh runs in front.
++    if (!force && this.availableModelsCache !== null && now - this.availableModelsAt < 3e5)
++      return this.availableModelsCache;
++    const collect = async () => {
++      const models = [];
++      let cursor = null;
++      do {
++        const response = await this.codexClient.listModels({
++          cursor,
++          limit: null
++        });
++        models.push(...response.data);
++        cursor = response.nextCursor;
++      } while (cursor);
++      const listed = this.getGatewayListedModels();
++      return this.providerCatalog.catalog(listed === null ? models : narrowToListedModels(models, listed));
++    };
++    const refreshed = await Promise.race([
++      collect(),
++      new Promise((_, reject) => setTimeout(() => reject(new Error("online model refresh timed out")), 8000))
++    ]).catch(() => null);
++    if (refreshed !== null) {
++      this.availableModelsCache = refreshed;
++      this.availableModelsAt = now;
++      return refreshed;
++    }
++    if (!force && this.availableModelsCache !== null)
++      return this.availableModelsCache;
++    // Cold start without network: the gateway models alone still open the session.
+     const listed = this.getGatewayListedModels();
+-    return this.providerCatalog.catalog(listed === null ? models : narrowToListedModels(models, listed));
++    return this.providerCatalog.catalog(listed === null ? [] : listed);
+   }
+   getGatewayListedModels() {
++    // Only a single-gateway ("route") connection replaces Codex's models with the vendor's own.
++    // In catalog mode the getaways' models are appended to Codex's list, so the vendor listing
++    // must not filter it: the shared router answers `/models` from whichever vendor route is
++    // active (an empty list when none is), which stripped every native GPT model from the picker
++    // and left a single "Sol" row whose only effort was MAX.
++    if (this.providerCatalog.mode === "catalog")
++      return null;
+     return this.gatewayConfigSource === "acpProviders" ? this.gatewayConfig?.listedModels ?? null : null;
+   }
+   isNarrowedByGateway() {
+@@ -31091,13 +31577,13 @@ class CodexAppServerClient {
+     return await this.sendRequest({ method: "config/batchWrite", params });
+   }
+   async accountRead(params) {
+-    return await this.sendRequest({ method: "account/read", params });
++    return await withNativeAccountFallback("account/read", () => this.sendRequest({ method: "account/read", params }));
+   }
+   async accountRateLimitsRead() {
+-    return await this.sendRequest({
++    return await withNativeAccountFallback("account/rateLimits/read", () => this.sendRequest({
+       method: "account/rateLimits/read",
+       params: undefined
+-    });
++    }));
+   }
+   async awaitTurnCompleted(threadId, turnId) {
+     let resolver;
+@@ -37666,6 +38152,8 @@ class CodexSessionToolCalls {
+ var TITLE_GENERATION_SETTLE_TIMEOUT_MS = 1e4;
+ var NO_ACTIVE_TURN_RETRY_DELAYS_MS = [25, 50, 100, 200, 400];
+ var ACCOUNT_READ_LOAD_GRACE_MS = 1000;
++/// How long the throwaway `openai`-provider account read stays fresh; it only re-reads auth.json.
++var NATIVE_SNAPSHOT_TTL_MS = 60000;
+ function createDeferred() {
+   let resolve;
+   const promise = new Promise((res) => {
+@@ -37830,6 +38318,7 @@ class CodexAcpServer {
+       this.connection = this.reportingConnection.asClientConnection();
+     }
+     this.codexAcpClient = codexAcpClient;
++    this.codexAcpClient.restartForProvider = (provider) => this.restartEngineForProvider(provider);
+     this.mcpServerSignIn = createMcpServerSignIn(this.connection, () => this.codexAcpClient, () => this.clientCapabilities);
+     this.mcpSessionStartup = new McpSessionStartup(this.connection, () => this.codexAcpClient, (operation) => this.runWithProcessCheck(operation), this.mcpServerSignIn, () => this.capabilities, (sessionId) => this.sessions.has(sessionId) && !this.sessionIsClosing(sessionId));
+     this.defaultAuthRequest = defaultAuthRequest ?? null;
+@@ -38403,6 +38892,12 @@ class CodexAcpServer {
+       return await this.tryCreateSession(request);
+     } catch (e) {
+       const error = e instanceof Error ? e : new Error(String(e));
++      try {
++        appendFileSync(
++          `${process.env.HOME}/Library/Logs/ai.alwith.u/adapter-route.log`,
++          JSON.stringify({ at: new Date().toISOString(), sid: request.sessionId, cwd: request.cwd, branch: "error", message: error.message, meta: request._meta ?? null }) + "\n"
++        );
++      } catch {}
+       await this.handleError(error);
+       throw e;
+     }
+@@ -38549,7 +39044,17 @@ You have been logged out. Please try again.`);
+     const existingSessionRequest = request;
+     const previousInstructions = "sessionId" in request ? this.sessions.get(request.sessionId)?.instructions : undefined;
+     const requestedSessionGeneration = operation === "resume" ? this.beginSessionOpen(existingSessionRequest.sessionId) : null;
+-    const gatewayRequested = this.codexAcpClient.providerCatalog.active !== null && (await this.codexAcpClient.sessionRoute(request)).gatewayId !== null;
++    // The thread is born inside the app-server process, so its provider has to be the one the
++    // process runs on. Creating it under another provider produced a thread that died with the
++    // process on the next resume ("Session … not found" / "This chat uses X…"), which is what made
++    // a fresh chat in a different vendor flash and disappear.
++    let requestedRoute = null;
++    if (this.codexAcpClient.providerCatalog.active !== null) {
++      requestedRoute = await this.codexAcpClient.sessionRoute(request);
++      if (requestedRoute.modelProvider != null && requestedRoute.modelProvider !== this.currentEngineProvider())
++        await this.restartEngineForProvider(requestedRoute.modelProvider);
++    }
++    const gatewayRequested = requestedRoute !== null && requestedRoute.gatewayId !== null;
+     const knownAccount = gatewayRequested ? null : await this.checkAuthorization();
+     const requestedMcpServers = request.mcpServers ?? [];
+     const readMcpServerStartupVersion = () => requestedMcpServers.length > 0 ? this.codexAcpClient.getMcpServerStartupVersion() : null;
+@@ -38787,7 +39292,13 @@ You have been logged out. Please try again.`);
+     }).catch((error) => logger.error("Failed to apply a late account read", error));
+   }
+   authProviderUsesOpenAiAccount(authProvider) {
+-    return authProvider === null || authProvider === "openai";
++    // The shared runtime provider still serves the native ChatGPT models, so its sessions do use
++    // the OpenAI account even though Codex names the provider after the router.
++    return (
++      authProvider === null ||
++      authProvider === "openai" ||
++      this.codexAcpClient.providerCatalog.hasRuntime(authProvider)
++    );
+   }
+   authProvidersMatch(a, b) {
+     if (this.authProviderUsesOpenAiAccount(a) && this.authProviderUsesOpenAiAccount(b)) {
+@@ -39341,7 +39852,7 @@ You have been logged out. Please try again.`);
+       this.codexAcpClient.providerCatalog = next;
+       let models;
+       try {
+-        models = await this.codexAcpClient.fetchAvailableModels();
++        models = await this.codexAcpClient.fetchAvailableModels(true);
+         for (const session of affected) {
+           const old = ModelId.fromString(session.currentModelId).model;
+           const target = models.find((model) => model.id === old) ?? models.find((model) => model.isDefault);
+@@ -39396,9 +39907,40 @@ You have been logged out. Please try again.`);
+   async rebindSessionProvider(session, model, force = false, rollbackRouting = this.codexAcpClient.providerCatalog) {
+     this.assertSessionWritable(session.sessionId);
+     this.alwith.predictions.cancel(session.sessionId);
+-    const target = this.codexAcpClient.providerCatalog.gatewayIdFor(model);
+-    const current = this.codexAcpClient.providerCatalog.gatewayIdFor(ModelId.fromString(session.currentModelId).model);
+-    if (!force && target === current)
++    const catalog = this.codexAcpClient.providerCatalog;
++    // A model can point at a gateway that no longer exists (provider removed, disabled, or
++    // reconfigured). Resolving it must not abort the switch -- such a model simply belongs to no
++    // gateway now, so the rebinding decision falls back to "move off the stale gateway".
++    const safeUpstreamModel = (id) => {
++      try {
++        return catalog.upstreamModel(id);
++      } catch {
++        return null;
++      }
++    };
++    const gatewayOf = (id) => {
++      const gatewayId =
++        catalog.gatewayIdFor(id) ??
++        catalog.gatewayForModelSlug(typeof id === "string" && id.startsWith("gateway:") ? safeUpstreamModel(id) : id) ??
++        catalog.gatewayForRoutedSlug(typeof id === "string" ? id : "");
++      return gatewayId === null ? null : (catalog.runtimeIdForGateway(gatewayId) ?? gatewayId);
++    };
++    const target = gatewayOf(model);
++    // Gateways that share a runtime id are indistinguishable to Codex, so the model can change
++    // without touching the thread. The session's real provider is the authority: a thread written
++    // before the router existed still carries its own vendor name and cannot be moved.
++    const current = session.authProvider ?? gatewayOf(ModelId.fromString(session.currentModelId).model);
++    if (!force && current !== null && current !== target && catalog.hasGateway(current)) {
++      throw RequestError.invalidRequest(
++        undefined,
++        `This chat is pinned to the "${current}" provider; start a new chat to switch vendors`
++      );
++    }
++    // `null` means "no gateway" (a plain model). Two nulls used to compare equal and skip the
++    // rebind entirely, which left the thread on its old gateway while the picker already showed
++    // the new plain model -- the request then hit that gateway and was rejected as an unsupported
++    // model name. Only matching non-null gateways genuinely need no work.
++    if (!force && target === current && target !== null)
+       return;
+     if (this.isSessionBusy(session.sessionId) || this.activePrompts.has(session.sessionId)) {
+       throw RequestError.invalidRequest(undefined, "Wait for the current turn before changing its provider");
+@@ -39426,27 +39968,41 @@ You have been logged out. Please try again.`);
+       } catch (error) {
+         if (!isMissingRolloutError(error) && !isThreadNotMaterializedError(error))
+           throw error;
+-        await client.appServerClient.connection.sendRequest("thread/inject_items", {
+-          threadId: session.sessionId,
+-          items: [
+-            {
+-              type: "message",
+-              role: "developer",
+-              content: [
+-                {
+-                  type: "input_text",
+-                  text: "The user changed this conversation's model before sending a message."
+-                }
+-              ]
+-            }
+-          ]
+-        });
++        try {
++          await client.appServerClient.connection.sendRequest("thread/inject_items", {
++            threadId: session.sessionId,
++            items: [
++              {
++                type: "message",
++                role: "developer",
++                content: [
++                  {
++                    type: "input_text",
++                    text: "The user changed this conversation's model before sending a message."
++                  }
++                ]
++              }
++            ]
++          });
++        } catch { /* the resume below re-reads the thread anyway */ }
+       }
+       await client.appServerClient.threadUnsubscribe({
+         threadId: session.sessionId
+-      });
++      }).catch(() => {});
+       try {
+-        const metadata = await resume(model);
++        let metadata = await resume(model);
++        // Codex ignores resume overrides while the thread is still running (a failed turn
++        // leaves it running through its async teardown). Verify the provider actually moved;
++        // if not, wait for the turn to settle and resume again, or the next prompt still
++        // hits the old gateway (503 / no channel available).
++        if (target !== null && metadata.modelProvider !== target) {
++          for (let attempt = 0; attempt < 3 && metadata.modelProvider !== target; attempt++) {
++            await Promise.allSettled([...this.activePrompts.values()].map((prompt) => (prompt?.completion instanceof Promise ? prompt.completion.catch(() => {}) : Promise.resolve())));
++            await new Promise((resolve) => setTimeout(resolve, 500));
++            if (!this.sessionPublishIsCurrent(session, generation)) break;
++            metadata = await resume(model);
++          }
++        }
+         if (!this.sessionPublishIsCurrent(session, generation)) {
+           await client.appServerClient.threadUnsubscribe({
+             threadId: session.sessionId
+@@ -39454,10 +40010,13 @@ You have been logged out. Please try again.`);
+           throw RequestError.invalidRequest(undefined, "Session closed during provider selection");
+         }
+         const authProvider = metadata.modelProvider ?? null;
+-        const auth = await this.getAuthStateForProvider(authProvider);
++        let auth = null;
++        try {
++          auth = await this.getAuthStateForProvider(authProvider);
++        } catch { /* an account read failure must not fail the model switch */ }
+         session.authProvider = authProvider;
+-        session.account = auth.account;
+-        session.authConfigured = auth.authConfigured;
++        session.account = auth?.account ?? null;
++        session.authConfigured = auth?.authConfigured ?? true;
+       } catch (error) {
+         if (this.sessionPublishIsCurrent(session, generation)) {
+           const failedRouting = client.providerCatalog;
+@@ -39604,9 +40163,127 @@ You have been logged out. Please try again.`);
+     }
+     return await this.recovery.beginReplacement();
+   }
++  /**
++   * Codex fixes its provider when the app-server starts, so a chat recorded under another
++   * provider cannot be resumed by this process. Restart just the app-server with
++   * `-c model_provider=<provider>` (never touching the user's config.toml) and adopt it.
++   */
++  /** The provider the running app-server was started with (`-c model_provider=…` wins). */
++  currentEngineProvider() {
++    const args = Array.isArray(this.codexProcessState?.appServerStartupArgs) ? this.codexProcessState.appServerStartupArgs : [];
++    for (let index = args.length - 1; index >= 0; index -= 1) {
++      const arg = args[index];
++      if (typeof arg === "string" && arg.startsWith("model_provider="))
++        return arg.slice("model_provider=".length).replace(/^"|"$/g, "");
++    }
++    const configured = this.codexProcessState?.config?.model_provider;
++    if (typeof configured === "string" && configured.length > 0)
++      return configured;
++    // The startup config we are handed rarely carries `model_provider` even though the engine
++    // booted from config.toml with one, so assuming "openai" made the very first chat of every
++    // launch look like a provider change and pay a full engine restart (~1.5s) before its model
++    // list could appear. Fall back to the provider this client actually routes to.
++    const declared = this.codexAcpClient?.getModelProvider?.();
++    if (typeof declared === "string" && declared.length > 0)
++      return declared;
++    const built = this.codexProcessState?.modelProvider;
++    if (typeof built === "string" && built.length > 0)
++      return built;
++    return "openai";
++  }
++  async restartEngineForProvider(provider) {
++    const trace = (step, extra = {}) => {
++      try {
++        appendFileSync(`${process.env.HOME}/Library/Logs/ai.alwith.u/adapter-provider.log`, JSON.stringify({
++          at: new Date().toISOString(),
++          step,
++          provider,
++          ...extra
++        }) + "\n");
++      } catch {}
++    };
++    const state = this.codexProcessState;
++    if (state === null || this.recovery === null || this.initializeRequest === null) {
++      trace("unavailable");
++      return null;
++    }
++    // A provider that no longer exists cannot be started at all: codex exits at boot with
++    // "Model provider `x` not found", and five such exits make the agent stop restarting
++    // entirely. Leave those chats to the client's own message instead of crash-looping.
++    // A provider that no longer exists cannot be started at all: codex exits at boot with
++    // "Model provider `x` not found", and five such exits make the agent stop restarting for
++    // every chat. Read the managed blocks straight from config.toml and refuse those up front.
++    let declared = null;
++    try {
++      const { readFileSync } = await import("node:fs");
++      const home = process.env.CODEX_HOME && process.env.CODEX_HOME.trim() !== "" ? process.env.CODEX_HOME : `${process.env.HOME}/.codex`;
++      const config = readFileSync(`${home}/config.toml`, "utf8");
++      declared = new RegExp(`^\\[model_providers\\.${provider.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]`, "m").test(config);
++    } catch {}
++    if (declared === false && provider !== "openai" && !this.providerCatalog?.hasGateway?.(provider)) {
++      trace("unknown-provider");
++      return null;
++    }
++    // One restart at a time: two overlapping replacements make the recovery state machine drop
++    // the first one's completion, which strands the transition lock and hangs every later request.
++    const previous = this.providerUpdate?.catch(() => {
++      return;
++    }) ?? Promise.resolve();
++    let release = () => {};
++    const held = new Promise((resolve) => {
++      release = resolve;
++    });
++    this.providerUpdate = previous.then(() => held);
++    await previous;
++    try {
++      // Drop the previous pair outright: keeping the value while dropping its -c turned the
++      // leftover into an unrecognised subcommand and crash-looped the app-server.
++      const base = [];
++      const startupArgs = Array.isArray(state.appServerStartupArgs) ? state.appServerStartupArgs : ["app-server"];
++      for (let index = 0; index < startupArgs.length; index += 1) {
++        if (startupArgs[index] === "-c" && typeof startupArgs[index + 1] === "string" && startupArgs[index + 1].startsWith("model_provider=")) {
++          index += 1;
++          continue;
++        }
++        base.push(startupArgs[index]);
++      }
++      state.appServerStartupArgs = [...base, "-c", `model_provider=${JSON.stringify(provider)}`];
++      state.modelProvider = provider;
++      trace("begin");
++      const previousArgs = state.appServerStartupArgs;
++      const replacement = await this.restartCodexClient();
++      trace("spawned");
++      try {
++        await replacement.initialize(this.initializeRequest);
++        trace("initialized");
++        this.installCodexClient(replacement);
++        trace("installed");
++      } catch (error) {
++        // The new process refused the startup configuration; put the old one back so the next
++        // chat is not poisoned by it, and let the caller report the original error.
++        state.appServerStartupArgs = previousArgs;
++        this.recovery.completeReplacement(replacement);
++        trace("initialize-failed", { message: error instanceof Error ? error.message : String(error) });
++        return null;
++      }
++      this.recovery.completeReplacement(replacement);
++      trace("completed", { pending: this.recovery.pendingReplacement !== null });
++      logger.log("Codex app-server restarted for a chat provider", { provider });
++      return replacement;
++    } catch (error) {
++      trace("failed", { message: error instanceof Error ? error.message : String(error) });
++      throw error;
++    } finally {
++      release();
++    }
++  }
+   async waitForProviderUpdate() {
+     try {
+-      await this.providerUpdate;
++      // A stuck session can keep the provider update pending indefinitely; the config change
++      // below must never hang on it. Give the update a short window, then proceed.
++      if (this.providerUpdate !== null) {
++        await Promise.race([this.providerUpdate, new Promise((resolve) => setTimeout(resolve, 3000))]);
++      }
+     } catch (error) {
+       const mapped = this.recovery?.mapError(error) ?? error;
+       if (!(mapped instanceof RequestError && mapped.code === CODEX_PROCESS_EXITED_ERROR_CODE))
+@@ -39676,6 +40353,7 @@ You have been logged out. Please try again.`);
+   installCodexClient(client) {
+     client.adoptRoutingFrom(this.codexAcpClient);
+     this.codexAcpClient = client;
++    client.restartForProvider = (provider) => this.restartEngineForProvider(provider);
+     this.sessionIndex.observe(client);
+     if (this.protocolVersion === 2)
+       this.alwith.observe();
+@@ -39700,6 +40378,7 @@ You have been logged out. Please try again.`);
+     return true;
+   }
+   async refreshAuthState(authProvider) {
++    this.constructor.authRequirementCache = null;
+     const refreshed = await this.refreshSessionsAuthState(authProvider);
+     if (refreshed)
+       return;
+@@ -39940,10 +40619,40 @@ You have been logged out. Please try again.`);
+       }
+       throw RequestError.invalidParams();
+     }
++    // Capture the outgoing model before anything mutates the session: the transcript note
++    // names both sides of the switch, like the desktop agents do.
++    const previousModel = sessionState.availableModels.find((m) => m.id === ModelId.fromString(sessionState.currentModelId).model);
+     const currentEffort = ModelId.fromString(sessionState.currentModelId).effort;
+     const effort = findSupportedEffort(model.supportedReasoningEfforts, currentEffort) ?? model.defaultReasoningEffort;
+     await this.rebindSessionProvider(sessionState, value);
+     this.applyModelAndEffort(sessionState, model, effort);
++    // A visible note in the transcript, like the desktop agents show: the reader must see the
++    // switch actually landed, not guess from the picker.
++    {
++      const modelLabel = (entry) =>
++        typeof entry.displayName === "string" && entry.displayName.length > 0
++          ? entry.displayName
++          : typeof entry.name === "string" && entry.name.length > 0
++            ? entry.name
++            : entry.id;
++      const label = modelLabel(model);
++      const previousLabel = previousModel === undefined ? null : modelLabel(previousModel);
++      const text =
++        previousLabel === null || previousLabel === label
++          ? `\u6a21\u578b\u5df2\u5207\u6362\u4e3a ${label}\uff08\u65b0\u4f1a\u8bdd\u624d\u4f1a\u4f7f\u7528 ${label} \u7684\u8eab\u4efd\u8bf4\u660e\uff09`
++          : `\u6a21\u578b\u5df2\u4ece ${previousLabel} \u66f4\u6539\u4e3a ${label}\uff08\u65b0\u4f1a\u8bdd\u624d\u4f1a\u4f7f\u7528 ${label} \u7684\u8eab\u4efd\u8bf4\u660e\uff09`;
++      try {
++        const connection = new ACPSessionConnection(this.connection, sessionState.sessionId);
++        const notice = {
++          sessionUpdate: "agent_message",
++          messageId: `model-switch:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
++          content: [{ type: "text", text }],
++          _meta: { codex: { notice: true } }
++        };
++        if (connection.protocolVersion === 2) await connection.updateV2(notice);
++        else await connection.update(notice);
++      } catch { /* a failed notice must not fail the switch */ }
++    }
+   }
+   applyReasoningEffortChange(sessionState, value) {
+     const effort = findSupportedEffort(sessionState.supportedReasoningEfforts, value);
+@@ -41980,7 +42689,8 @@ ${stderr}` : "";
+       activePrompt.abortInteractions();
+     }
+     this.cancelQueuedV2Prompts(params.sessionId);
+-    await this.interruptSessionTurn(sessionState, "Cancel", false);
++    await this.interruptSessionTurn(sessionState, "Cancel", true);
++    await this.reportCodexTurnState(params.sessionId, { state: "idle", stopReason: "cancelled" });
+   }
+ }
+ var REVIEWER_PROMPT_CANDIDATE_MAX_ITEMS = 100;

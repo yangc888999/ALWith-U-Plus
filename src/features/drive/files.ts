@@ -3,10 +3,27 @@ import { driveFileWebUrl, isYuplinkName, parseYuplink } from "@alwith/module-dri
 import { confirm } from "@tauri-apps/plugin-dialog"
 import { toast } from "sonner"
 
+import { usePlatformAuth } from "@/features/auth/store"
+import { settingsStore } from "@/lib/settings-store"
 import { openExternal } from "@/lib/open"
 
 import { drive } from "./controller"
 import { driveFileSystem } from "./filesystem"
+import { isDriveVisible } from "./visibility"
+
+/**
+ * Whether the cloud drive is part of this session at all.
+ *
+ * With the YUP switch off the drive tree and its sync are gone, so opening a file must not ask
+ * the (stopped) drive host anything — otherwise a plain memory.md click surfaces
+ * "Drive sync is not running".
+ */
+function driveAvailable(): boolean {
+  const auth = usePlatformAuth.getState()
+  const enabled = settingsStore.get<boolean>("drive.yupEnabled") ?? true
+  const configured = drive.getSnapshot().snapshot?.configured === true
+  return enabled && isDriveVisible(auth.isAuthenticated, auth.user?.login_email, configured)
+}
 
 export interface WorkspaceFileHost {
   readFile: (path: string) => Promise<Uint8Array>
@@ -23,6 +40,7 @@ export function safeDriveWebUrl(raw: string): string {
 
 /** Resolve shortcut identity from the native index; shortcut names and stored URLs may be stale. */
 export async function prepareWorkspaceFile(path: string, host?: WorkspaceFileHost): Promise<string | null> {
+  if (!driveAvailable()) return path
   const generation = drive.getSnapshot().snapshot?.generation
   const checkProfile = (): void => {
     if (drive.getSnapshot().snapshot?.generation !== generation) {

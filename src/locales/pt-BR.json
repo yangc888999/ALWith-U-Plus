@@ -3,7 +3,7 @@
     "email": "E-mail",
     "code": "Código de verificação",
     "signIn": "Entrar",
-    "signOut": "Sair do ALwith U"
+    "signOut": "Sair do ALWith L"
   },
   "guide": {
     "help": "Obter ajuda"
@@ -122,7 +122,7 @@
         "name": "Acesso completo",
         "description": "Use com cuidado: o Codex pode editar arquivos fora desta área de trabalho e acessar a internet sem aprovação"
       },
-      "heading": "Como aprovar as ações do ALwith U?"
+      "heading": "Como aprovar as ações do ALWith L?"
     }
   },
   "composer": {
@@ -141,7 +141,6 @@
     "reset": "Redefinir"
   },
   "settings": {
-    "gamepad": "Gamepad",
     "general": "Geral",
     "versionLabel": "Versão",
     "title": "Configurações",
@@ -352,13 +351,8 @@
     "emptyNewTab": "Nova aba",
     "more": "Mais ações"
   },
-  "pet": {
-    "retry": "Tentar novamente",
-    "lounge": "Sala de descanso Vibémon",
-    "recall": "Voltar à sala de descanso"
-  },
   "app": {
-    "name": "ALwith U"
+    "name": "ALWith L"
   },
   "notify": {
     "needsInput": "Sua intervenção é necessária",

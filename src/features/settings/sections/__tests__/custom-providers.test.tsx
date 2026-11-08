@@ -34,7 +34,8 @@ beforeEach(() => {
     status: "applied",
     error: null,
     providers: {},
-    customProviders: []
+    customProviders: [],
+    builtInModels: {}, managedProviders: []
   }
   vi.mocked(useProviders).mockImplementation(() => snapshot)
   vi.mocked(saveCustomProvider)
@@ -64,9 +65,7 @@ function visibleEditor(view: ReturnType<typeof render>): Scope {
 }
 
 function providerTabs(view: ReturnType<typeof render>): Scope {
-  const tabs = view.getByRole("heading", { name: "Models" }).parentElement
-  if (!tabs) throw new Error("Provider tabs missing")
-  return within(tabs)
+  return within(view.getByTestId("provider-tabs"))
 }
 
 async function fillProvider(editor: Scope, name: string): Promise<void> {
@@ -93,7 +92,7 @@ test("successive custom providers get independent IDs and existing providers rem
     await act(() => Promise.try(() => fireEvent.click(tabs.getByText("Custom", { selector: "span" }))))
     const editor = visibleEditor(view)
     await fillProvider(editor, name)
-    await act(() => Promise.try(() => fireEvent.click(editor.getByText("Save", { selector: "button" }))))
+    await act(() => Promise.try(() => fireEvent.click(editor.getByText("Save connection", { selector: "button" }))))
   }
   const inputs: CustomProviderInput[] = vi.mocked(saveCustomProvider).mock.calls.map(([, input]) => input)
   expect(new Set(inputs.map((input) => input.id)).size).toBe(3)
@@ -102,7 +101,7 @@ test("successive custom providers get independent IDs and existing providers rem
     expect(visibleEditor(view).getByLabelText("Provider name")).toHaveValue(name)
   }
   await fillProvider(visibleEditor(view), "Updated")
-  await act(() => Promise.try(() => fireEvent.click(visibleEditor(view).getByText("Save", { selector: "button" }))))
+  await act(() => Promise.try(() => fireEvent.click(visibleEditor(view).getByText("Save connection", { selector: "button" }))))
   expect(vi.mocked(saveCustomProvider).mock.calls[3]?.[1].id).toBe(inputs[2]?.id)
   expect(tabs.getByRole("button", { name: "First" })).toBeVisible()
   expect(tabs.getByRole("button", { name: "Second" })).toBeVisible()
@@ -115,12 +114,12 @@ test("a failed save and switching tabs preserve the new provider draft", async (
   const tabs = providerTabs(view)
   await act(() => Promise.try(() => fireEvent.click(tabs.getByText("Custom", { selector: "span" }))))
   await fillProvider(visibleEditor(view), "Draft")
-  await act(() => Promise.try(() => fireEvent.click(visibleEditor(view).getByText("Save", { selector: "button" }))))
-  await act(() => Promise.try(() => fireEvent.click(tabs.getByText("DeepSeek", { selector: "span" }))))
+  await act(() => Promise.try(() => fireEvent.click(visibleEditor(view).getByText("Save connection", { selector: "button" }))))
+  await act(() => Promise.try(() => fireEvent.click(tabs.getByText("哈基米", { selector: "span" }))))
   await act(() => Promise.try(() => fireEvent.click(tabs.getByText("Custom", { selector: "span" }))))
   expect(visibleEditor(view).getByLabelText("Provider name")).toHaveValue("Draft")
   expect(visibleEditor(view).getByLabelText("API key")).toHaveValue("key-Draft")
-  await act(() => Promise.try(() => fireEvent.click(visibleEditor(view).getByText("Save", { selector: "button" }))))
+  await act(() => Promise.try(() => fireEvent.click(visibleEditor(view).getByText("Save connection", { selector: "button" }))))
   const calls = vi.mocked(saveCustomProvider).mock.calls
   expect(calls[1]?.[1]).toEqual(calls[0]?.[1])
   await act(() => Promise.try(() => fireEvent.click(tabs.getByText("Custom", { selector: "span" }))))
@@ -135,7 +134,8 @@ test("pending catalog exposes an explicit retry action", async () => {
     status: "pending",
     error: null,
     providers: {},
-    customProviders: []
+    customProviders: [],
+    builtInModels: {}, managedProviders: []
   })
   const view = render(<ProviderSection />)
   vi.mocked(applyProvidersWhenIdle).mockResolvedValue({
@@ -144,14 +144,15 @@ test("pending catalog exposes an explicit retry action", async () => {
     status: "pending",
     error: null,
     providers: {},
-    customProviders: []
+    customProviders: [],
+    builtInModels: {}, managedProviders: []
   })
-  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Retry" }))))
+  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Apply now" }))))
   expect(applyProvidersWhenIdle).toHaveBeenCalledTimes(1)
   expect(toast.info).toHaveBeenCalledWith(
-    "Settings saved. Remaining changes apply when chats using the affected providers finish."
+    "Saved. Changes apply automatically when busy conversations end; “Apply now” applies them without waiting."
   )
-  expect(view.getByRole("button", { name: "Retry" })).toBeEnabled()
+  expect(view.getByRole("button", { name: "Apply now" })).toBeEnabled()
 })
 
 test("saving a pending custom provider reports that it is not applied yet", async () => {
@@ -161,14 +162,15 @@ test("saving a pending custom provider reports that it is not applied yet", asyn
     status: "pending",
     error: null,
     providers: {},
-    customProviders: []
+    customProviders: [],
+    builtInModels: {}, managedProviders: []
   })
   const view = render(<ProviderSection />)
   await act(() => Promise.try(() => fireEvent.click(providerTabs(view).getByText("Custom", { selector: "span" }))))
   await fillProvider(visibleEditor(view), "Pending")
-  await act(() => Promise.try(() => fireEvent.click(visibleEditor(view).getByText("Save", { selector: "button" }))))
+  await act(() => Promise.try(() => fireEvent.click(visibleEditor(view).getByText("Save connection", { selector: "button" }))))
   expect(toast.success).toHaveBeenLastCalledWith(
-    "Settings saved. Remaining changes apply when chats using the affected providers finish."
+    "Saved. Changes apply automatically when busy conversations end; “Apply now” applies them without waiting."
   )
 })
 
@@ -179,11 +181,12 @@ test("retry failure remains actionable and releases the busy state", async () =>
     status: "failed",
     error: "Catalog unavailable",
     providers: {},
-    customProviders: []
+    customProviders: [],
+    builtInModels: {}, managedProviders: []
   })
   vi.mocked(applyProvidersWhenIdle).mockRejectedValueOnce(new Error("Still unavailable"))
   const view = render(<ProviderSection />)
-  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Retry" }))))
+  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Apply now" }))))
   expect(toast.error).toHaveBeenLastCalledWith("Still unavailable")
-  expect(view.getByRole("button", { name: "Retry" })).toBeEnabled()
+  expect(view.getByRole("button", { name: "Apply now" })).toBeEnabled()
 })

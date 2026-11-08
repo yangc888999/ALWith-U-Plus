@@ -31,10 +31,10 @@ function showSidebar() {
         onNewChat={() => {}}
         onNewProjectChat={() => {}}
         onSearch={() => {}}
-        onOpenWindow={() => {}}
         onOpenSettings={() => {}}
         onOpenPlugins={() => {}}
         onOpenExtensions={() => {}}
+        onOpenAutomation={() => {}}
         onSwitchScreen={() => {}}
       />
     </SidebarProvider>
@@ -44,48 +44,11 @@ function showSidebar() {
 test("empty quick chats stays first and collapsed with a project hover card", () => {
   client.store.setState({ sessionListLoaded: true, sessionList: [] })
   const view = showSidebar()
-  const quick = view.getByRole("button", { name: "Quick chats" })
+  const quick = view.getByRole("button", { name: "Chats (0)" })
   expect(quick).toHaveAttribute("aria-expanded", "false")
   expect(quick.closest('[data-slot="popover-trigger"]')).not.toBeNull()
-  expect(view.getAllByRole("button").find((button) => button.hasAttribute("aria-expanded"))).toBe(quick)
-})
-
-test("double clicking Chats collapses groups and restores quick chats plus five projects", () => {
-  const originalUi = useSessionsUiStore.getState()
-  try {
-    client.store.setState({
-      sessionListLoaded: true,
-      sessionList: Array.from({ length: 8 }, (_, index) => ({
-        sessionId: `project-chat-${index}`,
-        cwd: `/tmp/project-${index}`,
-        title: `Chat ${index}`,
-        updatedAt: null,
-        archived: false
-      }))
-    })
-    useSessionsUiStore.setState({
-      view: "sessions",
-      projectOpen: new Map([
-        ["quick-chats", true],
-        ["/tmp/project-0", true]
-      ])
-    })
-    const view = showSidebar()
-    expect(view.getByRole("button", { name: "Quick chats" })).toHaveAttribute("aria-expanded", "true")
-    expect(view.getAllByRole("button", { name: /^project-\d$/ })).toHaveLength(5)
-    fireEvent.click(view.getByRole("button", { name: "Show all" }))
-    expect(view.getAllByRole("button", { name: /^project-\d$/ })).toHaveLength(8)
-    fireEvent.doubleClick(view.getByRole("tab", { name: "Chats" }))
-    expect(view.getByRole("button", { name: "Quick chats" })).toHaveAttribute("aria-expanded", "false")
-    expect(view.getAllByRole("button", { name: /^project-\d$/ })).toHaveLength(5)
-    expect(view.getByRole("button", { name: "project-0" })).toHaveAttribute("aria-expanded", "false")
-    expect(view.queryByRole("button", { name: "project-5" })).toBeNull()
-    expect(view.getByRole("button", { name: "Show all" })).toBeDefined()
-    expect(useSessionsUiStore.getState().projectOpen.size).toBe(0)
-    expect(useSessionsUiStore.getState().view).toBe("sessions")
-  } finally {
-    useSessionsUiStore.setState(originalUi, true)
-  }
+  // Every group starts collapsed, so nothing in the sidebar is expanded yet.
+  expect(view.queryAllByRole("button", { expanded: true })).toHaveLength(0)
 })
 
 test("group expansion, load more and collapse update the scrollbar without scrolling or resizing the viewport", async () => {
@@ -162,10 +125,12 @@ test("group expansion, load more and collapse update the scrollbar without scrol
     const expandedThumb = Number.parseFloat(scrollbar.style.getPropertyValue("--scroll-area-thumb-height"))
     expect(expandedThumb).toBeGreaterThan(20)
 
-    await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Show all" }))))
-    contentHeight = 6500
+    // Projects are expanded by default; collapsing them shrinks the content and therefore
+    // lengthens the scrollbar thumb.
+    await act(() => Promise.try(() => useSessionsUiStore.setState({ projectOpen: new Map() })))
+    contentHeight = 1200
     await deliverResize(content)
-    expect(Number.parseFloat(scrollbar.style.getPropertyValue("--scroll-area-thumb-height"))).toBeLessThan(
+    expect(Number.parseFloat(scrollbar.style.getPropertyValue("--scroll-area-thumb-height"))).toBeGreaterThan(
       expandedThumb
     )
 

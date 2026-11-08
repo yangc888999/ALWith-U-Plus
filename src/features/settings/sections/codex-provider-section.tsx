@@ -49,7 +49,7 @@ function UsageLimitRow({ label, window }: { label?: string; window?: RateLimitWi
             aria-valuemin={0}
             aria-valuemax={100}
           >
-            <div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
+            <div className="h-full rounded-full bg-[var(--settings-accent)]" style={{ width: `${percent}%` }} />
           </div>
         ) : (
           <Skeleton className="h-2 rounded-full motion-reduce:animate-none" />
@@ -103,7 +103,7 @@ export function CodexAccountSummary({
             : t("usage.bedrock")
   const limits = account?.rateLimits ?? null
   return (
-    <section aria-busy={loading} aria-label="Codex" className="space-y-4">
+    <section aria-busy={loading} aria-label="ChatGPT" className="space-y-4">
       <div className="flex min-h-8 items-center justify-between gap-4">
         {loading ? (
           <Skeleton className="h-4 w-40 max-w-[65%] motion-reduce:animate-none" />
@@ -125,7 +125,12 @@ export function CodexAccountSummary({
           {loading ? (
             <UsageLimitRow />
           ) : limits === null ? (
-            <span className="text-sm text-muted-foreground">{t("usage.unavailable")}</span>
+            // "No usage data" and "the read failed" are different facts: the first is a plan
+            // without windows, the second is chatgpt.com not answering. Saying the wrong one made
+            // a network blip look like an empty plan.
+            <span className="text-sm text-muted-foreground">
+              {t(account?.rateLimitsError === true ? "usage.limitsError" : "usage.unavailable")}
+            </span>
           ) : (
             <>
               {limits.primary !== null && (
@@ -136,6 +141,15 @@ export function CodexAccountSummary({
               )}
               {limits.primary === null && limits.secondary === null && (
                 <span className="text-sm text-muted-foreground">{t("usage.unavailable")}</span>
+              )}
+              {/* Always date the numbers. When the live read failed, say so as well — a cached
+                  value is only honest if the reader can tell how old it is. */}
+              {account?.rateLimitsCapturedAt != null && (
+                <p className="text-[11px] text-muted-foreground" role="status">
+                  {t(account.rateLimitsStale === true ? "usage.staleLimits" : "usage.lastUpdated", {
+                    time: format(new Date(account.rateLimitsCapturedAt), "yyyy/MM/dd HH:mm")
+                  })}
+                </p>
               )}
             </>
           )}
@@ -151,7 +165,7 @@ export function CodexProviderSection() {
   const [signingOut, setSigningOut] = useState(false)
   return (
     <SettingGroup>
-      <SettingLabel>Codex</SettingLabel>
+      <SettingLabel>ChatGPT</SettingLabel>
       <div className="rounded-xl border p-4">
         <CodexAccountSummary
           account={account}

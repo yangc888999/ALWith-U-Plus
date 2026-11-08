@@ -1,6 +1,9 @@
 import { error as logError } from "@tauri-apps/plugin-log"
 import { toast } from "sonner"
 
+import { describeError } from "./error-text"
+import { startupSilent } from "./startup-window"
+
 /** Preserve nested causes in the log; native errors may also arrive as plain objects. */
 export function errorDetails(error: unknown): string {
   const seen = new Set<unknown>()
@@ -39,7 +42,16 @@ export function reportBackgroundError(
   options: { message?: string; action?: { label: string; onClick: () => void } } = {}
 ): void {
   logBackgroundError(context, error)
-  toast.error(options.message ?? (error instanceof Error ? error.message : errorDetails(error)), {
+  // This module imports `sonner` directly, so it bypassed the gate in `lib/toast-error.ts` and
+  // was the one exit that could still paint an error during startup. On 2026-11-08 that is
+  // exactly what reached the reader: `connect()` sets `connection = "ready"` before providers are
+  // applied, so `reportBackgroundError("provider-startup", …)` fired with the silent window
+  // already closed — a raw `acpRequest: Codex process has exited with code 1 …` toast in the
+  // corner, gone a second later. The log keeps the details; the screen waits for the window.
+  if (startupSilent()) return
+  // The log keeps the raw details; the toast is user-facing and goes through the same
+  // localization table as every other error (Drive's package errors are English).
+  toast.error(options.message ?? describeError(error), {
     id: context,
     action: options.action
   })

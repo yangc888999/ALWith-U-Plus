@@ -13,5 +13,10 @@
   <true/>
   <key>com.apple.security.device.audio-input</key>
   <true/>
+  <!-- Native modules (node_modules/@alwith/native-kit) are linker-signed ad-hoc, so the
+       hardened-runtime library validation would reject them when the app itself is
+       signed ad-hoc locally (dlopen failed during setup). -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
 </dict>
 </plist>

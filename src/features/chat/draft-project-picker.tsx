@@ -77,7 +77,9 @@ export function DraftProjectPicker({
           <Button
             variant="ghost"
             size="icon-xs"
-            className="relative size-4 rounded-full p-0 hover:bg-transparent dark:hover:bg-transparent"
+            // The icon is 16px but the target is not: the padded pseudo-element lifts the hit area
+            // to 24px, the minimum that is comfortable to aim at, without moving anything on screen.
+            className="relative size-4 rounded-full p-0 before:absolute before:-inset-1 before:content-[''] hover:bg-transparent dark:hover:bg-transparent"
             aria-label={t("chat.draft.workOutsideProject")}
             title={t("chat.draft.workOutsideProject")}
             disabled={defaultCwd === null}

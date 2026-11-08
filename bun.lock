@@ -143,6 +143,8 @@
     },
   },
   "patchedDependencies": {
+    "@alwith/module-chat@0.5.3": "patches/@alwith__module-chat@0.5.3.patch",
+    "@nyssance/codex-acp-v2@0.7.39": "patches/@nyssance%2Fcodex-acp-v2@0.7.39.patch",
     "vite@8.3.5": "patches/vite@8.3.5.patch",
   },
   "overrides": {

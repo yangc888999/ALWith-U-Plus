@@ -1,6 +1,4 @@
-import { vibemonLocales } from "@alwith/module-auth/pets/locales"
 import { chatLocales } from "@alwith/module-chat/locales"
-import { gamepadResources } from "@alwith/module-gamepad/locales"
 import i18n, { type Resource } from "i18next"
 import { initReactI18next } from "react-i18next"
 
@@ -44,6 +42,7 @@ export function isLanguageCode(value: string): value is LanguageCode {
 /** Desktop's mapping of a system locale to the closest supported language. */
 function mapSystemLocale(value: string): LanguageCode | null {
   const lower = value.toLowerCase()
+  if (lower.startsWith("en")) return "en"
   if (lower.startsWith("zh")) return "zh-CN"
   if (lower.startsWith("fr")) return "fr"
   if (lower.startsWith("de")) return "de"
@@ -59,8 +58,24 @@ function mapSystemLocale(value: string): LanguageCode | null {
   return null
 }
 
+/**
+ * Resolve either a saved preference (`zh-CN`) or an OS/webview BCP-47 tag (`zh-Hans-CN`,
+ * `en-US`) to a language we actually ship. The two shapes used to be conflated: an OS tag is not
+ * a supported code, so it fell through to the `navigator.language` fallback.
+ */
+export function resolveLanguage(value: string | null | undefined): LanguageCode | null {
+  if (value === null || value === undefined || value === "") return null
+  return isLanguageCode(value) ? value : mapSystemLocale(value)
+}
+
+/**
+ * Last resort when nothing was stored. WKWebView reports the *bundle's* language, not the user's
+ * system language: with only `CFBundleDevelopmentRegion = English` macOS hands the webview
+ * `en-US` even on a Chinese Mac. `main.tsx` therefore passes the OS locale explicitly; this path
+ * only covers non-Tauri environments (tests, browser preview) and a failed OS lookup.
+ */
 function systemLanguage(): LanguageCode {
-  return mapSystemLocale(navigator.language) ?? "en"
+  return resolveLanguage(navigator.language) ?? resolveLanguage(navigator.languages?.[0]) ?? "en"
 }
 
 const translations = { en, "zh-CN": zhCN, fr, de, it, es, ja, ko, ru, ar, "pt-BR": ptBR, hi, id } satisfies Record<
@@ -74,55 +89,25 @@ export function initI18n(language: string | null): Promise<unknown> {
       code,
       {
         translation: translations[code],
-        gamepad: gamepadResources[code],
-        alwithChat: chatLocales[code],
-        ...(code === "en" || code === "zh-CN" ? vibemonLocales[code] : {})
+        alwithChat: chatLocales[code]
       }
     ])
   )
 
-  // Window actions belong to U; pet catalogs are supplied by the shared module.
-  resources.en = {
-    ...resources.en,
-    common: {
-      ...vibemonLocales.en.common,
-      navigation: { mainWindow: "Main window", chatWindow: "Floating window" },
-      petMode: {
-        ...vibemonLocales.en.common.petMode,
-        enter: "Collapse to Vibémon",
-        openMain: "Open conversation in main window",
-        openChat: "Open conversation in floating window"
-      }
-    }
-  }
-  resources["zh-CN"] = {
-    ...resources["zh-CN"],
-    common: {
-      ...vibemonLocales["zh-CN"].common,
-      navigation: { mainWindow: "主窗", chatWindow: "独立浮窗" },
-      petMode: {
-        ...vibemonLocales["zh-CN"].common.petMode,
-        enter: "收起到 Vibémon",
-        openMain: "在主窗中打开会话",
-        openChat: "在独立浮窗中打开会话"
-      }
-    }
-  }
+  // Window actions shared with module-chat navigation.
+  const navigation = {
+    en: { navigation: { mainWindow: "Main window", chatWindow: "Chat window" } },
+    "zh-CN": { navigation: { mainWindow: "主窗", chatWindow: "聊天浮窗" } }
+  } as const
+  for (const code of ["en", "zh-CN"] as const) resources[code] = { ...resources[code], common: navigation[code] }
 
   return i18n.use(initReactI18next).init({
     resources,
     supportedLngs: LANGUAGES.map(({ code }) => code),
-    lng: language !== null && isLanguageCode(language) ? language : systemLanguage(),
+    lng: resolveLanguage(language) ?? systemLanguage(),
     fallbackLng: "en",
     interpolation: { escapeValue: false }
   })
-}
-
-// Tool windows can register their namespace after the main app initializes.
-export function registerGamepadLocales(): void {
-  for (const [language, catalog] of Object.entries(gamepadResources)) {
-    i18n.addResourceBundle(language, "gamepad", catalog)
-  }
 }
 
 export default i18n

@@ -32,7 +32,7 @@ test("the switch reads system state, serializes changes and refreshes after exte
   const pending = Promise.withResolvers<null>()
   vi.mocked(commands.autostartSet).mockImplementation(() => pending.promise)
   const view = render(<AutostartRow />)
-  const toggle = view.getByRole("switch", { name: "Start Vibémon at login" })
+  const toggle = view.getByRole("switch", { name: "Start ALWith L at login" })
   await waitFor(() => expect(toggle).not.toHaveAttribute("aria-disabled", "true"))
   fireEvent.click(toggle)
   expect(toggle).toHaveAttribute("aria-disabled", "true")

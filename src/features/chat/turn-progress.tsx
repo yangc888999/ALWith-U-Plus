@@ -1,0 +1,423 @@
+// What the running turn is doing, docked above the composer.
+//
+// The visible row is deliberately one short line: "<model> <state>···". The state set is
+// configurable — connecting / thinking / replying / tool / planning / compacting / waiting for
+// confirmation — but every one of them is the same short phrase, never a sentence. Effort, the
+// precise step, tool counts and long explanations used to turn an ordinary long reasoning turn
+// into something that read like an error. They now live off the row: the precise step and the
+// explanation are hover titles, and the clock carries the timing.
+//
+// One rule holds the whole file together: **this component may only describe what it can see.**
+// Silence in the store has several possible causes — the model is thinking, the gateway is queuing,
+// a local tool is running, the user has not answered — and the renderer is not in a position to
+// tell them apart. Only the bridge sees the upstream, so amber rows and stall wording come from
+// its `model:stalled` notice; everything else is a plain timer with one gentle action.
+//
+// That action is a nudge, not a model switch. Switching changes the session's default model and
+// cancels the turn in flight, which is the opposite of what a slow-but-working step needs; it also
+// already has an entrance under the composer. A status line that rewrites configuration on a
+// stopwatch is how a healthy four-minute reasoning step gets thrown away.
+
+import type { Session } from "@alwith/api"
+import { AlertTriangleIcon, CircleHelpIcon, Loader2Icon } from "lucide-react"
+import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react"
+import { useTranslation } from "react-i18next"
+import { subscribeGroupSpeaker } from "@/lib/group-runtime"
+
+import { selectedModelId } from "@/agent/native-models"
+import { dismissOverload, overloadNotice, subscribeOverload } from "./model-overload-alert"
+import { nudgeTurn } from "./nudge-turn"
+import { activeTool, awaitingUser } from "./turn-activity"
+import { getQueueSendMode, subscribeChatDisplayPreferences } from "@/lib/chat-display-preferences"
+import { cn } from "@/lib/utils"
+import { client } from "@/lib/client"
+import {
+  orchestrationFor,
+  subscribeOrchestration
+} from "@/lib/session-orchestration"
+
+/** Per-session turn clock. `last` only moves when the store reports new work, so it doubles as
+ *  the "how long has it been quiet" anchor. */
+type Turn = {
+  start: number
+  last: number
+  clock: number
+  /** The model this turn is actually running on, captured when it started. A mid-turn switch only
+   *  affects the NEXT turn, so reading the live config here would name a model that is not running. */
+  model: string | null
+}
+
+const turns = new Map<string, Turn>()
+/** Past this much silence the row stops implying progress and states how long the step has run.
+ *  Ninety seconds is past the point where a reader starts wondering, and still short enough that a
+ *  two-minute reasoning step looks like what it is: one step, not a fault. */
+const QUIET_MS = 90_000
+/** A notice older than this is stale even if the turn never moved: the engine has moved on. */
+const OVERLOAD_TTL_MS = 120_000
+/** How long the row may sit with nothing new before an upstream notice is worth showing. */
+const NUDGE_MS = 30_000
+
+/** The turn currently in flight, or null when the session is not running. */
+function trackTurn(session: Session): Turn | null {
+  const running = session.state === "running" || session.state === "requires_action"
+  if (!running) {
+    turns.delete(session.id)
+    return null
+  }
+  const now = Date.now()
+  const previous = turns.get(session.id)
+  if (previous === undefined) {
+    const lastUser = [...session.items].reverse().find((item) => item.kind === "user")
+    // The package's `clock` is an epoch timestamp of the last applied update, so a strip mounted
+    // mid-turn starts from the real last activity instead of pretending the turn just began.
+    const observed = session.clock > 0 && session.clock <= now ? session.clock : now
+    const start = lastUser !== undefined && lastUser.at <= now && now - lastUser.at < 6 * 60 * 60_000 ? lastUser.at : observed
+    const turn = { start, last: Math.max(start, observed), clock: session.clock, model: modelLabel(session) }
+    turns.set(session.id, turn)
+    return turn
+  }
+  // `clock` ticks on every update the package applies to this session, including thought chunks
+  // and tool output — the cheapest "the agent is alive" signal available.
+  if (previous.clock !== session.clock) {
+    previous.clock = session.clock
+    previous.last = now
+  }
+  return previous
+}
+
+function modelLabel(session: Session): string | null {
+  return labelForModelId(session, selectedModelId(session.configOptions))
+}
+
+/** Resolves a model id (the session's selected one, or an orchestration role's) to its display name,
+ *  falling back to the raw id when the catalog no longer lists it. */
+function labelForModelId(session: Session, id: string | null): string | null {
+  if (id === null) return null
+  const option = session.configOptions.find((entry) => entry.category === "model" && entry.type === "select")
+  if (option === undefined || option.type !== "select") return id
+  const choices: unknown[] = Array.isArray(option.options) ? option.options : []
+  for (const entry of choices) {
+    const nested = (entry as { options?: unknown }).options
+    const list = Array.isArray(nested) ? nested : [entry]
+    for (const item of list) {
+      const choice = item as { value?: unknown; name?: unknown }
+      if (choice.value === id && typeof choice.name === "string" && choice.name !== "") return choice.name
+    }
+  }
+  return id
+}
+
+function short(text: string, limit = 60): string {
+  const oneLine = text.replace(/\s+/g, " ").trim()
+  return oneLine.length > limit ? `${oneLine.slice(0, limit)}…` : oneLine
+}
+
+/** Precise step — kept for the hover title so support can still tell what the agent emitted last. */
+type Stage = { key: string; name?: string; count?: number }
+
+function stageOf(session: Session): Stage {
+  if (session.state === "requires_action") return { key: "chat.turnProgress.confirm" }
+  let index = session.items.length - 1
+  while (index >= 0 && session.items[index]?.kind !== "user") index -= 1
+  const done = session.items.slice(index + 1).filter((item) => item.kind === "tool" && item.status === "completed").length
+  const waiting = (): Stage =>
+    done === 0 ? { key: "chat.turnProgress.waiting" } : { key: "chat.turnProgress.waitingAfterTools", count: done }
+  const last = session.items[session.items.length - 1]
+  if (last === undefined || index === session.items.length - 1) return waiting()
+  switch (last.kind) {
+    case "tool": {
+      const running = last.status === "in_progress" || last.status === "pending"
+      if (!running) return waiting()
+      return { key: "chat.turnProgress.tool", name: short(last.title ?? last.name ?? "") }
+    }
+    case "assistant":
+      return { key: "chat.turnProgress.writing" }
+    case "thought":
+      return { key: "chat.turnProgress.thinking" }
+    case "compaction":
+      return { key: "chat.turnProgress.compacting" }
+    case "plan":
+      return { key: "chat.turnProgress.planning" }
+    default:
+      return waiting()
+  }
+}
+
+type ShortState =
+  | "stateConnecting"
+  | "stateThinking"
+  | "stateReplying"
+  | "stateTool"
+  | "statePlanning"
+  | "stateCompacting"
+  | "stateConfirm"
+
+/** Every precise step collapses into one short "<model> <state>···" phrase. Nothing is lost — the
+ *  tool name, finished-tool count and exact step stay in the hover title — it just never becomes a
+ *  sentence on screen. Add an entry here whenever a new step deserves its own wording; the row
+ *  always stays one short line. */
+const SHORT_STATE: Record<string, ShortState> = {
+  "chat.turnProgress.waiting": "stateConnecting",
+  "chat.turnProgress.waitingAfterTools": "stateThinking",
+  "chat.turnProgress.thinking": "stateThinking",
+  "chat.turnProgress.writing": "stateReplying",
+  "chat.turnProgress.tool": "stateTool",
+  "chat.turnProgress.planning": "statePlanning",
+  "chat.turnProgress.compacting": "stateCompacting",
+  "chat.turnProgress.confirm": "stateConfirm"
+}
+
+function stateOf(session: Session, parked: boolean): ShortState {
+  // Waiting on the user is not the upstream's fault, however long it takes: never call it a stall.
+  if (parked) return "stateConfirm"
+  // No wall-clock override. "Quiet for three minutes ⇒ reconnecting" was a guess about the
+  // upstream made from a stopwatch, and it fired on every slow reasoning step; when the upstream
+  // really is stuck the bridge says so, and that notice owns the wording.
+  return SHORT_STATE[stageOf(session).key] ?? "stateReplying"
+}
+
+function clock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+}
+
+function duration(ms: number): { key: string; values: Record<string, number> } {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  if (total < 60) return { key: "chat.turnProgress.seconds", values: { value: total } }
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  if (seconds === 0) return { key: "chat.turnProgress.minutes", values: { value: minutes } }
+  return { key: "chat.turnProgress.minutesSeconds", values: { minutes, seconds } }
+}
+
+export function TurnProgressBar({ session }: { session: Session }): ReactNode {
+  const { t } = useTranslation()
+  const running = session.state === "running" || session.state === "requires_action"
+  const notice = useSyncExternalStore(subscribeOverload, overloadNotice, overloadNotice)
+  // In a group discussion the floor moves between roles, each on its own model. The session's
+  // configured model is not what is answering, so the row names the member holding the floor.
+  const [speaker, setSpeaker] = useState<string | null>(null)
+  useEffect(() => subscribeGroupSpeaker((next) => setSpeaker(next)), [])
+  const [, tick] = useState(0)
+
+  useEffect(() => {
+    if (!running) return
+    // 350ms drives the cycling dots; the MM:SS clock only changes once a second.
+    const timer = setInterval(() => tick((value) => value + 1), 350)
+    return () => clearInterval(timer)
+  }, [running])
+  // The notice lives in a module store, so a turn that ends while overloaded must clear it —
+  // otherwise the next turn would open with a stale "at capacity" line.
+  useEffect(() => {
+    if (!running) dismissOverload(session.id)
+  }, [running, session.id])
+
+  // Every hook must run on every render. `trackTurn` returns null the moment a turn ends, and the
+  // early return below would then skip the two subscriptions underneath — flipping the hook count
+  // between renders, which React rejects outright ("rendered fewer/more hooks than expected",
+  // #300 / #310) and shows as the app-wide error page. Both subscriptions are independent of
+  // `turn`, so they belong with the other hooks, above the bail-out.
+  const orchestration = useSyncExternalStore(
+    subscribeOrchestration,
+    () => orchestrationFor(session.id),
+    () => orchestrationFor(session.id)
+  )
+  const phase = useSyncExternalStore(
+    client.subscribeOrchestrationPhase.bind(client),
+    () => client.orchestrationPhaseFor(session.id),
+    () => client.orchestrationPhaseFor(session.id)
+  )
+  // Sending mid-turn only steers when the chat surface is set to do that. In "queued" mode the
+  // composer holds messages until the turn settles, so a nudge from the row would not reach the
+  // model at all — it would arrive afterwards as a stray "继续" turn. Whether it is offered is
+  // decided below, but the subscription has to sit with the other hooks, above the bail-out.
+  const steering = useSyncExternalStore(
+    subscribeChatDisplayPreferences,
+    () => getQueueSendMode() === "immediate",
+    () => getQueueSendMode() === "immediate"
+  )
+
+  const turn = trackTurn(session)
+  if (turn === null) return null
+  const now = Date.now()
+  const silent = now - turn.last
+  const stage = stageOf(session)
+  // Local work: a tool still executing, or a compaction pass. The upstream has no request in flight
+  // during either, so a quiet spell there is the machine working — never the model failing to
+  // answer. Only upstream evidence (overload / no-ack) or a long plain wait may suggest switching.
+  const runningTool = activeTool(session)
+  const localBusy = runningTool !== null || stage.key === "chat.turnProgress.compacting"
+  const parked = awaitingUser(session)
+  // In an orchestrated turn the session's selected id is only swapped to the active role partway
+  // through, so the captured `turn.model` can still read as the other role. The phase the client
+  // records is the source of truth: name the planner or worker model the turn is actually on.
+  let rolePrefix: string | null = null
+  let roleModel: string | null = null
+  if (orchestration !== null && phase !== null) {
+    const roleModelId =
+      phase === "planner" ? orchestration.planner.model : orchestration.worker.model
+    roleModel = labelForModelId(session, roleModelId) ?? roleModelId
+    rolePrefix = phase === "planner" ? t("chat.turnProgress.rolePlanner") : t("chat.turnProgress.roleWorker")
+  }
+  // One row carries both facts: an upstream overload IS the reason the turn is silent, so showing a
+  // separate banner above this one repeated the same model name and the same wait twice.
+  // "At capacity" is only true while the overload is what is holding the turn. The moment the
+  // session applies another update, output resumed and the row must go back to 回复中/正在思考.
+  // How long the upstream asked us to wait, counted down in place. When the estimate runs out the
+  // row goes back to the plain "reconnecting" state; the engine is already retrying on its own.
+  const remainingMs =
+    notice?.retryAfter == null ? 0 : Math.max(0, notice.at + notice.retryAfter * 1000 - now)
+  const overload =
+    notice !== null &&
+    notice.sessionId === session.id &&
+    turn.last <= notice.at &&
+    // The event can arrive after two seconds of a retry loop; the reader only needs to hear about
+    // it once the wait is long enough to act on.
+    silent >= NUDGE_MS &&
+    (notice.retryAfter === null ? now - notice.at < OVERLOAD_TTL_MS : remainingMs > 0)
+      ? notice
+      : null
+  const quiet = !localBusy && !parked && silent >= QUIET_MS && overload === null
+  // Amber is evidence, not a mood: only the bridge can prove the upstream is the one not answering.
+  const alerting = overload !== null
+  const state = stateOf(session, parked)
+  // The row's one action is a nudge, offered together with the silence badge: it is cheap and
+  // reversible, so it does not need a separate, later threshold. A turn running a tool or parked on
+  // a prompt is busy elsewhere or waiting on the reader — nudging either would be noise, and while
+  // the upstream is retrying an overload, a nudge cannot reach it.
+  const canNudge = quiet && steering && !localBusy && !parked && overload === null
+  // `·` → `··` → `···` on the same 350ms beat as the re-render, so the row reads as alive
+  // instead of ending in a static ellipsis that looks like truncated text.
+  const dots = "·".repeat((Math.floor(now / 350) % 3) + 1)
+  // Locked to the model the turn started on; null falls back to the live picker.
+  const liveModel = modelLabel(session)
+  const model = speaker ?? (roleModel !== null ? roleModel : turn.model) ?? liveModel
+  // A mid-turn switch changes the picker immediately but only takes effect next turn. Naming both
+  // in the hover title keeps the row honest without adding another chip to a narrow strip. While an
+  // orchestrated turn is running the role already names its model, so the "next turn" hint is moot.
+  const nextModel =
+    roleModel === null && liveModel !== null && model !== null && liveModel !== model ? liveModel : null
+  const baseTitle = t(stage.key, { name: stage.name, count: stage.count })
+  const stateTitle =
+    rolePrefix !== null
+      ? `${baseTitle} · ${t("chat.turnProgress.roleActive", { role: rolePrefix })}`
+      : nextModel === null
+        ? baseTitle
+        : `${baseTitle} · ${t("chat.turnProgress.nextTurnModel", { model: nextModel })}`
+  const quietFor = duration(silent)
+  const eta = duration(remainingMs)
+  // The explanation rides on the badge and the "?" as a native hover title. A floating toast said
+  // the same thing over the top of whatever the reader was looking at — the row already sits beside
+  // the wait it describes, so the copy belongs there, not on top of the document.
+  const slowHelp = t("chat.turnProgress.slowModel")
+  // An at-capacity upstream is the one case where the row is reporting a fact, so its hover carries
+  // the fact plus where the remedy lives: the model picker under the composer, the single place a
+  // model is switched from.
+  const stallHelp =
+    overload === null
+      ? null
+      : overload.retryAfter === null
+        ? t("chat.overload.descriptionUnknown")
+        : t("chat.overload.description", { minutes: overload.minutes ?? 1 })
+
+  return (
+    <div className="w-full min-w-0" data-turn-progress="">
+      <div
+        className={cn(
+          "relative flex min-w-0 items-center gap-2 overflow-hidden text-[11px]",
+          // Healthy turns get no box at all: the row is part of the composer card, and a second
+          // bordered slab above it was exactly the "layer cake" the composer did not need.
+          alerting
+            ? "h-8 rounded-lg border border-amber-500/35 bg-amber-500/[0.07] px-2.5"
+            : "h-7 px-0.5"
+        )}
+      >
+        {/* An indeterminate hairline says "still alive" without another line of copy. Only the
+            alert state draws one; a healthy turn is just text. */}
+        {alerting && (
+          <span className="pointer-events-none absolute inset-x-0 top-0 h-px overflow-hidden" aria-hidden="true">
+            <span className="block h-full w-1/3 animate-pulse bg-gradient-to-r from-transparent via-amber-500/60 to-transparent" />
+          </span>
+        )}
+        {overload !== null ? (
+          <AlertTriangleIcon className="size-3.5 shrink-0 text-amber-500" aria-hidden="true" />
+        ) : (
+          <Loader2Icon className="size-3 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />
+        )}
+        <span
+          className="flex min-w-0 flex-1 items-center gap-1 truncate font-medium text-foreground/85"
+          title={stallHelp ?? stateTitle}
+          data-turn-state=""
+        >
+          {rolePrefix !== null && (
+            <span className="shrink-0 rounded bg-primary/12 px-1 py-px text-[10px] font-semibold leading-tight text-primary">
+              {rolePrefix}
+            </span>
+          )}
+          {overload !== null ? (
+            <>
+              {overload.reason === "no_ack"
+                ? t("chat.overload.titleNoAck", {
+                    model: overload.modelName,
+                    duration: t(quietFor.key, quietFor.values)
+                  })
+                : overload.retryAfter === null
+                  ? t("chat.overload.titleUnknown", { model: overload.modelName })
+                  : t("chat.overload.titleRecover", {
+                      model: overload.modelName,
+                      duration: t(eta.key, eta.values)
+                    })}
+              <span className="inline-block w-[1.5em] text-left" aria-hidden="true">
+                {dots}
+              </span>
+            </>
+          ) : (
+            <>
+              {t(`chat.turnProgress.${state}`, {
+                name: model ?? t("chat.turnProgress.stateModelFallback")
+              })}
+              {state !== "stateConfirm" && (
+                <span className="inline-block w-[1.5em] text-left" aria-hidden="true">
+                  {dots}
+                </span>
+              )}
+            </>
+          )}
+        </span>
+        {quiet && (
+          <span
+            className="shrink-0 rounded px-1.5 py-0.5 tabular-nums text-muted-foreground"
+            title={slowHelp}
+            data-turn-quiet=""
+          >
+            {t("chat.turnProgress.quiet", { duration: t(quietFor.key, quietFor.values) })}
+          </span>
+        )}
+        <span className="shrink-0 tabular-nums text-muted-foreground/70">{clock(now - turn.start)}</span>
+        {quiet && (
+          <button
+            type="button"
+            aria-label={t("chat.turnProgress.details")}
+            title={slowHelp}
+            className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
+          >
+            <CircleHelpIcon className="size-3" aria-hidden="true" />
+          </button>
+        )}
+        {canNudge && (
+          <button
+            type="button"
+            title={t("chat.turnProgress.nudgeHint")}
+            className="shrink-0 rounded-full border border-border/70 px-2 py-0.5 font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
+            onClick={() => void nudgeTurn(session)}
+          >
+            {t("chat.turnProgress.nudge")}
+          </button>
+        )}
+
+      </div>
+    </div>
+  )
+}

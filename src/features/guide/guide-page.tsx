@@ -21,6 +21,7 @@ import {
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
+import { describeError } from "@/lib/error-text"
 import { AuxWindowShell } from "@/components/alwith-ui/aux-window-shell"
 import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
@@ -39,7 +40,7 @@ const chapters = content.split(/^## /m).map((chapter, index) => {
 const details = [
   {
     icon: BookOpenIcon,
-    summary: "A practical handbook for your everyday work with ALwith U.",
+    summary: "A practical handbook for your everyday work with ALWith L.",
     group: "Overview",
     takeaway: "Choose a task below, or follow the getting-started path."
   },
@@ -81,7 +82,7 @@ const details = [
   },
   {
     icon: CloudIcon,
-    summary: "Check cloud transfers and manage your Vibémon companion.",
+    summary: "Check cloud transfers and resolve failed items.",
     group: "Make it yours",
     takeaway: "Verify transfer status before relying on a cloud copy."
   },
@@ -104,7 +105,7 @@ function InterfaceMap({ navigate }: { navigate: (index: number) => void }) {
     <div className="guide-interface">
       <div className="guide-interface-bar">
         <img className="guide-interface-mark" src={logo} alt="" />
-        <strong>ALwith U</strong>
+        <strong>ALWith L</strong>
         <span>Interface map</span>
       </div>
       <div className="guide-interface-body">
@@ -162,7 +163,7 @@ function GuideHome({ navigate }: { navigate: (index: number) => void }) {
       <section className="guide-hero">
         <div className="guide-hero-copy">
           <span className="guide-edition">
-            <BookOpenIcon /> The ALwith U handbook
+            <BookOpenIcon /> The ALWith L handbook
           </span>
           <h1>
             Turn a clear request
@@ -235,7 +236,7 @@ function GuideHome({ navigate }: { navigate: (index: number) => void }) {
         </blockquote>
       </section>
       <footer className="guide-home-footer">
-        <span>ALwith U Guide</span>
+        <span>ALWith L Guide</span>
         <span>An independent client powered by Codex CLI.</span>
       </footer>
     </div>
@@ -250,7 +251,7 @@ export function GuidePage() {
       theme: resolvedTheme,
       copyLabel: "Copy",
       openLink: (url) => {
-        void openExternal(url).catch((error: unknown) => toast.error(String(error)))
+        void openExternal(url).catch((error: unknown) => toast.error(describeError(error)))
       }
     }),
     [resolvedTheme]
@@ -259,7 +260,7 @@ export function GuidePage() {
   const detail = details[selected]
   return (
     <AuxWindowShell
-      title="ALwith U Guide"
+      title="ALWith L Guide"
       showTitleBar={!navigator.platform.includes("Win")}
       sidebarClassName="guide-sidebar"
       className="guide-window"
@@ -267,7 +268,7 @@ export function GuidePage() {
         <nav aria-label="Guide chapters" className="guide-navigation">
           <div className="guide-brand">
             <img src={logo} alt="" />
-            <strong>ALwith U</strong>
+            <strong>ALWith L</strong>
           </div>
           {chapters.map((item, index) => {
             const Icon = details[index].icon
@@ -291,7 +292,7 @@ export function GuidePage() {
           <div className="guide-navigation-footer">
             <CheckIcon />
             <span>
-              Bundled with ALwith U<br />
+              Bundled with ALWith L<br />
               <small>English edition</small>
             </span>
           </div>

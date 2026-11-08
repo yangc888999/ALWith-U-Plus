@@ -16,10 +16,11 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { drive } from "@/features/drive/drive"
 import { driveFileSystem } from "@/features/drive/filesystem"
+import { describeError } from "@/lib/error-text"
 
 const controls: DirectoryPickerControls = { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, Button }
 function report(error: unknown): void {
-  toast.error(error instanceof Error ? error.message : String(error))
+  toast.error(describeError(error))
 }
 
 /** Match Desktop's browsable-root policy; selected libraries precede writable cloud-only targets. */

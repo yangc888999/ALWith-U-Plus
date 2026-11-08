@@ -11,6 +11,7 @@ export function createTreeOpener(
 } {
   let preview: string | null = editor.getSnapshot().documents.find((document) => !document.pinned)?.id ?? null
   let pending: Promise<void> = Promise.resolve()
+  let disposed = false
   const unsubscribe = editor.subscribe(() => {
     preview = editor.getSnapshot().documents.find((document) => !document.pinned && !document.dirty)?.id ?? null
   })
@@ -22,7 +23,15 @@ export function createTreeOpener(
         path = destination
         const existing = editor.getSnapshot().documents.find((doc) => doc.path === path)
         const previous = tabs?.getSnapshot().tabs.at(-1)?.kind === "new" ? null : preview
-        const document = await editor.open(path)
+        let document: { id: string }
+        try {
+          document = await editor.open(path)
+        } catch (error) {
+          // Closing the panel cancels the open in flight and the editor reports it as a failure.
+          // Nothing is broken and there is no surface left to tell, so this one is not an error.
+          if (disposed) return
+          throw error
+        }
         if (pinned) {
           editor.pin(document.id)
           if (preview === document.id) preview = null
@@ -41,6 +50,9 @@ export function createTreeOpener(
       pending = pending.then(open, open)
       return pending
     },
-    dispose: unsubscribe
+    dispose() {
+      disposed = true
+      unsubscribe()
+    }
   }
 }

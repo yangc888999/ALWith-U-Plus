@@ -3,15 +3,22 @@ import { beforeEach, expect, test, vi } from "vitest"
 const mocks = vi.hoisted(() => ({
   prepare: vi.fn((_controller: unknown, path: string) => Promise.resolve(path as string | null)),
   request: vi.fn(),
-  snapshot: vi.fn(() => ({ snapshot: { generation: 1, webBaseUrl: "https://drive.example.test" } })),
+  snapshot: vi.fn(
+    (): { snapshot: { generation: number; webBaseUrl: string; configured?: boolean } } => ({
+      snapshot: { generation: 1, webBaseUrl: "https://drive.example.test" }
+    })
+  ),
   external: vi.fn(async (_url: string) => {}),
   read: vi.fn(),
-  info: vi.fn()
+  info: vi.fn(),
+  auth: { isAuthenticated: true, user: { login_email: "test@finture.id" } }
 }))
 vi.mock("@alwith/module-drive", () => ({ prepareDriveFile: mocks.prepare }))
 vi.mock("../controller", () => ({ drive: { request: mocks.request, getSnapshot: mocks.snapshot } }))
 vi.mock("../filesystem", () => ({ driveFileSystem: () => Promise.resolve({ readFile: mocks.read }) }))
 vi.mock("@/lib/open", () => ({ openExternal: mocks.external }))
+vi.mock("@/lib/settings-store", () => ({ settingsStore: { get: () => true } }))
+vi.mock("@/features/auth/store", () => ({ usePlatformAuth: { getState: () => mocks.auth } }))
 vi.mock("@tauri-apps/plugin-dialog", () => ({ confirm: vi.fn() }))
 vi.mock("sonner", () => ({ toast: { info: mocks.info } }))
 
@@ -25,12 +32,29 @@ beforeEach(() => {
   mocks.snapshot.mockReturnValue({ snapshot: { generation: 1, webBaseUrl: "https://drive.example.test" } })
   mocks.read.mockResolvedValue(shortcut(7))
   mocks.request.mockResolvedValue({ type: "path", data: null })
+  mocks.auth.isAuthenticated = true
+  mocks.auth.user = { login_email: "test@finture.id" }
 })
 
 test("ordinary files keep the existing preparation flow", async () => {
   expect(await prepareWorkspaceFile("/project/note.md")).toBe("/project/note.md")
   expect(mocks.read).not.toHaveBeenCalled()
   expect(mocks.request).not.toHaveBeenCalled()
+})
+
+test("a synced drive serves shortcuts for accounts without a company-domain email", async () => {
+  mocks.auth.user = { login_email: "personal@example.com" }
+  mocks.snapshot.mockReturnValue({
+    snapshot: { generation: 1, webBaseUrl: "https://drive.example.test", configured: true }
+  })
+  expect(await prepareWorkspaceFile("/project/a.yuplink")).toBeNull()
+  expect(mocks.external).toHaveBeenCalledWith("https://drive.example.test/file/7")
+})
+
+test("signed-out sessions resolve shortcuts as plain local paths", async () => {
+  mocks.auth.isAuthenticated = false
+  expect(await prepareWorkspaceFile("/project/note.md")).toBe("/project/note.md")
+  expect(mocks.read).not.toHaveBeenCalled()
 })
 
 test("shortcut opens the current native target through the workspace host", async () => {

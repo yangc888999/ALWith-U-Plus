@@ -8,13 +8,22 @@ import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 
+import { useBlockConflictCopies } from "./block-conflict-copies-preference"
 import { drive } from "./controller"
 
+// Cheap structural comparison so the 5s refresh doesn't re-render when nothing changed.
+function contentEqual<T>(previous: T | null, next: T): boolean {
+  return previous !== null && JSON.stringify(previous) === JSON.stringify(next)
+}
+
 export function DriveIntegrations(): ReactNode {
-  const { i18n } = useTranslation()
+  const { i18n, t: translate } = useTranslation()
   const zh = i18n.language.startsWith("zh")
   const t = driveTranslator(zh ? "zh-CN" : "en", "settings")
   const { connected, snapshot } = useDrive(drive)
+  // Local switch, not a Drive preference: it is read by the filesystem wrapper, so it needs no
+  // connection and still applies while the daemon is stopped.
+  const [blockConflictCopies, setBlockConflictCopies] = useBlockConflictCopies()
   const [preferences, setPreferences] = useState<Preferences | null>(null)
   const [archive, setArchive] = useState<ArchiveStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -26,6 +35,8 @@ export function DriveIntegrations(): ReactNode {
       return
     }
     let active = true
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let failures = 0
     setError(null)
     const load = async (): Promise<void> => {
       const [settings, status] = await Promise.all([
@@ -35,20 +46,32 @@ export function DriveIntegrations(): ReactNode {
       if (settings.type !== "preferences" || status.type !== "archiveStatus")
         throw new Error("Invalid Drive integration settings")
       if (active) {
-        setPreferences(settings.data)
-        setArchive(status.data)
+        setPreferences((current) => (contentEqual(current, settings.data) ? current : settings.data))
+        setArchive((current) => (contentEqual(current, status.data) ? current : status.data))
       }
     }
-    const refresh = (): void => {
-      void load().catch((cause: unknown) => {
-        if (active) setError(String(cause))
-      })
+    // One pair of requests in flight at a time. The old 5s interval fired whether the previous
+    // pair had come back or not: while Drive is busy with a full sync each pair times out after
+    // 45s, so requests piled up, kept the daemon saturated and left the UI stuck on "syncing".
+    // Back off on consecutive failures and return to 5s as soon as Drive answers again.
+    const schedule = (delay: number): void => {
+      if (!active) return
+      timer = setTimeout(() => {
+        void load()
+          .then(() => {
+            failures = 0
+          })
+          .catch((cause: unknown) => {
+            failures += 1
+            if (active) setError(String(cause))
+          })
+          .finally(() => schedule(failures === 0 ? 5000 : Math.min(5000 * 2 ** failures, 60_000)))
+      }, delay)
     }
-    refresh()
-    const timer = setInterval(refresh, 5000)
+    schedule(0)
     return () => {
       active = false
-      clearInterval(timer)
+      if (timer !== null) clearTimeout(timer)
     }
   }, [connected, snapshot?.configured, snapshot?.generation])
   const change = (key: keyof Preferences, value: boolean): void => {
@@ -130,6 +153,20 @@ export function DriveIntegrations(): ReactNode {
           checked={preferences?.knowledgeInject ?? false}
           disabled={!connected || busy || !preferences}
           onCheckedChange={(value) => change("knowledgeInject", value)}
+        />
+      </div>
+      <div className="alwith-drive-setting">
+        <div>
+          <strong>{translate("drive.blockConflictCopies")}</strong>
+          <p>{translate("drive.blockConflictCopiesHint")}</p>
+        </div>
+        <Switch
+          aria-label={translate("drive.blockConflictCopies")}
+          // Local display preference, not a Drive setting: it must stay usable before the daemon
+          // attaches (and while it is stopped), unlike the archive/knowledge switches above.
+          data-local-preference="true"
+          checked={blockConflictCopies}
+          onCheckedChange={setBlockConflictCopies}
         />
       </div>
     </section>

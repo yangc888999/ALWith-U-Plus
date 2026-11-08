@@ -273,3 +273,28 @@
     transition: none;
   }
 }
+
+/* System notices in the transcript (the model-switch note and friends): a pure-notice turn
+   renders as one muted status block. Center it between two hairlines so it reads like the
+   desktop agents' "model changed" row instead of a stray chat line. The selector pair is the
+   module's exact rendering of that branch, and nothing else emits it. */
+[data-stream-style="codexUI"] div[role="status"].text-muted-foreground.py-2 {
+  width: 100%;
+  align-items: center;
+  text-align: center;
+  border-block: 1px solid color-mix(in srgb, var(--muted-foreground) 22%, transparent);
+}
+[data-stream-style="codexUI"] div[role="status"].text-muted-foreground.py-2 > * {
+  max-width: 100%;
+}
+
+/* 对话过程展示方式 = 详细：every tool group spreads open, mirroring the -open state.
+   简洁（默认）keeps the module's collapsed-by-default behaviour, expandable by hand. */
+[data-conversation-detail="full"] .codex-activity-group-grid {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+[data-conversation-detail="full"] .codex-activity-group-body {
+  max-height: none;
+  transform: translateY(0);
+}

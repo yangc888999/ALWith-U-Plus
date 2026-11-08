@@ -51,7 +51,8 @@ fn remote_source_url(hash: &str, manifest: &Value, profile: Option<&Profile>) ->
         .ok_or("远程加载器缺少代码下载地址；请提供 updateUrl 或选择包含完整 main.js 的扩展目录")?;
     super::http::validate_url(value).map(Some)
 }
-async fn download_source(url: reqwest::Url) -> Result<Vec<u8>, String> {
+/// `Ok(None)` means the server has no such file; every other failure is fatal.
+async fn download(url: reqwest::Url, limit: u64) -> Result<Option<Vec<u8>>, String> {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             if attempt.previous().len() >= 10 {
@@ -65,27 +66,36 @@ async fn download_source(url: reqwest::Url) -> Result<Vec<u8>, String> {
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
-    let mut response = client
+    let response = client
         .get(url)
         .send()
         .await
-        .map_err(|e| format!("下载扩展代码失败：{e}"))?
-        .error_for_status()
         .map_err(|e| format!("下载扩展代码失败：{e}"))?;
-    if !response.status().is_success() {
-        return Err(format!("下载扩展代码失败：HTTP {}", response.status()));
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
     }
-    if response.content_length().is_some_and(|size| size > MAX_SOURCE) {
+    // Redirects are followed above, so any remaining non-success here is final: 304 included, which
+    // `error_for_status` lets through as "fine" and would otherwise download as an empty source.
+    if !response.status().is_success() {
+        return Err(format!("下载扩展代码失败：{}", response.status()));
+    }
+    let mut response = response.error_for_status().map_err(|e| format!("下载扩展代码失败：{e}"))?;
+    if response.content_length().is_some_and(|size| size > limit) {
         return Err("Legacy source is too large".into());
     }
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
-        if bytes.len() + chunk.len() > MAX_SOURCE as usize {
+        if bytes.len() + chunk.len() > limit as usize {
             return Err("Legacy source is too large".into());
         }
         bytes.extend_from_slice(&chunk);
     }
-    Ok(bytes)
+    Ok(Some(bytes))
+}
+async fn download_source(url: reqwest::Url) -> Result<Vec<u8>, String> {
+    download(url, MAX_SOURCE)
+        .await?
+        .ok_or_else(|| String::from("下载扩展代码失败：HTTP 404"))
 }
 
 fn digest(bytes: &[u8]) -> String {
@@ -383,6 +393,55 @@ pub async fn extension_prepare_install(
     };
     let directory = selected.into_path().map_err(|e| e.to_string())?;
     prepare_install_from_directory(&window, &directory, expected_id.as_deref()).await.map(Some)
+}
+
+/// A published extension is one manifest address: the metadata is read first, then exactly the code
+/// that sits beside it is fetched into an app-owned staging folder, so the panel can offer a
+/// one-click install without asking the user to unzip a package by hand.
+#[tauri3_specta::command]
+pub async fn extension_install_from_url(
+    window: tauri::Window, manifest_url: String,
+) -> Result<Option<PreparedInstall>, String> {
+    require_main(&window)?;
+    let manifest_url = super::http::validate_url(&manifest_url)?;
+    if manifest_url.scheme() != "https" {
+        return Err("扩展地址必须使用 HTTPS".into());
+    }
+    let base = manifest_url
+        .path()
+        .strip_suffix("manifest.json")
+        .ok_or("扩展地址必须以 manifest.json 结尾")?
+        .to_string();
+    let manifest_bytes =
+        download(manifest_url.clone(), 128 * 1024).await?.ok_or("扩展清单不存在（HTTP 404）")?;
+    let manifest: Value =
+        serde_json::from_slice(&manifest_bytes).map_err(|e| format!("Invalid extension manifest: {e}"))?;
+    let id = manifest.get("id").and_then(Value::as_str).ok_or("Extension manifest has no id")?.to_string();
+    if !is_legacy_manifest(&manifest)? {
+        return Err("该地址没有发布可安装的扩展清单".into());
+    }
+    let mut package: Vec<(&str, Vec<u8>)> = vec![("manifest.json", manifest_bytes)];
+    for name in ["main.js", "styles.css"] {
+        let mut url = manifest_url.clone();
+        url.set_path(&format!("{base}{name}"));
+        match download(url, MAX_SOURCE).await? {
+            Some(bytes) => package.push((name, bytes)),
+            // The panel itself needs main.js; styles are optional by contract.
+            None if name == "main.js" => return Err("远程扩展缺少 main.js".into()),
+            None => {}
+        }
+    }
+    let staging = window
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("extension-downloads")
+        .join(uuid::Uuid::new_v4().to_string());
+    fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+    for (name, bytes) in package {
+        fs::write(staging.join(name), bytes).map_err(|e| e.to_string())?;
+    }
+    prepare_install_from_directory(&window, &staging, Some(id.as_str())).await.map(Some)
 }
 
 /// The caller owns native authorization through the folder picker or startup inbox.

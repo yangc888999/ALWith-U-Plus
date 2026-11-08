@@ -1,17 +1,17 @@
 import { isFormElicitation } from "@alwith/api"
-import { requestVibemonView } from "@alwith/module-auth/pets/core"
 import { exportDraft, type FormAction, importDraft, setComposerDraft } from "@alwith/module-chat/conversation"
-import { hasAccount } from "@nyssance/codex-acp-v2/client"
-import { isTauri } from "@tauri-apps/api/core"
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow"
+import { hasAccount, type RateLimitSnapshot } from "@nyssance/codex-acp-v2/client"
+import { invoke, isTauri } from "@tauri-apps/api/core"
+import { getCurrentWindow } from "@tauri-apps/api/window"
 import { info } from "@tauri-apps/plugin-log"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { createPortal, flushSync } from "react-dom"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
 
 import type { SessionSummary } from "@/agent/client"
+import { NATIVE_MODEL_GROUP, nativeGroupModels } from "@/agent/native-models"
 import { watchSessionList } from "@/agent/session-list-refresh"
 import { commands, events } from "@/bindings"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -22,17 +22,16 @@ import { ActionCard, ElicitationFormDialog } from "@/features/chat/action-card"
 import { ChatView } from "@/features/chat/chat-view"
 import { DRAFT_SESSION_ID, DraftChat } from "@/features/chat/draft-chat"
 import { newChatDirectory } from "@/features/chat/new-chat-directory"
+import { isQuickChatDirectory } from "@alwith/module-chat/session-list"
 import { ChatProjectMenu } from "@/features/chat/project-session-popover"
 import { useDriveArchive } from "@/features/drive/archive-runtime"
 import { DriveDeleteConfirmation, DrivePage, DriveStatus, useDriveConnection } from "@/features/drive/drive"
 import { useDrivePluginBridge } from "@/features/drive/plugin-bridge-hook"
 import { sendExtensionMessage, setExtensionDraft } from "@/features/extensions/chat/chat"
 import { connectExtensionNavigation } from "@/features/extensions/chat/navigation"
-import { ExtensionEntryMenu } from "@/features/extensions/extension-entry-menu"
 import { ExtensionNavigation } from "@/features/extensions/extension-navigation"
 import { ExtensionStatusBar } from "@/features/extensions/extension-outlets"
 import { ExtensionMount, ExtensionPage } from "@/features/extensions/extension-view"
-import { ExtensionsSection } from "@/features/extensions/extensions-section"
 import { showExtensionLimitations } from "@/features/extensions/legacy/limitations"
 import { reportExtensionError } from "@/features/extensions/runtime"
 import { useExtensions } from "@/features/extensions/use-extensions"
@@ -41,19 +40,33 @@ import { LeadingNavigation } from "@/features/layout/components/leading-navigati
 import { MainSidebarLayout } from "@/features/layout/components/main-sidebar-layout"
 import { TrailingBoard } from "@/features/layout/components/trailing-board"
 import { CommandPalette } from "@/features/palette/command-palette"
-import { PluginsPage } from "@/features/plugins/plugins-page"
-import { ArchivedChatsPage } from "@/features/sessions/archived-chats-page"
 import { recentMainActivity } from "@/features/sessions/recent-main-activity"
 import { selectSession } from "@/features/sessions/select-session"
 import { SessionSidebar } from "@/features/sessions/session-sidebar"
+import { TitleBarLeadingActions } from "@/features/sessions/title-bar-leading"
 import { HotkeysDialog } from "@/features/settings/hotkeys-dialog"
-import { StoryPage } from "@/features/story/story-page"
-import { updateMainPetSurface } from "@/features/vibemon/main-host"
-import { VibemonCenter } from "@/features/vibemon/pet-center"
+import { useAccentDataAttribute } from "@/features/settings/accent-store"
+import { serveAutomationBridge } from "@/features/automation/automation-bridge"
+import {
+  executeAutomationRun,
+  serialAutomationExecutor,
+  startAutomationScheduler
+} from "@/features/automation/automation-scheduler"
+import { patchRunRecord, setTaskMonitorSession } from "@/features/automation/task-store"
+import type { OnRunTask } from "@/features/automation/types"
 import { useVoiceHandoff } from "@/features/voice/use-voice-handoff"
 import { WorkspaceHeaderContext } from "@/features/workspace/context"
 import { FileWorkspace } from "@/features/workspace/file-workspace"
+import { useFourColumnsDefault } from "@/features/workspace/four-columns-preference"
+import { closeOnlineBiWindow } from "@/features/workspace/online-bi"
+import { usePreviewExtension } from "@/features/workspace/preview-extension"
 import { logBackgroundError, reportBackgroundError } from "@/lib/background-errors"
+import { notify } from "@/lib/notifications"
+import { automationSessionRows, automationTitleOf, rememberAutomationSessionId } from "@/lib/automation-sessions"
+import { playCompletionSound, soundForRunState } from "@/lib/completion-sound"
+import { bumpDockBadge, clearDockBadge } from "@/lib/dock-badge"
+import { settingsStore } from "@/lib/settings-store"
+import { startFreeModelWatch } from "@/features/providers/free-model-watch"
 import { installChatShortcut } from "@/lib/chat-shortcut"
 import {
   openChatWindow,
@@ -63,24 +76,58 @@ import {
   syncChatWindowSurface
 } from "@/lib/chat-window"
 import { serveChatClient } from "@/lib/chat-window-client"
+import { describeError } from "@/lib/error-text"
+import { notifyConversation } from "@/lib/notify"
 import { useMainWindowSurface } from "@/lib/chat-window-state"
 import { client, markRead, useApp, useSession, watchRunStates } from "@/lib/client"
 import { watchForNotifications } from "@/lib/notifications"
 import { type Preferences, savePreference } from "@/lib/preferences"
+import { ensureDefaultGroupRoles } from "@/lib/group-roles"
+import { groupSessionRows } from "@/lib/group-sessions"
+import { ensureProjectMemory } from "@/lib/project-memory"
 import { applyProvidersWhenIdle } from "@/lib/providers"
+import {
+  type CachedRateLimits,
+  hasRateLimitWindows,
+  readCachedRateLimits,
+  writeCachedRateLimits
+} from "@/lib/rate-limit-cache"
 import { onHubExit } from "@/lib/runtime"
-import { serveSettingsBridge } from "@/lib/settings-bridge"
+import { markStartupReady, startupSilent } from "@/lib/startup-window"
+import { useStartupSilent, useStartupStalled } from "@/lib/use-startup-silent"
+import { serveSettingsBridge, type SettingsNativeModels } from "@/lib/settings-bridge"
+import { useProjectMemory } from "@/lib/use-project-memory"
 import { useProviders } from "@/lib/use-providers"
 import { useReadVisibleSession } from "@/lib/use-read-visible-session"
 import { useSurfaceOperation } from "@/lib/use-surface-operation"
 import { useWindowFocus } from "@/lib/window-focus"
 import { openSettingsWindow } from "@/lib/window-manager"
 
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
+// Matches `lib/startup-window.ts#FALLBACK_MS`: a startup failure keeps retrying while the silent
+// window is open, and this is how long that window lasts at most before the banner may speak.
+const STARTUP_RECOVERY_MS = 20_000
+
+// Pages behind a navigation click. Keeping them out of the startup chunk leaves the first paint
+// with only the chat surface to parse, which is what the window shows anyway; each page's chunk
+// arrives while the click is still being animated. The always-visible shell stays eager.
+const StoryPage = lazy(() => import("@/features/story/story-page").then((module) => ({ default: module.StoryPage })))
+const ArchivedChatsPage = lazy(() =>
+  import("@/features/sessions/archived-chats-page").then((module) => ({ default: module.ArchivedChatsPage }))
+)
+const PluginsPage = lazy(() =>
+  import("@/features/plugins/plugins-page").then((module) => ({ default: module.PluginsPage }))
+)
+const ExtensionsSection = lazy(() =>
+  import("@/features/extensions/extensions-section").then((module) => ({ default: module.ExtensionsSection }))
+)
+// 定时任务 lives on the leading screen now: the sidebar row opened the settings window, which
+// pushed the reader out of the app they were working in (2026-11-08).
+const AutomationPage = lazy(() =>
+  import("@/features/automation/automation-page").then((module) => ({ default: module.AutomationPage }))
+)
 
 export function App({ initialPreferences }: { initialPreferences: Preferences }) {
+  useAccentDataAttribute()
   useDriveConnection()
   useDrivePluginBridge()
   useDriveArchive()
@@ -88,6 +135,15 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   const { t } = useTranslation()
   const connection = useApp((state) => state.connection)
   const connectionError = useApp((state) => state.connectionError)
+  // 引擎第一次 ready 之前是「启动静默期」：连接横幅绝不显示红色错误，而且连中性的
+  // 「正在启动」也要等 800ms 之后才允许出现 —— 热启动只要几百毫秒，画了再抹就是"闪一下"。
+  // 这段窗口由 lib/startup-window.ts 统一维护（主窗口 / 草稿页 / 浮窗 / toast 读同一个状态），
+  // 早先这里是各自的 5 秒定时器，冷启动慢一点就会先红一下再消失（2026-11-08）。
+  const silent = useStartupSilent()
+  const stalled = useStartupStalled()
+  // The silent window is closed by `connect()` once providers are applied — not here. Closing it
+  // on the `connection` event opened a hole between `client.connect()` and
+  // `applyProvidersWhenIdle()`, and a failure inside that hole reached the reader as a raw toast.
   const globalActions = useApp(useShallow((state) => state.actions.filter((action) => action.sessionId === null)))
   const globalForms = globalActions.filter(
     (action): action is FormAction => action.kind === "elicitation" && isFormElicitation(action.params)
@@ -97,10 +153,18 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   // user opens one.
   const [driveSidebar, setDriveSidebar] = useState<HTMLDivElement | null>(null)
   const [workspaceToolbar, setWorkspaceToolbar] = useState<HTMLDivElement | null>(null)
+  // macOS docks the workspace toolbar (condense + workspace toggle) in the top-right header.
+  // Windows keeps the focused-window controls, so this target is only used when it exists.
+  const [workspaceTrailing, setWorkspaceTrailing] = useState<HTMLDivElement | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   useEffect(() => {
     if (isTauri()) void commands.bridgeSetActiveSession({ sessionId: selectedId })
   }, [selectedId])
+  // The group panel lists members by role: seed the five defaults on launch, so a roster the user
+  // has not opened settings for yet still reads as configured (and a 群聊 has people in it).
+  useEffect(() => {
+    ensureDefaultGroupRoles()
+  }, [])
   const [submittingDraftId, setSubmittingDraftId] = useState<string | null>(null)
   const [surfaceGeneration, setSurfaceGeneration] = useState(0)
   const voiceHandoff = useVoiceHandoff(selectedId, surfaceGeneration)
@@ -110,12 +174,12 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [hotkeysOpen, setHotkeysOpen] = useState(false)
   // Management pages share the leading screen; the offscreen chat stays mounted.
-  const [view, setView] = useState<"chat" | "plugins" | "extensions" | "vibemon" | "archives" | "story" | "extension">(
-    "chat"
-  )
-  const [leadingPage, setLeadingPage] = useState<"plugins" | "extensions" | "vibemon" | "archives">("plugins")
+  const [view, setView] = useState<
+    "chat" | "plugins" | "extensions" | "archives" | "story" | "extension" | "automation"
+  >("chat")
+  const [leadingPage, setLeadingPage] = useState<"plugins" | "extensions" | "archives" | "automation">("plugins")
   const leading =
-    view === "plugins" || view === "extensions" || view === "vibemon" || view === "extension" || view === "archives"
+    view === "plugins" || view === "extensions" || view === "extension" || view === "archives" || view === "automation"
   const [extensionView, setExtensionView] = useState<string | null>(null)
   const openExtension = useCallback(
     (id: string): void => {
@@ -144,18 +208,31 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     setLeadingPage("extensions")
     setView("extensions")
   }, [])
-  const [vibemonVisited, setVibemonVisited] = useState(false)
-  const openVibemon = useCallback(() => {
-    setVibemonVisited(true)
-    setLeadingPage("vibemon")
-    setView("vibemon")
+  /** 定时任务: a page inside the main window, exactly like WorkBuddy — the sidebar stays put. */
+  const openAutomation = useCallback(() => {
+    setLeadingPage("automation")
+    setView("automation")
+  }, [])
+  /** 扩展 lives in Settings' 应用扩展 page; the leading screen stays for extension surfaces. */
+  const openExtensionSettings = useCallback(() => {
+    void openSettingsWindow("extensions").catch((error: unknown) => toast.error(describeError(error)))
   }, [])
   const openLeading = useCallback((): void => {
     if (leadingPage === "extensions") openExtensions()
-    else if (leadingPage === "vibemon") openVibemon()
     else if (leadingPage === "archives") openArchives()
+    else if (leadingPage === "automation") openAutomation()
     else openPlugins()
-  }, [leadingPage, openExtensions, openVibemon, openArchives, openPlugins])
+  }, [leadingPage, openExtensions, openArchives, openAutomation, openPlugins])
+  // The online BI surface is a child webview of the main window, so it stays glued on top when the
+  // canvas slides to the leading screen (the main content is only `inert`, never unmounted). Close
+  // both the preview extension and the standalone BI window the moment we leave the main screen, so
+  // the floating BI panel auto-dismisses instead of lingering over the leading view.
+  const closePreviewExtension = usePreviewExtension((state) => state.close)
+  useEffect(() => {
+    if (!leading) return
+    closePreviewExtension()
+    void closeOnlineBiWindow().catch(() => {})
+  }, [leading, closePreviewExtension])
   const session = useSession(selectedId)
   const draftSessions = useApp((state) => state.draftSessions)
   const { busy, operation } = useSurfaceOperation()
@@ -182,7 +259,13 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     return connectExtensionNavigation({
       currentSession: () => {
         const selected = extensionSession.current
-        return selected?.attached ? { id: selected.id, cwd: selected.cwd, title: selected.title ?? selected.id } : null
+        return selected?.attached
+          ? {
+              id: selected.id,
+              cwd: selected.cwd,
+              title: selected.title ?? selected.id
+            }
+          : null
       },
       openView: openExtension,
       send: (id, text, required, check) =>
@@ -196,23 +279,32 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const window = getCurrentWebviewWindow()
+      // Window-level question, window-level API: `getCurrentWindow()` resolves the webview
+      // that currently has focus, and a child webview (在线 BI) has no window of its own — asking
+      // it threw "current webview is not a WebviewWindow" on every click into that pane.
+      const window = getCurrentWindow()
       const visible = (focused || (await window.isVisible())) && !(await window.isMinimized())
       if (!cancelled) {
         setMainVisible(visible)
-        useMainWindowSurface.setState({ sessionId: selectedId, visible: visible && view === "chat" })
-        await updateMainPetSurface(selectedId, visible && view === "chat")
+        useMainWindowSurface.setState({
+          sessionId: selectedId,
+          visible: visible && view === "chat"
+        })
       }
-    })().catch((error) => toast.error(describe(error)))
+    })().catch((error) => toast.error(describeError(error)))
     return () => {
       cancelled = true
     }
   }, [selectedId, focused, view])
 
   useReadVisibleSession(selectedId, focused && view === "chat")
+  useProjectMemory()
 
   const select = useCallback(
     (sessionRow: SessionSummary) => {
+      // A project opened from history must have its memory file too, not only the ones picked in
+      // the composer: the read-memory action would otherwise find nothing on older projects.
+      void ensureProjectMemory(sessionRow.cwd)
       // Codex refuses to resume an archived session; opening one restores it first, as the
       // official client does.
       void operation
@@ -236,20 +328,131 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
               setView("chat")
               setSelectedId(id)
             },
-            onOpenError: (error: unknown) => toast.error(describe(error))
+            onOpenError: (error: unknown) => toast.error(describeError(error))
           })
         )
-        .catch((error: unknown) => toast.error(describe(error)))
+        .catch((error: unknown) => toast.error(describeError(error)))
     },
     [operation]
   )
 
+  // Bumped when the reader picks a project folder for a new chat. The workspace opens its columns
+  // once per project per run, so without this signal a project already visited would stay in two
+  // columns after an explicit "create a chat here".
+  const [columnsRequest, setColumnsRequest] = useState(0)
   const chooseDraftFolder = useCallback((directory: string | null) => {
     setLastDirectory(directory)
-    void savePreference("lastProjectDirectory", directory).catch((error: unknown) => toast.error(describe(error)))
+    if (directory !== null && !isQuickChatDirectory(directory)) setColumnsRequest((value) => value + 1)
+    // Every project a chat is opened in gets a memory.md, including composer folder picks.
+    // Temporary chats (quick-chat directory) are not projects and must not create one.
+    if (directory === null || !isQuickChatDirectory(directory)) void ensureProjectMemory(directory)
+    void savePreference("lastProjectDirectory", directory).catch((error: unknown) => toast.error(describeError(error)))
   }, [])
 
-  const [draftCollection, setDraftCollection] = useState<{ id: string; generation: number } | null>(null)
+  // One reaction per conversation settle: system notification + Dock badge + (opt-in) sound.
+  // The recorded state makes this idempotent across the frequent run-state republishes.
+  const runStates = useApp((state) => state.runStates)
+  const knownSessions = useApp((state) => state.sessionList)
+  const notifiedStates = useRef(new Map<string, string>())
+  const settledBaseline = useRef(false)
+  useEffect(() => {
+    // The first pass after mount replays states that settled before this window existed. Recording
+    // them without reacting is what keeps a relaunch from chiming and re-badging old conversations.
+    if (!settledBaseline.current) {
+      for (const [id, record] of Object.entries(runStates)) notifiedStates.current.set(id, record.state)
+      settledBaseline.current = true
+      return
+    }
+    for (const [id, record] of Object.entries(runStates)) {
+      const state = record.state
+      if (state !== "done" && state !== "requires_action") {
+        notifiedStates.current.set(id, state)
+        continue
+      }
+      if (notifiedStates.current.get(id) === state) continue
+      notifiedStates.current.set(id, state)
+      // Group and automation rows are not in `sessionList` (the sidebar keeps them apart), so the
+      // notification has to look in their stores too or it falls back to a session UUID.
+      const title =
+        knownSessions.find((row) => row.sessionId === id)?.title ??
+        automationTitleOf(automationSessionRows().find((row) => row.sessionId === id)?.title ?? null) ??
+        automationSessionRows().find((row) => row.sessionId === id)?.title ??
+        groupSessionRows().find((row) => row.sessionId === id)?.title ??
+        id
+      void notifyConversation(title, state === "done" ? "对话已完成" : "需要你的操作")
+      // Two audibly different outcomes: a finished turn vs one waiting for the user's approval.
+      // A failed turn stays silent; it still gets the notification and the badge.
+      const kind = soundForRunState(state)
+      if (kind !== null && settingsStore.get<boolean>("automation.completionSound") === true) {
+        playCompletionSound(kind)
+      }
+      bumpDockBadge()
+    }
+  }, [runStates, knownSessions])
+
+  // VITE_AUTOTEST=1: 自测模式——逐个打开侧边栏会话，结果写入 ~/Library/Logs/ai.alwith.u/autotest.log
+  const autotestRan = useRef(false)
+  useEffect(() => {
+    if (
+      import.meta.env.VITE_AUTOTEST !== "1" ||
+      autotestRan.current ||
+      connection !== "ready" ||
+      knownSessions.length === 0
+    )
+      return
+    autotestRan.current = true
+    void (async () => {
+      const mark = (line: string): Promise<void> =>
+        invoke("append_diagnostic", { line })
+          .catch(() => undefined)
+          .then(() => undefined)
+      await mark(`=== autotest ${new Date().toISOString()} sessions=${knownSessions.length} ===`)
+      for (const row of knownSessions.slice(0, 30)) {
+        const started = Date.now()
+        try {
+          // A wedged engine must not freeze the whole run: report the session as a timeout and
+          // move on, so one bad chat cannot hide the state of the other eighteen.
+          await Promise.race([
+            client.open(row.sessionId, row.cwd),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("timeout after 20s")), 20_000))
+          ])
+          const error = client.state.sessions[row.sessionId]?.error ?? null
+          await mark(
+            JSON.stringify({
+              id: row.sessionId,
+              title: row.title,
+              ok: error === null,
+              error,
+              ms: Date.now() - started
+            })
+          )
+        } catch (error) {
+          await mark(
+            JSON.stringify({
+              id: row.sessionId,
+              title: row.title,
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+              ms: Date.now() - started
+            })
+          )
+        }
+      }
+      await mark("=== autotest done ===")
+    })()
+  }, [connection, knownSessions])
+
+  // A temporary chat lives in the quick-chat folder: no file tree, no preview by default.
+  const currentDirectory = session?.cwd ?? lastDirectory
+  const isTemporaryChat = currentDirectory !== null && isQuickChatDirectory(currentDirectory)
+  // Projects open four columns wide unless 设置 → 主题和外观 → 界面布局 says otherwise. A temporary
+  // chat is two columns regardless: it has no project behind it to preview.
+  const fourColumnsDefault = useFourColumnsDefault()
+
+  const [draftCollection, setDraftCollection] = useState<{
+    id: string
+    generation: number
+  } | null>(null)
   const newChatInDirectory = useCallback(
     (cwd?: string | null, collectionId?: string) => {
       if (operation.busy) return
@@ -267,12 +470,62 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           setView("chat")
           setSelectedId(null)
         })
-        .catch((error: unknown) => toast.error(describe(error)))
+        .catch((error: unknown) => toast.error(describeError(error)))
     },
     [chooseDraftFolder, lastDirectory, operation, surfaceGeneration]
   )
 
-  const newChat = useCallback(() => newChatInDirectory(), [newChatInDirectory])
+  /** 新建会话: a temporary chat in the quick-chat folder, never inside a project. */
+  const newChat = useCallback(() => {
+    void commands
+      .quickChatDirectory()
+      .then((directory) => newChatInDirectory(directory))
+      .catch((error: unknown) => toast.error(describeError(error)))
+  }, [newChatInDirectory])
+
+  /** 新建项目: pick a directory, then start a chat inside it (four-column layout by default). */
+  const newProject = useCallback(() => {
+    void commands
+      .pickProjectDirectory()
+      .then((directory) => {
+        if (directory !== null) newChatInDirectory(directory)
+      })
+      .catch((error: unknown) => toast.error(describeError(error)))
+  }, [newChatInDirectory])
+
+  /**
+   * Clears the context of the conversation on screen without leaving it.
+   *
+   * Codex has no in-place reset, so the thread itself has to be replaced; the old one is archived
+   * (still recoverable) instead of being left in the sidebar, and the replacement takes over the
+   * same project, model and effort. What the user sees is the current chat starting over rather
+   * than a new conversation piling up next to it.
+   */
+  const clearContextInPlace = useCallback(
+    (sessionId: string, cwd: string) => {
+      if (operation.busy) return
+      void operation
+        .run(async () => {
+          // Park the model and effort before the thread goes away; the first turn of the
+          // replacement re-applies them.
+          client.rememberCurrentForNextChat(sessionId)
+          await client.discardDraft("main")
+          await client.archive(sessionId)
+          // The archived thread must not be what the next launch reopens: clearing the context
+          // means the next visit starts on a fresh draft in the same project, not on the chat
+          // that was just archived. The project itself is remembered separately below.
+          await savePreference("lastSession", null).catch(() => {})
+          chooseDraftFolder(cwd)
+          importDraft(DRAFT_SESSION_ID, null)
+          setSurfaceGeneration((value) => value + 1)
+          setChatRevealRequest((value) => value + 1)
+          setView("chat")
+          setSelectedId(null)
+        })
+        .catch((error: unknown) => toast.error(describeError(error)))
+    },
+    [chooseDraftFolder, operation]
+  )
 
   const draftCreated = useCallback((id: string) => {
     setSelectedId(id)
@@ -281,24 +534,12 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   useEffect(() => {
     let disposed = false
     const shortcut = installChatShortcut(() => {
-      void openChatWindow().catch((error) => toast.error(describe(error)))
+      void openChatWindow().catch((error) => toast.error(describeError(error)))
     })
     const ready = (async () => {
-      const stopClient = await serveChatClient(client, undefined, (error) => toast.error(describe(error)))
+      const stopClient = await serveChatClient(client, undefined, (error) => toast.error(describeError(error)))
       const stopSurface = await serveChatSurface(async (action) => {
         switch (action.type) {
-          case "vibemon": {
-            if (action.view !== "pull" && action.view !== "equip") throw new Error("Invalid Vibémon view")
-            flushSync(() => {
-              requestVibemonView(action.view)
-              openVibemon()
-            })
-            const win = getCurrentWebviewWindow()
-            await win.unminimize()
-            await win.show()
-            await win.setFocus()
-            return null
-          }
           case "present":
             return operation.run(async () => {
               const transfer = action.transfer
@@ -317,7 +558,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
               setSurfaceGeneration((value) => value + 1)
               setChatRevealRequest((value) => value + 1)
               setView("chat")
-              const win = getCurrentWebviewWindow()
+              const win = getCurrentWindow()
               await win.unminimize()
               await win.show()
               await win.setFocus()
@@ -338,10 +579,10 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
         stopSurface()
         return () => {}
       }
-      void syncChatWindowSurface().catch((error) => toast.error(describe(error)))
+      void syncChatWindowSurface().catch((error) => toast.error(describeError(error)))
       void shortcut
         .set(initialPreferences.chatWindowShortcut ?? "Alt+Space", false)
-        .catch((error) => toast.error(describe(error)))
+        .catch((error) => toast.error(describeError(error)))
       return () => {
         stopClient()
         stopSurface()
@@ -350,10 +591,10 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     setChatWindowHostReady(ready)
     return () => {
       disposed = true
-      void ready.then((stop) => stop()).catch((error) => toast.error(describe(error)))
-      void shortcut.dispose().catch((error) => toast.error(describe(error)))
+      void ready.then((stop) => stop()).catch((error) => toast.error(describeError(error)))
+      void shortcut.dispose().catch((error) => toast.error(describeError(error)))
     }
-  }, [initialPreferences.chatWindowShortcut, openVibemon, operation])
+  }, [initialPreferences.chatWindowShortcut, operation])
 
   // Run states come over the Runtime port; a new port (after alwith-runtime restarted) needs a
   // new subscription, so the watch is restarted with every connect.
@@ -362,6 +603,11 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       await client.connect()
       // Restore choices must be checked against the applied provider catalog.
       await applyProvidersWhenIdle()
+      // Close the silent window here, not on the `connection` event. `client.connect()` flips
+      // `connection` to "ready" before providers are applied; closing on the event left the gap
+      // between the two unguarded, and a provider-apply failure in that gap surfaced as a raw
+      // `acpRequest: …` toast (2026-11-08). Now the window survives until the engine can serve.
+      markStartupReady()
       void info(`connected to ${client.state.agent?.info.name} ${client.state.agent?.info.version}`)
     } catch (error) {
       if (client.state.connection === "failed" || client.state.connection === "disconnected")
@@ -374,6 +620,36 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     if (connection === "ready") return watchSessionList(client)
   }, [connection])
 
+  // Reopen the conversation that was on screen when the app quit, in its own project. The client
+  // restores that conversation's model and effort as part of the replay, so launch lands exactly
+  // where the last session left off instead of an empty draft in the wrong folder.
+  const restoredLastSession = useRef(false)
+  useEffect(() => {
+    const saved = initialPreferences.lastSession
+    if (restoredLastSession.current || connection !== "ready" || !saved) return
+    restoredLastSession.current = true
+    void (async () => {
+      try {
+        await client.discardDraft("main")
+        await client.open(saved.id, saved.cwd, "main")
+        void ensureProjectMemory(saved.cwd)
+        setLastDirectory(saved.cwd)
+        setSelectedId(saved.id)
+        setView("chat")
+      } catch {
+        // The conversation may have been deleted since; the home screen is still correct.
+      }
+    })()
+  }, [connection, initialPreferences.lastSession])
+
+  // Remember the conversation on screen, so the next launch can reopen it.
+  useEffect(() => {
+    if (selectedId === null) return
+    const cwd = client.state.sessions[selectedId]?.cwd
+    if (!cwd) return
+    void savePreference("lastSession", { id: selectedId, cwd }).catch(() => {})
+  }, [selectedId])
+
   useEffect(() => {
     if (focused && connection === "ready" && client.state.sessionListLoaded)
       void client.listSessions({ reset: true }).catch(() => undefined)
@@ -383,7 +659,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   useEffect(() => {
     if (connection !== "ready") return
     const stop = watchRunStates()
-    void stop.catch((error: unknown) => toast.error(describe(error)))
+    void stop.catch((error: unknown) => toast.error(describeError(error)))
     return () => {
       void stop.then(
         (unsubscribe) => unsubscribe(),
@@ -403,13 +679,28 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       saving = saving
         .then(() => savePreference("modelSelections", selection))
         .catch((error) => {
-          toast.error(describe(error))
+          toast.error(describeError(error))
         })
     })
   }, [initialPreferences.modelSelections])
 
   // The settings window has no agent connection of its own: it asks this window for the
   // engine identity and for sign-out, and provider keys saved there are applied here.
+  const bundledNativeModels: { current: SettingsNativeModels | null } = {
+    current: null
+  }
+  // Last rate-limit snapshot that actually reached ChatGPT. The endpoint lives on chatgpt.com, so
+  // a VPN hiccup or an offline moment used to turn the panel into "暂无用量数据" even though the
+  // numbers were known a minute ago; the panel now shows this snapshot and labels its age. It is
+  // persisted so a restart inside a network outage still has something to show.
+  const rateLimitCache = useRef<CachedRateLimits | null>(readCachedRateLimits())
+  const rememberLimits = (snapshot: RateLimitSnapshot | null): void => {
+    // Only real windows are cached. An empty 200 otherwise wipes the last good snapshot and the
+    // panel has nothing to show on the next failed read.
+    if (snapshot === null || !hasRateLimitWindows(snapshot)) return
+    rateLimitCache.current = { snapshot, capturedAt: Date.now() }
+    writeCachedRateLimits(rateLimitCache.current)
+  }
   useEffect(() => {
     const stopBridge = serveSettingsBridge({
       agent: () => {
@@ -428,27 +719,281 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       respond: (actionId, answer) => client.respond(actionId, answer),
       account: async () => {
         if (client.state.connection !== "ready" || !hasAccount(client.state.agent)) return null
-        const [account, rateLimits] = await Promise.all([
-          client.readAccount(),
-          client.readRateLimits().catch(() => null)
-        ])
-        return { account, rateLimits }
+        const account = await client.readAccount()
+        let rateLimits: RateLimitSnapshot | null = null
+        let stale = false
+        let failed = false
+        try {
+          const fresh = await client.readRateLimits()
+          if (hasRateLimitWindows(fresh)) {
+            rememberLimits(fresh)
+            rateLimits = fresh
+          } else {
+            // A successful-but-empty answer is still not fresh data (token being replaced). Keep
+            // the last real numbers, label them with their capture time, and keep retrying.
+            rateLimits = rateLimitCache.current?.snapshot ?? null
+            stale = rateLimits !== null
+            failed = rateLimits === null
+          }
+        } catch {
+          // chatgpt.com is unreachable (no VPN, endpoint down). The last good snapshot beats a
+          // blank panel; `rateLimitsStale` tells the UI to say how old it is, and `rateLimitsError`
+          // lets it distinguish "read failed" from "this plan really has no windows".
+          rateLimits = rateLimitCache.current?.snapshot ?? null
+          stale = rateLimits !== null
+          failed = rateLimits === null
+        }
+        return {
+          account,
+          rateLimits,
+          rateLimitsCapturedAt: rateLimitCache.current?.capturedAt ?? null,
+          rateLimitsStale: stale,
+          rateLimitsError: failed
+        }
       },
-      onRateLimits: (listener) => client.onRateLimits(listener)
+      onRateLimits: (listener) =>
+        client.onRateLimits((limits) => {
+          // Never push an empty snapshot into the settings window: it would replace good numbers
+          // with "暂无用量数据" mid-session for no reason.
+          if (!hasRateLimitWindows(limits)) return
+          rememberLimits(limits)
+          listener(limits)
+        }),
+      // Every live session carries the same integrated model group in its picker; the settings
+      // window has no agent connection of its own and asks for it here. With no session open
+      // (fresh install, all chats closed) the picker falls back to the bundled catalog.
+      nativeModels: () => {
+        const session = Object.values(client.state.sessions).find((entry) => entry.configOptions.length > 0)
+        if (session !== undefined) return nativeGroupModels(session.configOptions)
+        return bundledNativeModels.current
+      }
     })
-    return stopBridge
+    // No live session yet (fresh install, all chats closed): the picker's integrated group
+    // comes straight from the bundled Codex catalog instead of waiting for a first session.
+    void invoke<
+      Array<{
+        slug: string
+        name: string
+        efforts: string[]
+        defaultEffort: string | null
+      }>
+    >("codex_bundled_models")
+      .then(
+        (
+          entries: Array<{
+            slug: string
+            name: string
+            efforts: string[]
+            defaultEffort: string | null
+          }>
+        ) => {
+          if (!Array.isArray(entries) || entries.length === 0) return
+          bundledNativeModels.current = {
+            id: NATIVE_MODEL_GROUP.id,
+            name: NATIVE_MODEL_GROUP.name,
+            models: entries.map((entry) => ({
+              id: entry.slug,
+              label: entry.name,
+              efforts: entry.efforts,
+              defaultEffort: entry.defaultEffort
+            }))
+          }
+          stopBridge.republish()
+        }
+      )
+      .catch(() => {
+        // The engine catalog is best-effort; the picker stays provider-only without it.
+      })
+    return () => stopBridge.stop()
   }, [])
 
+  // 定时任务：主窗口常驻调度器 + 设置窗口「立即运行」共用一个执行器。
+  // 只要 App 开着（主窗口在），到点就新建会话发提示词，完全不依赖设置窗口是否打开；
+  // 运行记录也由主窗口写进共享 KV，设置窗口通过 store-changed 自动刷新。
+  // 用 newSession 的对象形式（而非默认 draft slot）是为了不抢占当前打开的对话。
   useEffect(() => {
-    void connect()
+    const run: OnRunTask = async (request) => {
+      try {
+        const cwd = request.cwd.trim() !== "" ? request.cwd : await commands.quickChatDirectory()
+        // One task = one monitor conversation, named after the task. Every run appends to that
+        // same thread, so the sidebar keeps a single 「监控」row instead of growing a chat a day.
+        // After an app restart the thread is no longer attached: re-open it with the options form
+        // of `open`, which only attaches/replays and does not steal the user's active chat slot.
+        let sessionId: string = request.monitorSessionId ?? ""
+        let created = false
+        if (sessionId !== "" && !client.holds(sessionId)) {
+          try {
+            await client.open(sessionId, cwd, {})
+          } catch {
+            // A deleted or unreadable rollout must not block the schedule: start a fresh monitor.
+            sessionId = ""
+          }
+        }
+        if (sessionId === "" || !client.holds(sessionId)) {
+          sessionId = await client.newSession(cwd, {
+            draft: false,
+            meta: { codex: { mode: request.fullAccess ? "agent-full-access" : "workspace-write" } }
+          })
+          created = true
+        }
+        // A task may pin its own model. setConfig("model") also re-applies that model's effort
+        // ladder (client.landModelSwitch), so a scheduled run never inherits the previous default
+        // model's effort. Leaving it empty keeps the session default untouched.
+        if (request.model.trim() !== "") {
+          await client.setConfig(sessionId, "model", request.model.trim())
+        }
+        // Explicit overrides come *after* the model switch: landModelSwitch re-applies that
+        // model's default effort/fast-mode, so writing them first would be silently overwritten.
+        // The client clamps both against what the new model actually publishes — a task that saved
+        // "max" and was later re-pointed at a model with three levels must still run.
+        if (request.effort.trim() !== "" || request.fastMode) {
+          await client.applyRunOverrides(sessionId, request.effort.trim(), request.fastMode)
+        }
+        // Mark the origin by id, not by title: a task's first prompt has no `#` heading, which is
+        // the only signal the old `codex exec` runs gave the sidebar to divert them out of 项目.
+        if (created) {
+          // Name the monitor after the task. The engine persists the rename, so the sidebar row
+          // stays recognisable across restarts. A failed rename must not cost the run itself.
+          try {
+            await client.renameSession(sessionId, request.taskName)
+          } catch {
+            // The thread still works with its default title.
+          }
+          setTaskMonitorSession(request.taskId, sessionId)
+        }
+        rememberAutomationSessionId(sessionId)
+        // A task without full access can hit a permission prompt the engine parks in
+        // `requires_action`. Nobody is at the keyboard to approve it, so it would otherwise
+        // sit in "运行中" forever. Poll the session state while the turn runs; the moment it
+        // parks, flag the run record and raise a desktop notification so the user knows to
+        // step in. The flag is advisory only — the turn still resolves on its own (or times
+        // out) and the record is finalized normally below.
+        let needsAuthSeen = false
+        const authProbe = window.setInterval(() => {
+          const state = client.session(sessionId)?.state
+          if (state === "requires_action" && !needsAuthSeen) {
+            needsAuthSeen = true
+            patchRunRecord(request.runId, { needsAuth: true })
+            void notify(
+              t("automation.runNeedsAuthTitle"),
+              t("automation.runNeedsAuth", { name: request.taskName })
+            )
+          }
+        }, 2000)
+        try {
+          const before = client.state.sessions[sessionId]?.items.length ?? 0
+          // Same thread, many runs: label each run with its timestamp in the visible timeline so
+          // the monitor reads as a dated log. `display` only changes what the reader sees; the
+          // agent still receives the untouched prompt.
+          const started = new Date()
+          const pad2 = (value: number): string => String(value).padStart(2, "0")
+          const runStamp = `${started.getFullYear()}-${pad2(started.getMonth() + 1)}-${pad2(started.getDate())} ${pad2(started.getHours())}:${pad2(started.getMinutes())}`
+          await client.prompt(
+            sessionId,
+            [{ type: "text", text: request.prompt }],
+            { display: [{ type: "text", text: `【${runStamp} 运行】\n${request.prompt}` }] }
+          )
+          // The ACP stop reason ("end_turn") is meaningless to a reader. Push and record what the
+          // agent actually wrote in this turn; an empty string means there was no readable answer.
+          const answer = client.answerSince(sessionId, before)
+          return {
+            runId: request.runId,
+            taskId: request.taskId,
+            status: "success",
+            summary: answer,
+            sessionId,
+            error: null,
+            finishedAt: Date.now()
+          }
+        } finally {
+          window.clearInterval(authProbe)
+        }
+      } catch (error) {
+        return {
+          runId: request.runId,
+          taskId: request.taskId,
+          status: "failed",
+          summary: "",
+          sessionId: null,
+          error: error instanceof Error ? error.message : String(error),
+          finishedAt: Date.now()
+        }
+      }
+    }
+    // 定时器和「立即运行」共用一条队列：引擎是单进程，并行发起只会让两个任务互相等。
+    // Completion cues are handled once in the runStates effect above, for every conversation;
+    // playing a chime here too would make a scheduled task sound twice.
+    const execute = serialAutomationExecutor(async (request) => {
+      const result = await executeAutomationRun(run, request)
+      // Notifications are best effort: a Lark outage must never turn a successful task into a
+      // failed one, and the run record is already written by the time we get here.
+      if (request.larkNotify && request.larkTargets.length > 0) {
+        const now = new Date()
+        const pad = (value: number): string => String(value).padStart(2, "0")
+        const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
+        const body =
+          result.status === "success"
+            ? result.summary.trim() !== ""
+              ? result.summary.trim()
+              : t("automation.larkEmptyResult")
+            : (result.error ?? t("automation.toastRunFailed"))
+        const header =
+          result.status === "success" ? stamp : `${stamp} · ${t("automation.runStatusFailed")}`
+        // The message IS the result — no task/session ids, no "状态：完成" shell around an empty
+        // body. Only a failed run gets an explicit failure marker.
+        const text = [`【${request.taskName}】`, header, "", body].join("\n").slice(0, 4000)
+        void commands
+          .larkCliSend({ targets: request.larkTargets, text, identity: request.larkIdentity })
+          .then((failures) => {
+            if (failures.length > 0) toast.error(`飞书推送部分失败：${failures.join("；")}`)
+          })
+          .catch((cause: unknown) => toast.error(describeError(cause)))
+      }
+      return result
+    })
+    const bridge = serveAutomationBridge(execute)
+    // 引擎未就绪时跳过这一轮，不消耗排期、不写失败记录；连上后下一轮自然会跑。
+    const stopScheduler = startAutomationScheduler(execute, () => client.state.connection === "ready")
+    return () => {
+      bridge.stop()
+      stopScheduler()
+    }
+  }, [])
+
+  // A Dock badge left over from the previous session has no meaning after a relaunch.
+  useEffect(() => clearDockBadge(), [])
+  // App 开着就检查 OpenRouter 有没有新上架的 :free 模型（开关默认关，设置页可开）。
+  useEffect(() => startFreeModelWatch(), [])
+
+  useEffect(() => {
+    let cancelled = false
+    // Retry on a *time* budget, not a round count. Six rounds is ~8 s of backoff, and the other
+    // Mac's cold start needed 8 s to reach `provider: completed` — the budget ran out a few hundred
+    // milliseconds before the engine was usable, so the banner showed a failure that was already
+    // healing. A successful `connect()` closes the silent window itself, which stops this loop;
+    // the 20 s fallback still lets a real failure through.
+    const deadline = Date.now() + STARTUP_RECOVERY_MS
+    const attempt = async (round: number): Promise<void> => {
+      await connect()
+      if (cancelled || !startupSilent() || Date.now() >= deadline) return
+      window.setTimeout(() => {
+        if (!cancelled) void attempt(round + 1)
+      }, Math.min(400 * 2 ** Math.min(round, 2), 2000))
+    }
+    void attempt(0)
     const stopNotifications = watchForNotifications(client)
     // alwith-runtime gone: the port is reset, the client drops to "disconnected", and Reconnect
-    // asks Rust for a fresh alwith-runtime.
+    // asks Rust for a fresh alwith-runtime. 启动期的退出会被 toast 闸门吞掉，只留日志。
     const stopHubExit = onHubExit((exit) => {
-      toast.error(t("connection.runtimeExited", { code: exit.code ?? exit.signal ?? "?" }))
+      toast.error(
+        t("connection.runtimeExited", {
+          code: exit.code ?? exit.signal ?? "?"
+        })
+      )
       client.disconnect()
     })
     return () => {
+      cancelled = true
       stopNotifications()
       void stopHubExit.then((stop) => stop())
     }
@@ -457,7 +1002,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   // Native menu items (macOS, Linux) arrive as events; where there is no native menu
   // (Windows) the keyboard handler below covers the same shortcuts.
   useEffect(() => {
-    const webview = getCurrentWebviewWindow()
+    const webview = getCurrentWindow()
     const listeners = Promise.all([
       webview.listen<null>(events["menu:new-chat"].name, () => void newChat()),
       webview.listen<null>(events["menu:open-settings"].name, () => void openSettingsWindow()),
@@ -496,21 +1041,49 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   const main = (() => {
     // The engine starts in the background; the home screen is there from the first frame, as
     // in Desktop and the official app. Only a failed or dropped connection says so, inline.
-    const connectionNotice =
-      connection === "failed" || connection === "disconnected" ? (
-        <div className="mx-auto w-full max-w-3xl px-6 pt-12">
-          <Alert variant="destructive">
-            <AlertTitle>{connection === "failed" ? t("connection.failed") : t("connection.disconnected")}</AlertTitle>
-            <AlertDescription className="flex flex-wrap items-center gap-2">
-              {connectionError !== null && <span className="font-mono">{connectionError}</span>}
-              <Button size="sm" variant="outline" onClick={() => void connect()}>
-                {t("connection.reconnect")}
-              </Button>
-            </AlertDescription>
-          </Alert>
-        </div>
-      ) : null
-    if (view === "story") return <StoryPage />
+    //
+    // 启动静默期（引擎还没第一次 ready）内一律只显示中性文案：这段时间的失败是过程态
+    // （冷启动、config 自愈、runtime 重启），红了再消失就是"一启动就报错"。
+    // 静默期一结束（ready，或 20 秒兜底过期），真失败照常显示，且带重连按钮。
+    const connectionBroken = connection === "failed" || connection === "disconnected"
+    const showConnectionError = connectionBroken && !silent
+    const showConnecting = stalled && connection !== "ready"
+    const connectionNotice = showConnectionError ? (
+      <div className="mx-auto w-full max-w-3xl px-6 pt-12">
+        <Alert variant="destructive">
+          <AlertTitle>{connection === "failed" ? t("connection.failed") : t("connection.disconnected")}</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-2">
+            {connectionError !== null && (
+              <span className="font-mono" title={describeError(connectionError)}>
+                {describeError(connectionError)}
+              </span>
+            )}
+            {/* The ACP layer only ever says "agent codex exited". The real reason (bad engine
+                override, blocked binary, broken config) is written to the boot log by the
+                adapter, so point at it instead of leaving a dead end. */}
+            {connectionError !== null && /agent .*exited|Codex process has exited/i.test(connectionError) && (
+              <p className="w-full text-xs text-muted-foreground">{t("connection.engineExitedHint")}</p>
+            )}
+            <Button size="sm" variant="outline" onClick={() => void connect()}>
+              {t("connection.reconnect")}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      </div>
+    ) : showConnecting ? (
+      <div className="mx-auto w-full max-w-3xl px-6 pt-12">
+        <Alert variant="default">
+          <AlertTitle>{t("connection.connecting")}</AlertTitle>
+          <AlertDescription>{t("connection.connectingHint")}</AlertDescription>
+        </Alert>
+      </div>
+    ) : null
+    if (view === "story")
+      return (
+        <Suspense fallback={null}>
+          <StoryPage />
+        </Suspense>
+      )
     // Keyed: the thread and the composer keep per-session state (draft, scroll memory) and start fresh per session.
     const moveToWindow = (): void => {
       void operation
@@ -530,7 +1103,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
             await client.open(replacement.sessionId, replacement.cwd)
           }
         })
-        .catch((error) => toast.error(describe(error)))
+        .catch((error) => toast.error(describeError(error)))
     }
     const newProjectChat = newChat
 
@@ -554,6 +1127,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           onSelectSession={select}
           onOpenWindow={moveToWindow}
           onNewChat={newProjectChat}
+          onClearContext={(cwd) => clearContextInPlace(session.id, cwd)}
           onDeleted={deleted}
         />
       )
@@ -617,23 +1191,15 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
               selectedId={view === "chat" && mainVisible ? selectedId : null}
               onSelect={select}
               onNewChat={newChat}
+              onNewProject={newProject}
               onSearch={() => setPaletteOpen(true)}
-              onOpenVibemon={openVibemon}
-              onOpenWindow={() => void openChatWindow().catch((error) => toast.error(describe(error)))}
               onNewProjectChat={newChatInDirectory}
               onOpenSettings={() => void openSettingsWindow()}
+              onEditProfile={() => void openSettingsWindow("account")}
               onOpenPlugins={openPlugins}
-              onOpenExtensions={openExtensions}
-              renderExtensionEntry={(trigger) => (
-                <ExtensionEntryMenu
-                  host={extensions}
-                  manifests={extensionState.native?.installations.map((item) => item.manifest) ?? []}
-                  trigger={trigger}
-                  onManage={openExtensions}
-                  onOpenSurface={openExtension}
-                  onError={reportExtensionError}
-                />
-              )}
+              onOpenSkills={() => void openSettingsWindow("skills")}
+              onOpenExtensions={openExtensionSettings}
+              onOpenAutomation={openAutomation}
               drivePanel={<div ref={setDriveSidebar} className="min-h-0 flex-1 overflow-auto" />}
               onSwitchScreen={() => {
                 if (leading) setView("chat")
@@ -644,8 +1210,8 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           leading={
             <>
               <LeadingNavigation
-                activePage={view === "extension" ? null : leadingPage}
-                onOpenVibemon={openVibemon}
+                // 定时任务 不在这一列（插件 / 扩展 / 归档）里，所以它打开时整列都不高亮。
+                activePage={view === "extension" || leadingPage === "automation" ? null : leadingPage}
                 onOpenArchives={openArchives}
                 onOpenPlugins={openPlugins}
                 onOpenExtensions={openExtensions}
@@ -660,31 +1226,48 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
               </LeadingNavigation>
               <SidebarInset className="main-chat-surface flex min-h-0 flex-col">
                 {leading && actionCards}
-                {view === "archives" && <ArchivedChatsPage />}
+                {view === "archives" && (
+                  <Suspense fallback={null}>
+                    <ArchivedChatsPage />
+                  </Suspense>
+                )}
                 {pluginsVisited && (
                   <div className={leadingPage === "plugins" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-                    <PluginsPage cwd={session?.cwd ?? lastDirectory} active={view === "plugins"} />
-                  </div>
-                )}
-                {vibemonVisited && (
-                  <div className={leadingPage === "vibemon" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-                    <VibemonCenter />
+                    <Suspense fallback={null}>
+                      <PluginsPage cwd={session?.cwd ?? lastDirectory} active={view === "plugins"} />
+                    </Suspense>
                   </div>
                 )}
                 {view === "extension" && extensionView !== null ? (
                   <ExtensionPage id={extensionView} onClose={() => setView("chat")} />
+                ) : leadingPage === "automation" ? (
+                  <div className="min-h-0 flex-1 overflow-auto">
+                    <Suspense fallback={null}>
+                      <AutomationPage />
+                    </Suspense>
+                  </div>
                 ) : leadingPage === "extensions" ? (
                   <div className="min-h-0 flex-1 overflow-auto">
                     <div className="mx-auto w-full max-w-5xl px-6 py-8">
-                      <ExtensionsSection onOpenSurface={openExtension} />
+                      <Suspense fallback={null}>
+                        <ExtensionsSection onOpenSurface={openExtension} />
+                      </Suspense>
                     </div>
                   </div>
                 ) : null}
               </SidebarInset>
             </>
           }
-          trailing={<TrailingBoard onOpenVibemon={openVibemon} />}
+          trailing={<TrailingBoard />}
           toolbar={<div ref={setWorkspaceToolbar} hidden={leading} className="main-workspace-toolbar" />}
+          headerTrailing={
+            <div ref={setWorkspaceTrailing} hidden={leading} className="main-workspace-toolbar" />
+          }
+          leadingActions={
+            <TitleBarLeadingActions
+              onOpenWindow={() => void openChatWindow().catch((error) => toast.error(describeError(error)))}
+            />
+          }
           statusBar={
             <>
               <div className="main-extension-status pointer-events-none flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
@@ -703,8 +1286,16 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           main={
             <SidebarInset className="main-chat-surface main-workspace-surface flex min-h-0 flex-col">
               {!leading && actionCards}
-              <WorkspaceHeaderContext.Provider value={workspaceToolbar}>
-                <FileWorkspace cwd={session?.cwd ?? lastDirectory} chatRevealRequest={chatRevealRequest}>
+              <WorkspaceHeaderContext.Provider value={workspaceTrailing ?? workspaceToolbar}>
+                <FileWorkspace
+                  cwd={session?.cwd ?? lastDirectory}
+                  sessionId={session?.id ?? null}
+                  chatRevealRequest={chatRevealRequest}
+                  columnsRequest={columnsRequest}
+                  busy={session != null && session.state !== "idle"}
+                  // Projects open with all four columns; temporary chats stay two-column.
+                  defaultOpen={!isTemporaryChat && fourColumnsDefault}
+                >
                   <DriveDeleteConfirmation />
                   <div className="flex min-h-0 flex-1 flex-col">{main}</div>
                   {driveSidebar &&

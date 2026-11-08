@@ -38,7 +38,7 @@ pub fn html_preview_open(
     let filesystem = FileSystem::new([root.clone()])?;
     let document = filesystem.authorize_path(&path)?;
     if !document.is_file() {
-        return Err("HTML preview must reference a file".into());
+        return Err(format!("HTML preview must reference a file: {}", path.display()));
     }
     let relative = document.strip_prefix(&root).map_err(|error| error.to_string())?;
     let path = relative.to_str().ok_or("HTML preview path is not UTF-8")?.replace('\\', "/");
@@ -78,7 +78,119 @@ fn decode_path(encoded: &str) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|error| error.to_string())
 }
 
-async fn read_resource(preview: &Preview, encoded: &str) -> Result<(Vec<u8>, &'static str), String> {
+/// Installed into the previewed document.
+///
+/// A preview renders inside an iframe, which is a document of its own: the parent page never sees
+/// its `contextmenu` event, so the native English menu would open. This cancels that menu and asks
+/// the parent to show the translated one, reporting where the pointer was inside the frame.
+///
+/// It is installed twice: as a same-origin script (`__alwith-menu.js`) so a document whose CSP only
+/// allows `script-src 'self'` still gets it, and inline for documents that only allow inline
+/// scripts. The guard makes whichever runs first win instead of opening the menu twice.
+const PREVIEW_MENU_BRIDGE: &str = r#"
+(function () {
+  if (window.__alwithPreviewMenu === true) return;
+  window.__alwithPreviewMenu = true;
+  // The hosting page never sees events inside this frame, so right-click and text selection are
+  // both forwarded: contextmenu opens the translated menu, selection drives the copy/quote pill.
+  document.addEventListener('contextmenu', function (event) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    var text = '';
+    try {
+      var selection = window.getSelection && window.getSelection();
+      if (selection) { text = String(selection).trim(); }
+    } catch (error) {}
+    try {
+      window.parent.postMessage({
+        source: 'alwith-preview',
+        type: 'context-menu',
+        text: text,
+        x: event.clientX,
+        y: event.clientY
+      }, '*');
+    } catch (error) {}
+  }, true);
+  var lastText = null;
+  function reportSelection() {
+    var text = '';
+    var rect = null;
+    try {
+      var selection = window.getSelection && window.getSelection();
+      if (selection && selection.rangeCount > 0) {
+        text = String(selection).trim().slice(0, 20000);
+        var box = selection.getRangeAt(0).getBoundingClientRect();
+        rect = { left: box.left, top: box.top, bottom: box.bottom, width: box.width };
+      }
+    } catch (error) {}
+    if (text === lastText) return;
+    lastText = text;
+    try {
+      window.parent.postMessage({
+        source: 'alwith-preview',
+        type: 'selection',
+        text: text,
+        rect: rect
+      }, '*');
+    } catch (error) {}
+  }
+  document.addEventListener('mouseup', function (event) {
+    if (event.button !== 0) return;
+    setTimeout(reportSelection, 0);
+  }, true);
+  document.addEventListener('mousedown', function (event) {
+    if (event.button !== 0) return;
+    if (lastText !== '') { lastText = ''; try { window.parent.postMessage({ source: 'alwith-preview', type: 'selection', text: '', rect: null }, '*'); } catch (error) {} }
+  }, true);
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') reportSelection();
+  }, true);
+  document.addEventListener('selectionchange', function () {
+    if (window.getSelection && String(window.getSelection()).trim() === '') reportSelection();
+  }, true);
+})();
+"#;
+
+/// The resource name the injected script loads, scoped to the preview's capability token.
+const PREVIEW_MENU_RESOURCE: &str = "__alwith-menu.js";
+
+fn preview_menu_script(token: &str) -> String {
+    format!(
+        "<script src=\"/{token}/{PREVIEW_MENU_RESOURCE}\"></script><script>{PREVIEW_MENU_BRIDGE}</script>"
+    )
+}
+
+/// Returns the document with the context-menu bridge installed.
+///
+/// The script runs as the very first thing in the document, wherever the content allows: installed
+/// after `<head>` it still lost the race against a page that registered its own `contextmenu`
+/// handler later, and a fragment with no head or body at all must not be left with the English
+/// menu either.
+fn inject_preview_script(html: &str, token: &str) -> Vec<u8> {
+    // Lowercasing is ASCII-only, so the byte length — and therefore every byte index — still
+    // lines up with the original string.
+    let lowered = html.to_ascii_lowercase();
+    let anchor = lowered.find("<head").map(|index| lowered[index..].find('>').map_or(index, |end| index + end + 1));
+    let script = preview_menu_script(token);
+    let mut out = String::with_capacity(html.len() + script.len());
+    match anchor {
+        Some(index) => {
+            out.push_str(&html[..index]);
+            out.push_str(&script);
+            out.push_str(&html[index..]);
+        }
+        None => {
+            out.push_str(&script);
+            out.push_str(html);
+        }
+    }
+    out.into_bytes()
+}
+
+async fn read_resource(preview: &Preview, encoded: &str, token: &str) -> Result<(Vec<u8>, &'static str), String> {
+    if encoded == PREVIEW_MENU_RESOURCE {
+        return Ok((PREVIEW_MENU_BRIDGE.as_bytes().to_vec(), "application/javascript; charset=utf-8"));
+    }
     let decoded = decode_path(encoded)?;
     let relative = Path::new(&decoded);
     if decoded.contains(['\\', '\0']) || relative.components().any(|part| !matches!(part, Component::Normal(_))) {
@@ -88,7 +200,7 @@ async fn read_resource(preview: &Preview, encoded: &str) -> Result<(Vec<u8>, &'s
     let path = preview.filesystem.authorize_path(&preview.root.join(relative))?;
     let mime = mime_for_extension(path.extension().and_then(|extension| extension.to_str()));
     let bytes = if path == preview.document {
-        preview.source.as_bytes().to_vec()
+        inject_preview_script(&preview.source, token)
     } else {
         let encoded = preview.filesystem.read_base64(path).await?;
         base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|error| error.to_string())?
@@ -113,7 +225,7 @@ async fn protocol_response(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
             .get(token)
             .cloned()
             .ok_or((403, "HTML preview capability is unavailable".to_owned()))?;
-        read_resource(&preview, path).await.map_err(|error| (404, error))
+        read_resource(&preview, path, token).await.map_err(|error| (404, error))
     }
     .await;
     let (status, bytes, mime) = match result {
@@ -172,7 +284,7 @@ mod tests {
     use std::fs;
 
     fn resource(preview: &Preview, path: &str) -> Result<(Vec<u8>, &'static str), String> {
-        tauri::async_runtime::block_on(read_resource(preview, path))
+        tauri::async_runtime::block_on(read_resource(preview, path, "token"))
     }
 
     fn response(request: Request<Vec<u8>>) -> Response<Vec<u8>> {
@@ -191,11 +303,21 @@ mod tests {
     }
 
     #[test]
-    fn serves_unmodified_html_and_relative_resources_with_correct_mime() {
+    fn serves_html_with_the_context_menu_bridge_and_relative_resources_with_correct_mime() {
         let (_directory, preview) = fixture();
         let (html, mime) = resource(&preview, "report/index.html").unwrap();
-        assert_eq!(html, preview.source.as_bytes());
+        let served = String::from_utf8(html).unwrap();
+        assert!(
+            served.starts_with(&preview_menu_script("token")),
+            "the bridge must run before the document"
+        );
+        assert!(served.contains(PREVIEW_MENU_RESOURCE));
+        assert!(served.ends_with(&preview.source));
         assert_eq!(mime, "text/html; charset=utf-8");
+        // The bridge is also served as its own script so a CSP that only allows 'self' still runs it.
+        let (script, mime) = resource(&preview, PREVIEW_MENU_RESOURCE).unwrap();
+        assert_eq!(script, PREVIEW_MENU_BRIDGE.as_bytes());
+        assert_eq!(mime, "application/javascript; charset=utf-8");
         let (css, mime) = resource(&preview, "report/a%20b.css").unwrap();
         assert_eq!(css, b"body { color: red }");
         assert_eq!(mime, "text/css; charset=utf-8");
@@ -229,7 +351,9 @@ mod tests {
         let uri = format!("preview-html://localhost/{token}/report/index.html");
         let result = response(Request::builder().uri(&uri).body(Vec::new()).unwrap());
         assert_eq!(result.status(), 200);
-        assert_eq!(result.body(), preview.source.as_bytes());
+        let served = String::from_utf8(result.body().clone()).unwrap();
+        assert!(served.ends_with(&preview.source));
+        assert!(served.starts_with(&preview_menu_script(&token)));
         assert!(result.headers()["Cache-Control"].to_str().unwrap().contains("no-store"));
         let result = response(Request::builder().method("POST").uri(&uri).body(Vec::new()).unwrap());
         assert_eq!(result.status(), 405);

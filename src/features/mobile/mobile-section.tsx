@@ -19,14 +19,21 @@ import { SettingGroup, SettingLabel, SettingRow } from "@/features/settings/sect
 import { settingsStore } from "@/lib/settings-store"
 
 import { MOBILE_RELAY_URL, mobileEnabled, setMobileEnabled } from "./bridge"
+import { PhoneLoginView } from "./phone-login-view"
 
-export function MobileSection({ onOpenAccount }: { onOpenAccount?: () => void }) {
+// Cheap structural comparison so the 2s refresh doesn't re-render when nothing changed.
+function contentEqual<T>(previous: T | null, next: T): boolean {
+  return previous !== null && JSON.stringify(previous) === JSON.stringify(next)
+}
+
+export function MobileSection() {
   const { t, i18n } = useTranslation()
   const enabled = useSyncExternalStore((notify) => settingsStore.subscribe(notify), mobileEnabled)
   const [status, setStatus] = useState<MobileBridgeStatus | null>(null)
   const [devices, setDevices] = useState<TrustedDevice[]>([])
   const [pairing, setPairing] = useState<PairingInfo | null>(null)
   const [remaining, setRemaining] = useState(0)
+  const [loggingIn, setLoggingIn] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -43,8 +50,8 @@ export function MobileSection({ onOpenAccount }: { onOpenAccount?: () => void })
       try {
         const [status, devices] = await Promise.all([commands.mobileBridgeStatus(), commands.bridgeTrustedList()])
         if (!disposed) {
-          setStatus(status)
-          setDevices(devices)
+          setStatus((current) => (contentEqual(current, status) ? current : status))
+          setDevices((current) => (contentEqual(current, devices) ? current : devices))
           setLoaded(true)
           setLoadError(null)
         }
@@ -97,12 +104,18 @@ export function MobileSection({ onOpenAccount }: { onOpenAccount?: () => void })
   }
   return (
     <div className="space-y-6">
-      <p className="text-sm text-muted-foreground">{t("mobile.intro")}</p>
-      {onOpenAccount && (
-        <Button variant="link" className="h-auto rounded-sm p-0" onClick={onOpenAccount}>
-          {t("mobile.openAccount")}
-        </Button>
-      )}
+      {/* 扫码登录 lives here now: it is the first thing to do before binding a phone, and sending
+          people to 账户 for it split one task across two pages. */}
+      <SettingGroup>
+        <SettingRow title={t("mobile.login.title")} desc={t("mobile.login.subtitle")}>
+          {!loggingIn && (
+            <Button className="rounded-sm" variant="outline" onClick={() => setLoggingIn(true)}>
+              {t("mobile.login.action")}
+            </Button>
+          )}
+        </SettingRow>
+        {loggingIn && <PhoneLoginView onBack={() => setLoggingIn(false)} />}
+      </SettingGroup>
       <SettingGroup>
         <SettingRow title={t("mobile.enable")} desc={t("mobile.description")}>
           <Switch
@@ -197,8 +210,8 @@ export function MobileSection({ onOpenAccount }: { onOpenAccount?: () => void })
                 key={device.deviceId}
                 className="flex items-start gap-3 rounded-xl border bg-card p-4 text-card-foreground"
               >
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted">
-                  <SmartphoneIcon className="size-5 text-muted-foreground" aria-hidden="true" />
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-[color:var(--settings-accent-soft)] text-[color:var(--settings-accent-ink)] shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--settings-accent)_22%,transparent)]">
+                  <SmartphoneIcon className="size-5" aria-hidden="true" />
                 </div>
                 <div className="min-w-0 flex-1 space-y-1">
                   <p className="text-sm font-medium break-words">{device.name || device.model || t("mobile.phone")}</p>

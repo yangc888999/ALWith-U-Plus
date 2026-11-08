@@ -315,6 +315,7 @@ test("the real new-chat surface supplies its receipt and resumes after materiali
     appliedRevision: 1,
     providers: {},
     customProviders: [],
+    builtInModels: {}, managedProviders: [],
     status: "applied" as const,
     error: null
   }

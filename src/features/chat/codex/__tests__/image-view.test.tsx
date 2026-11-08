@@ -57,6 +57,6 @@ test("native image views replace file cards, load outside cwd on demand, and nav
   expect(within(dialog).getByRole("button", { name: "Next image" })).toBeDisabled()
   fireEvent.keyDown(dialog, { key: "ArrowLeft" })
   expect(within(dialog).getByRole("img").getAttribute("alt")).toBe("one.png")
-  fireEvent.click(within(dialog).getByRole("button", { name: "Close" }))
+  fireEvent.click(within(dialog).getByRole("button", { name: "Close preview" }))
   await waitFor(() => expect(view.queryByRole("dialog")).toBeNull())
 })

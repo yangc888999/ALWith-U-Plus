@@ -13,7 +13,12 @@ fn resolve_directory(cwd: Option<PathBuf>, documents: &Path) -> Result<PathBuf, 
     if !directory.is_absolute() || !directory.is_dir() {
         return Err(format!("Project directory is unavailable: {}", directory.display()));
     }
-    Ok(directory)
+    // Canonicalize so the session's cwd matches the workspace root produced by `workspace_open`
+    // (which also canonicalizes). Without this, a freshly created project's first session had a raw
+    // path that differed from the previewed document's root whenever the path carried a symlink or
+    // `.`/`..` segments, so the chat silently dropped the document reference.
+    let canonical = directory.canonicalize().map_err(|error| format!("Project directory is unavailable: {error}"));
+    Ok(canonical.unwrap_or(directory))
 }
 
 #[tauri3_specta::command]
@@ -36,13 +41,14 @@ mod tests {
     #[test]
     fn first_use_creates_a_workspace_but_never_recreates_a_missing_project() {
         let root = tempfile::tempdir().unwrap();
-        let default = resolve_directory(None, root.path()).unwrap();
+        let documents = root.path();
+        let default = resolve_directory(None, documents).unwrap();
         assert!(default.is_dir());
-        assert_eq!(default, root.path().join("ALwith"));
-        assert_eq!(resolve_directory(None, root.path()).unwrap(), default);
-        let missing = root.path().join("removed-project");
-        assert!(resolve_directory(Some(missing.clone()), root.path()).is_err());
+        assert_eq!(default, documents.join("ALwith").canonicalize().unwrap());
+        assert_eq!(resolve_directory(None, documents).unwrap(), default);
+        let missing = documents.join("removed-project");
+        assert!(resolve_directory(Some(missing.clone()), documents).is_err());
         assert!(!missing.exists());
-        assert_eq!(resolve_directory(Some(root.path().to_owned()), root.path()).unwrap(), root.path());
+        assert_eq!(resolve_directory(Some(documents.to_owned()), documents).unwrap(), documents.canonicalize().unwrap());
     }
 }

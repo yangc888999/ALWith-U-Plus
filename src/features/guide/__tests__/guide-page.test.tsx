@@ -33,7 +33,7 @@ test("the bundled English guide starts at welcome and navigates to complete chap
     "Choose a model",
     "Work with project files",
     "Plugins and extensions",
-    "Cloud files and Vibémon",
+    "Cloud files",
     "Settings and shortcuts",
     "Troubleshooting"
   ]) {
@@ -50,7 +50,7 @@ test.each(["Win32", "MacIntel"] as const)("%s uses the appropriate guide title b
   const view = render(<GuidePage />)
   const header = view.container.querySelector(".guide-window > div > [data-tauri-drag-region]")
   if (platform === "Win32") expect(header).toBeNull()
-  else expect(header).toHaveTextContent("ALwith U Guide")
+  else expect(header).toHaveTextContent("ALWith L Guide")
   expect(view.getByRole("navigation", { name: "Guide chapters" })).toBeVisible()
   expect(view.getByRole("main", { name: "Welcome" })).toBeVisible()
 })

@@ -83,7 +83,7 @@ test("a system clipboard failure is shown to the user", async () => {
     />
   )
   fireEvent.click(screen.getByText("Copy web link"))
-  await waitFor(() => expect(boundary.error).toHaveBeenCalledWith("Error: Clipboard unavailable"))
+  await waitFor(() => expect(boundary.error).toHaveBeenCalledWith("Clipboard unavailable"))
 })
 
 test("publishing retains the cloud placeholder path until confirmation", () => {

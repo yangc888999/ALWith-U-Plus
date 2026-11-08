@@ -8,6 +8,7 @@ const host = vi.hoisted(() => ({
   create: vi.fn<(label: string, options: ConstructorParameters<typeof WebviewWindow>[1]) => void>(),
   show: vi.fn(),
   focus: vi.fn(),
+  destroy: vi.fn(),
   attach: vi.fn(),
   emit: vi.fn()
 }))
@@ -16,13 +17,22 @@ vi.mock("../platform", () => ({ isMac: () => host.mac }))
 vi.mock("../i18n", () => ({ default: { t: () => "Settings" } }))
 vi.mock("@/bindings", () => ({ commands: { attachWindowToMain: host.attach } }))
 vi.mock("@tauri-apps/api/event", () => ({ emitTo: host.emit }))
+vi.mock("@tauri-apps/api/window", async () => {
+  // 生产代码用窗口级 API（`getCurrentWindow`）：子 webview 有焦点时 `getCurrentWebviewWindow()`
+  // 会抛 "current webview is not a WebviewWindow"。测试里两者指向同一个假窗口。
+  const webviewWindow = await import("@tauri-apps/api/webviewWindow")
+  return { ...webviewWindow, getCurrentWindow: () => webviewWindow.getCurrentWebviewWindow() }
+})
+
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   WebviewWindow: class {
     constructor(label: string, options: ConstructorParameters<typeof WebviewWindow>[1]) {
       host.create(label, options)
     }
     static getByLabel() {
-      return Promise.resolve(host.existing ? { show: host.show, setFocus: host.focus } : null)
+      return Promise.resolve(
+        host.existing ? { show: host.show, setFocus: host.focus, destroy: host.destroy } : null
+      )
     }
     show = host.show
     setFocus = host.focus
@@ -35,7 +45,7 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
     }
   }
 }))
-import { openGamepadWindow, openSettingsWindow } from "../window-manager"
+import { openSettingsWindow } from "../window-manager"
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -60,7 +70,10 @@ test("Windows settings retains native window decorations", async () => {
     "settings",
     expect.objectContaining({
       url: "/settings.html?tab=general",
-      resizable: false,
+      // The settings window is resizable now; the size floor keeps the layout usable.
+      resizable: true,
+      minWidth: 720,
+      minHeight: 620,
       maximizable: false,
       minimizable: false
     })
@@ -90,38 +103,6 @@ test("reopening hidden Windows settings reuses the window and selects the reques
   expect(host.emit).toHaveBeenCalledWith("settings", "settings-change-tab", "appearance")
 })
 
-test("Gamepad opens Desktop's full-size dedicated window", async () => {
-  await openGamepadWindow()
-  expect(host.create).toHaveBeenCalledWith(
-    "gamepad",
-    expect.objectContaining({
-      url: "/gamepad.html",
-      title: "ALwith Gamepad",
-      minWidth: 1250,
-      minHeight: 750,
-      minimizable: false,
-      decorations: false,
-      transparent: false
-    })
-  )
-})
-
-test("Gamepad reuses and focuses its existing window", async () => {
-  host.existing = true
-  await openGamepadWindow()
-  expect(host.create).not.toHaveBeenCalled()
-  expect(host.show).toHaveBeenCalledOnce()
-  expect(host.focus).toHaveBeenCalledOnce()
-})
-
-test("Gamepad creation errors reject the menu action and allow retry", async () => {
-  host.creationError = "Window creation unavailable"
-  await expect(openGamepadWindow()).rejects.toThrow("Window creation unavailable")
-  host.creationError = null
-  await openGamepadWindow()
-  expect(host.create).toHaveBeenCalledTimes(2)
-})
-
 test("reopening hidden macOS settings always shows and focuses the existing window", async () => {
   host.mac = true
   host.existing = true
@@ -131,4 +112,17 @@ test("reopening hidden macOS settings always shows and focuses the existing wind
   expect(host.show).toHaveBeenCalledTimes(2)
   expect(host.focus).toHaveBeenCalledTimes(2)
   expect(host.create).not.toHaveBeenCalled()
+})
+
+test("a stale hidden settings window is recreated instead of silently staying closed", async () => {
+  host.existing = true
+  host.show.mockRejectedValueOnce(new Error("window not found"))
+
+  await openSettingsWindow("extensions")
+
+  expect(host.destroy).toHaveBeenCalledOnce()
+  expect(host.create).toHaveBeenCalledWith(
+    "settings",
+    expect.objectContaining({ url: "/settings.html?tab=extensions" })
+  )
 })

@@ -1,26 +1,96 @@
 // U owns startup caching. The ACP adapter is imported unchanged from its published package.
 import { spawnSync } from "node:child_process"
-import { isAbsolute } from "node:path"
+import { appendFileSync, existsSync, mkdirSync } from "node:fs"
+import { homedir } from "node:os"
+import { dirname, isAbsolute, join } from "node:path"
 
 import { prepareModelCatalog } from "./lib/model-catalog"
 
+/**
+ * Where the agent records why it refused to boot.
+ *
+ * A throw in this file happens before the ACP handshake, so the reader only ever sees
+ * "agent codex exited" — the same sentence for a quarantined binary, a half-downloaded engine
+ * update and an unreadable config. The app log cannot capture a child's stderr, so the reason is
+ * appended here instead, where a user on any macOS account can find it.
+ */
+function bootLogPath(): string {
+  return process.platform === "darwin"
+    ? join(homedir(), "Library/Logs/ai.alwith.u/adapter-codex.log")
+    : join(homedir(), ".alwith-u/adapter-codex.log")
+}
+
+function recordBootFailure(error: unknown): void {
+  const line = `[${new Date().toISOString()}] agent boot failed: ${
+    error instanceof Error ? (error.stack ?? error.message) : String(error)
+  }\n`
+  try {
+    mkdirSync(dirname(bootLogPath()), { recursive: true })
+    appendFileSync(bootLogPath(), line)
+  } catch {
+    // Logging must never mask the failure it is describing.
+  }
+  process.stderr.write(`[alwith-u] ${line}`)
+}
+
+function describeProbe(probe: ReturnType<typeof spawnSync>): string {
+  if (probe.error) return probe.error.message
+  const stderr = typeof probe.stderr === "string" ? probe.stderr.trim() : ""
+  return stderr === "" ? `exit ${String(probe.status)}` : `exit ${String(probe.status)}: ${stderr.slice(0, 400)}`
+}
+
+/**
+ * Resolve the engine to run, preferring the configured path but never dying on it.
+ *
+ * `ALWITH_U_CODEX_PATH` may name a per-user engine update (`codex-override/codex`). That file is
+ * outside the app bundle: a half-finished download, a quarantine flag or a broken arch leaves a
+ * binary that cannot execute, and the agent used to exit before it could answer `initialize`.
+ * The bundled engine always sits next to this Bun process, so a failing override degrades the
+ * version instead of taking the whole app down.
+ */
+function resolveCodex(configured: string): { command: string; version: string } {
+  const first = spawnSync(configured, ["--version"], { encoding: "utf8", timeout: 10_000 })
+  if (!first.error && first.status === 0) return { command: configured, version: (first.stdout ?? "").trim() }
+
+  const bundled = join(dirname(process.execPath), process.platform === "win32" ? "codex.exe" : "codex")
+  if (bundled !== configured && existsSync(bundled)) {
+    const retry = spawnSync(bundled, ["--version"], { encoding: "utf8", timeout: 10_000 })
+    if (!retry.error && retry.status === 0) {
+      process.stderr.write(
+        `[alwith-u] configured Codex failed (${describeProbe(first)}); using bundled ${bundled}\n`
+      )
+      return { command: bundled, version: (retry.stdout ?? "").trim() }
+    }
+  }
+  throw new Error(`Codex version probe failed for ${configured} (${describeProbe(first)})`)
+}
+
 async function start(): Promise<void> {
-  const command = process.env.ALWITH_U_CODEX_PATH
-  if (!command || !isAbsolute(command)) throw new Error("ALWITH_U_CODEX_PATH must name the bundled Codex executable")
-  const probe = spawnSync(command, ["--version"], { encoding: "utf8", timeout: 10_000 })
-  if (probe.error || probe.status !== 0)
-    throw new Error(`Codex version probe failed: ${probe.error?.message ?? probe.stderr}`)
-  const catalog = prepareModelCatalog({ command, prefixArgs: [], shell: false }, process.env, probe.stdout.trim())
-  if (catalog.path === null) delete process.env.ALWITH_U_CODEX_CATALOG
+  const configured = process.env.ALWITH_U_CODEX_PATH
+  if (!configured || !isAbsolute(configured))
+    throw new Error("ALWITH_U_CODEX_PATH must name the bundled Codex executable")
+  const { command, version } = resolveCodex(configured)
+
+  // The catalog is an enhancement, not a prerequisite. `codex debug models` fails on older
+  // engines and on an unreadable ~/.codex/config.toml; letting that throw would kill the agent
+  // before it could start a conversation.
+  let catalog: ReturnType<typeof prepareModelCatalog> | null = null
+  try {
+    catalog = prepareModelCatalog({ command, prefixArgs: [], shell: false }, process.env, version)
+  } catch (error) {
+    process.stderr.write(`[alwith-u] model catalog unavailable, starting without it: ${String(error)}\n`)
+  }
+  if (catalog === null || catalog.path === null) delete process.env.ALWITH_U_CODEX_CATALOG
   else process.env.ALWITH_U_CODEX_CATALOG = catalog.path
-  process.once("exit", catalog.dispose)
-  process.stdin.once("end", catalog.dispose)
+  const dispose = (): void => catalog?.dispose()
+  process.once("exit", dispose)
+  process.stdin.once("end", dispose)
   for (const [signal, code] of [
     ["SIGINT", 130],
     ["SIGTERM", 143]
   ] as const) {
     process.once(signal, () => {
-      catalog.dispose()
+      dispose()
       process.exit(code)
     })
   }
@@ -29,8 +99,14 @@ async function start(): Promise<void> {
     const adapter = new URL("./codex-acp-v2.mjs", import.meta.url).href
     await import(adapter)
   } catch (error) {
-    catalog.dispose()
+    dispose()
     throw error
   }
 }
-await start()
+
+try {
+  await start()
+} catch (error) {
+  recordBootFailure(error)
+  process.exit(1)
+}

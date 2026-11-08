@@ -5,7 +5,7 @@
     "code": "رمز التحقق",
     "password": "كلمة المرور",
     "signIn": "تسجيل الدخول",
-    "signOut": "تسجيل الخروج من ALwith U"
+    "signOut": "تسجيل الخروج من ALWith L"
   },
   "guide": {
     "help": "احصل على المساعدة"
@@ -52,6 +52,9 @@
     "signOut": "تسجيل الخروج",
     "plugins": "المكونات الإضافية",
     "extensions": "ملحقات",
+    "newTask": "مهمة جديدة",
+    "newTaskWindow": "نافذة مهمة جديدة",
+    "toolbox": "الإضافات · الامتدادات · المهارات",
     "activity": "نشاط",
     "background": "الخلفية",
     "newChat": "دردشة جديدة",
@@ -184,7 +187,7 @@
         "name": "وصول كامل",
         "description": "استخدم بحذر: يستطيع Codex تعديل الملفات خارج مساحة العمل هذه والوصول إلى الإنترنت دون موافقة"
       },
-      "heading": "كيف تتم الموافقة على إجراءات ALwith U؟"
+      "heading": "كيف تتم الموافقة على إجراءات ALWith L؟"
     }
   },
   "composer": {
@@ -203,7 +206,6 @@
     "reset": "إعادة ضبط"
   },
   "settings": {
-    "gamepad": "Gamepad",
     "general": "عام",
     "versionLabel": "الإصدار",
     "engine": "المحرك",
@@ -470,14 +472,8 @@
     "emptyNewTab": "علامة تبويب جديدة",
     "more": "المزيد من الإجراءات"
   },
-  "pet": {
-    "retry": "أعد المحاولة",
-    "enable": "إظهار Vibémon",
-    "lounge": "استراحة Vibémon",
-    "recall": "إعادة إلى الاستراحة"
-  },
   "app": {
-    "name": "ALwith U"
+    "name": "ALWith L"
   },
   "notify": {
     "needsInput": "يلزم إدخالك",

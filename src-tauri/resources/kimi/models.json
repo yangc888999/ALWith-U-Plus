@@ -1,0 +1,31 @@
+{
+  "models": [
+    {
+      "slug": "kimi-k3",
+      "display_name": "Kimi K3",
+      "description": "Moonshot flagship for long-context agentic work.",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Low reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "High reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Max reasoning"
+        }
+      ],
+      "default_reasoning_level": "max",
+      "context_window": 1048576,
+      "max_context_window": 1048576,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "supports_parallel_tool_calls": true
+    }
+  ]
+}

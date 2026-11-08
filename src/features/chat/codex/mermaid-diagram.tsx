@@ -1,6 +1,7 @@
 import { Code, Copy, Download, Eye, Maximize2, MoreHorizontal, X } from "lucide-react"
 import { useEffect, useId, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
+import { useTranslation } from "react-i18next"
 
 import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
@@ -35,6 +36,7 @@ function diagramTheme(element: HTMLElement) {
 }
 
 export function MermaidDiagram({ source }: { source: string }) {
+  const { t } = useTranslation()
   const { resolvedTheme } = useTheme()
   const id = `mermaid-${useId().replaceAll(":", "")}`
   const [svg, setSvg] = useState<string | null>(null)
@@ -74,7 +76,7 @@ export function MermaidDiagram({ source }: { source: string }) {
   const copySource = async () => {
     try {
       await navigator.clipboard.writeText(source)
-      toast.success("Mermaid 源码已复制")
+      toast.success(t("chat.mermaidCopied"))
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
     }

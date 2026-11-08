@@ -10,7 +10,6 @@ import {
   useRef,
   useState
 } from "react"
-import { flushSync } from "react-dom"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
@@ -119,7 +118,9 @@ export function useMainCanvas(
       )
     }
     measure()
-    const observer = new ResizeObserver(() => flushSync(measure))
+    // Avoid flushSync: React batches the size update to the next frame on its own, so resizing
+    // or dragging the divider no longer forces a synchronous render that blocks the main thread.
+    const observer = new ResizeObserver(measure)
     observer.observe(root)
     observer.observe(nav)
     return () => observer.disconnect()

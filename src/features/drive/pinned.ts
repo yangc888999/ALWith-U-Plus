@@ -1,3 +1,5 @@
+import i18n from "@/lib/i18n"
+import { describeError } from "@/lib/error-text"
 import { parsePinnedDocs, type PinnedDoc } from "@alwith/module-drive/react"
 import { useSyncExternalStore } from "react"
 import { toast } from "sonner"
@@ -13,7 +15,11 @@ function read(profile: string): PinnedDoc[] {
     parsed = parsePinnedDocs(raw === null ? [] : JSON.parse(raw))
   } catch (error) {
     parsed = []
-    queueMicrotask(() => toast.error(`Unable to read pinned Drive documents: ${String(error)}`))
+    queueMicrotask(() => toast.error(
+      i18n.language.startsWith("zh")
+        ? `无法读取固定的云盘文档：${describeError(error)}`
+        : `Unable to read pinned Drive documents: ${describeError(error)}`
+    ))
   }
   cache.set(profile, parsed)
   return parsed

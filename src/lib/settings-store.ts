@@ -90,12 +90,35 @@ export async function bootstrapSettings(): Promise<void> {
     if (isTauri()) await initializeSettings()
     else applyInitialTheme()
   } catch (error: unknown) {
-    const root = document.getElementById("root")
-    if (root) root.textContent = error instanceof Error ? error.message : String(error)
+    // 这一段跑在 React 挂载之前。以前把异常原文写进 #root，等于在启动画面上直接糊一段英文栈
+    // —— 正是「启动界面闪一下报错」的来源之一。这里只留中性占位 + 一个重新启动入口，
+    // 原始错误交给调用方记日志（main.tsx 的 bootstrap catch）。
+    showBootFailureNotice()
     throw error
   } finally {
     document.documentElement.style.visibility = "visible"
   }
+}
+
+/** 启动没走完时的中性占位：不出现错误文本、不出现栈，只给一个能重新来一次的动作。 */
+function showBootFailureNotice(): void {
+  const root = document.getElementById("root")
+  if (!root) return
+  const chinese = (navigator.language ?? "").toLowerCase().startsWith("zh")
+  const wrap = document.createElement("div")
+  wrap.setAttribute("role", "status")
+  wrap.style.cssText =
+    "display:flex;width:100vw;height:100vh;align-items:center;justify-content:center;flex-direction:column;gap:12px;font:13px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif;color:rgba(127,127,127,0.9)"
+  const text = document.createElement("span")
+  text.textContent = chinese ? "启动没有完成" : "Startup did not finish"
+  const button = document.createElement("button")
+  button.type = "button"
+  button.textContent = chinese ? "重新启动" : "Reload"
+  button.style.cssText =
+    "cursor:pointer;border-radius:8px;border:1px solid rgba(127,127,127,0.35);background:transparent;color:inherit;padding:5px 14px;font:inherit"
+  button.addEventListener("click", () => window.location.reload())
+  wrap.append(text, button)
+  root.replaceChildren(wrap)
 }
 export async function updateSettings(changes: Record<string, unknown>): Promise<void> {
   await settingsStore.write({ action: "update", changes })

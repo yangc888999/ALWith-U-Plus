@@ -18,11 +18,12 @@ pub fn initialize(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Erro
 pub fn settings_request(
     window: tauri::Window, state: State<'_, SharedSettings>, input: Value,
 ) -> Result<Value, String> {
-    if !matches!(window.label(), "main" | "chat" | "settings" | "gamepad" | "guide" | "vibemon" | "bubble-menu-vibemon")
-    {
+    if !matches!(window.label(), "main" | "chat" | "settings" | "guide") {
         return Err("Settings access denied".into());
     }
     let action = input["action"].as_str().ok_or("Missing settings action")?;
+    let enable_auto_update =
+        action == "update" && input.pointer("/changes/updater.autoUpdate").and_then(Value::as_bool) == Some(true);
     let expected = match input.get("expectedRevision") {
         None | Some(Value::Null) => None,
         Some(value) => Some(value.as_u64().ok_or("Invalid settings revision")?),
@@ -67,6 +68,14 @@ pub fn settings_request(
     if action != "read" {
         window.app_handle().emit("settings:changed", &snapshot).map_err(|e| e.to_string())?;
         window.app_handle().state::<crate::power::PreventSleep>().set_enabled(prevent_sleep)?;
+    }
+    drop(store);
+    if enable_auto_update {
+        let app = window.app_handle().clone();
+        if let Some(service) = app.try_state::<Arc<crate::updater::UpdaterService>>() {
+            let service = service.inner().clone();
+            tauri::async_runtime::spawn(crate::updater::commands::check_and_autodownload(app, service));
+        }
     }
     Ok(snapshot)
 }

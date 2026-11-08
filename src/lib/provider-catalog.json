@@ -1,5 +1,12 @@
 [
   {
+    "id": "openai",
+    "name": "OpenAI",
+    "native": true,
+    "keyUrl": "https://platform.openai.com/api-keys",
+    "models": []
+  },
+  {
     "id": "deepseek",
     "name": "DeepSeek",
     "baseUrl": "https://api.deepseek.com/",
@@ -108,5 +115,73 @@
       }
     ],
     "catalog": "xai/models.json"
+  },
+  {
+    "id": "kimi",
+    "name": "Kimi",
+    "baseUrl": "https://api.moonshot.cn/v1",
+    "keyUrl": "https://platform.moonshot.cn/console/api-keys",
+    "models": [
+      {
+        "id": "kimi-k3",
+        "label": "Kimi K3",
+        "description": "Moonshot flagship for long-context agentic work."
+      }
+    ],
+    "catalog": "kimi/models.json"
+  },
+  {
+    "id": "zhipu",
+    "name": "智谱 GLM",
+    "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+    "keyUrl": "https://open.bigmodel.cn/usercenter/apikeys",
+    "favicon": "https://bigmodel.cn/static/images/favicon.png",
+    "models": [
+      {
+        "id": "glm-5.3",
+        "label": "GLM 5.3",
+        "description": "Z.ai GLM flagship for reasoning and tool use."
+      }
+    ],
+    "catalog": "zhipu/models.json"
+  },
+  {
+    "id": "minimax",
+    "name": "MiniMax",
+    "baseUrl": "https://api.minimax.chat/v1",
+    "keyUrl": "https://platform.minimaxi.com/user-center/basic-information/interface-key",
+    "models": [
+      {
+        "id": "minimax-m2",
+        "label": "MiniMax M2",
+        "description": "MiniMax flagship for coding and agentic work."
+      }
+    ],
+    "catalog": "minimax/models.json"
+  },
+  {
+    "id": "hakimi",
+    "name": "哈基米",
+    "apiType": "chat",
+    "baseUrl": "https://vip.aipro.love/v1",
+    "keyUrl": "https://aipro.love/",
+    "models": [
+      {
+        "id": "claude-opus-5-5",
+        "label": "Claude Opus 5.5",
+        "description": "Anthropic frontier model for demanding reasoning and agentic work."
+      },
+      {
+        "id": "claude-fable-5-1",
+        "label": "Claude Fable 5.1",
+        "description": "Anthropic flagship model for the most demanding long-horizon work."
+      },
+      {
+        "id": "claude-sonnet-5-5",
+        "label": "Claude Sonnet 5.5",
+        "description": "Anthropic balanced model for fast, capable everyday agentic work."
+      }
+    ],
+    "catalog": "hakimi/models.json"
   }
 ]

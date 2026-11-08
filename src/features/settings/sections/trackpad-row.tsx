@@ -11,7 +11,7 @@ import {
   useTrackpadEnabled
 } from "@/lib/trackpad-preference"
 
-import { SettingGroup, SettingRow } from "./shared"
+import { SettingRow, SettingsCard } from "./shared"
 
 /** The master switch preserves the user's gesture selection, as in Desktop. */
 export function TrackpadRow() {
@@ -27,8 +27,8 @@ export function TrackpadRow() {
       .finally(() => setSaving(false))
   }
   return (
-    <SettingGroup>
-      <SettingRow title={t("settings.trackpadEnabled")}>
+    <SettingsCard title={t("settings.cardTrackpad")} desc={t("settings.cardTrackpadDesc")}>
+      <SettingRow title={t("settings.trackpadEnabled")} desc={t("settings.trackpadEnabledDesc")}>
         <Switch
           aria-label={t("settings.trackpadEnabled")}
           checked={master}
@@ -51,6 +51,6 @@ export function TrackpadRow() {
           onCheckedChange={(checked) => save(() => setThreeFingerSwipeEnabled(checked))}
         />
       </SettingRow>
-    </SettingGroup>
+    </SettingsCard>
   )
 }

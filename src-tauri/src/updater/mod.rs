@@ -382,6 +382,19 @@ impl SignatureVerifier for MinisignVerifier {
     }
 }
 
+/// Automatic checks are opt-in because this fork may point at the upstream ALwith release feed.
+/// The setting is read from the native store; a missing value means disabled.
+pub fn auto_update_enabled(app: &AppHandle) -> bool {
+    use tauri::Manager;
+    app.try_state::<crate::settings::SharedSettings>()
+        .and_then(|settings| {
+            settings.0.lock().ok().map(|store| {
+                store.values.get("updater.autoUpdate").and_then(serde_json::Value::as_bool).unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
 /// Wires the service into the app: state changes reach the webview as `updater:state`; startup
 /// recovers a downloaded archive, then the 30s/1h check loop and the 5-minute overwrite check run
 /// for the life of the process. Missing `plugins.updater.endpoints` disables the whole feature.
@@ -415,8 +428,13 @@ pub fn init(app: &tauri::App) {
         let Ok(updater_dir) = commands::updater_dir(&app) else {
             return;
         };
-        let checker = PluginChecker::new(app.clone());
-        svc.init_recover(&updater_dir, env!("CARGO_PKG_VERSION"), &MinisignVerifier::new(public_key), &checker).await;
+        if auto_update_enabled(&app) {
+            let checker = PluginChecker::new(app.clone());
+            svc.init_recover(&updater_dir, env!("CARGO_PKG_VERSION"), &MinisignVerifier::new(public_key), &checker)
+                .await;
+        } else {
+            svc.set_state(State::idle());
+        }
 
         let svc_overwrite = svc.clone();
         let app_overwrite = app.clone();

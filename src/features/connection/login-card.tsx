@@ -16,6 +16,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/u
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
+import { describeError } from "@/lib/error-text"
 
 function methodLabel(method: acp.AuthMethod, t: (key: string) => string): string {
   switch (method.methodId) {
@@ -47,7 +48,7 @@ export function LoginCard({
     try {
       await signIn(methodId, extra)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error))
+      toast.error(describeError(error))
     } finally {
       setBusy(null)
     }

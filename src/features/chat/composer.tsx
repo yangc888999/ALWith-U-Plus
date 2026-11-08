@@ -2,22 +2,94 @@
  * U's composer: the package composer with U's dictation and realtime voice, native file drops,
  * model catalog and prediction preference.
  */
+import { usePromptInputAttachments } from "@alwith/module-chat/composer-context"
 import { Composer, type ComposerProps, useComposer } from "@alwith/module-chat/conversation"
-import { useCallback, useState } from "react"
+import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useRef, useState } from "react"
 import { useStore } from "zustand"
 
 import { observeVoiceTurn } from "@/core/voice-turn"
+import { ChatContextMenu, type ContextMenuTarget, contextMenuText } from "@/features/chat/chat-context-menu"
 import { RealtimeVoiceButton } from "@/features/voice/realtime-voice-button"
 import type { VoiceResume } from "@/features/voice/use-voice-handoff"
 import { VoiceButton } from "@/features/voice/voice-button"
+import { ActivePreviewChip } from "@/features/workspace/active-preview-chip"
 import { client } from "@/lib/client"
+import { groupByDirectory } from "@/lib/groups"
 
 import { chatModelMenu } from "./composer/model-catalog"
+import { withoutWaitingForTurn } from "./composer/detach-submit"
 import { nativeAttachmentPolicy, NativeFileDrop } from "./composer/native-file-drop"
+import { OrchestrationControl } from "./composer/orchestration-control"
+import { PendingModelChip } from "./composer/pending-model-chip"
 import { predictionPreference } from "./composer/prediction-preference"
+import { QueuedPromptChip } from "./composer/queued-prompt-chip"
+import { TurnProgressBar } from "./turn-progress"
 
-function ComposerVoice({ voiceResume }: { voiceResume?: VoiceResume }) {
-  const composer = useComposer()
+/** Nothing to hand a receipt to: the surface already owns the conversation it is typing into. */
+const noHandOff: NonNullable<ComposerProps["onHandOff"]> = () => {}
+
+/** The input's height, dragged from the top edge of the card and remembered across launches. */
+const INPUT_HEIGHT_KEY = "alwith:composer-input-height"
+const INPUT_MIN = 40
+const INPUT_MAX = 720
+
+/**
+ * A grab strip along the composer's top edge.
+ *
+ * The package composer grows its textarea with the text and caps nothing, so a long paste pushed
+ * the toolbar off the bottom of the window. Dragging here writes `--composer-input-height` on the
+ * wrapping `[data-composer]`, which `index.css` turns into the textarea's height: it keeps growing
+ * up to the chosen size and then scrolls, so both "make it taller" and "make it shorter" work.
+ */
+function ComposerResizeHandle({ shellRef }: { shellRef: React.RefObject<HTMLDivElement | null> }) {
+  const drag = useRef<{ startY: number; startHeight: number; shell: HTMLElement } | null>(null)
+  useEffect(() => {
+    const shell = shellRef.current
+    if (shell === null) return
+    const saved = Number(localStorage.getItem(INPUT_HEIGHT_KEY))
+    if (Number.isFinite(saved) && saved >= INPUT_MIN) shell.style.setProperty("--composer-input-height", `${saved}px`)
+  }, [shellRef])
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
+    const shell = event.currentTarget.parentElement
+    const area = shell?.querySelector<HTMLElement>(".alwith-composer-textarea")
+    if (!shell || !area) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    drag.current = { startY: event.clientY, startHeight: area.getBoundingClientRect().height, shell }
+  }
+  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>): void => {
+    const state = drag.current
+    if (state === null) return
+    const next = Math.round(
+      Math.min(INPUT_MAX, Math.max(INPUT_MIN, state.startHeight + (state.startY - event.clientY)))
+    )
+    state.shell.style.setProperty("--composer-input-height", `${next}px`)
+  }
+  const onPointerUp = (event: React.PointerEvent<HTMLDivElement>): void => {
+    const state = drag.current
+    drag.current = null
+    if (state === null) return
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    const value = state.shell.style.getPropertyValue("--composer-input-height")
+    if (value !== "") localStorage.setItem(INPUT_HEIGHT_KEY, String(Number.parseFloat(value)))
+  }
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      className="group absolute inset-x-6 -top-2.5 z-20 flex h-2.5 cursor-ns-resize items-center justify-center"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    >
+      <span className="bg-border group-hover:bg-muted-foreground/60 h-1 w-10 rounded-full opacity-0 transition-opacity group-hover:opacity-100" />
+    </div>
+  )
+}
+
+function ComposerVoice({ voiceResume }: { voiceResume?: VoiceResume }) {  const composer = useComposer()
   const { observeReceipts, session } = composer
   const [realtimeActive, setRealtimeActive] = useState(false)
   const observe = useCallback(
@@ -69,11 +141,17 @@ function ComposerVoice({ voiceResume }: { voiceResume?: VoiceResume }) {
 
 function ComposerFileDrop() {
   const composer = useComposer()
+  const attachments = usePromptInputAttachments()
+  const group = groupByDirectory(composer.session.cwd)
   return (
     <NativeFileDrop
       sessionId={composer.session.id}
       enabled={composer.inputReady && !composer.sending}
       onMention={composer.addMention}
+      // Images go to the ordinary attachment tray (the package's default): Codex takes them from
+      // there, while an inline `〔图N〕` marker only ever reached the model as plain text.
+      onImage={(file) => attachments.add([file])}
+      materialsDirectory={group?.directory ?? null}
       onBusyChange={composer.setAdding}
     />
   )
@@ -81,18 +159,117 @@ function ComposerFileDrop() {
 
 export function ChatComposer({
   voiceResume,
+  onSubmit,
   ...props
 }: Omit<ComposerProps, "actions" | "children" | "attachmentPolicy" | "predictions"> & { voiceResume?: VoiceResume }) {
   const predictions = useStore(predictionPreference, (state) => state.enabled)
+  const [menu, setMenu] = useState<ContextMenuTarget | null>(null)
+  const shellRef = useRef<HTMLDivElement>(null)
+  const sessionId = props.session.id
+  /**
+   * Hands the send to the background instead of awaiting it.
+   *
+   * `prompt` only settles when the whole turn is over — that is how the engine answers it — and
+   * the package composer uses the same promise to drive its `sending` state. Awaiting it therefore
+   * kept the submit button spinning and disabled for the entire answer: the round arrow became a
+   * spinner that never came back, and a second message could not be sent until the model finished.
+   * The turn is already visible through the stop button beside it, so the wait belongs in the
+   * background. Only a refusal raised before dispatch (no session, nothing to send) still fails the
+   * submit, which is what puts the draft back into the input.
+   */
+  const submit = useCallback<NonNullable<ComposerProps["onSubmit"]>>(
+    (content, accept) => {
+      let task: Promise<unknown>
+      try {
+        // Only pass the receipt sink when there is one: a caller that forwards its own submit
+        // (the draft surface) is called with exactly the arguments it is given, and an explicit
+        // `undefined` is a different call than none.
+        task =
+          onSubmit === undefined
+            ? client.prompt(sessionId, content)
+            : accept === undefined
+              ? onSubmit(content)
+              : onSubmit(content, accept)
+      } catch (error) {
+        return Promise.reject(error instanceof Error ? error : new Error(String(error)))
+      }
+      // Nothing left to wait for: release the composer and let the turn run in the background. The
+      // receipt a voice handoff needs arrives with the answer, so it is handed over from inside the
+      // window helper instead of holding the button for the whole turn.
+      return withoutWaitingForTurn(task, accept)
+    },
+    [onSubmit, sessionId]
+  )
+  /**
+   * The package decides hands-free voice from "no submit callback, or one that also handles the
+   * handoff" (`handsFree: onSubmit === undefined || onHandOff !== undefined`). Supplying our own
+   * submit would quietly downgrade the voice button to push-to-talk on every surface that used the
+   * default one, so keep the handoff slot filled when there is nothing to hand off to.
+   */
+  const handOff = props.onHandOff ?? noHandOff
+
+  // Suggestions cost a round trip per keystroke. While a turn is running that request competes
+  // with the stream for the main thread, which is exactly when typing starts to lag and drop
+  // characters; keep the input local and instant instead.
+  const suggestions = predictions && props.session.state === "idle"
+  // The composer owns its own menu: the conversation's document-level handler scopes itself to
+  // the transcript and the (ported) header, and the input must not be left without one.
+  const openMenu = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    const target = event.target
+    if (!(target instanceof Element)) return
+    event.preventDefault()
+    event.stopPropagation()
+    setMenu({
+      x: event.clientX,
+      y: event.clientY,
+      text: contextMenuText(target),
+      editable: true
+    })
+  }
+  // Nothing here asks the engine about the model list. A model the provider withdraws is dropped
+  // from 设置 → 可用模型, this picker and 分工 by `servedNativeRows`, which reads the catalog the
+  // session already carries; the row comes back when a later catalog lists it again. The old
+  // hover check cost a `session/set_config_option` round trip (0.1–8s) on every menu open and left
+  // the picker spinning for the duration, for an answer the session's own catalog already had.
   return (
-    <Composer
-      modelMenu={chatModelMenu}
-      {...props}
-      predictions={predictions}
-      attachmentPolicy={nativeAttachmentPolicy}
-      actions={<ComposerVoice voiceResume={voiceResume} />}
-    >
-      <ComposerFileDrop />
-    </Composer>
+    <div data-composer ref={shellRef} className="relative" onContextMenu={openMenu}>
+      <ComposerResizeHandle shellRef={shellRef} />
+      <Composer
+        modelMenu={chatModelMenu}
+        {...props}
+        onSubmit={submit}
+        onHandOff={handOff}
+        inputHeader={
+          props.inputHeader ?? (
+            // Two rows inside the same card: the running state on top (transparent until it needs
+            // attention), then the quoted document and 分工. Nothing floats above the surface, so
+            // the composer reads as one card instead of three stacked slabs.
+            <div className="flex w-full min-w-0 flex-col gap-1">
+              <TurnProgressBar session={props.session} />
+              <div className="flex w-full min-w-0 items-center justify-between gap-2">
+              {/* A quoted document's name is a reference, not the subject: it never takes more
+                  than a third of the row, and the rest goes to the model controls. */}
+                <div className="flex min-w-0 max-w-[33%] flex-1 items-center gap-2 overflow-hidden">
+                  <ActivePreviewChip />
+                  <QueuedPromptChip session={props.session} />
+                </div>
+              {/* 分工 sits at the composer's top-right: it is a property of the next message, and
+                  the conversation header had no room for it next to the title and icon actions. */}
+                <div className="flex shrink-0 items-center gap-1">
+                  <PendingModelChip session={props.session} />
+                  <OrchestrationControl session={props.session} />
+                </div>
+              </div>
+            </div>
+          )
+        }
+        predictions={suggestions}
+        attachmentPolicy={nativeAttachmentPolicy}
+        actions={<ComposerVoice voiceResume={voiceResume} />}
+      >
+        <ComposerFileDrop />
+      </Composer>
+      <ChatContextMenu target={menu} onClose={() => setMenu(null)} />
+    </div>
   )
 }

@@ -24,7 +24,7 @@ pub fn initialize(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Erro
         ownership_directory: home.join(".alwith-drive").join("owners"),
         default_root: home.join("YUP Drive"),
         reserved_roots: vec![],
-        device_name: "ALwith U".into(),
+        device_name: "ALWith L".into(),
         client_version: env!("CARGO_PKG_VERSION").into(),
         open_url: Arc::new(move |url| opener.opener().open_url(url, None::<&str>).map_err(|error| error.to_string())),
     })
@@ -122,12 +122,28 @@ pub fn prevent_exit(app: &tauri::AppHandle, code: Option<i32>) -> bool {
         return false;
     }
     if !state.closing.swap(true, Ordering::AcqRel) {
-        // Dirty-buffer approval precedes this irreversible shutdown phase. On macOS,
-        // set_enabled(false) creates an animated sheet; hiding keeps cleanup invisible
-        // without destroying the webviews needed to drain outstanding IPC replies.
-        for window in app.webview_windows().into_values() {
+        // macOS leaves native fullscreen with an animation. Hiding that window in the same tick
+        // as set_fullscreen(false) strands its fullscreen Space as an empty black rectangle —
+        // exactly the "Cmd+Q leaves a black screen" report. Keep fullscreen windows visible
+        // until the process exits, so macOS tears the Space down together with the window.
+        let fullscreen: Vec<String> = app
+            .webview_windows()
+            .into_iter()
+            .filter(|(_, window)| window.is_fullscreen().unwrap_or(false))
+            .map(|(label, _)| label)
+            .collect();
+        if !fullscreen.is_empty() {
+            crate::window::mark_fullscreen_exit();
+        }
+        crate::window::leave_fullscreen_all(app);
+        // Dirty-buffer approval precedes this irreversible shutdown phase. Hiding the remaining
+        // windows keeps cleanup invisible without destroying webviews still draining IPC replies.
+        for (label, window) in app.webview_windows() {
+            if fullscreen.contains(&label) {
+                continue;
+            }
             if let Err(error) = window.hide() {
-                log::error!("Cannot hide window {} during shutdown: {error}", window.label());
+                log::error!("Cannot hide window {} during shutdown: {error}", label);
             }
         }
         let app = app.clone();
@@ -135,10 +151,13 @@ pub fn prevent_exit(app: &tauri::AppHandle, code: Option<i32>) -> bool {
             let started = std::time::Instant::now();
             log::info!("Stopping Drive before application exit");
             let state = app.state::<DriveState>();
-            if let Ok(service) = &state.service
-                && let Err(error) = service.shutdown().await
-            {
-                log::error!("Drive shutdown failed: {error}");
+            if let Ok(service) = &state.service {
+                // A wedged service must never keep the process (and its hidden windows) alive.
+                match tokio::time::timeout(std::time::Duration::from_secs(5), service.shutdown()).await {
+                    Ok(Err(error)) => log::error!("Drive shutdown failed: {error}"),
+                    Err(_) => log::error!("Drive shutdown timed out; exiting anyway"),
+                    Ok(Ok(())) => {}
+                }
             }
             log::info!("Drive shutdown completed in {:?}", started.elapsed());
             state.stopped.store(true, Ordering::Release);

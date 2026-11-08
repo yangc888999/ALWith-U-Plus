@@ -1,16 +1,21 @@
 import { chatLocales } from "@alwith/module-chat/locales"
-import { gamepadResources } from "@alwith/module-gamepad/locales"
 import { expect, test } from "vitest"
 
-import i18n, { initI18n, LANGUAGES } from "@/lib/i18n"
+import i18n, { initI18n, LANGUAGES, resolveLanguage } from "@/lib/i18n"
 import en from "@/locales/en.json"
 import zhCN from "@/locales/zh-CN.json"
 
-type TranslationTree = { readonly [key: string]: string | TranslationTree }
+// 目录里允许字符串数组（例如关于页的“主要调整内容”列表），其余仍是嵌套的消息表。
+type TranslationTree = { readonly [key: string]: string | readonly string[] | TranslationTree }
+
+function isMessageList(value: unknown): value is readonly string[] {
+  return Array.isArray(value)
+}
 
 function leafMessages(tree: TranslationTree, prefix = ""): Array<[string, string]> {
   return Object.entries(tree).flatMap(([key, value]) => {
     const path = prefix === "" ? key : `${prefix}.${key}`
+    if (isMessageList(value)) return value.map((item, index): [string, string] => [`${path}.${index}`, item])
     return typeof value === "string" ? [[path, value] as [string, string]] : leafMessages(value, path)
   })
 }
@@ -23,6 +28,21 @@ function resourceContract(tree: TranslationTree): Array<[string, string[]]> {
     ])
     .toSorted(([left], [right]) => left.localeCompare(right))
 }
+
+test("an OS BCP-47 locale resolves to a language we actually ship", () => {
+  expect(resolveLanguage("zh-Hans-CN")).toBe("zh-CN")
+  expect(resolveLanguage("en-US")).toBe("en")
+  expect(resolveLanguage("ja-JP")).toBe("ja")
+  expect(resolveLanguage("zh-CN")).toBe("zh-CN")
+  expect(resolveLanguage(null)).toBeNull()
+  expect(resolveLanguage("xx-YY")).toBeNull()
+})
+
+test("a first launch with only an OS locale still boots in Chinese", async () => {
+  await initI18n("zh-Hans-CN")
+  expect(i18n.language).toBe("zh-CN")
+  expect(i18n.t("sidebar.chats")).toBe("聊天")
+})
 
 test("every English UI message has an explicit Simplified Chinese translation", async () => {
   await initI18n("zh-CN")
@@ -46,22 +66,21 @@ test("the Simplified Chinese activity sidebar uses translated labels", async () 
   expect(i18n.t("sidebar.background")).toBe("后台")
 })
 
-test("supported locales use the ALwith U product name", async () => {
+test("supported locales use the ALWith L product name", async () => {
   for (const { code: language } of LANGUAGES) {
     await initI18n(language)
 
-    expect(i18n.t("app.name")).toBe("ALwith U")
-    expect(i18n.t("platformAuth.signOut")).toContain("ALwith U")
+    expect(i18n.t("app.name")).toBe("ALWith L")
+    expect(i18n.t("platformAuth.signOut")).toContain("ALWith L")
   }
 })
 
-test.each(LANGUAGES)("$code loads application, chat and gamepad catalogs", async ({ code }) => {
+test.each(LANGUAGES)("$code loads application and chat catalogs", async ({ code }) => {
   await initI18n(code)
 
   expect(i18n.language).toBe(code)
   expect(i18n.resolvedLanguage).toBe(code)
   expect(i18n.getResourceBundle(code, "alwithChat")).toEqual(chatLocales[code])
-  expect(i18n.getResourceBundle(code, "gamepad")).toEqual(gamepadResources[code])
   const catalog = i18n.getResourceBundle(code, "translation") as TranslationTree
   const source = new Map(resourceContract(en))
   for (const [key, placeholders] of resourceContract(catalog)) {
@@ -87,5 +106,5 @@ test("Arabic loads existing app and shared chat translations with English for mi
   expect(i18n.dir()).toBe("rtl")
   expect(i18n.t("settings.title")).toBe("الإعدادات")
   expect(i18n.t("actions.copy", { ns: "alwithChat" })).toBe(chatLocales.ar.actions.copy)
-  expect(i18n.t("app.name")).toBe("ALwith U")
+  expect(i18n.t("app.name")).toBe("ALWith L")
 })

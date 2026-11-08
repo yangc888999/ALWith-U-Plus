@@ -53,7 +53,7 @@ const flush = async () => {
   })
 }
 
-test("keeps expired pairing visible with a refresh action and keeps sign-in in account settings", async () => {
+test("keeps expired pairing visible with a refresh action and offers phone sign-in here", async () => {
   render(<MobileSection />)
   await flush()
   expect(screen.getByText(/No phones paired yet/)).toBeVisible()
@@ -64,7 +64,8 @@ test("keeps expired pairing visible with a refresh action and keeps sign-in in a
   })
   expect(screen.getByText(/This pairing QR code has expired/)).toBeVisible()
   expect(screen.getByRole("button", { name: "Refresh pairing QR code" })).toBeEnabled()
-  expect(screen.queryByRole("button", { name: "Sign in on phone" })).not.toBeInTheDocument()
+  // 扫码登录 moved into this page: it is the step before binding, not an account detail.
+  expect(screen.getByRole("button", { name: "Sign in on phone" })).toBeEnabled()
 })
 
 test("successful polling does not erase an action failure", async () => {

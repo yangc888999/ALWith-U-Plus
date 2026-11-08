@@ -131,7 +131,6 @@ test("leading navigation goes directly to management", () => {
   const ui = render(
     <LeadingNavigation
       activePage="plugins"
-      onOpenVibemon={vi.fn()}
       onOpenArchives={vi.fn()}
       onOpenPlugins={vi.fn()}
       onOpenExtensions={props.onManage}

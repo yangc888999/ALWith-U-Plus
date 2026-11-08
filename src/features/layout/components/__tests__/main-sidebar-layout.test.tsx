@@ -449,3 +449,37 @@ test("Windows hosts workspace actions in the title bar instead of the body", () 
     target.remove()
   }
 })
+
+test("resizing follows the pointer one pixel per pixel however fast it moves", () => {
+  // A share that resolves above the 180px floor, so the drag has room to move both ways.
+  localStorage.setItem(
+    "workspace:layout",
+    JSON.stringify({ navigationRatio: 0.3, chatRatio: 0.2, treeRatio: 0.15, previewRatio: 0.35 })
+  )
+  try {
+    const view = setup(true)
+    const divider = view.getByRole("separator")
+    divider.setPointerCapture = vi.fn()
+    const start = Number(divider.getAttribute("aria-valuenow"))
+    const width = () => Number(divider.getAttribute("aria-valuenow"))
+    expect(start).toBeGreaterThan(0)
+
+    fireEvent.pointerDown(divider, { button: 0, clientX: 400, pointerId: 1 })
+    // Two steps to the same place must land where one jump would: the width depends on the distance
+    // from the press, not on how many pointermove events it took to get there.
+    fireEvent.pointerMove(divider, { clientX: 450, pointerId: 1 })
+    expect(width() - start).toBe(50)
+    fireEvent.pointerMove(divider, { clientX: 500, pointerId: 1 })
+    expect(width() - start).toBe(100)
+    // Holding still must not creep.
+    fireEvent.pointerMove(divider, { clientX: 500, pointerId: 1 })
+    expect(width() - start).toBe(100)
+
+    // Crossing back past the press point narrows by the same rule.
+    fireEvent.pointerMove(divider, { clientX: 370, pointerId: 1 })
+    expect(width() - start).toBe(-30)
+    fireEvent.pointerUp(divider, { pointerId: 1 })
+  } finally {
+    localStorage.removeItem("workspace:layout")
+  }
+})

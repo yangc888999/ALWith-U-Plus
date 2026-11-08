@@ -1,7 +1,7 @@
 //! Application-owned Runtime connection. The shared SDK owns framing, request correlation,
 //! journal refill and process shutdown; each webview receives only its own request replies.
 use alwith_api::{ClientEvent, ResponseError, RuntimeClient, process::HideConsoleExt};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -83,6 +83,24 @@ impl RuntimeState {
     }
 }
 
+/// Restarts the Codex engine in place, without relaunching the app.
+///
+/// codex fixes its provider per process, so switching providers only takes effect after the
+/// engine respawns. This closes the current engine (the webview then calls connect(), which
+/// starts a fresh one), leaving the app window, settings and layout untouched.
+#[tauri3_specta::command]
+pub async fn restart_runtime_engine(state: State<'_, RuntimeState>) -> Result<(), String> {
+    let client = state.client.lock().unwrap().take();
+    if let Some(client) = client {
+        client.close(SHUTDOWN_GRACE).await;
+    }
+    state.shutdown_complete.store(false, Ordering::Release);
+    log::info!("Runtime engine closed for a provider switch");
+    // The webview reconnects next (its connect() owns the runtime identity); spawning another one
+    // here replaced the window connection and every later request failed with that error.
+    Ok(())
+}
+
 /// Keep the native event loop alive while IPC replies and Runtime shutdown drain.
 /// Blocking this thread can strand a Tokio worker waiting for a WebKit response.
 pub fn prevent_exit(app: &AppHandle, code: Option<i32>) -> bool {
@@ -93,13 +111,19 @@ pub fn prevent_exit(app: &AppHandle, code: Option<i32>) -> bool {
     if state.begin_shutdown() {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(error) = app.state::<alwith_computer::ComputerHost>().shutdown().await {
-                log::error!("Computer shutdown failed: {error}");
+            // Every step is bounded: a wedged sidecar must not keep a windowless process alive.
+            let drain = async {
+                if let Err(error) = app.state::<alwith_computer::ComputerHost>().shutdown().await {
+                    log::error!("Computer shutdown failed: {error}");
+                }
+                if let Err(error) = crate::mobile::shutdown().await {
+                    log::error!("Mobile shutdown failed: {error}");
+                }
+                app.state::<RuntimeState>().shutdown().await;
+            };
+            if tokio::time::timeout(std::time::Duration::from_secs(5), drain).await.is_err() {
+                log::error!("Runtime shutdown timed out; exiting anyway");
             }
-            if let Err(error) = crate::mobile::shutdown().await {
-                log::error!("Mobile shutdown failed: {error}");
-            }
-            app.state::<RuntimeState>().shutdown().await;
             app.exit(code.unwrap_or(0));
         });
     }
@@ -117,10 +141,22 @@ pub(crate) fn sidecar_path(name: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// The Codex executable that would actually run: the user-installed engine override when
+/// present (`codex_update` writes it), otherwise the bundled sidecar.
+pub fn bundled_codex_path(app: &AppHandle) -> PathBuf {
+    if let Ok(data) = app.path().app_data_dir() {
+        let over = data.join("codex-override/codex");
+        if over.is_file() {
+            return over;
+        }
+    }
+    sidecar_path("codex").unwrap_or_else(|_| PathBuf::from("codex"))
+}
+
 /// Read the same bundled executable used by the Runtime, not the ACP adapter's package version.
 #[tauri3_specta::command]
-pub async fn codex_version() -> Result<String, String> {
-    let mut command = tokio::process::Command::new(sidecar_path("codex")?);
+pub async fn codex_version(app: AppHandle) -> Result<String, String> {
+    let mut command = tokio::process::Command::new(bundled_codex_path(&app));
     command.arg("--version").kill_on_drop(true).hide_console();
     let output = tokio::time::timeout(Duration::from_secs(5), command.output())
         .await
@@ -138,6 +174,66 @@ pub async fn codex_version() -> Result<String, String> {
         .ok_or_else(|| "Unexpected Codex version output".into())
 }
 
+
+/// The integrated GPT catalog straight from the bundled binary (`codex debug models --bundled`).
+///
+/// The settings window's default-model picker normally reads it from a live session's config
+/// options; right after a fresh install (or with every conversation closed) no session exists
+/// and the picker would be empty, so it falls back to this.
+#[derive(Debug, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct BundledModelEntry {
+    pub slug: String,
+    pub name: String,
+    pub efforts: Vec<String>,
+    pub default_effort: Option<String>,
+}
+
+#[tauri3_specta::command]
+pub async fn codex_bundled_models(app: AppHandle) -> Result<Vec<BundledModelEntry>, String> {
+    let mut command = tokio::process::Command::new(bundled_codex_path(&app));
+    command.args(["debug", "models", "--bundled"]).kill_on_drop(true).hide_console();
+    let output = tokio::time::timeout(Duration::from_secs(10), command.output())
+        .await
+        .map_err(|_| "Codex catalog check timed out".to_string())?
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(format!("Codex catalog failed: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    let stdout = String::from_utf8(output.stdout).map_err(|error| error.to_string())?;
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).map_err(|error| format!("catalog JSON: {error}"))?;
+    let mut entries = Vec::new();
+    if let Some(models) = parsed.get("models").and_then(serde_json::Value::as_array) {
+        for model in models {
+            let slug = model.get("slug").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+            if slug.is_empty() {
+                continue;
+            }
+            let name = model
+                .get("display_name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(&slug)
+                .to_string();
+            let efforts = model
+                .get("supported_reasoning_levels")
+                .and_then(serde_json::Value::as_array)
+                .map(|levels| {
+                    levels
+                        .iter()
+                        .filter_map(|level| level.get("effort").and_then(serde_json::Value::as_str).map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let default_effort = model
+                .get("default_reasoning_level")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            entries.push(BundledModelEntry { slug, name, efforts, default_effort });
+        }
+    }
+    Ok(entries)
+}
+
 fn engines_table(app: &AppHandle) -> Result<String, String> {
     #[cfg(debug_assertions)]
     let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
@@ -150,10 +246,23 @@ fn engines_table(app: &AppHandle) -> Result<String, String> {
     }
     let catalogs = std::env::join_paths(crate::providers::bundled_model_catalogs(&resources)?)
         .map_err(|error| error.to_string())?;
+    let codex_path_for_engine = |app: &AppHandle| -> Result<String, String> {
+        // A user-installed engine update wins over the bundled binary.
+        let over = app.path().app_data_dir().map_err(|error| error.to_string())?.join("codex-override/codex");
+        if over.is_file() {
+            return Ok(over.to_string_lossy().to_string());
+        }
+        Ok(sidecar_path("codex")?.to_string_lossy().to_string())
+    };
     let mut engines = json!({"codex": {
         "command": sidecar_path("bun")?,
         "args": ["--no-install", adapter],
-        "env": {"CODEX_PATH": sidecar_path("alwith-codex-launcher")?, "ALWITH_U_CODEX_PATH": sidecar_path("codex")?, "CODEX_ACP_MODEL_CATALOGS": catalogs.to_string_lossy()}
+        // `ALWITH_U_ROUTER_BASE` / `_TOKEN` let the launcher hand Codex the router *table* on the
+        // command line. Without them the engine depends on `[model_providers.alwith]` still being
+        // present in the shared `~/.codex/config.toml` at boot, which no other Codex client
+        // respects: dropping it makes Codex exit 1 with "Model provider `alwith` not found"
+        // before ACP can answer (reproduced against codex-cli 0.167.0).
+        "env": {"CODEX_PATH": sidecar_path("alwith-codex-launcher")?, "ALWITH_U_CODEX_PATH": codex_path_for_engine(app)?, "CODEX_ACP_MODEL_CATALOGS": catalogs.to_string_lossy(), "ALWITH_U_ROUTER_BASE": crate::bridge::router_base_url().unwrap_or_default(), "ALWITH_U_ROUTER_TOKEN": crate::providers::ROUTER_TOKEN}
     }});
     // Development seam: `ALWITH_U_DSH_AGENT` names a dsh-agent entry (`.../dsh-agent/src/main.ts`) run with
     // bundled Bun (`ALWITH_U_BUN` explicitly overrides it). Never discover Desktop's Bun through PATH.
@@ -212,6 +321,9 @@ pub async fn runtime_start(
         crate::power::sync(&app, false);
     }
     let journal = app.path().app_cache_dir().map_err(|error| error.to_string())?.join("runtime/sessions");
+    // An in-app engine restart (provider switch) must not inherit a config.toml that another
+    // Codex client rewrote while the app was running.
+    crate::providers::repair_router_provider();
     let mut command = tokio::process::Command::new(sidecar_path("alwith-runtime")?);
     command
         .args(["--listen", "stdio://"])
@@ -264,6 +376,10 @@ pub async fn runtime_start(
                         }
                         log::info!("alwith-runtime exited: {reason}");
                         state.client.lock().unwrap().take();
+                        // Another Codex client can rewrite the shared config.toml while the app
+                        // runs. If that is what killed the engine, the reader's 重试 must not hit
+                        // the same wall: repair the router block now, before a new engine reads it.
+                        crate::providers::repair_router_provider();
                         let _ = RuntimeExit { code: None, signal: None }.emit(&app);
                         break 'events;
                     }
@@ -273,6 +389,7 @@ pub async fn runtime_start(
                     ClientEvent::Runtime(alwith_api::RuntimeEvent::Outbound { ref line, .. })
                         if private_request(line) => {}
                     ClientEvent::Runtime(event) => {
+                        crate::providers::managed::observe_event(&app, &event);
                         crate::mobile::publish(&event);
                         if matches!(&event, alwith_api::RuntimeEvent::Exit { agent_id } if agent_id == "codex")
                             && let Err(error) = app.state::<alwith_computer::ComputerHost>().stop_current().await
@@ -359,14 +476,13 @@ pub async fn runtime_send(
         return Err("Window connection replaced".into());
     }
     let client = state.current()?;
-    let lifecycle = is_admission(&request);
-    let _admission = if lifecycle { Some(state.admission.lock().await) } else { None };
-    let temporary_gamepad = match gamepad_admission_target(window.label(), &request) {
-        Some(agent_id) => {
-            client.agents().await.map_err(request_error)?.iter().any(|agent| agent["agentId"] == agent_id)
-        }
-        None => false,
-    };
+    let lifecycle = is_admission(&request)
+        || crate::providers::managed::requires_admission(&request.method, request.params.as_ref());
+    // Lifecycle requests (new/resume/prompt) take admission only to flush pending provider
+    // changes below. Holding it across `client.request` let one stuck turn (a gateway that
+    // stalls mid-stream, say) block every provider save and every new conversation for
+    // minutes; the turn itself is protected by the adapter's busy-session pinning instead.
+    let admission = if lifecycle { Some(state.admission.lock().await) } else { None };
     let active_prompt = if let Some(session_id) = prompt_session_id(&request) {
         let states = client.run_states().await.map_err(request_error)?;
         is_active_prompt_target(session_id, states.iter().map(|session| (session.session_id.as_str(), &session.state)))
@@ -375,25 +491,37 @@ pub async fn runtime_send(
     };
     // Busy providers retain their applied routing; unrelated sessions can continue.
     if requires_provider_application(&request)
-        && !temporary_gamepad
         && !active_prompt
         && let Err(error) = crate::providers::apply_locked(window.app_handle(), &client).await
         && !crate::providers::application_pending(&error)
     {
         return Err(error);
     }
+    drop(admission);
     if !current_connection() {
         return Err("Window connection replaced".into());
     }
+    // The account-managed provider pins each session to the generation it was admitted under, so a
+    // logout or account switch cannot silently re-route a conversation that is already running.
+    let generation = crate::providers::managed::check(window.app_handle(), &request.method, request.params.as_ref())?;
+    let original = request.params.clone();
     let outcome = client.request(&request.method, request.params).await;
+    if let (Some(params), Ok(value)) = (&original, &outcome) {
+        crate::providers::managed::observe_realtime(window.app_handle(), &request.method, params);
+        let body = if request.method == "acpRequest" { &params["params"] } else { params };
+        if let Some(session) = value["sessionId"].as_str().or_else(|| body["sessionId"].as_str()) {
+            let agent = params["agentId"].as_str().unwrap_or("codex");
+            let confirmed = crate::providers::managed::confirms_model(&request.method, params).then_some(generation);
+            crate::providers::managed::observe(window.app_handle(), agent, session, value, confirmed);
+        }
+    }
     if !state.owns(&client) {
         return Err("Runtime instance replaced".into());
     }
     if !current_connection() {
         return Err("Window connection replaced".into());
     }
-    drop(_admission);
-    if lifecycle && !temporary_gamepad {
+    if lifecycle {
         crate::providers::schedule_apply(window.app_handle());
     }
     let response = match outcome {
@@ -477,28 +605,6 @@ fn is_draft_session_new(params: Option<&Value>) -> bool {
         .and_then(|value| value.get("draft"))
         .and_then(Value::as_bool)
         == Some(true)
-}
-
-/// The dedicated Gamepad agent receives its own catalog from gamepad_ai_prepare.
-/// Keep admission serialization, without applying pending settings to the main agent.
-fn gamepad_admission_target<'a>(window_label: &str, request: &'a Request) -> Option<&'a str> {
-    if window_label != "gamepad" || request.method != "acpRequest" {
-        return None;
-    }
-    let params = request.params.as_ref()?;
-    if !matches!(params.get("method").and_then(Value::as_str), Some("session/new" | "session/prompt")) {
-        return None;
-    }
-    let id = params.get("agentId")?.as_str()?;
-    let suffix = id.strip_prefix("gamepad-config-")?;
-    if suffix.len() != 36
-        || !suffix.bytes().enumerate().all(|(index, byte)| {
-            if matches!(index, 8 | 13 | 18 | 23) { byte == b'-' } else { byte.is_ascii_hexdigit() }
-        })
-    {
-        return None;
-    }
-    Some(id)
 }
 
 fn private_request(line: &str) -> bool {

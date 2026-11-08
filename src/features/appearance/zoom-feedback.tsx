@@ -1,4 +1,4 @@
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow"
+import { getCurrentWindow } from "@tauri-apps/api/window"
 import { MinusIcon, PlusIcon } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
@@ -25,7 +25,7 @@ export function ZoomFeedback({ showFeedback = true }: { showFeedback?: boolean }
   const visible = showFeedback && interaction !== dismissed
 
   useEffect(() => {
-    const window = getCurrentWebviewWindow()
+    const window = getCurrentWindow()
     const listeners = Promise.all([
       window.listen<null>(events["menu:zoom-in"].name, () => void zoomIn().catch(report)),
       window.listen<null>(events["menu:zoom-out"].name, () => void zoomOut().catch(report)),

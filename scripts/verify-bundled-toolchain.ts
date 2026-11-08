@@ -90,7 +90,10 @@ async function checkInitialize(adapter: string): Promise<void> {
         env: {
           CODEX_PATH: join(directory, `alwith-codex-launcher${suffix}`),
           ALWITH_U_CODEX_PATH: join(directory, `codex${suffix}`),
-          CODEX_ACP_MODEL_CATALOGS: providers.map((provider) => join(resources, provider.catalog)).join(delimiter),
+          CODEX_ACP_MODEL_CATALOGS: providers
+            .filter((provider) => provider.catalog !== undefined)
+            .map((provider) => join(resources, provider.catalog as string))
+            .join(delimiter),
           TMPDIR: codexHome,
           TEMP: codexHome,
           TMP: codexHome

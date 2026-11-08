@@ -19,7 +19,108 @@ export const commands = {
     __t3Invoke<null>("store_delete", args),
   storeClear: (args: { scope: StoreScope; store: string }): Promise<null> => __t3Invoke<null>("store_clear", args),
   storeReload: (args: { scope: StoreScope; store: string }): Promise<null> => __t3Invoke<null>("store_reload", args),
+  /**
+   *  Creates `memory.md` when missing. Returns `true` when the file was created by this call.
+   */
+  projectMemoryEnsure: (args: { root: string }): Promise<boolean> => __t3Invoke<boolean>("project_memory_ensure", args),
+  /**
+   *  Appends a Markdown block to `memory.md`, creating the file (and header) when missing.
+   *
+   *  The same turn can reach this command twice — the main window and the floating chat both observe
+   *  the conversation, and a relaunch can replay one already recorded. A block that is already in the
+   *  file is skipped, so a synced project is not written twice in a row for the same turn.
+   */
+  projectMemoryAppend: (args: { root: string; block: string }): Promise<null> =>
+    __t3Invoke<null>("project_memory_append", args),
+  /**
+   *  Archives the current `memory.md` verbatim into `<root>/history.md` before a compression.
+   *
+   *  The first snapshot creates `history.md`; every later one appends a new block. Each block is
+   *  marked with the local timestamp the frontend supplies and separated by `---` dividers, so the
+   *  file keeps every pre-compression state in chronological order. The timestamp comes from the
+   *  frontend because the native side cannot cheaply format the user's local timezone.
+   */
+  projectMemorySnapshot: (args: { root: string; timestamp: string }): Promise<null> =>
+    __t3Invoke<null>("project_memory_snapshot", args),
   autostartStatus: (): Promise<AutostartStatus> => __t3Invoke<AutostartStatus>("autostart_status"),
+  /**
+   *  Reads the last snapshot. The numbers are a 30-minute snapshot, not a live meter: an expired
+   *  cache is returned right away and refreshed in the background. Both commands run on the blocking
+   *  pool, so even a forced rebuild can never freeze the webview's main thread.
+   */
+  usageReport: (): Promise<UsageReport_Serialize> => __t3Invoke<UsageReport_Serialize>("usage_report"),
+  /**
+   *  The refresh button deliberately rebuilds even inside the snapshot lifetime.
+   */
+  usageReportRefresh: (): Promise<UsageReport_Serialize> => __t3Invoke<UsageReport_Serialize>("usage_report_refresh"),
+  /**
+   *  Pull a URL's body as plain text for the usage page's price refresh.
+   *
+   *  A naive GET fails on several official pricing pages on macOS:
+   *    * a transparent proxy (fake-IP / TUN mode) can present a certificate the bundled
+   *      rustls roots do not know, and
+   *    * pricing pages reject a non-browser user agent.
+   *  So: send a browser-like UA, follow redirects, and — because the payload is a public
+   *  price page, never a secret — retry once without certificate verification when the
+   *  first attempt fails (e.g. on the proxy's certificate).
+   */
+  fetchText: (args: { url: string }): Promise<string> => __t3Invoke<string>("fetch_text", args),
+  larkCliStatus: (): Promise<LarkCliStatus_Serialize> => __t3Invoke<LarkCliStatus_Serialize>("lark_cli_status"),
+  larkCliTargets: (args: { kind: string; query: string }): Promise<LarkTarget[]> =>
+    __t3Invoke<LarkTarget[]>("lark_cli_targets", args),
+  larkCliSend: (args: { targets: LarkTarget[]; text: string; identity: string }): Promise<string[]> =>
+    __t3Invoke<string[]>("lark_cli_send", args),
+  larkCliInstall: (): Promise<InstallResult> => __t3Invoke<InstallResult>("lark_cli_install"),
+  /**
+   *  Registry-based check: no CLI self-updater and no GitHub release request at all.
+   */
+  larkCliCheckUpdate: (): Promise<LarkUpdateCheck_Serialize> =>
+    __t3Invoke<LarkUpdateCheck_Serialize>("lark_cli_check_update"),
+  larkCliUpdate: (): Promise<InstallResult> => __t3Invoke<InstallResult>("lark_cli_update"),
+  larkCliAuthStatus: (): Promise<LarkAuthStatus_Serialize> =>
+    __t3Invoke<LarkAuthStatus_Serialize>("lark_cli_auth_status"),
+  /**
+   *  `lark-cli auth login --no-wait --json --scope …` — starts a device-flow authorization and
+   *  returns immediately with the verification URL and device code. The UI renders the URL as a QR
+   *  code; completion is driven separately by `lark_cli_auth_complete`.
+   *
+   *  An empty `scopes` list is a plain sign-in (minimum identity scope only). A non-empty list is
+   *  a permission request from the checkbox chain and must contain exactly the ticked scopes.
+   */
+  larkCliAuthLogin: (args: { scopes: string[] }): Promise<LarkAuthLogin_Serialize> =>
+    __t3Invoke<LarkAuthLogin_Serialize>("lark_cli_auth_login", args),
+  /**
+   *  `lark-cli auth login --device-code <code> --json` — blocks and polls the device flow started
+   *  by `lark_cli_auth_login` until the user scans, the code expires, or the CLI errors out.
+   *
+   *  The CLI reports failures as `{"ok":false,"error":{...}}` **with exit code 0**, so only checking
+   *  `status.success()` used to turn an expired / invalid code into a false "authorization complete".
+   *  Parse the JSON body instead: the UI needs to know it failed so it can offer a fresh code.
+   */
+  larkCliAuthComplete: (args: { deviceCode: string }): Promise<InstallResult> =>
+    __t3Invoke<InstallResult>("lark_cli_auth_complete", args),
+  larkCliAuthLogout: (): Promise<InstallResult> => __t3Invoke<InstallResult>("lark_cli_auth_logout"),
+  /**
+   *  `lark-cli contact +get-user --as user --format json` — the profile card needs the real
+   *  avatar, which `auth status --json` does not include. This only works under the user identity;
+   *  a bot-only install fails the call and the UI falls back to an initial / the auth-status name.
+   */
+  larkCliUserProfile: (): Promise<LarkUserProfile_Serialize> =>
+    __t3Invoke<LarkUserProfile_Serialize>("lark_cli_user_profile"),
+  nodeStatus: (): Promise<NodeStatus_Serialize> => __t3Invoke<NodeStatus_Serialize>("node_status"),
+  /**
+   *  Download the official macOS universal Node.js `.pkg` for the latest LTS and open it with the
+   *  system Installer. Falls back to a manual-download instruction when the download fails (e.g. no
+   *  network), which the Settings UI also surfaces as a link.
+   */
+  nodeInstall: (): Promise<InstallOutcome> => __t3Invoke<InstallOutcome>("node_install"),
+  brewStatus: (): Promise<BrewStatus_Serialize> => __t3Invoke<BrewStatus_Serialize>("brew_status"),
+  /**
+   *  Install Homebrew by running the official script inside Terminal. The installer needs `sudo`
+   *  and a TTY, so a silent background process cannot supply the admin password; delegating to
+   *  Terminal gives the user a real prompt while still being a single click from Settings.
+   */
+  brewInstall: (): Promise<InstallOutcome> => __t3Invoke<InstallOutcome>("brew_install"),
   computerStatus: (): Promise<ComputerStatus_Serialize> => __t3Invoke<ComputerStatus_Serialize>("computer_status"),
   computerStart: (): Promise<ComputerStatus_Serialize> => __t3Invoke<ComputerStatus_Serialize>("computer_start"),
   /**
@@ -49,13 +150,7 @@ export const commands = {
   computerRequestPermissions: (args: { permission: string; request: boolean }): Promise<null> =>
     __t3Invoke<null>("computer_request_permissions", args),
   autostartSet: (args: { enabled: boolean }): Promise<null> => __t3Invoke<null>("autostart_set", args),
-  autostartLaunch: (): Promise<boolean> => __t3Invoke<boolean>("autostart_launch"),
-  autostartComplete: (args: { restored: boolean }): Promise<null> => __t3Invoke<null>("autostart_complete", args),
-  /**
-   *  Every explicit main-window open cancels the pending login-launch exit.
-   */
   showMainWindow: (): Promise<null> => __t3Invoke<null>("show_main_window"),
-  trayPetReady: (): Promise<null> => __t3Invoke<null>("tray_pet_ready"),
   extensionInboxScan: (): Promise<Scan_Serialize> => __t3Invoke<Scan_Serialize>("extension_inbox_scan"),
   extensionInboxScanExtension: (args: { extensionId: string }): Promise<Scan_Serialize> =>
     __t3Invoke<Scan_Serialize>("extension_inbox_scan_extension", args),
@@ -77,18 +172,6 @@ export const commands = {
     __t3Invoke<null>("voice_save_credential", args),
   voiceDeleteCredential: (args: { input: CredentialProvider }): Promise<null> =>
     __t3Invoke<null>("voice_delete_credential", args),
-  gamepadRequest: (args: { request: Value }): Promise<Value> => __t3Invoke<Value>("gamepad_request", args),
-  gamepadPermission: (args: { operation: string }): Promise<Value> => __t3Invoke<Value>("gamepad_permission", args),
-  gamepadCapture: (args: { start: boolean }): Promise<null> => __t3Invoke<null>("gamepad_capture", args),
-  /**
-   *  Native catalogs use cached snapshots while refreshing application icons off-thread.
-   */
-  gamepadCatalog: (args: { operation: string; path: string | null }): Promise<Value> =>
-    __t3Invoke<Value>("gamepad_catalog", args),
-  /**
-   *  Configure only a newly created Gamepad agent; credentials never leave the native host.
-   */
-  gamepadAiPrepare: (args: { agentId: string }): Promise<null> => __t3Invoke<null>("gamepad_ai_prepare", args),
   driveRequest: (args: { request: Value }): Promise<Value> => __t3Invoke<Value>("drive_request", args),
   drivePathExists: (args: { path: string }): Promise<boolean> => __t3Invoke<boolean>("drive_path_exists", args),
   chatSaveFile: (args: { name: string; data: string }): Promise<boolean> => __t3Invoke<boolean>("chat_save_file", args),
@@ -137,6 +220,23 @@ export const commands = {
       | { format: "legacy"; prepared: PreparedImport }
       | null
     >("extension_prepare_install", args),
+  /**
+   *  A published extension is one manifest address: the metadata is read first, then exactly the code
+   *  that sits beside it is fetched into an app-owned staging folder, so the panel can offer a
+   *  one-click install without asking the user to unzip a package by hand.
+   */
+  extensionInstallFromUrl: (args: {
+    manifestUrl: string
+  }): Promise<
+    | { format: "current"; path: string; id: string; version: string; digest: string }
+    | { format: "legacy"; prepared: PreparedImport }
+    | null
+  > =>
+    __t3Invoke<
+      | { format: "current"; path: string; id: string; version: string; digest: string }
+      | { format: "legacy"; prepared: PreparedImport }
+      | null
+    >("extension_install_from_url", args),
   legacyStageImport: (args: { ticket: string; manifest: Value; main: string }): Promise<StagedImport> =>
     __t3Invoke<StagedImport>("legacy_stage_import", args),
   legacyTakeInitialData: (args: {
@@ -205,26 +305,272 @@ export const commands = {
     __t3Invoke<boolean>("wallpaper_remove", args),
   refreshTokens: (args: { apiBaseUrl: string; refreshToken: string }): Promise<RefreshedTokens> =>
     __t3Invoke<RefreshedTokens>("refresh_tokens", args),
-  vibemonWindow: (args: { action: string; payload: Value }): Promise<Value> =>
-    __t3Invoke<Value>("vibemon_window", args),
-  vibemonResource: (args: {
-    action: string
-    path: string
-    bytes: string | null
-    destination: string | null
-  }): Promise<Value> => __t3Invoke<Value>("vibemon_resource", args),
-  vibemonDownload: (args: { url: string }): Promise<string> => __t3Invoke<string>("vibemon_download", args),
-  vibemonClaim: (args: { requestId: string; scope: string; sessionId: string; owner: string }): Promise<boolean> =>
-    __t3Invoke<boolean>("vibemon_claim", args),
   presentChatWindow: (): Promise<null> => __t3Invoke<null>("present_chat_window"),
   resizeChatWindow: (args: { direction: string; x: number; y: number; width: number; height: number }): Promise<null> =>
     __t3Invoke<null>("resize_chat_window", args),
   runtimeStart: (args: { connectionId: string }): Promise<null> => __t3Invoke<null>("runtime_start", args),
   runtimeSend: (args: { line: string; connectionId: string }): Promise<null> => __t3Invoke<null>("runtime_send", args),
   /**
+   *  Restarts the Codex engine in place, without relaunching the app.
+   *
+   *  codex fixes its provider per process, so switching providers only takes effect after the
+   *  engine respawns. This closes the current engine (the webview then calls connect(), which
+   *  starts a fresh one), leaving the app window, settings and layout untouched.
+   */
+  restartRuntimeEngine: (): Promise<null> => __t3Invoke<null>("restart_runtime_engine"),
+  /**
    *  Read the same bundled executable used by the Runtime, not the ACP adapter's package version.
    */
   codexVersion: (): Promise<string> => __t3Invoke<string>("codex_version"),
+  codexBundledModels: (): Promise<BundledModelEntry_Serialize[]> =>
+    __t3Invoke<BundledModelEntry_Serialize[]>("codex_bundled_models"),
+  skillsList: (): Promise<SkillEntry[]> => __t3Invoke<SkillEntry[]>("skills_list"),
+  skillsSetEnabled: (args: { id: string; enabled: boolean }): Promise<null> =>
+    __t3Invoke<null>("skills_set_enabled", args),
+  /**
+   *  Installs a skill from a local directory: it must contain SKILL.md.
+   */
+  skillsInstall: (args: { source: string }): Promise<SkillEntry> => __t3Invoke<SkillEntry>("skills_install", args),
+  /**
+   *  Opens the skills folder in the system file manager.
+   */
+  skillsOpenFolder: (): Promise<string> => __t3Invoke<string>("skills_open_folder"),
+  /**
+   *  Native folder picker for "install from a local directory".
+   */
+  skillsPickDirectory: (): Promise<string | null> => __t3Invoke<string | null>("skills_pick_directory"),
+  /**
+   *  Deletes a user skill's directory (enabled or disabled). Engine built-ins stay read-only.
+   *
+   *  Deletion is irreversible, so the id is validated against path traversal and the directory
+   *  must actually look like a skill (contains SKILL.md).
+   */
+  skillsUninstall: (args: { id: string }): Promise<null> => __t3Invoke<null>("skills_uninstall", args),
+  /**
+   *  Reads `<CODEX_HOME>/skills/ALWith.md`, creating the starter when it is missing.
+   */
+  globalPromptRead: (): Promise<string> => __t3Invoke<string>("global_prompt_read"),
+  /**
+   *  Writes `<CODEX_HOME>/skills/ALWith.md`, creating the skills directory when needed.
+   */
+  globalPromptWrite: (args: { content: string }): Promise<null> => __t3Invoke<null>("global_prompt_write", args),
+  /**
+   *  Creates (or reuses) the group's folder and writes the starter document into it.
+   */
+  groupDirectoryCreate: (args: { name: string }): Promise<GroupDirectory> =>
+    __t3Invoke<GroupDirectory>("group_directory_create", args),
+  /**
+   *  Points a group at a folder the user picked, laying the group's own files out inside it.
+   *
+   *  A group used to be pinned to `~/Documents/ALWith/groups/<slug>`. A discussion about a real
+   *  project belongs in that project's folder — the data it argues from is already there — so the
+   *  directory is the user's to choose, and this only adds what the group needs (`资料/`, `产出/`,
+   *  and a `group.md` when there is not one yet). An existing `group.md` is never touched.
+   */
+  groupDirectoryAttach: (args: { path: string }): Promise<GroupDirectory> =>
+    __t3Invoke<GroupDirectory>("group_directory_attach", args),
+  /**
+   *  Native folder picker for the group's own directory.
+   */
+  pickGroupDirectory: (): Promise<string | null> => __t3Invoke<string | null>("pick_group_directory"),
+  /**
+   *  Copies files dropped into a group chat into that group's 资料/ folder.
+   *
+   *  The group's material is what every member reads before speaking; a drag into the conversation
+   *  is the fastest way to hand it over. Files are copied, never moved, and the destination is the
+   *  group's own folder — the one the user chose for it.
+   */
+  groupCopyMaterials: (args: { paths: string[]; groupDirectory: string }): Promise<string[]> =>
+    __t3Invoke<string[]>("group_copy_materials", args),
+  /**
+   *  Reads a group's own document.
+   */
+  groupDocumentRead: (args: { document: string }): Promise<string> => __t3Invoke<string>("group_document_read", args),
+  /**
+   *  Writes a group's own document.
+   */
+  groupDocumentWrite: (args: { document: string; content: string }): Promise<null> =>
+    __t3Invoke<null>("group_document_write", args),
+  /**
+   *  Reads a local text file: a role definition may be a markdown file anywhere on disk.
+   */
+  readTextFile: (args: { path: string }): Promise<string> => __t3Invoke<string>("read_text_file", args),
+  /**
+   *  Open the role library folder (the group-roles "打开角色库目录" action).
+   */
+  robModelsOpenFolder: (): Promise<string> => __t3Invoke<string>("rob_models_open_folder"),
+  /**
+   *  Read one bot's `config.json` (model / effort / moderator). Missing file → `None`.
+   */
+  robModelsReadConfig: (args: { bot: string }): Promise<string | null> =>
+    __t3Invoke<string | null>("rob_models_read_config", args),
+  /**
+   *  Write one bot's `config.json`, keeping that bot's settings next to its persona.
+   */
+  robModelsWriteConfig: (args: { bot: string; config: string }): Promise<null> =>
+    __t3Invoke<null>("rob_models_write_config", args),
+  /**
+   *  Native file picker for a role definition: markdown or text files only.
+   */
+  pickRoleDocument: (): Promise<string | null> => __t3Invoke<string | null>("pick_role_document"),
+  /**
+   *  Resolves a skill id to its `SKILL.md`. Skills are directories, so the id is validated against
+   *  path traversal before it is joined onto the skills folder.
+   */
+  skillDocumentRead: (args: { id: string }): Promise<string> => __t3Invoke<string>("skill_document_read", args),
+  sessionOrigin: (args: {
+    sessionId: string
+  }): Promise<{
+    /**  `openai`, `deepseek`, `hakimi`, … as recorded in the rollout's session_meta. */
+    provider: string | null
+    /**  The model the thread was created with (first turn_context). */
+    model: string | null
+  } | null> =>
+    __t3Invoke<{
+      /**  `openai`, `deepseek`, `hakimi`, … as recorded in the rollout's session_meta. */
+      provider: string | null
+      /**  The model the thread was created with (first turn_context). */
+      model: string | null
+    } | null>("session_origin", args),
+  /**
+   *  Removes the `reasoning` items from a session's rollout so its history can be replayed by a
+   *  different provider.
+   *
+   *  Gateway models record reasoning text that the Responses API only accepts in an empty `content`
+   *  array; replaying such a history (especially through another gateway or the native provider)
+   *  fails with `input[n].content` 400s or an internal error. The user/assistant turns and tool
+   *  calls are untouched, so the conversation keeps its content — only the model's private
+   *  thinking is dropped. A `.bak-repair` copy is written before the first rewrite.
+   */
+  repairSessionRollout: (args: { sessionId: string }): Promise<number> =>
+    __t3Invoke<number>("repair_session_rollout", args),
+  /**
+   *  Moves every thread written before the shared router onto it.
+   *
+   *  A thread records the provider it was born on and codex refuses to resume it anywhere else; the
+   *  adapter's only remedy is restarting the whole app-server, which aborts whatever other chats are
+   *  streaming ("内核正在切换厂商，这次请求被打断了"). Rewriting the record once — rollout
+   *  `session_meta` plus the state DB row — lets those chats open on the router with no restart, so
+   *  switching between vendors stops costing someone else's turn.
+   *
+   *  Runs before the runtime starts. The state DB is copied once to `state_5.sqlite.bak-router` and
+   *  each rollout keeps a `.jsonl.bak-router`; a missing or locked DB is a no-op, not a failure.
+   */
+  migrateThreadsToRouter: (): Promise<RouterMigration> => __t3Invoke<RouterMigration>("migrate_threads_to_router"),
+  onlineBiCredentialsSave: (args: {
+    username: string
+    secret: string
+    token: string | null
+    path: string | null
+  }): Promise<OnlineBiCredentials> => __t3Invoke<OnlineBiCredentials>("online_bi_credentials_save", args),
+  onlineBiCredentialsLoad: (): Promise<{
+    username: string
+    /**  Never the real secret: the settings row only needs to say whether one is stored. */
+    secretMasked: string
+    /**  Same for the API token: the row shows a mask, the embed URL is built in Rust. */
+    tokenMasked: string
+    hasToken: boolean
+    /**  Path the preview column embeds; the token is appended as `?s=`. */
+    path: string
+  } | null> =>
+    __t3Invoke<{
+      username: string
+      /**  Never the real secret: the settings row only needs to say whether one is stored. */
+      secretMasked: string
+      /**  Same for the API token: the row shows a mask, the embed URL is built in Rust. */
+      tokenMasked: string
+      hasToken: boolean
+      /**  Path the preview column embeds; the token is appended as `?s=`. */
+      path: string
+    } | null>("online_bi_credentials_load"),
+  onlineBiCredentialsClear: (): Promise<null> => __t3Invoke<null>("online_bi_credentials_clear"),
+  /**
+   *  Fills and submits the dashboard's sign-in form in the already-open window.
+   *
+   *  Best effort by design: the page is third-party HTML we do not build against, so the script finds
+   *  the first visible text/password pair and submits the surrounding form. Returns whether a pair was
+   *  found and filled, which the caller uses to decide whether to try again after the page settles.
+   */
+  onlineBiAutofill: (args: { account: string | null }): Promise<boolean> =>
+    __t3Invoke<boolean>("online_bi_autofill", args),
+  /**
+   *  Where the dashboard window currently sits. Used to notice that the sign-in finished: the login
+   *  page and the board have different paths, so a changed URL is the one signal available without
+   *  injecting anything into the third-party page.
+   */
+  onlineBiWindowUrl: (): Promise<string | null> => __t3Invoke<string | null>("online_bi_window_url"),
+  /**
+   *  The embeddable URL for the preview column.
+   *
+   *  `bi.finture.id` is a Streamlit app: inside a cross-origin frame the sign-in cookie is dropped, but
+   *  the app accepts `?s=<JWT>` and restores the session from it — the same trick the BI Metrics
+   *  extension uses for its dashboard links. With no token stored we hand back the bare URL, and the
+   *  frame shows the sign-in form (the stand-alone window stays the way to sign in).
+   */
+  onlineBiEmbedUrl: (): Promise<string> => __t3Invoke<string>("online_bi_embed_url"),
+  /**
+   *  Saves only the API token, keeping the existing username/secret/path.
+   *
+   *  Used after the sign-in window lands on a `?s=<JWT>` URL: we grab that token and persist it so the
+   *  embedded frame can open already signed in next time, without the user copy-pasting anything.
+   */
+  onlineBiCredentialsSaveToken: (args: { token: string }): Promise<OnlineBiCredentials> =>
+    __t3Invoke<OnlineBiCredentials>("online_bi_credentials_save_token", args),
+  /**
+   *  Creates the window on first call, then only moves/resizes it.
+   */
+  onlineBiEmbedMount: (args: {
+    url: string
+    x: number
+    y: number
+    width: number
+    height: number
+    email: string | null
+  }): Promise<null> => __t3Invoke<null>("online_bi_embed_mount", args),
+  /**
+   *  Navigates the existing view. Never recreate it for a URL change — that is a new cookie jar.
+   */
+  onlineBiEmbedNavigate: (args: { url: string }): Promise<null> => __t3Invoke<null>("online_bi_embed_navigate", args),
+  /**
+   *  Hides the view without destroying it: the session lives in this window's cookie jar.
+   */
+  onlineBiEmbedSetVisible: (args: { visible: boolean }): Promise<null> =>
+    __t3Invoke<null>("online_bi_embed_set_visible", args),
+  /**
+   *  Drops the view when the preview leaves the BI surface.
+   */
+  onlineBiEmbedClose: (): Promise<null> => __t3Invoke<null>("online_bi_embed_close"),
+  /**
+   *  Points the Codex engine at another provider (top-level `model_provider` in config.toml).
+   *
+   *  codex fixes its provider per process, so a thread recorded on another provider can only be
+   *  resumed after the engine restarts on that provider. The model itself is left alone: model
+   *  names are provider-scoped but writing a stale one would break new chats.
+   */
+  applySessionProvider: (args: { provider: string }): Promise<null> => __t3Invoke<null>("apply_session_provider", args),
+  /**
+   *  Restarts the app so a provider change takes effect (the engine spawns per launch).
+   */
+  restartApp: (): Promise<null> => __t3Invoke<null>("restart_app"),
+  /**
+   *  Appends one line to the self-test log (`~/Library/Logs/ai.alwith.u/autotest.log`).
+   */
+  appendDiagnostic: (args: { line: string }): Promise<null> => __t3Invoke<null>("append_diagnostic", args),
+  /**
+   *  The directory temporary "chat" sessions live in: the app's default project-less folder.
+   *
+   *  module-chat treats `~/Documents/Codex` (and `~/Documents/ALwith`) as quick-chat directories,
+   *  so a new chat created here belongs to the "会话" section instead of any project.
+   */
+  quickChatDirectory: (): Promise<string> => __t3Invoke<string>("quick_chat_directory"),
+  /**
+   *  Native folder picker for "new project": the chosen directory becomes a project.
+   */
+  pickProjectDirectory: (): Promise<string | null> => __t3Invoke<string | null>("pick_project_directory"),
+  codexCheckEngineUpdate: (): Promise<EngineUpdateStatus_Serialize> =>
+    __t3Invoke<EngineUpdateStatus_Serialize>("codex_check_engine_update"),
+  codexInstallEngineUpdate: (args: { version: string }): Promise<string> =>
+    __t3Invoke<string>("codex_install_engine_update", args),
   mobileSetDraftSessions: (args: { sessionIds: string[] }): Promise<null> =>
     __t3Invoke<null>("mobile_set_draft_sessions", args),
   mobileBridgeStart: (args: { relayUrl: string }): Promise<null> => __t3Invoke<null>("mobile_bridge_start", args),
@@ -244,6 +590,8 @@ export const commands = {
       apiKey?: string | null
       region?: string | null
       baseUrl?: string | null
+      /**  `Some(true)` closes the provider while keeping its key; `None`/`false` enables it. */
+      disabled?: boolean | null
     } | null
     expectedRevision: number
   }): Promise<Snapshot_Serialize> => __t3Invoke<Snapshot_Serialize>("providers_save", args),
@@ -255,7 +603,30 @@ export const commands = {
     __t3Invoke<Snapshot_Serialize>("providers_remove_custom", args),
   providersTest: (args: { providerId: string }): Promise<TestResult_Serialize> =>
     __t3Invoke<TestResult_Serialize>("providers_test", args),
+  /**
+   *  Times one round trip against a single model of a saved provider.
+   *
+   *  This is the per-model "测速" in settings: it tells whether that model id answers at this
+   *  endpoint at all, and how long it takes, which a provider-level check cannot say.
+   */
+  providersTestModel: (args: { providerId: string; model: string }): Promise<TestResult_Serialize> =>
+    __t3Invoke<TestResult_Serialize>("providers_test_model", args),
+  /**
+   *  Read an OpenAI-compatible `/models` catalog without exposing the API key to the webview snapshot.
+   */
+  providersDiscoverModels: (args: { input: DiscoverInput_Deserialize }): Promise<CustomModel_Serialize[]> =>
+    __t3Invoke<CustomModel_Serialize[]>("providers_discover_models", args),
   providersApply: (): Promise<Snapshot_Serialize> => __t3Invoke<Snapshot_Serialize>("providers_apply"),
+  providersSaveBuiltInModels: (args: {
+    providerId: string
+    models: CustomModel_Deserialize[]
+    expectedRevision: number
+  }): Promise<Snapshot_Serialize> => __t3Invoke<Snapshot_Serialize>("providers_save_built_in_models", args),
+  providersAccountBind: (args: { account: Account }): Promise<number> =>
+    __t3Invoke<number>("providers_account_bind", args),
+  providersRefreshManaged: (args: { generation: number; accessToken: string }): Promise<Snapshot_Serialize> =>
+    __t3Invoke<Snapshot_Serialize>("providers_refresh_managed", args),
+  providersClearManaged: (): Promise<null> => __t3Invoke<null>("providers_clear_managed"),
   updaterGetState: (): Promise<State_Serialize> => __t3Invoke<State_Serialize>("updater_get_state"),
   updaterInstallAndRelaunch: (): Promise<null> => __t3Invoke<null>("updater_install_and_relaunch"),
   /**
@@ -284,7 +655,28 @@ export type CommandErrors = {
   storeDelete: string
   storeClear: string
   storeReload: string
+  projectMemoryEnsure: string
+  projectMemoryAppend: string
+  projectMemorySnapshot: string
   autostartStatus: string
+  usageReport: string
+  usageReportRefresh: string
+  fetchText: string
+  larkCliStatus: string
+  larkCliTargets: string
+  larkCliSend: string
+  larkCliInstall: string
+  larkCliCheckUpdate: string
+  larkCliUpdate: string
+  larkCliAuthStatus: string
+  larkCliAuthLogin: string
+  larkCliAuthComplete: string
+  larkCliAuthLogout: string
+  larkCliUserProfile: string
+  nodeStatus: never
+  nodeInstall: string
+  brewStatus: never
+  brewInstall: string
   computerStatus: string
   computerStart: string
   computerReconnect: string
@@ -299,10 +691,7 @@ export type CommandErrors = {
   computerUnsubscribe: string
   computerRequestPermissions: string
   autostartSet: string
-  autostartLaunch: never
-  autostartComplete: string
   showMainWindow: string
-  trayPetReady: string
   extensionInboxScan: string
   extensionInboxScanExtension: string
   extensionInboxFinish: string
@@ -315,11 +704,6 @@ export type CommandErrors = {
   voiceProfiles: string
   voiceSaveCredential: string
   voiceDeleteCredential: string
-  gamepadRequest: string
-  gamepadPermission: string
-  gamepadCapture: string
-  gamepadCatalog: string
-  gamepadAiPrepare: string
   driveRequest: string
   drivePathExists: string
   chatSaveFile: string
@@ -339,6 +723,7 @@ export type CommandErrors = {
   workspaceMoveTo: string
   extensionBundles: string
   extensionPrepareInstall: string
+  extensionInstallFromUrl: string
   legacyStageImport: string
   legacyTakeInitialData: string
   legacyAckInitialData: string
@@ -357,15 +742,54 @@ export type CommandErrors = {
   wallpaperImport: string
   wallpaperRemove: string
   refreshTokens: Value
-  vibemonWindow: string
-  vibemonResource: string
-  vibemonDownload: string
-  vibemonClaim: string
   presentChatWindow: string
   resizeChatWindow: string
   runtimeStart: string
   runtimeSend: string
+  restartRuntimeEngine: string
   codexVersion: string
+  codexBundledModels: string
+  skillsList: string
+  skillsSetEnabled: string
+  skillsInstall: string
+  skillsOpenFolder: string
+  skillsPickDirectory: string
+  skillsUninstall: string
+  globalPromptRead: string
+  globalPromptWrite: string
+  groupDirectoryCreate: string
+  groupDirectoryAttach: string
+  pickGroupDirectory: string
+  groupCopyMaterials: string
+  groupDocumentRead: string
+  groupDocumentWrite: string
+  readTextFile: string
+  robModelsOpenFolder: string
+  robModelsReadConfig: string
+  robModelsWriteConfig: string
+  pickRoleDocument: string
+  skillDocumentRead: string
+  sessionOrigin: string
+  repairSessionRollout: string
+  migrateThreadsToRouter: string
+  onlineBiCredentialsSave: string
+  onlineBiCredentialsLoad: string
+  onlineBiCredentialsClear: string
+  onlineBiAutofill: string
+  onlineBiWindowUrl: string
+  onlineBiEmbedUrl: string
+  onlineBiCredentialsSaveToken: string
+  onlineBiEmbedMount: string
+  onlineBiEmbedNavigate: string
+  onlineBiEmbedSetVisible: string
+  onlineBiEmbedClose: string
+  applySessionProvider: string
+  restartApp: never
+  appendDiagnostic: string
+  quickChatDirectory: string
+  pickProjectDirectory: string
+  codexCheckEngineUpdate: string
+  codexInstallEngineUpdate: string
   mobileSetDraftSessions: never
   mobileBridgeStart: string
   mobileBridgeStop: string
@@ -380,7 +804,13 @@ export type CommandErrors = {
   providersSaveCustom: string
   providersRemoveCustom: string
   providersTest: string
+  providersTestModel: string
+  providersDiscoverModels: string
   providersApply: string
+  providersSaveBuiltInModels: string
+  providersAccountBind: string
+  providersRefreshManaged: Value
+  providersClearManaged: string
   updaterGetState: null
   updaterInstallAndRelaunch: string
   attachWindowToMain: string
@@ -438,6 +868,15 @@ export const events = {
     emit: (payload: Snapshot_Deserialize) => __t3Emit("providers:changed", payload),
     emitTo: (target: string | __t3Target, payload: Snapshot_Deserialize) =>
       __t3EmitTo(target, "providers:changed", payload)
+  },
+  "providers:managed-revoked": {
+    name: "providers:managed-revoked",
+    listen: (handler: __t3Callback<RevokedSessions>) =>
+      __t3Listen<RevokedSessions>("providers:managed-revoked", handler),
+    once: (handler: __t3Callback<RevokedSessions>) => __t3Once<RevokedSessions>("providers:managed-revoked", handler),
+    emit: (payload: RevokedSessions) => __t3Emit("providers:managed-revoked", payload),
+    emitTo: (target: string | __t3Target, payload: RevokedSessions) =>
+      __t3EmitTo(target, "providers:managed-revoked", payload)
   },
   "updater:state": {
     name: "updater:state",
@@ -554,6 +993,11 @@ export const events = {
   }
 } as const
 
+export type Account = {
+  apiBaseUrl: string
+  userUuid: string
+}
+
 export type Activity = Activity_Serialize | Activity_Deserialize
 
 export type Activity_Deserialize = {
@@ -597,6 +1041,23 @@ export type AutostartStatus = {
   enabled: boolean
 }
 
+/**  Homebrew presence and version, detected the same PATH-agnostic way as Node. */
+export type BrewStatus = BrewStatus_Serialize | BrewStatus_Deserialize
+
+/**  Homebrew presence and version, detected the same PATH-agnostic way as Node. */
+export type BrewStatus_Deserialize = {
+  installed: boolean
+  version?: string | null
+  path?: string | null
+}
+
+/**  Homebrew presence and version, detected the same PATH-agnostic way as Node. */
+export type BrewStatus_Serialize = {
+  installed: boolean
+  version: string | null
+  path: string | null
+}
+
 export type BridgeIdentity = {
   deviceId: string
   publicKeyB64: string
@@ -607,6 +1068,43 @@ export type BundledExtension = {
   id: string
   version: string
   source: string
+}
+
+/**
+ *  The integrated GPT catalog straight from the bundled binary (`codex debug models --bundled`).
+ *
+ *  The settings window's default-model picker normally reads it from a live session's config
+ *  options; right after a fresh install (or with every conversation closed) no session exists
+ *  and the picker would be empty, so it falls back to this.
+ */
+export type BundledModelEntry = BundledModelEntry_Serialize | BundledModelEntry_Deserialize
+
+/**
+ *  The integrated GPT catalog straight from the bundled binary (`codex debug models --bundled`).
+ *
+ *  The settings window's default-model picker normally reads it from a live session's config
+ *  options; right after a fresh install (or with every conversation closed) no session exists
+ *  and the picker would be empty, so it falls back to this.
+ */
+export type BundledModelEntry_Deserialize = {
+  slug: string
+  name: string
+  efforts: string[]
+  defaultEffort?: string | null
+}
+
+/**
+ *  The integrated GPT catalog straight from the bundled binary (`codex debug models --bundled`).
+ *
+ *  The settings window's default-model picker normally reads it from a live session's config
+ *  options; right after a fresh install (or with every conversation closed) no session exists
+ *  and the picker would be empty, so it falls back to this.
+ */
+export type BundledModelEntry_Serialize = {
+  slug: string
+  name: string
+  efforts: string[]
+  defaultEffort: string | null
 }
 
 export type ChatDroppedFile = ChatDroppedFile_Serialize | ChatDroppedFile_Deserialize
@@ -724,6 +1222,17 @@ export type CustomModel_Deserialize = {
   api_id: string
   contextWindow?: number | null
   description?: string | null
+  /**
+   *  Reasoning efforts accepted by the provider. Omitted uses the conventional levels for
+   *  recognizable model families; an empty list is invalid.
+   */
+  reasoningLevels?: string[] | null
+  defaultReasoningLevel?: string | null
+  /**
+   *  Whether the model is offered in the picker. Omitted (and `true`) means enabled; a switched
+   *  off model stays in the settings list so it can be turned back on, but never reaches Codex.
+   */
+  enabled?: boolean | null
 }
 
 export type CustomModel_Serialize = {
@@ -731,6 +1240,17 @@ export type CustomModel_Serialize = {
   api_id: string
   contextWindow?: number
   description?: string
+  /**
+   *  Reasoning efforts accepted by the provider. Omitted uses the conventional levels for
+   *  recognizable model families; an empty list is invalid.
+   */
+  reasoningLevels?: string[]
+  defaultReasoningLevel?: string
+  /**
+   *  Whether the model is offered in the picker. Omitted (and `true`) means enabled; a switched
+   *  off model stays in the settings list so it can be turned back on, but never reaches Codex.
+   */
+  enabled?: boolean
 }
 
 export type DirectoryGrant = {
@@ -740,9 +1260,37 @@ export type DirectoryGrant = {
 
 export type DisablementReason = "invalidConfiguration"
 
+export type DiscoverInput = DiscoverInput_Serialize | DiscoverInput_Deserialize
+
+export type DiscoverInput_Deserialize = {
+  baseUrl: string
+  apiKey?: string | null
+  providerId?: string | null
+}
+
+export type DiscoverInput_Serialize = {
+  baseUrl: string
+  apiKey: string | null
+  providerId: string | null
+}
+
 export type EditRedo = null
 
 export type EditUndo = null
+
+export type EngineUpdateStatus = EngineUpdateStatus_Serialize | EngineUpdateStatus_Deserialize
+
+export type EngineUpdateStatus_Deserialize = {
+  current: string
+  latest?: string | null
+  hasUpdate: boolean
+}
+
+export type EngineUpdateStatus_Serialize = {
+  current: string
+  latest: string | null
+  hasUpdate: boolean
+}
 
 export type Environment = {
   name: string
@@ -807,6 +1355,13 @@ export type Frame_Serialize = {
   cursor: CursorPosition | null
 }
 
+export type GroupDirectory = {
+  /**  The absolute path of the group's folder. */
+  directory: string
+  /**  The absolute path of the group's document. */
+  document: string
+}
+
 export type HostApp = "desktop" | "u"
 
 export type HttpRequest = HttpRequest_Serialize | HttpRequest_Deserialize
@@ -845,24 +1400,196 @@ export type Input_Deserialize = {
   apiKey?: string | null
   region?: string | null
   baseUrl?: string | null
+  /**  `Some(true)` closes the provider while keeping its key; `None`/`false` enables it. */
+  disabled?: boolean | null
 }
 
 export type Input_Serialize = {
   apiKey: string | null
   region: string | null
   baseUrl: string | null
+  /**  `Some(true)` closes the provider while keeping its key; `None`/`false` enables it. */
+  disabled: boolean | null
+}
+
+export type InstallOutcome = {
+  ok: boolean
+  message: string
+}
+
+export type InstallResult = {
+  ok: boolean
+  message: string
+}
+
+export type LarkAuthIdentity = LarkAuthIdentity_Serialize | LarkAuthIdentity_Deserialize
+
+export type LarkAuthIdentity_Deserialize = {
+  /**  `bot` | `user` */
+  kind: string
+  available: boolean
+  status: string
+  userName?: string | null
+  /**
+   *  `ou_…` of the signed-in user. The bot identity has no open_id: its permissions are
+   *  configured on the Open Platform, not granted by a local OAuth scope list.
+   */
+  openId?: string | null
+  tokenStatus?: string | null
+  /**
+   *  Space-separated scopes granted to this identity, split into individual entries.
+   *  Empty for `bot` is *normal* — readiness comes from `available` + `status == "ready"`.
+   */
+  scopes: string[]
+}
+
+export type LarkAuthIdentity_Serialize = {
+  /**  `bot` | `user` */
+  kind: string
+  available: boolean
+  status: string
+  userName: string | null
+  /**
+   *  `ou_…` of the signed-in user. The bot identity has no open_id: its permissions are
+   *  configured on the Open Platform, not granted by a local OAuth scope list.
+   */
+  openId: string | null
+  tokenStatus: string | null
+  /**
+   *  Space-separated scopes granted to this identity, split into individual entries.
+   *  Empty for `bot` is *normal* — readiness comes from `available` + `status == "ready"`.
+   */
+  scopes: string[]
+}
+
+export type LarkAuthLogin = LarkAuthLogin_Serialize | LarkAuthLogin_Deserialize
+
+export type LarkAuthLogin_Deserialize = {
+  verificationUrl: string
+  deviceCode: string
+  userCode?: string | null
+  /**
+   *  `expires_in` from `auth login --no-wait --json` (seconds). The QR code and device code
+   *  both die at this point; the UI counts it down instead of waiting for the CLI to time out.
+   */
+  expiresIn?: number | null
+}
+
+export type LarkAuthLogin_Serialize = {
+  verificationUrl: string
+  deviceCode: string
+  userCode: string | null
+  /**
+   *  `expires_in` from `auth login --no-wait --json` (seconds). The QR code and device code
+   *  both die at this point; the UI counts it down instead of waiting for the CLI to time out.
+   */
+  expiresIn: number | null
+}
+
+export type LarkAuthStatus = LarkAuthStatus_Serialize | LarkAuthStatus_Deserialize
+
+export type LarkAuthStatus_Deserialize = {
+  loggedIn: boolean
+  brand?: string | null
+  appId?: string | null
+  /**  `defaultAs` from `auth status --json`: usually `auto`, sometimes `bot` / `user`. */
+  defaultIdentity?: string | null
+  identities: LarkAuthIdentity_Deserialize[]
+}
+
+export type LarkAuthStatus_Serialize = {
+  loggedIn: boolean
+  brand: string | null
+  appId: string | null
+  /**  `defaultAs` from `auth status --json`: usually `auto`, sometimes `bot` / `user`. */
+  defaultIdentity: string | null
+  identities: LarkAuthIdentity_Serialize[]
+}
+
+export type LarkCliStatus = LarkCliStatus_Serialize | LarkCliStatus_Deserialize
+
+export type LarkCliStatus_Deserialize = {
+  available: boolean
+  cliPath: string
+  /**  Parsed from `--version`; `None` when the CLI is missing or reports an unexpected format. */
+  version?: string | null
+  hint: string
+}
+
+export type LarkCliStatus_Serialize = {
+  available: boolean
+  cliPath: string
+  /**  Parsed from `--version`; `None` when the CLI is missing or reports an unexpected format. */
+  version: string | null
+  hint: string
+}
+
+export type LarkTarget = {
+  /**  `oc_…` for a group chat, `ou_…` for a direct message. */
+  id: string
+  name: string
+  /**  `chat` | `user` */
+  kind: string
+}
+
+export type LarkUpdateCheck = LarkUpdateCheck_Serialize | LarkUpdateCheck_Deserialize
+
+export type LarkUpdateCheck_Deserialize = {
+  hasUpdate: boolean
+  currentVersion?: string | null
+  latestVersion?: string | null
+  message: string
+  url?: string | null
+  /**  Link to the upstream CHANGELOG so the user can decide whether to update. */
+  changelog?: string | null
+}
+
+export type LarkUpdateCheck_Serialize = {
+  hasUpdate: boolean
+  currentVersion: string | null
+  latestVersion: string | null
+  message: string
+  url: string | null
+  /**  Link to the upstream CHANGELOG so the user can decide whether to update. */
+  changelog: string | null
+}
+
+export type LarkUserProfile = LarkUserProfile_Serialize | LarkUserProfile_Deserialize
+
+export type LarkUserProfile_Deserialize = {
+  name: string
+  openId: string
+  /**
+   *  72×72 avatar from `contact +get-user`. `auth status --json` has no avatar at all, so this
+   *  is a separate, user-identity-only call; `None` means the UI should draw an initial.
+   */
+  avatarUrl?: string | null
+}
+
+export type LarkUserProfile_Serialize = {
+  name: string
+  openId: string
+  /**
+   *  72×72 avatar from `contact +get-user`. `auth status --json` has no avatar at all, so this
+   *  is a separate, user-identity-only call; `None` means the UI should draw an initial.
+   */
+  avatarUrl: string | null
 }
 
 export type Metadata = Metadata_Serialize | Metadata_Deserialize
 
 export type Metadata_Deserialize = {
   configured: boolean
+  /**  Closed by the user, but its key is still stored — the switch is off, the credential is not. */
+  disabled: boolean
   region?: string | null
   base_url?: string | null
 }
 
 export type Metadata_Serialize = {
   configured: boolean
+  /**  Closed by the user, but its key is still stored — the switch is off, the credential is not. */
+  disabled: boolean
   region: string | null
   base_url: string | null
 }
@@ -891,7 +1618,40 @@ export type NewChat = null
 
 export type NewTab = null
 
+export type NodeStatus = NodeStatus_Serialize | NodeStatus_Deserialize
+
+export type NodeStatus_Deserialize = {
+  installed: boolean
+  /**  Node.js version (without a leading `v`), e.g. `22.22.2`. */
+  version?: string | null
+  /**  Bundled npm version, when Node is found. */
+  npmVersion?: string | null
+  /**  Resolved path to the `node` binary. */
+  path?: string | null
+}
+
+export type NodeStatus_Serialize = {
+  installed: boolean
+  /**  Node.js version (without a leading `v`), e.g. `22.22.2`. */
+  version: string | null
+  /**  Bundled npm version, when Node is found. */
+  npmVersion: string | null
+  /**  Resolved path to the `node` binary. */
+  path: string | null
+}
+
 export type Number = number
+
+export type OnlineBiCredentials = {
+  username: string
+  /**  Never the real secret: the settings row only needs to say whether one is stored. */
+  secretMasked: string
+  /**  Same for the API token: the row shows a mask, the embed URL is built in Rust. */
+  tokenMasked: string
+  hasToken: boolean
+  /**  Path the preview column embeds; the token is appended as `?s=`. */
+  path: string
+}
 
 export type OpenHotkeys = null
 
@@ -987,6 +1747,17 @@ export type ReplaceInFile = null
 
 export type Result<T, E> = ({ Ok: T } & { Err?: never }) | ({ Err: E } & { Ok?: never })
 
+export type RevokedSessions = {
+  sessionIds: string[]
+}
+
+export type RouterMigration = {
+  /**  Threads whose recorded provider was moved onto the shared router. */
+  threads: number
+  /**  Rollout files whose `session_meta` had to be rewritten to match. */
+  rollouts: number
+}
+
 export type RuntimeExit = RuntimeExit_Serialize | RuntimeExit_Deserialize
 
 export type RuntimeExit_Deserialize = {
@@ -1020,6 +1791,35 @@ export type SessionConnection = {
   token: string
 }
 
+export type SessionOrigin = SessionOrigin_Serialize | SessionOrigin_Deserialize
+
+export type SessionOrigin_Deserialize = {
+  /**  `openai`, `deepseek`, `hakimi`, … as recorded in the rollout's session_meta. */
+  provider?: string | null
+  /**  The model the thread was created with (first turn_context). */
+  model?: string | null
+}
+
+export type SessionOrigin_Serialize = {
+  /**  `openai`, `deepseek`, `hakimi`, … as recorded in the rollout's session_meta. */
+  provider: string | null
+  /**  The model the thread was created with (first turn_context). */
+  model: string | null
+}
+
+export type SkillEntry = {
+  /**  Directory name (also the stable id used for enable/disable). */
+  id: string
+  /**  `name:` from the frontmatter, falling back to the directory name. */
+  name: string
+  /**  First non-empty line of `description:`. */
+  description: string
+  /**  Lives under `.system/`: built in by the engine, not toggleable. */
+  system: boolean
+  enabled: boolean
+  path: string
+}
+
 export type Snapshot = Snapshot_Serialize | Snapshot_Deserialize
 
 export type Snapshot_Deserialize = {
@@ -1027,6 +1827,16 @@ export type Snapshot_Deserialize = {
   appliedRevision?: number | null
   providers: { [key in string]: Metadata_Deserialize }
   customProviders: PublicCustomProvider_Deserialize[]
+  /**
+   *  Providers the signed-in ALwith account contributes. Kept apart from `custom_providers` so a
+   *  logout never leaves an editable copy of an account-owned provider behind.
+   */
+  managedProviders: PublicCustomProvider_Deserialize[]
+  /**
+   *  Effective models for each built-in provider (bundled catalog merged with user overrides),
+   *  carrying the context window and reasoning levels the adapter threads through to Codex.
+   */
+  builtInModels: { [key in string]: CustomModel_Deserialize[] }
   status: string
   error?: string | null
 }
@@ -1036,6 +1846,16 @@ export type Snapshot_Serialize = {
   appliedRevision: number | null
   providers: { [key in string]: Metadata_Serialize }
   customProviders: PublicCustomProvider_Serialize[]
+  /**
+   *  Providers the signed-in ALwith account contributes. Kept apart from `custom_providers` so a
+   *  logout never leaves an editable copy of an account-owned provider behind.
+   */
+  managedProviders: PublicCustomProvider_Serialize[]
+  /**
+   *  Effective models for each built-in provider (bundled catalog merged with user overrides),
+   *  carrying the context window and reasoning levels the adapter threads through to Codex.
+   */
+  builtInModels: { [key in string]: CustomModel_Serialize[] }
   status: string
   error: string | null
 }
@@ -1198,6 +2018,98 @@ export type UpdateInfo_Serialize = {
   filename: string
   signature: string
   contentLength: number | null
+}
+
+/**
+ *  One row of the pre-aggregated table: an hour, a provider and a model.
+ *
+ *  Hour granularity exists for time-of-day pricing (DeepSeek bills weekday peak and off-peak
+ *  rates); charts aggregate these rows back up by day. `hour` is the UTC hour of `date`.
+ */
+export type UsagePoint = {
+  date: string
+  hour: number
+  provider: string
+  model: string
+  requests: number
+  /**  Input tokens the provider actually had to read (cached ones excluded). */
+  input: number
+  cached: number
+  output: number
+  reasoning: number
+  tokens: number
+}
+
+export type UsageReport = UsageReport_Serialize | UsageReport_Deserialize
+
+export type UsageReport_Deserialize = {
+  points: UsagePoint[]
+  recent: UsageTurn[]
+  /**  Session files that contributed at least one call. */
+  sessions: number
+  /**  Session files read, including the ones with no calls in them. */
+  scanned: number
+  first?: string | null
+  last?: string | null
+  /**  Empty when the engine has never written a transcript. */
+  source: string
+  /**
+   *  The words the user actually typed, newest last, stripped of engine-injected context.
+   *  Kept as raw text so the client can segment it with the OS locale instead of shipping a
+   *  Chinese dictionary inside the binary.
+   */
+  prompts: string[]
+  /**
+   *  Unix epoch millis when this snapshot was aggregated. 0 means no snapshot exists yet.
+   *  Read from the cache file's mtime, so old caches stay readable without a schema bump.
+   */
+  updatedAt?: number
+  /**
+   *  A background rebuild is in flight: the client shows these numbers immediately and polls
+   *  once for the fresh ones instead of blocking the window on a 73 MiB transcript walk.
+   */
+  pending?: boolean
+}
+
+export type UsageReport_Serialize = {
+  points: UsagePoint[]
+  recent: UsageTurn[]
+  /**  Session files that contributed at least one call. */
+  sessions: number
+  /**  Session files read, including the ones with no calls in them. */
+  scanned: number
+  first: string | null
+  last: string | null
+  /**  Empty when the engine has never written a transcript. */
+  source: string
+  /**
+   *  The words the user actually typed, newest last, stripped of engine-injected context.
+   *  Kept as raw text so the client can segment it with the OS locale instead of shipping a
+   *  Chinese dictionary inside the binary.
+   */
+  prompts: string[]
+  /**
+   *  Unix epoch millis when this snapshot was aggregated. 0 means no snapshot exists yet.
+   *  Read from the cache file's mtime, so old caches stay readable without a schema bump.
+   */
+  updatedAt: number
+  /**
+   *  A background rebuild is in flight: the client shows these numbers immediately and polls
+   *  once for the fresh ones instead of blocking the window on a 73 MiB transcript walk.
+   */
+  pending: boolean
+}
+
+/**  A single model call, for the request table. */
+export type UsageTurn = {
+  at: string
+  date: string
+  provider: string
+  model: string
+  input: number
+  cached: number
+  output: number
+  tokens: number
 }
 
 export type Value = null | boolean | number | string | Value[] | { [key in string]: Value }

@@ -86,6 +86,10 @@ test("Tab accepts an editable draft without sending; Shift-Tab and IME leave it 
   expect(view.queryByText(/Tab to accept/)).not.toBeInTheDocument()
   fireEvent.keyDown(input, { key: "Enter" })
   await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+  // The submit no longer keeps the composer busy for the whole turn, so the suggestion would
+  // reappear the instant the draft clears. In the app the session is already running by then and
+  // U's composer only asks for suggestions while it is idle; mirror that here.
+  view.rerender(<Composer session={{ ...predicted(session), state: "running" }} onSubmit={submit} />)
   fireEvent.change(input, { target: { value: "" } })
   await waitFor(() => expect(input).not.toHaveAttribute("placeholder", "Run the tests"))
 })

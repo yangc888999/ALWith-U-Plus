@@ -438,18 +438,20 @@ test("draft handoff keeps its model and only the new owner can discard it", asyn
 const codexModel = "gpt-6-astra"
 const deepseekModel = "gateway:deepseek:deepseek-flash"
 
-test("floating model selection and restore use only the floating slot", async () => {
+test("a floating model choice binds its own draft and never leaks into existing conversations", async () => {
   const f = await providerWindows()
   try {
     f.owner.setModelSelections({ main: codexModel, chat: codexModel })
     const choices: unknown[] = []
     f.owner.onConfirmedModel((...args) => choices.push(args))
     const draft = await f.remote.prepareDraft("chat", "/tmp/floating-choice")
+    expect(f.fake.modelHints.get(draft)).toBe(codexModel)
     await f.remote.setConfig(draft, "model", deepseekModel)
     await f.owner.open("h1", "/tmp/main-restore")
     await f.remote.open("h2", "/tmp/floating-restore")
-    expect(f.fake.modelHints.get("h1")).toBe(codexModel)
-    expect(f.fake.modelHints.get("h2")).toBe(deepseekModel)
+    // Existing conversations keep their own model; neither borrows the floating selection.
+    expect(f.fake.modelHints.get("h1")).toBeNull()
+    expect(f.fake.modelHints.get("h2")).toBeNull()
     expect(choices).toEqual([["chat", deepseekModel]])
   } finally {
     f.dispose()

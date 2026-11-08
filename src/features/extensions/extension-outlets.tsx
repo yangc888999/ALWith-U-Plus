@@ -196,10 +196,12 @@ export function ExtensionSettingsContent({
 }): ReactElement {
   const { t } = useTranslation()
   const view = views.find((item) => item.id === id && item.kind === "settingsPages")
+  // The settings shell already renders this view's title in the page header, so the content must
+  // not repeat it — otherwise the extension name shows twice (e.g. "YUP 知识库" in the header and
+  // again as the first line of the body).
   return (
-    <section className="space-y-4">
-      <h1 className="text-lg font-semibold">{view?.title ?? t("extensions.unavailable")}</h1>
-      {view && renderView(view)}
+    <section>
+      {view ? renderView(view) : <p className="text-sm text-muted-foreground">{t("extensions.unavailable")}</p>}
     </section>
   )
 }

@@ -352,7 +352,7 @@ test.each(["/Users/mac/Documents/Codex", "/Users/mac/Documents/ALwith"])(
   async (cwd) => {
     client.store.setState({ sessionList: sessionRows("/Users/mac/Documents/Codex/nested") })
     const view = render(<ProjectSessionPopover cwd={cwd} onSelect={() => {}} onNewChat={() => {}} />)
-    await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Quick chats" }))))
+    await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Chats" }))))
     expect(view.getByText("7 chats")).toBeVisible()
     expect(view.getByText("/Users/mac/Documents/ALwith")).toBeVisible()
   }

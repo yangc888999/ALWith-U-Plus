@@ -1,6 +1,6 @@
 import { ChatSearch as SharedChatSearch } from "@alwith/module-chat/search"
 import { revealTimelineTurn, timelineRegistry } from "@alwith/module-chat/timeline-registry"
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow"
+import { getCurrentWindow } from "@tauri-apps/api/window"
 import { type RefObject, useCallback } from "react"
 import { useTranslation } from "react-i18next"
 import { useStore } from "zustand"
@@ -47,7 +47,7 @@ export function ChatSearch({ rootRef, sessionId }: { rootRef: RefObject<HTMLElem
       }
       window.addEventListener(OPEN_SEARCH, requested)
       window.addEventListener("keydown", handler)
-      const stopMenu = getCurrentWebviewWindow().listen<null>(events["menu:find-in-chat"].name, () => routeFind(open))
+      const stopMenu = getCurrentWindow().listen<null>(events["menu:find-in-chat"].name, () => routeFind(open))
       return () => {
         window.removeEventListener(OPEN_SEARCH, requested)
         window.removeEventListener("keydown", handler)

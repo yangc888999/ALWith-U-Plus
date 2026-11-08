@@ -1,4 +1,4 @@
-import { getVersion } from "@tauri-apps/api/app"
+import { BrainIcon, LanguagesIcon, PlayCircleIcon, SparklesIcon, SquareArrowOutUpRightIcon } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -17,22 +17,22 @@ import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { predictionPreference, setPredictionsEnabled } from "@/features/chat/composer/prediction-preference"
 import { ProjectAppIcon, useExternalApps } from "@/features/chat/open-in-editor"
+import { setYupDriveEnabled, useYupDriveEnabled } from "@/features/drive/yup-drive-preference"
 import { requestChatSurface } from "@/lib/chat-window"
 import i18n, { isLanguageCode, LANGUAGES } from "@/lib/i18n"
 import { loadPreferences, savePreference } from "@/lib/preferences"
 
 import { AutostartRow } from "./autostart-row"
+import { MemoryInjectionRow } from "./memory-injection-row"
 import { PreventSleepRow } from "./prevent-sleep-row"
-import { SettingGroup, SettingRow } from "./shared"
+import { SandboxRow } from "./sandbox-row"
+import { SettingRow, SettingsCard } from "./shared"
 
 export function GeneralSection() {
   const { t } = useTranslation()
   const predictions = useStore(predictionPreference, (state) => state.enabled)
+  const yupDrive = useYupDriveEnabled()
   const [savingPredictions, setSavingPredictions] = useState(false)
-  const [version, setVersion] = useState("")
-  useEffect(() => {
-    void getVersion().then(setVersion)
-  }, [])
   const apps = useExternalApps()
   const [externalEditor, setExternalEditor] = useState<string | null>(null)
   const [shortcut, setShortcut] = useState("")
@@ -45,61 +45,87 @@ export function GeneralSection() {
   }, [])
   const activeEditor = apps.find((app) => app.bundle_id === externalEditor) ?? apps[0]
   return (
-    <SettingGroup>
-      <SettingRow title={t("settings.versionLabel")}>
-        <span className="block text-end text-sm text-muted-foreground">v{version}</span>
-      </SettingRow>
-      <SettingRow title={t("chatWindow.shortcut")} aligned>
-        <div className="flex w-full items-center gap-2">
-          <Input
-            className="min-w-0 flex-1"
-            aria-label={t("chatWindow.shortcut")}
-            value={shortcut}
-            placeholder={t("chatWindow.shortcutOff")}
-            onChange={(event) => setShortcut(event.target.value)}
-            disabled={savingShortcut}
-          />
-          <Button
-            variant="outline"
-            size="default"
-            disabled={savingShortcut}
-            onClick={() => {
-              setSavingShortcut(true)
-              void requestChatSurface("main", { type: "shortcut", shortcut: shortcut.trim() })
-                .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))
-                .finally(() => setSavingShortcut(false))
+    <>
+      <SettingsCard title={t("settings.cardLanguage")} icon={<LanguagesIcon className="size-3.5" />}>
+        <SettingRow title={t("settings.language")} desc={t("settings.languageDesc")} aligned>
+          <Select
+            items={LANGUAGES.map((language) => ({ value: language.code, label: language.label }))}
+            value={i18n.language}
+            onValueChange={(value) => {
+              if (!value || !isLanguageCode(value)) return
+              void i18n.changeLanguage(value)
+              void savePreference("language", value)
             }}
           >
-            {t("chatWindow.shortcutSave")}
-          </Button>
-        </div>
-      </SettingRow>
-      <SettingRow title={t("settings.language")} aligned>
-        <Select
-          items={LANGUAGES.map((language) => ({ value: language.code, label: language.label }))}
-          value={i18n.language}
-          onValueChange={(value) => {
-            if (!value || !isLanguageCode(value)) return
-            void i18n.changeLanguage(value)
-            void savePreference("language", value)
-          }}
-        >
-          <SelectTrigger id="language" className="w-full" aria-label={t("settings.language")}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              {LANGUAGES.map((language) => (
-                <SelectItem key={language.code} value={language.code}>
-                  {language.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </SettingRow>
+            <SelectTrigger id="language" className="w-full" aria-label={t("settings.language")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {LANGUAGES.map((language) => (
+                  <SelectItem key={language.code} value={language.code}>
+                    {language.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </SettingRow>
+        <SettingRow title={t("settings.composerPredictions")} desc={t("settings.composerPredictionsDesc")}>
+          <div className="flex justify-end">
+            <Switch
+              aria-label={t("settings.composerPredictions")}
+              checked={predictions}
+              disabled={savingPredictions}
+              onCheckedChange={(enabled) => {
+                setSavingPredictions(true)
+                void setPredictionsEnabled(enabled)
+                  .catch((error: unknown) => toast.error(String(error)))
+                  .finally(() => setSavingPredictions(false))
+              }}
+            />
+          </div>
+        </SettingRow>
+      </SettingsCard>
+
+      <SettingsCard
+        title={t("settings.cardShortcut")}
+        desc={t("settings.cardShortcutDesc")}
+        icon={<SquareArrowOutUpRightIcon className="size-3.5" />}
+      >
+        <SettingRow title={t("chatWindow.shortcut")} desc={t("settings.cardShortcutHint")} aligned>
+          <div className="flex w-full items-center gap-2">
+            <Input
+              className="min-w-0 flex-1"
+              aria-label={t("chatWindow.shortcut")}
+              value={shortcut}
+              placeholder={t("chatWindow.shortcutOff")}
+              onChange={(event) => setShortcut(event.target.value)}
+              disabled={savingShortcut}
+            />
+            <Button
+              variant="outline"
+              size="default"
+              disabled={savingShortcut}
+              onClick={() => {
+                setSavingShortcut(true)
+                void requestChatSurface("main", { type: "shortcut", shortcut: shortcut.trim() })
+                  .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))
+                  .finally(() => setSavingShortcut(false))
+              }}
+            >
+              {t("chatWindow.shortcutSave")}
+            </Button>
+          </div>
+        </SettingRow>
+      </SettingsCard>
+
       {apps.length > 0 && (
-        <>
+        <SettingsCard
+          title={t("settings.cardOpenWith")}
+          desc={t("settings.cardOpenWithDesc")}
+          icon={<SparklesIcon className="size-3.5" />}
+        >
           <SettingRow title={t("settings.externalEditor")} desc={t("settings.externalEditorDesc")} aligned>
             <Select
               value={activeEditor?.bundle_id ?? ""}
@@ -129,25 +155,37 @@ export function GeneralSection() {
               </SelectContent>
             </Select>
           </SettingRow>
-        </>
+        </SettingsCard>
       )}
-      <SettingRow title={t("settings.composerPredictions")} desc={t("settings.composerPredictionsDesc")}>
-        <div className="flex justify-end">
-          <Switch
-            aria-label={t("settings.composerPredictions")}
-            checked={predictions}
-            disabled={savingPredictions}
-            onCheckedChange={(enabled) => {
-              setSavingPredictions(true)
-              void setPredictionsEnabled(enabled)
-                .catch((error: unknown) => toast.error(String(error)))
-                .finally(() => setSavingPredictions(false))
-            }}
-          />
-        </div>
-      </SettingRow>
-      <PreventSleepRow />
-      <AutostartRow />
-    </SettingGroup>
+
+      <SettingsCard
+        title={t("settings.cardStartup")}
+        desc={t("settings.cardStartupDesc")}
+        icon={<PlayCircleIcon className="size-3.5" />}
+      >
+        <AutostartRow />
+        <PreventSleepRow />
+        <SandboxRow />
+      </SettingsCard>
+
+      <SettingsCard
+        title={t("settings.cardMemory")}
+        desc={t("settings.cardMemoryDesc")}
+        icon={<BrainIcon className="size-3.5" />}
+      >
+        <MemoryInjectionRow />
+        <SettingRow title={t("settings.yupDrive")} desc={t("settings.yupDriveDesc")}>
+          <div className="flex justify-end">
+            <Switch
+              aria-label={t("settings.yupDrive")}
+              checked={yupDrive}
+              onCheckedChange={(enabled) => {
+                void setYupDriveEnabled(enabled).catch((error: unknown) => toast.error(String(error)))
+              }}
+            />
+          </div>
+        </SettingRow>
+      </SettingsCard>
+    </>
   )
 }

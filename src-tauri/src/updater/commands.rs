@@ -11,9 +11,17 @@ pub async fn updater_get_state(svc: TauriState<'_, Arc<UpdaterService>>) -> Resu
 /// One background round: check (the plugin call blocks, so it runs on a blocking thread),
 /// then download straight away when a release is found.
 pub async fn check_and_autodownload(app: AppHandle, svc: Arc<UpdaterService>) {
+    if !crate::updater::auto_update_enabled(&app) {
+        return;
+    }
     let checker = PluginChecker::new(app.clone());
     let svc_check = svc.clone();
     if tokio::task::spawn_blocking(move || svc_check.check_for_updates(&checker)).await.is_err() {
+        return;
+    }
+    // The setting can change while the network check is in flight.
+    if !crate::updater::auto_update_enabled(&app) {
+        svc.set_state(UpdaterState::idle());
         return;
     }
     let Ok(updater_dir) = updater_dir(&app) else {

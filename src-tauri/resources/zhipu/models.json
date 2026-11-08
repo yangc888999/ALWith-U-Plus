@@ -1,0 +1,31 @@
+{
+  "models": [
+    {
+      "slug": "glm-5.3",
+      "display_name": "GLM 5.3",
+      "description": "Z.ai GLM flagship for reasoning and tool use.",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Low reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "High reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Max reasoning"
+        }
+      ],
+      "default_reasoning_level": "max",
+      "context_window": 200000,
+      "max_context_window": 200000,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "supports_parallel_tool_calls": true
+    }
+  ]
+}

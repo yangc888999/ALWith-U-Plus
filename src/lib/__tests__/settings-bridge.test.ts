@@ -5,7 +5,8 @@ import {
   createSettingsAuthClient,
   serveSettingsBridge,
   type SettingsAgent,
-  type SettingsEvents
+  type SettingsEvents,
+  type SettingsNativeModels
 } from "../settings-bridge"
 import { must } from "./must"
 
@@ -61,7 +62,8 @@ test("settings authenticates through main and refreshes the account after login 
           account: { account: signedIn ? { type: "apiKey" } : null, requiresOpenaiAuth: true },
           rateLimits: null
         }),
-      onRateLimits: () => () => {}
+      onRateLimits: () => () => {},
+      nativeModels: () => null
     },
     bus.events
   )
@@ -77,7 +79,7 @@ test("settings authenticates through main and refreshes the account after login 
   await client.requestSignOut()
   expect(signedIn).toBe(false)
   expect(bus.count("settings:auth-result")).toBe(0)
-  stop()
+  stop.stop()
   await Promise.resolve()
   expect(bus.count("settings:auth-request")).toBe(0)
 })
@@ -96,7 +98,8 @@ test("overlapping requests match their own results and errors release listeners"
         }),
       respond: () => {},
       account: () => Promise.resolve(null),
-      onRateLimits: () => () => {}
+      onRateLimits: () => () => {},
+      nativeModels: () => null
     },
     bus.events
   )
@@ -112,7 +115,7 @@ test("overlapping requests match their own results and errors release listeners"
   must(finish.get("good"), "the good login to be pending")()
   await first
   expect(bus.count("settings:auth-result")).toBe(0)
-  stop()
+  stop.stop()
 })
 
 test("failed delivery releases the response subscription", async () => {
@@ -127,4 +130,49 @@ test("failed delivery releases the response subscription", async () => {
   })
   await expect(client.requestSignOut()).rejects.toThrow("Main unavailable")
   expect(bus.count("settings:auth-result")).toBe(0)
+})
+
+test("the integrated model group is answered on request and republished when it changes", async () => {
+  const bus = eventBus()
+  let native: SettingsNativeModels | null = null
+  let notify: (() => void) | null = null
+  const stop = serveSettingsBridge(
+    {
+      agent: () => agent,
+      subscribe: (listener) => {
+        notify = listener
+        return () => {}
+      },
+      logout: async () => {},
+      login: async () => {},
+      respond: () => {},
+      account: () => Promise.resolve(null),
+      onRateLimits: () => () => {},
+      nativeModels: () => native
+    },
+    bus.events
+  )
+  const models = (event: string) => bus.messages.filter((item) => item.event === event).map((item) => item.payload)
+  // The bridge installs its listeners asynchronously, like Tauri does.
+  for (let index = 0; index < 5; index++) await Promise.resolve()
+  // The settings window asks; the main window answers with whatever it holds (null before a session).
+  await bus.events.emitTo("main", "settings:request-native-models", undefined)
+  expect(models("settings:native-models")).toEqual([null])
+
+  // The list appears with the first session: the next store tick republishes it.
+  native = {
+    id: "chatgpt",
+    name: "ChatGPT",
+    models: [{ id: "gpt-6.1-sol", label: "6.1-Sol", efforts: ["low", "high"], defaultEffort: "high" }]
+  }
+  must<() => void>(notify, "the store subscription")()
+  expect(models("settings:native-models").at(-1)).toEqual(native)
+  // An unchanged list is not republished on later ticks.
+  must<() => void>(notify, "the store subscription")()
+  expect(models("settings:native-models")).toHaveLength(2)
+  // A changed one is.
+  native = { ...native, models: [...native.models, { id: "gpt-6-sol", label: "6-Sol", efforts: [], defaultEffort: null }] }
+  must<() => void>(notify, "the store subscription")()
+  expect(models("settings:native-models")).toHaveLength(3)
+  stop.stop()
 })

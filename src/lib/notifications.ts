@@ -4,7 +4,7 @@ import { isPermissionGranted, requestPermission, sendNotification } from "@tauri
 import type { CodexClient } from "@/agent/client"
 import i18n from "@/lib/i18n"
 
-async function notify(title: string, body: string): Promise<void> {
+export async function notify(title: string, body: string): Promise<void> {
   let granted = await isPermissionGranted()
   if (!granted) granted = (await requestPermission()) === "granted"
   if (granted) sendNotification({ title, body })

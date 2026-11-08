@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react"
 import { useState } from "react"
 import { afterEach, expect, test } from "vitest"
 
@@ -10,6 +10,7 @@ import { initI18n } from "@/lib/i18n"
 
 import { SessionSidebar } from "../session-sidebar"
 import { useSessionsUiStore } from "../store"
+import { TitleBarLeadingActions } from "../title-bar-leading"
 
 await initI18n("en")
 const originalState = client.state
@@ -53,10 +54,10 @@ test("footer arrows switch screens, plugins are selected only on the leading scr
             onNewChat={() => setScreen("main")}
             onNewProjectChat={() => {}}
             onSearch={() => {}}
-            onOpenWindow={() => {}}
             onOpenSettings={() => {}}
             onOpenPlugins={() => setScreen("leading")}
             onOpenExtensions={() => {}}
+            onOpenAutomation={() => {}}
             onSwitchScreen={() => setScreen(screen === "main" ? "leading" : "main")}
           />
         }
@@ -64,11 +65,11 @@ test("footer arrows switch screens, plugins are selected only on the leading scr
     )
   }
   const view = render(<Harness />)
-  const plugins = view.getByRole("button", { name: "Plugins" })
+  // 插件 / 扩展 / 技能 share one row whose flyout lists them; a plain click opens the first one.
+  const plugins = view.getByRole("button", { name: "Plugins · Extensions · Skills" })
   const arrow = view.getByRole("button", { name: "Open -1 screen" })
   const updateCard = view.getByRole("button", { name: /Relaunch to update/ })
   expect(updateCard.closest('[data-slot="sidebar-footer"]')).toBe(arrow.closest('[data-slot="sidebar-footer"]'))
-  expect(updateCard.nextElementSibling).toHaveAttribute("data-slot", "navigation-ads-padding")
   expect(arrow.closest('[data-slot="sidebar-footer"]')).not.toBeNull()
   expect(arrow.querySelector(".lucide-arrow-left")).toBeTruthy()
   expect(arrow.classList.contains("justify-start")).toBe(true)
@@ -86,7 +87,11 @@ test("footer arrows switch screens, plugins are selected only on the leading scr
   expect(plugins.hasAttribute("aria-current")).toBe(false)
   await act(() => Promise.try(() => fireEvent.click(plugins)))
   expect(plugins.getAttribute("aria-current")).toBe("page")
-  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "New chat" }))))
+  // 新建任务 goes straight into a new chat: no flyout stands between the click and the page.
+  const newTask = view.getByRole("button", { name: "New task" })
+  expect(newTask.hasAttribute("aria-haspopup")).toBe(false)
+  await act(() => Promise.try(() => fireEvent.click(newTask)))
+  expect(view.queryByRole("menu")).toBeNull()
   expect(view.getByRole("button", { name: "Open -1 screen" })).toBeTruthy()
   expect(plugins.hasAttribute("aria-current")).toBe(false)
 })
@@ -117,7 +122,6 @@ test("extensions sit below plugins, select their own leading page and remain ava
             onNewChat={() => setScreen("main")}
             onNewProjectChat={() => {}}
             onSearch={() => {}}
-            onOpenWindow={() => {}}
             onOpenSettings={() => {}}
             onOpenPlugins={() => {
               setLeadingPage("plugins")
@@ -127,6 +131,7 @@ test("extensions sit below plugins, select their own leading page and remain ava
               setLeadingPage("extensions")
               setScreen("leading")
             }}
+            onOpenAutomation={() => {}}
             onSwitchScreen={() => setScreen(screen === "main" ? "leading" : "main")}
           />
         }
@@ -134,31 +139,95 @@ test("extensions sit below plugins, select their own leading page and remain ava
     )
   }
   const view = render(<Harness />)
-  const plugins = view.getByRole("button", { name: "Plugins" })
-  const extensions = view.getByRole("button", { name: "Extensions" })
-  expect(plugins.nextElementSibling).toBe(extensions)
-  expect(extensions.hasAttribute("aria-current")).toBe(false)
-  await act(() => Promise.try(() => fireEvent.click(extensions)))
-  expect(extensions.getAttribute("aria-current")).toBe("page")
-  expect(plugins.hasAttribute("aria-current")).toBe(false)
+  const toolbox = view.getByRole("button", { name: "Plugins · Extensions · Skills" })
+  const openFlyout = async () => {
+    fireEvent.pointerEnter(toolbox)
+    return await waitFor(() => view.getByRole("menu", { name: "Plugins · Extensions · Skills" }))
+  }
+  expect(toolbox.hasAttribute("aria-current")).toBe(false)
+
+  // 插件 and 扩展 are destinations of the hover flyout rather than rows of their own, in that order.
+  const flyout = await openFlyout()
+  expect(within(flyout).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+    "Plugins",
+    "Extensions",
+    "Skills"
+  ])
+
+  await act(() => Promise.try(() => fireEvent.click(within(flyout).getByRole("menuitem", { name: "Extensions" }))))
+  expect(toolbox.getAttribute("aria-current")).toBe("page")
   expect(view.getByText("Extension management")).toBeTruthy()
   expect(view.container.querySelector('[data-screen-panel="main"]')?.getAttribute("aria-hidden")).toBe("true")
+  // Choosing a destination puts the flyout away again.
+  expect(view.queryByRole("menu")).toBeNull()
+
   await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Back to main screen" }))))
-  expect(extensions.hasAttribute("aria-current")).toBe(false)
+  expect(toolbox.hasAttribute("aria-current")).toBe(false)
   await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Open -1 screen" }))))
-  expect(extensions.getAttribute("aria-current")).toBe("page")
-  await act(() => Promise.try(() => fireEvent.click(plugins)))
-  expect(plugins.getAttribute("aria-current")).toBe("page")
-  expect(extensions.hasAttribute("aria-current")).toBe(false)
+  expect(toolbox.getAttribute("aria-current")).toBe("page")
+
+  const reopened = await openFlyout()
+  await act(() => Promise.try(() => fireEvent.click(within(reopened).getByRole("menuitem", { name: "Plugins" }))))
+  expect(toolbox.getAttribute("aria-current")).toBe("page")
+  expect(view.getByText("Plugin content")).toBeTruthy()
+
   await act(() => Promise.try(() => client.store.setState({ agent: null })))
-  // main keeps both navigation entries visible while the agent is disconnected.
-  expect(view.getByRole("button", { name: "Plugins" })).toBe(plugins)
-  expect(view.getByRole("button", { name: "Extensions" })).toBeTruthy()
-  await act(() => Promise.try(() => fireEvent.click(extensions)))
-  expect(extensions.getAttribute("aria-current")).toBe("page")
+  // Both destinations stay reachable while the agent is disconnected.
+  const offline = await openFlyout()
+  expect(within(offline).getByRole("menuitem", { name: "Plugins" })).toBeTruthy()
+  expect(within(offline).getByRole("menuitem", { name: "Extensions" })).toBeTruthy()
 })
 
 test("Drive mounts on first visit and retains input across tab switches until access is lost", async () => {
+  usePlatformAuth.setState({
+    isAuthenticated: true,
+    user: { ...originalAuth.user, login_email: "test@finture.id" } as NonNullable<typeof originalAuth.user>
+  })
+  useSessionsUiStore.setState({ view: "sessions" })
+  const view = render(
+    <MainSidebarLayout
+      initialPinned
+      screen="main"
+      leading={null}
+      main={null}
+      leadingActions={<TitleBarLeadingActions onOpenWindow={() => {}} />}
+      sidebar={
+        <SessionSidebar
+          screen="main"
+          leadingPage="plugins"
+          selectedId={null}
+          onSelect={() => {}}
+          onNewChat={() => {}}
+          onNewProjectChat={() => {}}
+          onSearch={() => {}}
+          onOpenSettings={() => {}}
+          onOpenPlugins={() => {}}
+          onOpenExtensions={() => {}}
+          onOpenAutomation={() => {}}
+          onSwitchScreen={() => {}}
+          drivePanel={<input aria-label="Drive filter" defaultValue="" />}
+        />
+      }
+    />
+  )
+  expect(view.queryByLabelText("Drive filter")).toBeNull()
+  // 资料库 是侧栏里的一条会话入口；云盘面板首次访问时挂载，之后保持不动。
+  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "YUP Drive" }))))
+  const input = view.getByLabelText("Drive filter")
+  fireEvent.change(input, { target: { value: "report" } })
+  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Activity" }))))
+  expect(input).toBeInTheDocument()
+  expect(input).not.toBeVisible()
+  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "YUP Drive" }))))
+  expect(view.getByLabelText("Drive filter")).toBe(input)
+  expect(input).toHaveValue("report")
+  expect(input).toBeVisible()
+  await act(() => Promise.try(() => usePlatformAuth.setState({ isAuthenticated: false })))
+  expect(view.queryByLabelText("Drive filter")).toBeNull()
+  expect(useSessionsUiStore.getState().view).toBe("sessions")
+})
+
+test("the sidebar keeps 资料库 and no longer carries a BI Metrics row", async () => {
   usePlatformAuth.setState({
     isAuthenticated: true,
     user: { ...originalAuth.user, login_email: "test@finture.id" } as NonNullable<typeof originalAuth.user>
@@ -179,35 +248,31 @@ test("Drive mounts on first visit and retains input across tab switches until ac
           onNewChat={() => {}}
           onNewProjectChat={() => {}}
           onSearch={() => {}}
-          onOpenWindow={() => {}}
           onOpenSettings={() => {}}
           onOpenPlugins={() => {}}
           onOpenExtensions={() => {}}
+          onOpenAutomation={() => {}}
           onSwitchScreen={() => {}}
           drivePanel={<input aria-label="Drive filter" defaultValue="" />}
         />
       }
     />
   )
-  expect(view.queryByLabelText("Drive filter")).toBeNull()
-  await act(() => Promise.try(() => fireEvent.click(view.getByRole("tab", { name: "Drive" }))))
-  const input = view.getByLabelText("Drive filter")
-  fireEvent.change(input, { target: { value: "report" } })
-  for (const name of ["Activity", "Chats"]) {
-    await act(() => Promise.try(() => fireEvent.click(view.getByRole("tab", { name }))))
-    expect(input).toBeInTheDocument()
-    expect(input).not.toBeVisible()
-    await act(() => Promise.try(() => fireEvent.click(view.getByRole("tab", { name: "Drive" }))))
-    expect(view.getByLabelText("Drive filter")).toBe(input)
-    expect(input).toHaveValue("report")
-    expect(input).toBeVisible()
-  }
+  // 资料库 opens the drive panel and toggles back to the conversation list.
+  const library = view.getByRole("button", { name: "YUP Drive" })
+  await act(() => Promise.try(() => fireEvent.click(library)))
+  expect(library.getAttribute("aria-current")).toBe("page")
+  expect(view.getByLabelText("Drive filter")).toBeVisible()
+  await act(() => Promise.try(() => fireEvent.click(library)))
+  expect(library.hasAttribute("aria-current")).toBe(false)
+  // BI Metrics now lives in the preview pane, not as a sidebar row.
+  expect(view.queryByRole("button", { name: "BI Metrics" })).toBeNull()
+  // Without company access the 资料库 row goes away.
   await act(() => Promise.try(() => usePlatformAuth.setState({ isAuthenticated: false })))
-  expect(view.queryByLabelText("Drive filter")).toBeNull()
-  expect(useSessionsUiStore.getState().view).toBe("sessions")
+  expect(view.queryByRole("button", { name: "YUP Drive" })).toBeNull()
 })
 
-test("project counts show only the number of sessions", () => {
+test("the quick-chat group carries its count while project rows stay uncounted", () => {
   useSessionsUiStore.setState({ view: "sessions" })
   client.store.setState({
     sessionListLoaded: true,
@@ -231,25 +296,28 @@ test("project counts show only the number of sessions", () => {
           onNewChat={() => {}}
           onNewProjectChat={() => {}}
           onSearch={() => {}}
-          onOpenWindow={() => {}}
           onOpenSettings={() => {}}
           onOpenPlugins={() => {}}
           onOpenExtensions={() => {}}
+          onOpenAutomation={() => {}}
           onSwitchScreen={() => {}}
         />
       }
     />
   )
-  expect(view.getByText("2", { exact: true })).toBeVisible()
+  // 聊天 keeps its count inline, exactly like 项目; the project groups below show only their names,
+  // because a second number next to every folder read as two different measurements.
+  expect(view.getByRole("button", { name: "Chats (0)" })).toHaveAttribute("aria-expanded", "true")
+  expect(view.queryByText("2", { exact: true })).toBeNull()
   expect(view.queryByText(/loaded/i)).toBeNull()
   expect(view.queryByRole("button", { name: "Load more" })).toBeNull()
 })
 
-test("Vibemon sits below extensions and selects its own leading page without an agent connection", async () => {
+test("Extensions sits below plugins and selects its own leading page without an agent connection", async () => {
   client.store.setState({ connection: "disconnected", agent: null })
   function Harness() {
     const [screen, setScreen] = useState<MainScreen>("main")
-    const [page, setPage] = useState<"plugins" | "extensions" | "vibemon">("plugins")
+    const [page, setPage] = useState<"plugins" | "extensions">("plugins")
     const open = (next: typeof page) => {
       setPage(next)
       setScreen("leading")
@@ -269,11 +337,10 @@ test("Vibemon sits below extensions and selects its own leading page without an 
             onNewChat={() => setScreen("main")}
             onNewProjectChat={() => {}}
             onSearch={() => {}}
-            onOpenWindow={() => {}}
             onOpenSettings={() => {}}
             onOpenPlugins={() => open("plugins")}
             onOpenExtensions={() => open("extensions")}
-            onOpenVibemon={() => open("vibemon")}
+            onOpenAutomation={() => {}}
             onSwitchScreen={() => setScreen(screen === "main" ? "leading" : "main")}
           />
         }
@@ -281,16 +348,15 @@ test("Vibemon sits below extensions and selects its own leading page without an 
     )
   }
   const view = render(<Harness />)
-  const vibemon = view.getByRole("button", { name: "Vibémon" })
-  const extensions = view.getByRole("button", { name: "Extensions" })
-  expect(extensions.nextElementSibling).toBe(vibemon)
-  expect(vibemon.closest('[data-slot="sidebar-header"]')).not.toBeNull()
-  await act(() => Promise.try(() => fireEvent.click(vibemon)))
-  expect(vibemon.getAttribute("aria-current")).toBe("page")
-  expect(extensions.hasAttribute("aria-current")).toBe(false)
+  const toolbox = view.getByRole("button", { name: "Plugins · Extensions · Skills" })
+  expect(toolbox.closest('[data-slot="sidebar-header"]')).not.toBeNull()
+  fireEvent.pointerEnter(toolbox)
+  const flyout = await waitFor(() => view.getByRole("menu", { name: "Plugins · Extensions · Skills" }))
+  await act(() => Promise.try(() => fireEvent.click(within(flyout).getByRole("menuitem", { name: "Extensions" }))))
+  expect(toolbox.getAttribute("aria-current")).toBe("page")
   expect(view.container.querySelector('[data-screen-panel="main"]')?.getAttribute("aria-hidden")).toBe("true")
   await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Back to main screen" }))))
-  expect(vibemon.hasAttribute("aria-current")).toBe(false)
+  expect(toolbox.hasAttribute("aria-current")).toBe(false)
   await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Open -1 screen" }))))
-  expect(vibemon.getAttribute("aria-current")).toBe("page")
+  expect(toolbox.getAttribute("aria-current")).toBe("page")
 })

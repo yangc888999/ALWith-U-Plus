@@ -55,7 +55,7 @@ jobs:
           workflowArtifactNamePattern: alwith-u-[version]-[platform]-[arch]-[bundle]
       - name: Verify packaged toolchain (macOS)
         if: runner.os == 'macOS'
-        run: bun scripts/verify-bundled-toolchain.ts "src-tauri/target/${{ matrix.target }}/release/bundle/macos/ALwith U.app/Contents/MacOS"
+        run: bun scripts/verify-bundled-toolchain.ts "src-tauri/target/${{ matrix.target }}/release/bundle/macos/ALWith L.app/Contents/MacOS"
       - name: Verify built toolchain with staged resources (Windows)
         if: runner.os == 'Windows'
         run: bun scripts/verify-bundled-toolchain.ts "src-tauri/target/${{ matrix.target }}/release" "src-tauri/resources"
@@ -115,7 +115,7 @@ jobs:
           count=$(jq 'length' <<< "$releases")
           if [ "$count" -eq 0 ]; then
             release_id=$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
-              -f tag_name="$RELEASE_TAG" -f name="ALwith U $RELEASE_TAG" \
+              -f tag_name="$RELEASE_TAG" -f name="ALWith L $RELEASE_TAG" \
               -F draft=true -F generate_release_notes=true --jq '.id')
           elif [ "$count" -eq 1 ]; then
             release_id=$(jq -er '.[0] | if .draft then .id else error("Release is already published") end' <<< "$releases")
@@ -173,7 +173,7 @@ jobs:
           tauriScript: bun tauri
           tagName: ${{ github.ref_name }}
           releaseId: ${{ needs.release-preflight.outputs.release_id }}
-          releaseName: ALwith U ${{ github.ref_name }}
+          releaseName: ALWith L ${{ github.ref_name }}
           releaseDraft: true
           generateReleaseNotes: true
           updaterJsonPreferNsis: true
@@ -181,7 +181,7 @@ jobs:
           args: --target ${{ matrix.target }}
       - name: Verify packaged toolchain (macOS)
         if: runner.os == 'macOS'
-        run: bun scripts/verify-bundled-toolchain.ts "src-tauri/target/${{ matrix.target }}/release/bundle/macos/ALwith U.app/Contents/MacOS"
+        run: bun scripts/verify-bundled-toolchain.ts "src-tauri/target/${{ matrix.target }}/release/bundle/macos/ALWith L.app/Contents/MacOS"
       - name: Verify built toolchain with staged resources (Windows)
         if: runner.os == 'Windows'
         run: bun scripts/verify-bundled-toolchain.ts "src-tauri/target/${{ matrix.target }}/release" "src-tauri/resources"

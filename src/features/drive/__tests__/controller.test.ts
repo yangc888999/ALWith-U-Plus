@@ -9,7 +9,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }))
 vi.mock("@tauri-apps/api/event", () => ({ emitTo: async () => {}, listen: () => Promise.resolve(() => {}) }))
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }))
 
-import { drive } from "../controller"
+import { drive, driveRequestTimeoutMs } from "../controller"
 
 const snapshot: Snapshot = {
   version: 1,
@@ -84,4 +84,34 @@ test("failed configuration saves propagate the error without a success toast", a
 test("background configuration reads do not show save notifications", async () => {
   await drive.request({ type: "configuration" })
   expect(mocks.success).not.toHaveBeenCalled()
+})
+
+test("interactive sign-in is uncapped while the delete round trips have a deadline", () => {
+  expect(driveRequestTimeoutMs({ type: "login", baseUrl: "https://drive.test", token: "t", localRoot: "/drive" })).toBeNull()
+  expect(driveRequestTimeoutMs({ type: "ssoLogin", baseUrl: "https://drive.test", localRoot: "/drive" })).toBeNull()
+  expect(driveRequestTimeoutMs({ type: "cancelDeletes", projectId: 499 })).toBe(20_000)
+  expect(driveRequestTimeoutMs({ type: "confirmDeletes", projectId: 499 })).toBe(20_000)
+  expect(driveRequestTimeoutMs({ type: "sync" })).toBe(180_000)
+  expect(driveRequestTimeoutMs({ type: "snapshot" })).toBe(45_000)
+})
+
+test("a wedged native delete call cannot freeze the shared refresh handle", async () => {
+  vi.useFakeTimers()
+  try {
+    mocks.invoke.mockImplementation((_command, { request }) => {
+      if (request.type === "snapshot") return Promise.resolve({ type: "snapshot", data: snapshot })
+      // The closed native dylib never answers this one.
+      if (request.type === "cancelDeletes") return new Promise<DriveResponse>(() => {})
+      return Promise.resolve({ type: "done" })
+    })
+    const wedged = drive.request({ type: "cancelDeletes", projectId: 499 })
+    const rejection = expect(wedged).rejects.toThrow("Drive request timed out: cancelDeletes")
+    await vi.advanceTimersByTimeAsync(20_000)
+    await rejection
+    // Rejecting at the transport releases the controller's deduplicated refresh promise, so the
+    // rest of the Drive panel stays usable instead of joining the stuck call.
+    await expect(drive.request({ type: "roots" })).resolves.toEqual({ type: "done" })
+  } finally {
+    vi.useRealTimers()
+  }
 })

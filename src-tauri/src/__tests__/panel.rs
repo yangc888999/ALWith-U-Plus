@@ -1,27 +1,11 @@
-use super::{is_overlay, set_presented, should_restore, with_restored_responder};
+use super::{is_overlay, should_restore, with_restored_responder};
 use std::cell::Cell;
 
 #[test]
-fn environment_repairs_keep_pet_visibility_intent_without_reopening_hidden_bubbles() {
-    set_presented("vibemon", true);
-    set_presented("bubble-menu-vibemon", false);
-    assert!(should_restore("vibemon", false));
-    assert!(!should_restore("bubble-menu-vibemon", true));
-    set_presented("bubble-menu-vibemon", true);
-    assert!(should_restore("bubble-menu-vibemon", false));
-    set_presented("vibemon", false);
-    set_presented("bubble-menu-vibemon", false);
-    assert!(!should_restore("vibemon", false));
-    assert!(!should_restore("bubble-menu-vibemon", false));
+fn only_the_chat_window_participates_in_the_panel_lifecycle() {
+    assert!(is_overlay("chat"));
     assert!(should_restore("chat", true));
     assert!(!should_restore("chat", false));
-}
-
-#[test]
-fn only_owned_overlays_participate_in_panel_lifecycle() {
-    for label in ["chat", "vibemon", "bubble-menu-vibemon"] {
-        assert!(is_overlay(label));
-    }
     for label in ["main", "settings", ""] {
         assert!(!is_overlay(label));
         assert!(!should_restore(label, true));

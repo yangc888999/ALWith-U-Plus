@@ -5,7 +5,7 @@ import * as core from "@tauri-apps/api/core"
 import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks"
 import { act, fireEvent, render as renderView, waitFor, within } from "@testing-library/react"
 import { type ReactElement, StrictMode, useState } from "react"
-import { expect, test, vi } from "vitest"
+import { afterEach, expect, test, vi } from "vitest"
 
 import { createFakeAgent } from "@/agent/__tests__/fake-agent"
 import { FakeHubPort } from "@/agent/__tests__/fake-runtime-client"
@@ -18,6 +18,7 @@ import { client, useApp, useSession } from "@/lib/client"
 import { initI18n } from "@/lib/i18n"
 import type { Preferences } from "@/lib/preferences"
 import type { ProviderSnapshot } from "@/lib/providers"
+import { armStartupWindow, resetStartupWindow, stallStartupWindow } from "@/lib/startup-window"
 import { mockOf } from "@/test/mock-of"
 
 import { navigationSoundStore } from "../codex/navigation-sound-store"
@@ -37,6 +38,7 @@ const providers: ProviderSnapshot = {
   appliedRevision: 1,
   providers: {},
   customProviders: [],
+  builtInModels: {}, managedProviders: [],
   status: "applied",
   error: null
 }
@@ -87,6 +89,9 @@ const windowPreferences: Preferences = {
   sidebarPinned: false,
   lastProjectDirectory: "/tmp/window-original",
   language: "en",
+  profileNickname: null,
+  profileAvatar: null,
+  profileOwner: null,
   zoomLevel: null,
   modelSelections: { main: null, chat: null },
   navigationSoundMode: "none",
@@ -244,6 +249,62 @@ test.each([
     await act(() => Promise.try(() => view.unmount()))
     discard.mockRestore()
     env.restore()
+  }
+})
+
+test("a quick-chat draft carries the neutral chat-mode badge with its icon", async () => {
+  const env = await windowEnvironment()
+  const view = render(
+    <ThemeProvider>
+      <ChatWindow
+        preferences={{ ...windowPreferences, lastProjectDirectory: "/Users/mac/Documents/ALwith" }}
+      />
+    </ThemeProvider>
+  )
+  try {
+    await waitFor(() => expect(env.ready()).toBe(true))
+    await act(() => env.present())
+    await waitFor(() => expect(view.getByRole("textbox")).toBeTruthy())
+    const badge = await view.findByText("Type to chat without a project")
+    expect(badge.className).toContain("chat-mode-badge")
+    expect(badge.querySelector(".lucide-message-circle")).not.toBeNull()
+  } finally {
+    await act(() => Promise.try(() => view.unmount()))
+    env.restore()
+  }
+})
+
+test("a draft keeps the project-memory action reachable", async () => {
+  // Clearing the context archives the conversation and lands on a draft. The memory action lives on
+  // the chat column's edge, not in a session menu, so it has to survive that swap — it used to be
+  // missing exactly then, and after a reload too.
+  const { restore } = await environment()
+  const prompt = vi.spyOn(client, "prompt")
+  const props = {
+    owner: "main" as const,
+    onCwdChange: () => {},
+    onCreated: () => {},
+    onSendingChange: () => {},
+    onAuthRequired: () => {},
+    onNewChat: () => {},
+    providerSnapshot: providers
+  }
+  const view = render(<DraftChat {...props} cwd="/tmp/draft-memory" />)
+  try {
+    const read = await view.findByRole("button", { name: "Read project memory" })
+    expect(read.getAttribute("title")).toBe("Read project memory")
+    // The edge action sends straight away only once the draft has materialised; before that it has
+    // to park the text in the composer instead.
+    await waitFor(() => expect(Object.keys(client.state.draftSessions)).toHaveLength(1))
+    await act(() => Promise.try(() => fireEvent.click(read)))
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1))
+    const blocks = must(prompt.mock.calls[0], "memory prompt")[1]
+    expect(
+      blocks.some((block) => block.type === "text" && typeof block.text === "string" && block.text.includes("memory.md"))
+    ).toBe(true)
+  } finally {
+    await act(() => Promise.try(() => view.unmount()))
+    restore()
   }
 })
 
@@ -564,6 +625,41 @@ test("initial preparation failure keeps the composer visible and retry preserves
     await waitFor(() => expect(view.getByTestId("model-trigger")).toBeTruthy())
     expect((view.getByRole("textbox") as HTMLTextAreaElement).value).toBe("retry input")
     expect(view.queryByText("Preparation failed")).toBeNull()
+  } finally {
+    await act(() => Promise.try(() => view.unmount()))
+    failure.mockRestore()
+    restore()
+  }
+})
+
+test("a startup router/config failure retries without flashing the raw ACP error", async () => {
+  const { restore } = await environment()
+  // Exact text from the other Mac's 2026-11-07 screenshot (backticks, not single quotes). The
+  // native host repairs config.toml before the engine is spawned; one client can still fail once.
+  const failure = vi
+    .spyOn(client, "prepareDraft")
+    .mockRejectedValueOnce(
+      new Error("acpRequest: Codex process has exited with code 1: Error: Model provider `alwith` not found")
+    )
+  const view = render(
+    <DraftChat
+      owner="main"
+      cwd="/tmp/startup"
+      onCwdChange={() => {}}
+      onCreated={() => {}}
+      onSendingChange={() => {}}
+      onAuthRequired={() => {}}
+      onNewChat={() => {}}
+      providerSnapshot={providers}
+    />
+  )
+  try {
+    // No red error card / Retry button for a transient startup failure, and the second attempt
+    // materialises the draft on its own — nobody has to click anything.
+    await waitFor(() => expect(view.getByTestId("model-trigger")).toBeTruthy(), { timeout: 3000 })
+    expect(failure).toHaveBeenCalledTimes(2)
+    expect(view.queryByText(/Codex process has exited/)).toBeNull()
+    expect(view.queryByRole("button", { name: "Retry" })).toBeNull()
   } finally {
     await act(() => Promise.try(() => view.unmount()))
     failure.mockRestore()
@@ -1280,5 +1376,102 @@ test("a collection draft is saved only after its first send is accepted", async 
     await act(() => Promise.resolve(view.unmount()))
     saved.mockRestore()
     env.restore()
+  }
+})
+
+test("the main window's draft drops its title bar while the floating window keeps one", async () => {
+  const env = await environment()
+  const props = {
+    owner: "main" as const,
+    cwd: "/tmp/draft-header",
+    onCwdChange: () => {},
+    onCreated: () => {},
+    onSendingChange: () => {},
+    onAuthRequired: () => {},
+    onNewChat: () => {},
+    providerSnapshot: providers
+  }
+  const view = render(<DraftChat {...props} />)
+  try {
+    // Nothing to title before the first message: the conversation starts at the greeting.
+    expect(view.container.querySelector("[data-main-chat-header]")).toBeNull()
+    expect(view.getByText("What would you like to build?")).toBeVisible()
+
+    const floating = document.createElement("div")
+    document.body.append(floating)
+    try {
+      // The floating window has no native title bar, so its header is portalled into one.
+      view.rerender(<DraftChat {...props} headerTarget={floating} />)
+      expect(within(floating).getByText("New chat")).toBeVisible()
+    } finally {
+      floating.remove()
+    }
+  } finally {
+    await act(() => Promise.resolve(view.unmount()))
+    env.restore()
+  }
+})
+
+// 静默窗是这一轮的核心承诺：引擎还没 ready 时，草稿页只许说「正在启动」，不许闪红字。
+afterEach(() => resetStartupWindow())
+
+test("a warm start paints no status line at all before the engine is ready", async () => {
+  // 热启动只要几百毫秒：这段时间什么都不画，否则"画了再抹"本身就是闪一下（2026-11-08）。
+  const { restore } = await environment()
+  armStartupWindow()
+  const failure = vi
+    .spyOn(client, "prepareDraft")
+    .mockRejectedValue(new Error("Runtime is not running: connect ECONNREFUSED 127.0.0.1:1"))
+  const view = render(
+    <DraftChat
+      owner="main"
+      cwd="/tmp/startup"
+      onCwdChange={() => {}}
+      onCreated={() => {}}
+      onSendingChange={() => {}}
+      onAuthRequired={() => {}}
+      onNewChat={() => {}}
+      providerSnapshot={providers}
+    />
+  )
+  try {
+    await waitFor(() => expect(failure).toHaveBeenCalled())
+    expect(view.queryByText("Starting chat service")).toBeNull()
+    expect(view.queryByText(/ECONNREFUSED/)).toBeNull()
+    expect(view.queryByRole("button", { name: "Retry" })).toBeNull()
+  } finally {
+    await act(() => Promise.try(() => view.unmount()))
+    failure.mockRestore()
+    restore()
+  }
+})
+
+test("a startup that drags says 正在启动 instead of the raw error", async () => {
+  const { restore } = await environment()
+  armStartupWindow()
+  stallStartupWindow()
+  const failure = vi
+    .spyOn(client, "prepareDraft")
+    .mockRejectedValue(new Error("Runtime is not running: connect ECONNREFUSED 127.0.0.1:1"))
+  const view = render(
+    <DraftChat
+      owner="main"
+      cwd="/tmp/startup"
+      onCwdChange={() => {}}
+      onCreated={() => {}}
+      onSendingChange={() => {}}
+      onAuthRequired={() => {}}
+      onNewChat={() => {}}
+      providerSnapshot={providers}
+    />
+  )
+  try {
+    await waitFor(() => expect(view.getByText("Starting chat service")).toBeTruthy())
+    expect(view.queryByText(/ECONNREFUSED/)).toBeNull()
+    expect(view.queryByRole("button", { name: "Retry" })).toBeNull()
+  } finally {
+    await act(() => Promise.try(() => view.unmount()))
+    failure.mockRestore()
+    restore()
   }
 })

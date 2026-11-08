@@ -1,8 +1,8 @@
 import { DriveNotificationProvider } from "@alwith/module-drive/react"
-import { isTauri } from "@tauri-apps/api/core"
+import { invoke, isTauri } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import { attachConsole, error as logError, info } from "@tauri-apps/plugin-log"
-import { platform } from "@tauri-apps/plugin-os"
+import { locale as systemLocale, platform } from "@tauri-apps/plugin-os"
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import { toast } from "sonner"
@@ -18,20 +18,31 @@ import { ZoomFeedback } from "@/features/appearance/zoom-feedback"
 import { AuthGate } from "@/features/auth/auth-gate"
 import { initPlatformAuth } from "@/features/auth/store"
 import { hydrateNavigationSound } from "@/features/chat/codex/navigation-sound-store"
+import { startModelOverloadAlerts } from "@/features/chat/model-overload-alert"
 import { predictionPreference } from "@/features/chat/composer/prediction-preference"
-import { restoreComputer } from "@/features/computer/operations"
+import { requestDefaultScreenCapture, restoreComputer } from "@/features/computer/operations"
 import { reportExtensionError } from "@/features/extensions/runtime"
 import { startStartupImports } from "@/features/extensions/startup-import-control"
 import { initializeMobile } from "@/features/mobile/bridge"
+import { hydrateProfileOverrides } from "@/features/profile/profile-store"
 import { useUpdaterStore } from "@/features/updater/store"
-import { initializeVibemonMain } from "@/features/vibemon/main-host"
+import { installErrorTextFormatter } from "@/lib/error-text"
+import { installToastErrorLocalization } from "@/lib/toast-error"
+import { armStartupWindow } from "@/lib/startup-window"
 import { initI18n } from "@/lib/i18n"
 import { startPreferenceSync } from "@/lib/preference-sync"
 import { loadPreferences } from "@/lib/preferences"
+import { isQueueCancelled } from "@/lib/queued-prompt"
 import { bootstrapSettings } from "@/lib/settings-store"
 import { hydrateZoom } from "@/lib/zoom"
 import { startZoomViewport } from "@/lib/zoom-viewport"
 import "./index.css"
+
+// Install before anything can toast: early startup rejections were the last raw-English path.
+installToastErrorLocalization()
+// 引擎第一次 ready 之前的一切失败都不上屏（只进日志）。顺序很重要：必须在第一个 await 之前开启，
+// 否则 bootstrap 里的失败会抢在窗口之前弹出来（2026-11-08）。
+armStartupWindow()
 
 const driveNotices = {
   error(message: string): void {
@@ -40,6 +51,68 @@ const driveNotices = {
   success(message: string): void {
     toast.success(message, { id: "drive-task-completed" })
   }
+}
+
+// Dev-only probe for the selection/right-click path: writes what the document actually receives
+// to the diagnostic log, so a missing floating menu can be explained instead of guessed at.
+if (import.meta.env.DEV) {
+  const probe = (line: string): void => {
+    void invoke("append_diagnostic", { line: `[probe] ${line}` }).catch(() => undefined)
+  }
+  const describeMenu = (selector: string): Record<string, unknown> | null => {
+    const node = document.querySelector<HTMLElement>(selector)
+    if (node === null) return null
+    const rect = node.getBoundingClientRect()
+    const style = getComputedStyle(node)
+    const px = Math.round(rect.left + rect.width / 2)
+    const py = Math.round(rect.top + rect.height / 2)
+    return {
+      rect: [Math.round(rect.left), Math.round(rect.top), Math.round(rect.width), Math.round(rect.height)],
+      position: style.position,
+      zIndex: style.zIndex,
+      visibility: style.visibility,
+      opacity: style.opacity,
+      background: style.backgroundColor,
+      color: style.color,
+      topmost: document.elementFromPoint(px, py)?.tagName ?? null,
+      inside: document.elementFromPoint(px, py) === node || node.contains(document.elementFromPoint(px, py))
+    }
+  }
+  const describeTarget = (target: EventTarget | null): Record<string, unknown> => ({
+    at: new Date().toISOString(),
+    tag: target instanceof Element ? target.tagName : null,
+    composer: target instanceof Element ? target.closest("[data-composer]") !== null : false,
+    pill: document.querySelector("[data-selection-menu]") !== null,
+    ctx: document.querySelector("[data-chat-context-menu]") !== null
+  })
+  window.addEventListener(
+    "pointerup",
+    (event) => {
+      const selection = window.getSelection()
+      probe(
+        JSON.stringify({
+          ev: "pointerup",
+          button: event.button,
+          text: selection?.toString().trim().slice(0, 12) ?? "",
+          ...describeTarget(event.target)
+        })
+      )
+      setTimeout(() => {
+        probe(JSON.stringify({ ev: "pointerup+180ms", box: describeMenu("[data-selection-menu]") }))
+      }, 180)
+    },
+    true
+  )
+  window.addEventListener(
+    "contextmenu",
+    (event) => {
+      probe(JSON.stringify({ ev: "contextmenu", ...describeTarget(event.target) }))
+      setTimeout(() => {
+        probe(JSON.stringify({ ev: "contextmenu+50ms", ...describeTarget(event.target), box: describeMenu("[data-chat-context-menu]") }))
+      }, 50)
+    },
+    true
+  )
 }
 
 function describe(value: unknown): string {
@@ -59,7 +132,15 @@ function surfaceGlobalError(message: string): void {
   logError(message).catch((failure: unknown) => console.error("[logError]", failure))
 }
 
-window.addEventListener("unhandledrejection", (event) => surfaceGlobalError(describe(event.reason)))
+// A cancelled queued message rejects by design (it is how the composer restores the text), so it
+// must not be reported as an uncaught failure.
+window.addEventListener("unhandledrejection", (event) => {
+  if (isQueueCancelled(event.reason)) {
+    event.preventDefault()
+    return
+  }
+  surfaceGlobalError(describe(event.reason))
+})
 window.addEventListener("error", (event) => {
   // Benign browser noise: the layout settled one frame late. VS Code and Sentry filter it too.
   if (event.message.startsWith("ResizeObserver loop")) return
@@ -72,28 +153,52 @@ async function bootstrap(): Promise<void> {
   if (isTauri() && platform() === "windows") {
     document.documentElement.dataset.windowBackdrop = "acrylic"
   }
-  await bootstrapSettings()
-  await initializeMobile().catch((error: unknown) => surfaceGlobalError(describe(error)))
-  await attachConsole()
-  await info("frontend booting")
-  const preferences = await loadPreferences()
+  // Every `await` before the first render is a frame the window spends on the boot placeholder, and
+  // each of these is a separate IPC round trip. The ones that do not feed each other now run
+  // together; only what the first frame actually shows (preferences, translations, zoom) is still
+  // awaited in order.
+  const [, preferences] = await Promise.all([bootstrapSettings(), loadPreferences()])
   predictionPreference.setState({ enabled: preferences.composerPredictions ?? true })
-  await initI18n(preferences.language)
-  if (isTauri()) {
-    await listen<string>("power:error", ({ payload }) => surfaceGlobalError(payload))
-    await restoreComputer().catch((error: unknown) => surfaceGlobalError(describe(error)))
-    void startStartupImports().catch(reportExtensionError)
-    void useUpdaterStore
-      .getState()
-      .init()
-      .catch((error: unknown) => surfaceGlobalError(describe(error)))
+  hydrateProfileOverrides({
+    owner: preferences.profileOwner,
+    nickname: preferences.profileNickname,
+    avatar: preferences.profileAvatar
+  })
+  // WKWebView reports the app bundle's language, not the user's system language. On a first
+  // launch there is no saved `language` preference yet, so trusting navigator.language renders the
+  // whole UI in English even on a Chinese Mac. Ask the OS directly before i18n is initialised.
+  let language = preferences.language
+  if (language === null && isTauri()) {
+    language = await systemLocale().catch(() => null)
   }
-  await startZoomViewport()
+  await initI18n(language)
+  // Legacy chats record the provider they were born on, and codex can only resume them by
+  // restarting the whole engine — which aborts whatever other chats are streaming. Move those
+  // records onto the shared router before the runtime starts, so no chat costs anyone else's turn.
+  if (isTauri()) {
+    await invoke("migrate_threads_to_router").catch((error: unknown) => {
+      console.warn("[router-migration]", error)
+    })
+  }
+  // Turn errors are painted by the chat package itself; it asks this formatter for the wording.
+  installErrorTextFormatter()
+  await Promise.all([
+    initializeMobile().catch((error: unknown) => surfaceGlobalError(describe(error))),
+    // Logging must be attached before the first line is written, but nothing renders for it.
+    attachConsole()
+      .then(() => info("frontend booting"))
+      .catch((error: unknown) => console.error("[attachConsole]", error)),
+    startZoomViewport(),
+    isTauri()
+      ? listen<string>("power:error", ({ payload }) => surfaceGlobalError(payload)).catch((error: unknown) =>
+          console.error("[power:error]", error)
+        )
+      : Promise.resolve(),
+    isTauri() ? initPlatformAuth() : Promise.resolve()
+  ])
   await hydrateZoom(preferences.zoomLevel)
   hydrateNavigationSound({ soundMode: preferences.navigationSoundMode, instrument: preferences.navigationInstrument })
   void startPreferenceSync()
-  await initPlatformAuth()
-  await initializeVibemonMain()
   const root = document.getElementById("root")
   if (!root) throw new Error("index.html has no #root")
   createRoot(root).render(
@@ -117,6 +222,19 @@ async function bootstrap(): Promise<void> {
       </AppDirectionProvider>
     </StrictMode>
   )
+  if (isTauri()) {
+    // Off the first-frame path: the computer driver, the screen-capture permission and the
+    // extension/updater checks are only needed once the surface is on screen, and waiting for them
+    // held the window on the boot placeholder for a whole startup round trip.
+    void restoreComputer().catch((error: unknown) => surfaceGlobalError(describe(error)))
+    void requestDefaultScreenCapture().catch((error: unknown) => surfaceGlobalError(describe(error)))
+    void startStartupImports().catch(reportExtensionError)
+    void startModelOverloadAlerts().catch((error: unknown) => surfaceGlobalError(describe(error)))
+    void useUpdaterStore
+      .getState()
+      .init()
+      .catch((error: unknown) => surfaceGlobalError(describe(error)))
+  }
 }
 
 bootstrap().catch((failure: unknown) => surfaceGlobalError(`bootstrap failed: ${describe(failure)}`))

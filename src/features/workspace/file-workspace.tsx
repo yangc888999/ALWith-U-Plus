@@ -5,6 +5,7 @@ import {
   DriveCondense,
   DriveMoveDialog,
   drivePreviewIntegrations,
+  isYuplinkName,
   resolveDriveRoot
 } from "@alwith/module-drive/content"
 import { DriveBadge, useDrive } from "@alwith/module-drive/react"
@@ -25,6 +26,8 @@ import {
 } from "@alwith/module-file-tree"
 import { containsPath, createFileSystem, dirname, type FileSystem, normalizePath } from "@alwith/module-fs"
 import { createTauriAdapter } from "@alwith/module-fs/tauri"
+import { hideConflictCopies, isIgnoredWatchPath } from "@/features/drive/conflict-copy-filter"
+import { createWatchRelay } from "./watch-relay"
 import { writeText } from "@tauri-apps/plugin-clipboard-manager"
 import { confirm } from "@tauri-apps/plugin-dialog"
 import { Effect } from "effect"
@@ -37,10 +40,16 @@ import { DriveDocumentSurface, useDriveContentHost } from "@/features/drive/cont
 import { driveControls, driveDialogClassName } from "@/features/drive/controls"
 import { useDriveDeepLinks } from "@/features/drive/deep-links"
 import { drive, DriveSharingDialog } from "@/features/drive/drive"
+import { useDriveVisible } from "@/features/drive/use-drive-visible"
+import { ExtensionMount } from "@/features/extensions/extension-view"
 import { prepareWorkspaceFile } from "@/features/drive/files"
 import { driveFileSystem } from "@/features/drive/filesystem"
+import { describeError } from "@/lib/error-text"
 import { rebaseDrivePins } from "@/features/drive/pinned"
 import { DriveTreeActions } from "@/features/drive/tree-actions"
+import { appendQuote, focusComposer, SelectionMenu } from "@/features/chat/selection-menu"
+import { DRAFT_SESSION_ID } from "@/features/chat/draft-chat"
+import { setActivePreview } from "@/lib/active-preview"
 import { openExternal } from "@/lib/open"
 import "@alwith/module-file-tree/styles.css"
 import "@alwith/module-editor/styles.css"
@@ -49,9 +58,10 @@ import { listen } from "@tauri-apps/api/event"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
 import { revealItemsInDir } from "@tauri-apps/plugin-opener"
-import { FolderTree } from "lucide-react"
+import { ChartColumn, FolderTree, MessageSquare } from "lucide-react"
 import {
   lazy,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   Suspense,
   useCallback,
@@ -67,6 +77,11 @@ import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import { Button } from "@/components/alwith-ui/button"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import {
+  ChatContextMenu,
+  type ContextMenuTarget
+} from "@/features/chat/chat-context-menu"
 import { WindowsWorkspaceControlsContext } from "@/components/alwith-ui/windows-main-window-shell"
 import { useTheme } from "@/components/theme-provider"
 import { ChatDirectoryContext } from "@/features/chat/file-actions"
@@ -75,7 +90,18 @@ import { CanvasContext } from "@/features/layout/lib/canvas-context"
 import { type FilePosition, WorkspaceContext, WorkspaceHeaderContext } from "./context"
 import { useHostDialog } from "./host-dialog"
 import type { PanelControls } from "./panel-controls-context"
+import {
+  ONLINE_BI_URL,
+  ONLINE_BI_VIEW_ID,
+  getOnlineBiEmbedSrc,
+  saveOnlineBiPath,
+  stripOnlineBiToken
+} from "./online-bi"
+import { OnlineBiNativeView } from "./online-bi-embed"
 import { PreviewSurface } from "./preview-surface"
+
+import { applyStoredCommentsVisibility, commentsHidden, setCommentsHidden } from "./preview-resources"
+import { usePreviewExtension } from "./preview-extension"
 import { WorkspaceButton } from "./workspace-button"
 import { WorkspaceEditor } from "./workspace-editor"
 import { WorkspacePanels } from "./workspace-panels"
@@ -87,9 +113,15 @@ import { MoveToDialog } from "./move-to-dialog"
 import { moveWorkspaceFiles, type WorkspaceMoveOutcome } from "./move-workspace-files"
 import { resolvePreviewResource } from "./preview-resources"
 import { createTreeOpener } from "./tree-opener"
+import { useTreeVisiblePreference } from "./tree-visible-preference"
 import { useEditorPreferences } from "./use-editor-preferences"
 import { openWorkspaceScope, workspaceTask } from "./workspace-lifecycle"
-import { createWorkspaceStateStore, type IconTheme, type WorkspaceState } from "./workspace-state"
+import {
+  createWorkspaceSessionStore,
+  createWorkspaceStateStore,
+  type IconTheme,
+  type WorkspaceState
+} from "./workspace-state"
 import "@alwith/module-editor/previews/styles.css"
 
 const loadMonaco = () => import("./monaco-editor")
@@ -102,20 +134,46 @@ interface Workspace {
   tabs: EditorWorkspaceController
   treeOpener: ReturnType<typeof createTreeOpener>
   iconTheme: IconTheme
+  /** Files the current editor state under the project and the conversation that owns it. */
+  persistState: () => void
 }
 const emptyEditorSnapshot = (): null => null
 const noEditorSubscription = (): (() => void) => () => {}
 function report(error: unknown): void {
-  toast.error(error instanceof Error ? error.message : String(error))
+  toast.error(describeError(error))
 }
+/**
+ * True when the right-click belongs to the file tree, which brings its own menu (open / reveal /
+ * rename / delete). The editor surface wraps the tree and would otherwise swallow the click into
+ * the text menu — the one with Translate and Share, and no file actions at all.
+ */
+export function ownsItsContextMenu(target: Element): boolean {
+  return target.closest(".alwith-file-tree, [data-file-path]") !== null
+}
+
 export function FileWorkspace({
   cwd,
   children,
-  chatRevealRequest = 0
+  sessionId = null,
+  chatRevealRequest = 0,
+  defaultOpen = false,
+  columnsRequest = 0,
+  busy = false
 }: {
   cwd: string | null
   children: ReactNode
+  /** The conversation on screen; opening another one restores the four-column layout. */
+  sessionId?: string | null
   chatRevealRequest?: number
+  /** Opens the preview pane once per project so the app starts with all four columns visible. */
+  defaultOpen?: boolean
+  /** Bumped when the reader explicitly starts a chat in a project: open all four columns again. */
+  columnsRequest?: number
+  /**
+   * An agent turn is running. File-watch reloads are held while this is true and replayed once it
+   * turns false, so an AI editing a document does not make the preview flicker under the reader.
+   */
+  busy?: boolean
 }) {
   const windowsControls = useContext(WindowsWorkspaceControlsContext)
   const { resolvedTheme } = useTheme()
@@ -123,6 +181,12 @@ export function FileWorkspace({
     { ask, dialog } = useHostDialog()
   const workspaces = useRef(new Map<string, Workspace>()),
     opening = useRef(new Map<string, Promise<Workspace>>())
+  // File-watch events produced while an agent turn is running are buffered per workspace and
+  // replayed when the turn ends, so the preview only reloads once the AI has finished editing.
+  const pendingChanges = useRef(new Map<string, Set<string>>())
+  const changeHandlers = useRef(new Map<string, (paths: string[]) => void>())
+  const busyRef = useRef(busy)
+  busyRef.current = busy
   const saveDriveDocument = useCallback(async (path: string): Promise<void> => {
     for (const owner of workspaces.current.values()) {
       const document = owner.editor.getSnapshot().documents.find((document) => document.path === path)
@@ -141,6 +205,19 @@ export function FileWorkspace({
   })
   const lifecycle = useRef(new AbortController())
   const stateStore = useMemo(() => createWorkspaceStateStore(), [])
+  const sessionStore = useMemo(() => createWorkspaceSessionStore(), [])
+  // The conversation whose tabs the editor currently holds. Read by the persistence path so a
+  // snapshot is always filed under the conversation that produced it, even though the workspace
+  // instance itself outlives the switch.
+  const openFor = useRef<string | null>(sessionId)
+  // Which workspace instance has actually been reconciled against which conversation. Tracked by
+  // object identity, not by session id alone: leaving a project and coming back rebuilds the
+  // workspace from the project record, and that record is not this conversation's view.
+  const applied = useRef<{ workspace: Workspace; session: string | null } | null>(null)
+  // Set while `applySession` is closing and reopening documents: the editor emits a snapshot for
+  // every step of that, and filing those would overwrite the target conversation with the
+  // half-restored intermediate state.
+  const restoring = useRef(false)
   const { settings, iconTheme } = useEditorPreferences()
   const [sharingPath, setSharingPath] = useState<string | null>(null)
   const [condenseJob, setCondenseJob] = useState<Job | undefined>()
@@ -176,9 +253,28 @@ export function FileWorkspace({
   )
   const panelControls = useRef<PanelControls | null>(null)
   const headerTarget = useContext(WorkspaceHeaderContext)
-  const [visible, setVisible] = useState(false),
-    [treeVisible, setTreeVisible] = useState(true),
+  // Closed by default for embedding tests; the main window asks for the four-column layout.
+  const [visible, setVisible] = useState(defaultOpen),
     [viewMode, setViewMode] = useState(false)
+  // BI Metrics takes over the preview pane; the sidebar no longer carries a full-page entry.
+  const previewExtension = usePreviewExtension((state) => state.id)
+  const closePreviewExtension = usePreviewExtension((state) => state.close)
+  // The embed URL carries the BI token (`?s=`), which is how a cross-site frame can be logged in.
+  const [biSrc, setBiSrc] = useState<string | null>(null)
+  // Bumped to remount the frame; a WebView keeps its own history across src changes.
+  const [biReload, setBiReload] = useState(0)
+  // Editable copy of the frame URL. The preview is a test surface for now: any bi.finture.id path
+  // can be tried without a rebuild, and the stored token is carried over when the pasted URL has
+  // none of its own.
+  const [biDraft, setBiDraft] = useState("")
+  // 评论栏 is the drive module's own column; this switch hides it for good instead of collapsing it.
+  const [commentsOff, setCommentsOff] = useState(() => commentsHidden())
+  useEffect(() => {
+    applyStoredCommentsVisibility()
+  }, [])
+  // The file tree remembers being closed: a project visit must not reopen a column the reader
+  // collapsed on purpose. The toggle in the tree header (and its shortcut) is the way back.
+  const [treeVisible, setTreeVisible] = useTreeVisiblePreference()
   const canvas = useContext(CanvasContext)
   const navigateCanvas = canvas?.navigate
   const showMainControls = canvas === null || canvas.selected === 1
@@ -191,6 +287,104 @@ export function FileWorkspace({
     navigateCanvas?.("chat")
   }, [chatRevealRequest, navigateCanvas])
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
+  useEffect(() => {
+    // Switching projects must not keep the previous project's BI surface in the preview pane.
+    closePreviewExtension()
+  }, [workspace?.root, closePreviewExtension])
+  useEffect(() => {
+    // The sidebar opens BI into the preview column even while the column is collapsed.
+    if (previewExtension !== null) setVisible(true)
+  }, [previewExtension])
+  // Plain URL by default: the dashboard keeps its own first-party session inside the frame, so the
+  // login screen is the expected entry point. `?s=<JWT>` stays available as an opt-in — it is the
+  // session token the app can also capture from the standalone window — but it is no longer the
+  // default, and the address bar can load any path with or without it.
+  const refreshBiSrc = useCallback(() => {
+    let cancelled = false
+    void getOnlineBiEmbedSrc()
+      .then((url) => {
+        if (cancelled) return
+        setBiSrc(stripOnlineBiToken(url))
+      })
+      .catch((error: unknown) => console.error("[online-bi] embed url", error))
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (previewExtension !== ONLINE_BI_VIEW_ID) return
+    const cancel = refreshBiSrc()
+    return cancel
+  }, [previewExtension, refreshBiSrc])
+
+  useEffect(() => {
+    if (biSrc !== null) setBiDraft(biSrc)
+  }, [biSrc])
+
+  /** Loads whatever is typed in the address field, keeping the signed-in token when it fits. */
+  const loadBiUrl = useCallback(
+    (raw: string) => {
+      const value = raw.trim()
+      if (value === "") return
+      let next = value
+      try {
+        const parsed = new URL(value)
+        // Remember where the reader went: next time the preview opens here. No settings field.
+        saveOnlineBiPath(parsed.pathname)
+      } catch {
+        toast.error(t("settings.onlineBiUrlInvalid"))
+        return
+      }
+      setBiSrc(next)
+      setBiReload((count) => count + 1)
+    },
+    [t]
+  )
+
+  // Which projects have already opened their four columns. A project opens once; a chat never
+  // opens them, and closing the preview inside a project keeps it closed on the next visit.
+  const openedProjects = useRef(new Set<string>())
+  // Whether the previous render belonged to a project. Moving from a project to a chat is the one
+  // transition that has to close columns the user did not close themselves.
+  const wasProject = useRef(defaultOpen)
+  useEffect(() => {
+    const project = defaultOpen
+    const leftProject = wasProject.current && !project
+    wasProject.current = project
+    if (!project) {
+      // A temporary chat has no files next to it: only the sidebar and the conversation remain.
+      if (leftProject) {
+        setViewMode(false)
+        setVisible(false)
+      }
+      return
+    }
+    if (cwd === null || openedProjects.current.has(cwd)) return
+    openedProjects.current.add(cwd)
+    // Opening `visible` is what makes the cwd effect load the workspace, so this must not wait
+    // for `workspace` to exist (that would deadlock the four-column layout).
+    setVisible(true)
+  }, [defaultOpen, cwd])
+  // An explicit "create a chat in this project" always shows the four columns, even for a project
+  // that was opened (and maybe collapsed) earlier in this run. `openedProjects` still keeps the
+  // ordinary revisits quiet; this signal deliberately bypasses it.
+  useEffect(() => {
+    if (columnsRequest === 0 || !defaultOpen || cwd === null) return
+    openedProjects.current.add(cwd)
+    setTreeVisible(true)
+    setVisible(true)
+  }, [columnsRequest, defaultOpen, cwd, setTreeVisible])
+  // Opening any conversation of a project restores the four columns — session list, chat, file tree
+  // and preview. This is keyed by the conversation, not by the project: entering the same project
+  // again through another chat (or through the floated chat window) must not inherit the collapsed
+  // state a previous visit left behind.
+  useEffect(() => {
+    if (!defaultOpen || cwd === null || sessionId === null) return
+    openedProjects.current.add(cwd)
+    setTreeVisible(true)
+    setVisible(true)
+  }, [sessionId, defaultOpen, cwd, setTreeVisible])
   const [navigation, setNavigation] = useState<{ path: string; position: FilePosition } | null>(null)
   const editorSnapshot = useSyncExternalStore(
     workspace ? workspace.editor.subscribe : noEditorSubscription,
@@ -201,11 +395,202 @@ export function FileWorkspace({
     workspace ? workspace.tabs.getSnapshot : emptyEditorSnapshot
   )
   const activeDocument = editorSnapshot?.documents.find((document) => document.id === tabSnapshot?.activeId)
+  // Publish the previewed document so the chat can scope the user's next message to it. Only an
+  // actually visible preview counts: a closed pane (or an empty editor) must not carry context.
+  useEffect(() => {
+    setActivePreview(
+      visible && workspace !== null && activeDocument?.path
+        ? {
+            path: activeDocument.path,
+            title: activeDocument.path.split(/[\\/]/).pop() ?? activeDocument.path,
+            // The mounted workspace's root, not the `cwd` prop: while switching projects the old
+            // workspace stays mounted, and pairing its document with the new project would attach
+            // the wrong file to the next prompt.
+            root: workspace.root
+          }
+        : null
+    )
+  }, [visible, workspace, activeDocument?.path])
+  // Drop the published document when the workspace unmounts so a stale path never leaks into the
+  // next surface's prompts.
+  //
+  // Swapping the open documents when the reader moves between conversations of the same project.
+  // The workspace itself stays mounted — it holds the tree, the editor and any unsaved buffers —
+  // so without this every chat in a project showed the same document, and the preview published to
+  // the composer (and therefore the file the next message is scoped to) belonged to whichever chat
+  // had opened it last.
+  useEffect(() => {
+    if (workspace === null) return
+    if (applied.current?.workspace === workspace && applied.current.session === sessionId) return
+    applied.current = { workspace, session: sessionId }
+    // `persistState` reads this ref on every editor change, so it has to move first: the close/open
+    // steps below are suppressed by `restoring`, but anything the reader does afterwards belongs to
+    // the conversation now on screen.
+    openFor.current = sessionId
+    if (sessionId === null) return
+    const target = workspace
+    void sessionStore
+      .load(target.root, sessionId)
+      .then(async (saved) => {
+        // No record yet: this conversation has never opened a file, so it keeps showing whatever
+        // the project has on screen. The first edit records it, and the two diverge from there.
+        if (saved === null) return
+        restoring.current = true
+        // Only a completed restore may re-file the record. Abandoning it (the reader cancelled the
+        // unsaved-changes prompt) leaves the previous conversation's tabs on screen, and filing
+        // those under this conversation would erase what it actually had open.
+        let restored = false
+        try {
+          const before = target.editor.getSnapshot()
+          const wanted = new Set(saved.tabs.map((tab) => tab.path))
+          const extra = before.documents.filter((doc) => !wanted.has(doc.path)).map((doc) => doc.id)
+          // Closing first keeps the reopened order identical to the saved one. A reader who cancels
+          // the unsaved-changes prompt keeps the current view rather than half a restore.
+          if (extra.length > 0 && !(await target.editor.requestCloseMany(extra))) return
+          for (const tab of saved.tabs) {
+            const document = await target.editor.open(tab.path).catch(() => null)
+            if (document !== null && tab.pinned) target.editor.pin(document.id)
+          }
+          const after = target.editor.getSnapshot()
+          const active = after.documents.find((doc) => doc.path === saved.activePath)
+          if (active !== undefined) target.editor.activate(active.id)
+          restored = true
+        } finally {
+          restoring.current = false
+          // File the restored view under this conversation explicitly. `persistState` skips the
+          // session write whenever the project record is unchanged, and this record has to be
+          // right even when two conversations happen to hold the same tabs.
+          if (restored) {
+            const settled = target.editor.getSnapshot()
+            void sessionStore
+              .save(target.root, sessionId, {
+                tabs: settled.documents.map((doc) => ({ path: doc.path, pinned: doc.pinned })),
+                activePath: settled.documents.find((doc) => doc.id === settled.activeId)?.path ?? null
+              })
+              .catch(report)
+          }
+          // The project record still carries the previous conversation's tabs, and a brand-new
+          // chat inherits from it.
+          target.persistState()
+        }
+      })
+      .catch((error: unknown) => {
+        restoring.current = false
+        report(error)
+      })
+  }, [sessionId, workspace, sessionStore])
+
+  const [previewMenu, setPreviewMenu] = useState<ContextMenuTarget | null>(null)
+  // Text selected inside the previewed HTML frame (forwarded by the bridge): the frame's own
+  // selection never reaches this document, so the host renders the copy pill itself.
+  const [previewSelection, setPreviewSelection] = useState<{ left: number; top: number; text: string } | null>(null)
+  const noSelectionRoot = useRef<HTMLDivElement | null>(null)
+  // The composer on screen belongs to the selected conversation; before the first message the
+  // draft chat owns it. Both the floating pill and the right-click menu quote into that composer.
+  const composerSessionId = sessionId ?? DRAFT_SESSION_ID
+  const dismissPreviewSelection = useCallback(() => setPreviewSelection(null), [])
+  const addSelectionToChat = useCallback(
+    (text: string): void => {
+      if (!appendQuote(composerSessionId, text)) {
+        toast.error(t("chat.selectionAddFailed"))
+        return
+      }
+      focusComposer()
+      toast.success(t("chat.selectionAdded"))
+    },
+    [composerSessionId, t]
+  )
+  // Where the pointer was when the preview asked for its menu. A frame's own coordinates drift
+  // under zoom and scrolling, so the window position recorded here is the reliable anchor.
+  const pointer = useRef({ x: 0, y: 0 })
+  useEffect(() => {
+    const track = (event: MouseEvent): void => {
+      pointer.current = { x: event.clientX, y: event.clientY }
+    }
+    window.addEventListener("mousemove", track, { passive: true })
+    return () => window.removeEventListener("mousemove", track)
+  }, [])
+  useEffect(() => () => setActivePreview(null), [])
+  // The tree, the tabs and the editor keep their own functional context menus (rename, copy path,
+  // close others…), so nothing here replaces them with a document-level menu — that would swallow
+  // their actions. Only the previewed document needs the translated menu, and it lives in an
+  // iframe the document never sees, so it is handled by the message listener below.
+  useEffect(() => {
+    const handler = (event: MessageEvent): void => {
+      const data = event.data as
+        | { source?: unknown; type?: unknown; text?: unknown; x?: unknown; y?: unknown; rect?: unknown }
+        | null
+      if (data === null || data.source !== "alwith-preview") return
+      if (data.type === "selection") {
+        const text = typeof data.text === "string" ? data.text.trim() : ""
+        const frame = Array.from(document.querySelectorAll("iframe")).find(
+          (element) => element.contentWindow === event.source
+        )
+        const box = frame?.getBoundingClientRect()
+        const rect = data.rect as { left?: number; top?: number; bottom?: number; width?: number } | null
+        if (text === "" || box === undefined || rect == null) {
+          setPreviewSelection(null)
+          return
+        }
+        const left = Math.max(8, Math.min(box.left + Number(rect.left ?? 0) + Number(rect.width ?? 0) / 2 - 98, window.innerWidth - 204))
+        const top = box.top + Number(rect.bottom ?? 0) + 8
+        setPreviewSelection({ left, top, text: text.slice(0, 20_000) })
+        return
+      }
+      if (data.type !== "context-menu") return
+      const frame = Array.from(document.querySelectorAll("iframe")).find(
+        (element) => element.contentWindow === event.source
+      )
+      const rect = frame?.getBoundingClientRect()
+      const measured = pointer.current
+      // Prefer the real pointer position: it is what the user actually aimed at. A frame that
+      // cannot be matched still opens the menu instead of silently doing nothing.
+      const x = measured.x > 0 ? measured.x : (rect?.left ?? 0) + Number(data.x ?? 0)
+      const y = measured.y > 0 ? measured.y : (rect?.top ?? 0) + Number(data.y ?? 0)
+      setPreviewMenu({
+        x,
+        y,
+        text: typeof data.text === "string" ? data.text : "",
+        editable: false
+      })
+    }
+    window.addEventListener("message", handler)
+    return () => window.removeEventListener("message", handler)
+  }, [])
+  // Previews rendered in this document (Markdown, PDF, images, spreadsheets, Word) are not frames,
+  // so their right-click never reaches the bridge above. Scope the menu to the preview surface
+  // by excluding the parts that own functional menus: the editor canvas, the tab strip and text
+  // fields. Everything else inside the surface is a preview.
+  const previewContextMenu = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    const target = event.target
+    if (!(target instanceof Element)) return
+    if (ownsItsContextMenu(target)) return
+    if (
+      target.closest(
+        '[contenteditable="true"], [contenteditable=""], textarea, input, .cm-editor, .monaco-editor, [class*="tab"], [role="tablist"], [data-editor]'
+      ) !== null
+    )
+      return
+    event.preventDefault()
+    event.stopPropagation()
+    // Only the selected text: a preview's `textContent` is the whole document, and copying that on
+    // a right-click without a selection would be a surprise.
+    const selection = window.getSelection()?.toString().trim() ?? ""
+    setPreviewMenu({ x: event.clientX, y: event.clientY, text: selection, editable: false })
+  }
   const activeCollaborationOwner = useCollaborationOwner(activeDocument?.path)
+  const driveVisible = useDriveVisible()
   const driveState = useDrive(drive).snapshot
+  // With the drive switched off nothing may consult it: opening a plain file (memory.md) used to
+  // surface "Drive is not running" from these lookups.
   const driveRoot =
-    activeDocument && driveState?.roots.find((root) => containsPath(root.localPath, activeDocument.path))
-  const driveFile = activeDocument && driveState?.files.find((file) => file.localPath === activeDocument.path)
+    driveVisible && activeDocument
+      ? driveState?.roots.find((root) => containsPath(root.localPath, activeDocument.path))
+      : null
+  const driveFile =
+    driveVisible && activeDocument
+      ? driveState?.files.find((file) => file.localPath === activeDocument.path)
+      : null
   const driveReadOnly =
     Boolean(
       driveRoot &&
@@ -215,13 +600,28 @@ export function FileWorkspace({
         driveRoot.cloudOnly ||
         driveRoot.kind === "SKILL")
     ) || driveFile?.state === "readOnly"
+  // The Drive host changes whenever its snapshot does (its `generation` is a cache-busting
+  // number). A preview is rebuilt whenever its host identity changes — the Markdown preview
+  // recreates its whole Milkdown editor — so passing the live object meant every sync tick tore
+  // down and rebuilt the open preview, and repeated clicks on a Markdown file could freeze the
+  // window. Keep one object and refresh its fields in place instead: providers compare identity,
+  // so a stable object stops the rebuilds while reads still see the current values.
+  const contentHostRef = useRef(contentHost)
+  contentHostRef.current = contentHost
+  const previewHost = useMemo(() => ({ ...contentHost }), [])
+  Object.assign(previewHost, contentHost)
+  // Translations are read through a ref as well: the preview list must not be rebuilt on every
+  // render just because the translator's identity moved, and a language change is the only thing
+  // that actually needs new labels.
+  const translateRef = useRef(t)
+  translateRef.current = t
   const previews = useMemo(() => {
     if (!workspace) return []
     const imageLabels = {
-      failed: t("workspace.imageFailed"),
-      zoomIn: t("workspace.zoomIn"),
-      zoomOut: t("workspace.zoomOut"),
-      resetZoom: t("workspace.resetZoom")
+      failed: translateRef.current("workspace.imageFailed"),
+      zoomIn: translateRef.current("workspace.zoomIn"),
+      zoomOut: translateRef.current("workspace.zoomOut"),
+      resetZoom: translateRef.current("workspace.resetZoom")
     }
     return [
       {
@@ -233,7 +633,7 @@ export function FileWorkspace({
         )
       },
       ...localPreviewProviders({
-        ...drivePreviewIntegrations(contentHost),
+        ...(driveVisible ? drivePreviewIntegrations(previewHost) : {}),
         htmlPreview: createHtmlPreviewHost(
           workspace.root,
           workspace.fs,
@@ -247,30 +647,30 @@ export function FileWorkspace({
         autoSaveDelay: 800,
         imageLabels,
         labels: {
-          loading: t("workspace.previewsLoading"),
-          openExternal: t("workspace.openExternal"),
-          legacyWord: t("workspace.legacyWord"),
-          mediaUnsupported: t("workspace.mediaUnsupported"),
-          emptySheet: t("workspace.emptySheet"),
-          worksheets: t("workspace.worksheets"),
-          bold: t("workspace.bold"),
-          italic: t("workspace.italic"),
-          outline: t("workspace.outline"),
-          outlineEmpty: t("workspace.outlineEmpty"),
-          editMarkdown: t("workspace.editMarkdown"),
-          copyCode: t("workspace.copyCode"),
-          toggleWrap: t("workspace.toggleWrap"),
-          previousSheet: t("workspace.previousSheet"),
-          nextSheet: t("workspace.nextSheet"),
-          page: t("workspace.page"),
-          thumbnails: t("workspace.thumbnails"),
-          zoomIn: t("workspace.zoomIn"),
-          zoomOut: t("workspace.zoomOut"),
-          resetZoom: t("workspace.resetZoom")
+          loading: translateRef.current("workspace.previewsLoading"),
+          openExternal: translateRef.current("workspace.openExternal"),
+          legacyWord: translateRef.current("workspace.legacyWord"),
+          mediaUnsupported: translateRef.current("workspace.mediaUnsupported"),
+          emptySheet: translateRef.current("workspace.emptySheet"),
+          worksheets: translateRef.current("workspace.worksheets"),
+          bold: translateRef.current("workspace.bold"),
+          italic: translateRef.current("workspace.italic"),
+          outline: translateRef.current("workspace.outline"),
+          outlineEmpty: translateRef.current("workspace.outlineEmpty"),
+          editMarkdown: translateRef.current("workspace.editMarkdown"),
+          copyCode: translateRef.current("workspace.copyCode"),
+          toggleWrap: translateRef.current("workspace.toggleWrap"),
+          previousSheet: translateRef.current("workspace.previousSheet"),
+          nextSheet: translateRef.current("workspace.nextSheet"),
+          page: translateRef.current("workspace.page"),
+          thumbnails: translateRef.current("workspace.thumbnails"),
+          zoomIn: translateRef.current("workspace.zoomIn"),
+          zoomOut: translateRef.current("workspace.zoomOut"),
+          resetZoom: translateRef.current("workspace.resetZoom")
         }
       })
     ]
-  }, [workspace, t, contentHost])
+  }, [workspace, i18n.language, previewHost])
   const reportedDirty = useRef(false)
   const requestGeneration = useRef(0),
     currentCwd = useRef(cwd)
@@ -309,7 +709,7 @@ export function FileWorkspace({
           )
         )
         signal.throwIfAborted()
-        const fs = createFileSystem({
+        const rawFs = createFileSystem({
           adapter: createTauriAdapter({
             root,
             transport: {
@@ -324,21 +724,42 @@ export function FileWorkspace({
                 })
             },
             watch: async (path, changed, onError) => {
+              // Drive writes a synced project one file at a time. Every raw event used to broadcast
+              // a `change`, and each one invalidates the editor's document cache and rebuilds the
+              // open preview — so a sync burst made the preview flicker continuously. Drop the
+              // conflict copies hidden from the tree, then coalesce the rest into one notification
+              // per quiet period.
+              const relay = createWatchRelay(changed, (changedPath) => !isIgnoredWatchPath(changedPath))
+              changeHandlers.current.set(root, relay.schedule)
               const stop = await listen<{ root: string; paths: string[]; error: string | null }>(
                 "workspace:change",
                 (event) => {
                   if (event.payload.root !== root) return
-                  if (event.payload.error !== null) onError(new Error(event.payload.error))
-                  else changed(event.payload.paths)
+                  if (event.payload.error !== null) {
+                    onError(new Error(event.payload.error))
+                    return
+                  }
+                  // Hold the reload while an agent turn runs: it writes many times and the preview
+                  // must stay readable. The effect below replays the union when the turn ends.
+                  const visible = event.payload.paths.filter((changedPath) => !isIgnoredWatchPath(changedPath))
+                  if (busyRef.current) {
+                    const pending = pendingChanges.current.get(root) ?? new Set<string>()
+                    for (const changedPath of visible) pending.add(changedPath)
+                    if (pending.size > 0) pendingChanges.current.set(root, pending)
+                    return
+                  }
+                  relay.schedule(visible)
                 }
               )
               try {
                 await invoke("workspace_watch", { path, enabled: true })
               } catch (error) {
+                relay.dispose()
                 stop()
                 throw error
               }
               return () => {
+                relay.dispose()
                 stop()
                 void invoke("workspace_watch", { path, enabled: false }).catch(report)
               }
@@ -346,6 +767,10 @@ export function FileWorkspace({
           }),
           reportError: report
         })
+        // Conflict copies are hidden from every listing while the Drive switch is on. Wrapping the
+        // filesystem (not the tree) also covers search, the chat's file pickers and anything else
+        // that reads a directory, and it never touches the sync daemon or the files on disk.
+        const fs = hideConflictCopies(rawFs)
         const editor = yield* Effect.acquireRelease(
           Effect.sync(() =>
             createEditorController({
@@ -442,28 +867,57 @@ export function FileWorkspace({
           root,
           fs,
           editor,
+          // Replaced below once the persistence closure exists; the placeholder keeps the shape
+          // total so callers can treat every workspace as persistable.
+          persistState: (): void => {},
           tabs,
           tree,
           iconTheme: saved?.iconTheme ?? "vscode-icons",
           treeOpener: createTreeOpener(
             editor,
-            (path) =>
-              prepareWorkspaceFile(path, {
+            async (path) => {
+              // Ordinary files are opened straight from disk. Going through the Drive index first
+              // meant a daemon round trip on every tree click, queued behind whatever sync work
+              // was running, so a local Markdown file could take seconds to appear.
+              if (!isYuplinkName(path)) {
+                const stat = await fs.stat(path).catch(() => null)
+                if (stat?.kind === "file" && stat.size > 0) {
+                  if (stat.size > 16 * 1024 * 1024) {
+                    await openExternal(path)
+                    return null
+                  }
+                  return path
+                }
+              }
+              return prepareWorkspaceFile(path, {
                 readFile: async (target) =>
                   (containsPath(root, target) ? fs : await driveFileSystem(target)).readFile(target),
                 openTarget: (target) => routeDriveTarget.current(target)
-              }),
+              })
+            },
             tabs
           )
         }
         yield* Effect.addFinalizer(() => Effect.sync(() => created.treeOpener.dispose()))
         let serialized = ""
-        const persistState = () => {
+        /**
+         * @param fileSession `false` only for the snapshot taken while the workspace is still being
+         *   built: at that moment the editor holds the project's restored tabs, not this
+         *   conversation's, and filing them would overwrite the conversation's own record with a
+         *   copy of the project's.
+         */
+        const persistState = (fileSession = true) => {
+          // A restore drives the editor through close/open one document at a time; every step
+          // emits a snapshot that looks like user activity but is not. Filing those would leave
+          // the conversation holding whichever document happened to be opened last.
+          if (restoring.current) return
           const snapshot = editor.getSnapshot(),
             treeSnapshot = tree.getSnapshot()
+          const tabs = snapshot.documents.map((doc) => ({ path: doc.path, pinned: doc.pinned }))
+          const activePath = snapshot.documents.find((doc) => doc.id === snapshot.activeId)?.path ?? null
           const state: WorkspaceState = {
-            tabs: snapshot.documents.map((doc) => ({ path: doc.path, pinned: doc.pinned })),
-            activePath: snapshot.documents.find((doc) => doc.id === snapshot.activeId)?.path ?? null,
+            tabs,
+            activePath,
             expanded,
             showHidden: treeSnapshot.showHidden,
             showIgnored: treeSnapshot.showIgnored,
@@ -471,21 +925,31 @@ export function FileWorkspace({
             tabLayout: created.tabs.serialize()
           }
           const next = JSON.stringify(state)
-          if (next === serialized) return
-          serialized = next
-          void stateStore.save(root, state).catch((error) => {
-            serialized = ""
-            report(error)
-          })
+          if (next !== serialized) {
+            serialized = next
+            void stateStore.save(root, state).catch((error) => {
+              serialized = ""
+              report(error)
+            })
+          }
+          // Same snapshot, filed under the conversation that owns the editor. Kept separate from
+          // the project record above, which is also read by the tree/hidden/theme preferences and
+          // must stay shared across conversations in one project.
+          const session = openFor.current
+          if (!fileSession || session === null) return
+          void sessionStore.save(root, session, { tabs, activePath }).catch(report)
         }
         late.persistState = persistState
+        created.persistState = persistState
         for (const subscribe of [
           () => editor.subscribe(persistState),
           () => tree.subscribe(persistState),
           () => created.tabs.subscribe(persistState)
         ])
           yield* Effect.acquireRelease(Effect.sync(subscribe), (stop) => Effect.sync(stop))
-        persistState()
+        // Project preferences only: the tabs in hand right now came from the project record, and
+        // the conversation's own record is applied by the session switch effect afterwards.
+        persistState(false)
         return created
       })
       const promise = openWorkspaceScope(signal, create, report).then((created) => {
@@ -567,12 +1031,14 @@ export function FileWorkspace({
         setTreeVisible(true)
       })
       .catch(report)
-  }, [cwd, ensure])
+  }, [cwd, ensure, setTreeVisible])
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.altKey || event.key.toLowerCase() !== "e")
         return
       event.preventDefault()
+      // The shortcut only ever shows the column: hiding it is the button's job, so a stray press
+      // never takes the reader's files away.
       showProjectTree()
     }
     window.addEventListener("keydown", onKeyDown)
@@ -591,13 +1057,29 @@ export function FileWorkspace({
     },
     [ensure]
   )
-  const previousCwd = useRef(cwd)
+  // `undefined` rather than `cwd` so the first mount also loads the project: with `defaultOpen`
+  // the preview must render all four columns on launch, and nothing else ensures the workspace
+  // (the project effect above only opens `visible`, which is what brings the workspace in here).
+  // Read in the cwd effect without becoming one of its dependencies: a `visible` dependency
+  // re-runs that effect (and cancels the in-flight load) every time the preview opens.
+  const visibleRef = useRef(visible)
+  visibleRef.current = visible
+  const previousCwd = useRef<string | null | undefined>(undefined)
   useEffect(() => {
     if (previousCwd.current === cwd) return
-    previousCwd.current = cwd
     requestGeneration.current++
-    if (!visible) return
-    setWorkspace(null)
+    // Load the workspace for any project (a project session, or a chat opened inside one) and skip
+    // quick chats, which never have files next to them. Gate on "the preview is on screen", not on
+    // `visible` alone: when a project session opens, the preview flag flips on in a *later* effect,
+    // so a bare `!visible` guard bails and leaves `workspace` null — the "opened a project but only
+    // the conversation shows" report. `defaultOpen` covers that first frame, and a preview the
+    // reader opened by hand (`visible`, preference off) still has to load when the project changes,
+    // otherwise the tree keeps listing the previous project's files.
+    if (cwd === null || (!defaultOpen && !visibleRef.current)) return
+    previousCwd.current = cwd
+    // Keep the previous workspace mounted until the new one is ready. Nulling it first makes
+    // `visible && workspace !== null` false, which collapses the whole chat/preview split and
+    // leaves the user with a single column after simply clicking another conversation.
     let cancelled = false
     void ensure(cwd)
       .then((value) => {
@@ -607,7 +1089,23 @@ export function FileWorkspace({
     return () => {
       cancelled = true
     }
-  }, [cwd, ensure, visible])
+  }, [cwd, ensure, defaultOpen])
+  // Replay the file changes held during the agent's turn, once it has settled: one reload at the
+  // end instead of a flicker per write.
+  useEffect(() => {
+    if (busy) return
+    const pending = pendingChanges.current
+    if (pending.size === 0) return
+    pendingChanges.current = new Map()
+    for (const [root, paths] of pending) {
+      if (paths.size === 0) continue
+      try {
+        changeHandlers.current.get(root)?.(Array.from(paths))
+      } catch {
+        // The workspace may have been disposed while the turn was running; its watcher is gone.
+      }
+    }
+  }, [busy])
   useEffect(() => {
     function beforeUnload(event: BeforeUnloadEvent): void {
       if (
@@ -675,6 +1173,8 @@ export function FileWorkspace({
       activeLifecycle.abort()
       currentWorkspaces.clear()
       currentOpening.clear()
+      pendingChanges.current.clear()
+      changeHandlers.current.clear()
     }
   }, [])
   useEffect(() => {
@@ -774,7 +1274,7 @@ export function FileWorkspace({
       setVisible(true)
       setTreeVisible(true)
     },
-    [ensure]
+    [ensure, setTreeVisible]
   )
   const context = useMemo(
     () => ({ visible, viewMode, toggle, openFile, openProject, revealEntry }),
@@ -816,10 +1316,70 @@ export function FileWorkspace({
   }
   return (
     <WorkspaceContext.Provider value={context}>
+      <ChatContextMenu
+        target={previewMenu}
+        onClose={() => setPreviewMenu(null)}
+        onAddToChat={addSelectionToChat}
+      />
+      {/* HTML frames and in-document previews both quote into the conversation's composer. */}
+      <SelectionMenu
+        containerRef={noSelectionRoot}
+        sessionId={composerSessionId}
+        external={previewSelection}
+        onDismiss={dismissPreviewSelection}
+      />
       {showMainControls &&
         headerTarget !== null &&
         createPortal(
           <div className="file-workspace-toolbar">
+            {/* A second copy of the tree toggle for the window header; the tree's own toolbar
+                keeps its toggle so the control is reachable from both places. */}
+            {/* Tooltip, not `title`: the sibling workspace button opens instantly, and a native
+                title next to it reads as a bug. */}
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    data-testid="header-comments-toggle"
+                    aria-label={t(commentsOff ? "workspace.showComments" : "workspace.hideComments")}
+                    aria-pressed={!commentsOff}
+                    onClick={() => {
+                      const next = !commentsOff
+                      setCommentsOff(next)
+                      setCommentsHidden(next)
+                    }}
+                  >
+                    <MessageSquare />
+                  </Button>
+                }
+              />
+              <TooltipContent side="bottom">
+                {t(commentsOff ? "workspace.showComments" : "workspace.hideComments")}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    className="workspace-explorer-toggle"
+                    data-testid="header-tree-toggle"
+                    aria-label={t(treeVisible ? "workspace.hideTree" : "workspace.showTree")}
+                    aria-expanded={treeVisible}
+                    onClick={() => setTreeVisible(!treeVisible)}
+                  >
+                    <FolderTree />
+                  </Button>
+                }
+              />
+              <TooltipContent side="bottom">
+                {t(treeVisible ? "workspace.hideTree" : "workspace.showTree")}
+                <span className="ms-1.5 text-muted-foreground">⌘⇧E</span>
+              </TooltipContent>
+            </Tooltip>
             <ChatCondenseEntry
               cwd={cwd}
               controller={drive}
@@ -864,6 +1424,7 @@ export function FileWorkspace({
               onClose={() => {
                 setVisible(false)
                 setViewMode(false)
+                closePreviewExtension()
               }}
               tree={
                 <FileTree
@@ -874,11 +1435,12 @@ export function FileWorkspace({
                       variant="ghost"
                       size="icon-sm"
                       className="workspace-explorer-toggle"
+                      data-testid="tree-toggle"
                       aria-label={t(treeVisible ? "workspace.hideTree" : "workspace.showTree")}
                       title={t(treeVisible ? "workspace.hideTree" : "workspace.showTree")}
                       shortcut="CmdOrCtrl+Shift+E"
                       aria-expanded={treeVisible}
-                      onClick={() => setTreeVisible((value) => !value)}
+                      onClick={() => setTreeVisible(!treeVisible)}
                     >
                       <FolderTree />
                     </Button>
@@ -888,7 +1450,12 @@ export function FileWorkspace({
                   activePath={activeDocument ? activeDocument.path : null}
                   labels={treeLabels}
                   onError={report}
-                  onOpenFile={(path) => workspace.treeOpener.open(path)}
+                  onOpenFile={(path) => {
+                    closePreviewExtension()
+                    // The tree has no promise slot of its own: report a failed open here instead of
+                    // letting it land in the window's unhandled-rejection handler.
+                    void workspace.treeOpener.open(path).catch(report)
+                  }}
                   renderActions={(paths) => {
                     const path = paths[0]
                     if (
@@ -932,7 +1499,7 @@ export function FileWorkspace({
                       locale={i18n.language.startsWith("zh") ? "zh-CN" : "en"}
                     />
                   )}
-                  onPinFile={(path) => workspace.treeOpener.open(path, true)}
+                  onPinFile={(path) => void workspace.treeOpener.open(path, true).catch(report)}
                   onOpenExternal={openExternal}
                   onReveal={(path) => revealItemsInDir(path)}
                   onCopyPath={writeText}
@@ -992,10 +1559,67 @@ export function FileWorkspace({
                   }
                 />
               }
-              editor={({ leading, trailing }) => (
-                <DriveDocumentSurface host={contentHost} path={activeDocument?.path ?? null}>
+              editor={({ leading, trailing }) => {
+                const onlineBi = previewExtension === ONLINE_BI_VIEW_ID
+                return previewExtension !== null ? (
+                  <div className="flex h-full min-h-0 flex-col">
+                    <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b px-2">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        {leading}
+                        <ChartColumn className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                        <span className="shrink-0 truncate text-sm font-medium">
+                          {onlineBi ? t("sidebar.onlineBi") : t("sidebar.biMetrics")}
+                        </span>
+                        {onlineBi && (
+                          <input
+                            aria-label={t("settings.onlineBiUrl")}
+                            value={biDraft}
+                            onChange={(event) => setBiDraft(event.currentTarget.value)}
+                            onKeyDown={(event) => {
+                              if (event.key !== "Enter") return
+                              event.preventDefault()
+                              loadBiUrl(biDraft)
+                            }}
+                            spellCheck={false}
+                            placeholder="https://bi.finture.id/"
+                            className="h-7 min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 text-[11px] tabular-nums outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                          />
+                        )}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        {onlineBi && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              refreshBiSrc()
+                              setBiReload((count) => count + 1)
+                            }}
+                          >
+                            {t("workspace.refresh")}
+                          </Button>
+                        )}
+                        <Button variant="ghost" size="sm" onClick={closePreviewExtension}>
+                          {t("workspace.backToFiles")}
+                        </Button>
+                        {trailing}
+                      </div>
+                    </div>
+                    <div className="flex min-h-0 flex-1 flex-col">
+                      {onlineBi ? (
+                        /* Native view, not an iframe: WKWebView withholds cookies from a
+                           cross-site frame, and the dashboard's session is a cookie. */
+                        <OnlineBiNativeView src={biSrc ?? ONLINE_BI_URL} reload={biReload} />
+                      ) : (
+                        <ExtensionMount id={previewExtension} />
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <DriveDocumentSurface host={previewHost} path={activeDocument?.path ?? null}>
                   <ChatDirectoryContext.Provider value={workspace.root}>
-                    <WorkspaceEditor
+                    <div className="contents" onContextMenu={previewContextMenu}>
+                      <WorkspaceEditor
                       tabs={workspace.tabs}
                       leading={leading}
                       trailing={trailing}
@@ -1044,9 +1668,11 @@ export function FileWorkspace({
                         </Suspense>
                       )}
                     />
+                    </div>
                   </ChatDirectoryContext.Provider>
-                </DriveDocumentSurface>
-              )}
+                  </DriveDocumentSurface>
+                )
+              }}
             />
           )
         }
@@ -1150,7 +1776,7 @@ export function FileWorkspace({
               locale={i18n.language.startsWith("zh") ? "zh-CN" : "en"}
               onClose={() => setMoveTarget(null)}
               host={{
-                confirm: (message) => confirm(message, { title: "YUP Drive", kind: "warning" }),
+                confirm: (message) => confirm(message, { title: i18n.t("drive.confirmTitle"), kind: "warning" }),
                 prepareMove: async (path) => {
                   for (const owner of workspaces.current.values()) {
                     const ids = owner.editor

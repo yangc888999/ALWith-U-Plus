@@ -101,7 +101,7 @@ test("configuration failures after attachment remain visible", async () => {
   await drive.attach()
   mock.request.mockRejectedValue(new Error("Configuration unavailable"))
   renderHook(() => useDriveContentHost(save))
-  await waitFor(() => expect(mock.error).toHaveBeenCalledWith("Error: Configuration unavailable"))
+  await waitFor(() => expect(mock.error).toHaveBeenCalledWith("Configuration unavailable"))
 })
 
 test("integration settings stay pending until attachment and then enable controls", async () => {
@@ -109,10 +109,17 @@ test("integration settings stay pending until attachment and then enable control
   render(<DriveIntegrations />)
   await act(async () => {})
   expect(screen.queryByRole("alert")).not.toBeInTheDocument()
-  for (const control of screen.getAllByRole("switch")) expect(control).toHaveAttribute("aria-disabled", "true")
+  // Only the switches that read Drive preferences have to wait: they have nothing to show until
+  // the daemon publishes them. The conflict-copy filter is a local display preference and is
+  // deliberately usable before attachment, so it is checked separately below.
+  const pending = () => screen.getAllByRole("switch").filter((control) => control.dataset.localPreference !== "true")
+  for (const control of pending()) expect(control).toHaveAttribute("aria-disabled", "true")
+  const local = screen.getAllByRole("switch").filter((control) => control.dataset.localPreference === "true")
+  expect(local).toHaveLength(1)
+  expect(local[0]).not.toHaveAttribute("aria-disabled", "true")
   await act(() => drive.attach())
   await waitFor(() => {
-    for (const control of screen.getAllByRole("switch")) expect(control).not.toHaveAttribute("aria-disabled", "true")
+    for (const control of pending()) expect(control).not.toHaveAttribute("aria-disabled", "true")
   })
 })
 

@@ -8,6 +8,13 @@ const state = vi.hoisted(() => ({
   focus: vi.fn(),
   unminimize: vi.fn()
 }))
+vi.mock("@tauri-apps/api/window", async () => {
+  // 生产代码用窗口级 API（`getCurrentWindow`）：子 webview 有焦点时 `getCurrentWebviewWindow()`
+  // 会抛 "current webview is not a WebviewWindow"。测试里两者指向同一个假窗口。
+  const webviewWindow = await import("@tauri-apps/api/webviewWindow")
+  return { ...webviewWindow, getCurrentWindow: () => webviewWindow.getCurrentWebviewWindow() }
+})
+
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   WebviewWindow: class {
     static getByLabel(label: string) {
@@ -45,7 +52,7 @@ test("repeated opens create one bundled guide window and restore its focus", asy
   expect(state.created).toHaveBeenCalledOnce()
   expect(state.created).toHaveBeenCalledWith(
     "guide",
-    expect.objectContaining({ url: "/guide.html", title: "ALwith U Guide" })
+    expect.objectContaining({ url: "/guide.html", title: "ALWith L Guide" })
   )
   expect(state.show).toHaveBeenCalledTimes(2)
   expect(state.focus).toHaveBeenCalledTimes(2)
@@ -68,7 +75,7 @@ test.each(["Win32", "MacIntel"] as const)("%s retains native guide window contro
   expect(state.created).toHaveBeenCalledWith(
     "guide",
     expect.objectContaining({
-      title: "ALwith U Guide",
+      title: "ALWith L Guide",
       hiddenTitle: platform !== "Win32",
       titleBarStyle: platform === "Win32" ? "visible" : "overlay"
     })

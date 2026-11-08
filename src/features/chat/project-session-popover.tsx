@@ -7,9 +7,10 @@ import {
   useProjectSessions,
   useSidebarOverlay
 } from "@alwith/module-chat/session-list"
-import { FolderClosedIcon, MessageSquareIcon, PlusIcon } from "lucide-react"
+import { FolderClosedIcon, MessageSquareIcon, PlusIcon, Trash2Icon } from "lucide-react"
 import { type ReactElement, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
+import { toast } from "sonner"
 
 import type { SessionSummary } from "@/agent/client"
 import { commands } from "@/bindings"
@@ -21,6 +22,8 @@ import { CollectionPicker } from "@/features/collection/collection-menu"
 import { ProjectPathAction } from "@/features/sessions/project-path-action"
 import { SessionListHostProvider } from "@/features/sessions/session-list-host"
 import { useChatWindowSurface, useMainWindowSurface } from "@/lib/chat-window-state"
+import { client } from "@/lib/client"
+import { describeError } from "@/lib/error-text"
 import { basename } from "@/lib/path"
 import { cn } from "@/lib/utils"
 
@@ -56,7 +59,7 @@ export function ChatProjectMenu({ cwd, ...actions }: ProjectActions & { trigger?
         if (active)
           setDirectory({
             status: "failed",
-            error: error instanceof Error ? error.message : String(error),
+            error: describeError(error),
             retry: () => setAttempt((value) => value + 1)
           })
       }
@@ -264,6 +267,23 @@ function ProjectContents({
         )
       : []
   const listRef = useRef<HTMLDivElement>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const deleteProject = async (): Promise<void> => {
+    if (cwd === null || deleting) return
+    const rows = result?.status === "ready" ? result.sessionRows : []
+    setDeleting(true)
+    try {
+      // Switch to a fresh draft first so removing the open session cannot blank the chat view.
+      onNewChat()
+      for (const row of rows) await client.delete(row.sessionId)
+    } catch (error) {
+      toast.error(describeError(error))
+    } finally {
+      setDeleting(false)
+      setConfirmingDelete(false)
+    }
+  }
   return (
     <>
       {showHeading && (
@@ -385,6 +405,34 @@ function ProjectContents({
         <PlusIcon />
         {t("sidebar.newChat")}
       </Button>
+      {cwd !== null &&
+        (confirmingDelete ? (
+          <div className="space-y-2 px-3 pt-1 pb-2">
+            <p className="text-xs leading-5 text-muted-foreground">
+              {t("chat.project.deleteDetail", {
+                count: result?.status === "ready" ? result.sessionRows.length : 0
+              })}
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button size="sm" variant="ghost" disabled={deleting} onClick={() => setConfirmingDelete(false)}>
+                {t("actions.cancel")}
+              </Button>
+              <Button size="sm" variant="destructive" disabled={deleting} onClick={() => void deleteProject()}>
+                {t("sidebar.delete")}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="justify-start gap-2 rounded-none border-0 px-3 font-normal text-destructive hover:text-destructive"
+            onClick={() => setConfirmingDelete(true)}
+          >
+            <Trash2Icon />
+            {t("chat.project.delete")}
+          </Button>
+        ))}
     </>
   )
 }

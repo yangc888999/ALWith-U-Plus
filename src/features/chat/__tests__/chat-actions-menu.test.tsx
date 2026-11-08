@@ -292,3 +292,30 @@ test.each(["main", "floating"] as const)("MCP startup diagnostics stay hidden in
     view.unmount()
   }
 })
+
+test("the session menu keeps the edge actions out of the dropdown", async () => {
+  const state = client.state
+  client.store.setState({ connection: "ready" })
+  try {
+    const view = render(
+      <ChatActionsMenu
+        surface="main"
+        session={createSession("menu-id", "/tmp/project")}
+        cwd="/tmp/project"
+        onNewChat={() => {}}
+      />
+    )
+    await act(() => {
+      return Promise.try(() => {
+        fireEvent.click(view.getByRole("button", { name: "More actions" }))
+      })
+    })
+    // These two live on the chat's trailing edge now; a second copy in the menu confused users.
+    for (const name of ["Read project memory", "Clear context (new thread)"]) {
+      expect(view.queryByRole("menuitem", { name })).toBeNull()
+    }
+    expect(view.getByRole("menuitem", { name: "Delete" })).toBeDefined()
+  } finally {
+    act(() => client.store.setState(state, true))
+  }
+})

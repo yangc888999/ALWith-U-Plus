@@ -1,0 +1,31 @@
+{
+  "models": [
+    {
+      "slug": "minimax-m2",
+      "display_name": "MiniMax M2",
+      "description": "MiniMax flagship for coding and agentic work.",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Low reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Medium reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "High reasoning"
+        }
+      ],
+      "default_reasoning_level": "high",
+      "context_window": 200000,
+      "max_context_window": 200000,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "supports_parallel_tool_calls": true
+    }
+  ]
+}

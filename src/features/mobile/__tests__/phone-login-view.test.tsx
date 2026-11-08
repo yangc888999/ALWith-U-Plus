@@ -39,6 +39,6 @@ test("requires explicit confirmation after scanning and uses authenticated platf
   })
   expect(request).toHaveBeenCalledWith("/api/v1/auth/qr/mobile-tickets/confirm", "POST", { qr_ticket: "ticket" })
   expect(screen.getByText("Phone sign-in approved")).toBeVisible()
-  fireEvent.click(screen.getByRole("button", { name: "Continue to pair with this U" }))
+  fireEvent.click(screen.getByRole("button", { name: "Continue to pair with this L" }))
   expect(continuePairing).toHaveBeenCalledOnce()
 })

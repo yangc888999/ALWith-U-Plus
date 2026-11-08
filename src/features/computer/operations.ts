@@ -1,6 +1,7 @@
 import { Cause, Effect, Exit, Semaphore } from "effect"
 
 import { commands } from "@/bindings"
+import { isMac } from "@/lib/platform"
 import { settingsStore, updateSettings } from "@/lib/settings-store"
 
 // Native owns application authority. This permit serializes this client's transitions and saves.
@@ -43,6 +44,23 @@ export function stopComputer(): Promise<void> {
     Effect.gen(function* () {
       yield* attempt(() => commands.computerStop())
       yield* attempt(() => updateSettings({ "computer.enabled": false }))
+    })
+  )
+}
+
+/** Ask macOS for screen-capture consent once per install so screenshots work by default. */
+export function requestDefaultScreenCapture(): Promise<void> {
+  return transition(
+    Effect.gen(function* () {
+      if (!isMac()) return
+      const key = "computer.screenCaptureRequested"
+      if (settingsStore.get<boolean>(key) === true) return
+      const status = yield* attempt(() => commands.computerStatus())
+      yield* attempt(() => updateSettings({ [key]: true }))
+      if (!status.permissions.supported || status.permissions.screenCapture) return
+      yield* attempt(() =>
+        commands.computerRequestPermissions({ permission: "screenCapture", request: true })
+      )
     })
   )
 }

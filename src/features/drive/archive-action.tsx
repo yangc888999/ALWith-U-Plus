@@ -5,6 +5,8 @@ import { type ReactNode, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
+import { describeError } from "@/lib/error-text"
+
 import { drive } from "./controller"
 import { useDriveVisible } from "./use-drive-visible"
 
@@ -27,7 +29,7 @@ export function DriveArchiveAction({ sessionId }: { sessionId: string }): ReactN
         if (active) setExcluded(response.data.includes(sessionId))
       })
       .catch((error: unknown) => {
-        if (active) toast.error(String(error))
+        if (active) toast.error(describeError(error))
       })
     return () => {
       active = false
@@ -52,7 +54,7 @@ export function DriveArchiveAction({ sessionId }: { sessionId: string }): ReactN
         void drive
           .request({ type: "setArchivePrivate", sessionId, private: !excluded })
           .then(() => setExcluded(!excluded))
-          .catch((error: unknown) => toast.error(String(error)))
+          .catch((error: unknown) => toast.error(describeError(error)))
           .finally(() => setBusy(false))
       }}
     />

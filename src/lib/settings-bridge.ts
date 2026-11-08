@@ -4,6 +4,7 @@
 // two windows talk over events, as ALwith Desktop's windows do.
 
 import type * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable"
+import { isTauri } from "@tauri-apps/api/core"
 import { emitTo, listen } from "@tauri-apps/api/event"
 import * as React from "react"
 import { toast } from "sonner"
@@ -12,7 +13,9 @@ import type { PendingAction } from "@/agent/client"
 import type { AccountReadResponse, RateLimitSnapshot } from "@nyssance/codex-acp-v2/client"
 
 export type SettingsEvents = { listen: typeof listen; emitTo: typeof emitTo }
-const nativeEvents: SettingsEvents = { listen, emitTo }
+// Built per call, not at import: a surface that only needs the types (or a test that stubs the
+// event module partially) must not pay for — or fail on — the Tauri bindings at module load.
+const tauriEvents = (): SettingsEvents => ({ listen, emitTo })
 
 export type SettingsAgent = {
   name: string
@@ -21,7 +24,30 @@ export type SettingsAgent = {
   actions: PendingAction[]
 } | null
 /** `null` while the agent is not connected or does not expose the account methods. */
-export type SettingsAccount = { account: AccountReadResponse; rateLimits: RateLimitSnapshot | null } | null
+export type SettingsAccount = {
+  account: AccountReadResponse
+  rateLimits: RateLimitSnapshot | null
+  /** When the snapshot above was read from ChatGPT (ms). Older than "now" once it is a cache. */
+  rateLimitsCapturedAt?: number | null
+  /** True when the live read failed and these numbers are the last successful snapshot. */
+  rateLimitsStale?: boolean
+  /** True when the live read failed *and* there was nothing cached to fall back on. */
+  rateLimitsError?: boolean
+} | null
+
+/** One model in the settings picker: its own effort ladder, when it publishes one. */
+export interface SettingsModel {
+  id: string
+  label: string
+  efforts: string[]
+  defaultEffort: string | null
+}
+/** The integrated (native) model group, answered by the main window's live agent catalog. */
+export interface SettingsNativeModels {
+  id: string
+  name: string
+  models: SettingsModel[]
+}
 
 const REQUEST_AGENT = "settings:request-agent"
 const AGENT = "settings:agent"
@@ -29,6 +55,8 @@ const AUTH_REQUEST = "settings:auth-request"
 const AUTH_RESULT = "settings:auth-result"
 const REQUEST_ACCOUNT = "settings:request-account"
 const ACCOUNT = "settings:account"
+const REQUEST_NATIVE_MODELS = "settings:request-native-models"
+const NATIVE_MODELS = "settings:native-models"
 
 type AuthRequest = { id: string } & (
   | { action: "login"; methodId: string; extra: Record<string, unknown> }
@@ -50,15 +78,30 @@ export function serveSettingsBridge(
     account: () => Promise<SettingsAccount>
     /** Rolling rate-limit updates; the callback receives each snapshot. */
     onRateLimits: (listener: (limits: RateLimitSnapshot) => void) => () => void
+    /** The integrated model group from any live session's picker; `null` before one exists. */
+    nativeModels: () => SettingsNativeModels | null
   },
-  events: SettingsEvents = nativeEvents
-): () => void {
+  events: SettingsEvents = tauriEvents()
+): { stop: () => void; republish: () => void } {
   const { listen, emitTo } = events
   let lastAgent = options.agent()
+  let lastNativeSignature = ""
+  const nativeSignature = (models: SettingsNativeModels | null): string =>
+    models === null
+      ? ""
+      : `${models.id}|${models.name}|${models.models.map((m) => `${m.id}:${m.efforts.join(",")}:${m.defaultEffort ?? ""}`).join(";")}`
   const publish = () => {
     const agent = options.agent()
     void emitTo("settings", AGENT, agent)
     if ((lastAgent === null) !== (agent === null)) void publishAccount()
+    // The native model list appears with the first session; republish it whenever it changes so
+    // a settings window opened before that still receives it.
+    const nativeModels = options.nativeModels()
+    const signature = nativeSignature(nativeModels)
+    if (signature !== lastNativeSignature) {
+      lastNativeSignature = signature
+      void emitTo("settings", NATIVE_MODELS, nativeModels)
+    }
     lastAgent = agent
   }
   let lastAccount: SettingsAccount = null
@@ -79,12 +122,16 @@ export function serveSettingsBridge(
   const unsubscribe = options.subscribe(publish)
   const stopLimits = options.onRateLimits((limits) => {
     if (lastAccount === null) return
-    lastAccount = { ...lastAccount, rateLimits: limits }
+    lastAccount = { ...lastAccount, rateLimits: limits, rateLimitsCapturedAt: Date.now(), rateLimitsStale: false }
     void emitTo("settings", ACCOUNT, lastAccount)
   })
+  const publishNativeModels = () => {
+    void emitTo("settings", NATIVE_MODELS, options.nativeModels())
+  }
   const stops = Promise.all([
     listen(REQUEST_AGENT, publish),
     listen(REQUEST_ACCOUNT, () => void publishAccount()),
+    listen(REQUEST_NATIVE_MODELS, publishNativeModels),
     listen<AuthRequest>(
       AUTH_REQUEST,
       ({ payload: request }) =>
@@ -113,25 +160,55 @@ export function serveSettingsBridge(
         })()
     )
   ])
-  return () => {
-    disposed = true
-    revision++
-    unsubscribe()
-    stopLimits()
-    void stops.then((fns) => {
-      for (const stop of fns) stop()
-    })
+  return {
+    stop: () => {
+      disposed = true
+      revision++
+      unsubscribe()
+      stopLimits()
+      void stops.then((fns) => {
+        for (const stop of fns) stop()
+      })
+    },
+    /** Re-pushes the current snapshot: the bundled-catalog fallback arrives after boot. */
+    republish: publish
   }
 }
 
 /** Settings window: the main window's account + rate limits, `undefined` until the first answer. */
 export function useSettingsAccount(): SettingsAccount | undefined {
   const [account, setAccount] = React.useState<SettingsAccount | undefined>(undefined)
+  const retry = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const retryDelay = React.useRef(8_000)
   React.useEffect(() => {
     let disposed = false
+    const ask = () => {
+      if (disposed) return
+      void emitTo("main", REQUEST_ACCOUNT)
+    }
+    // A failed limit read is usually a network blip, so ask again by itself rather than leaving the
+    // panel on "暂无用量数据" until the user happens to reopen settings. The delay doubles up to a
+    // minute: an offline machine must not hammer an endpoint it cannot reach.
+    const scheduleRetry = (payload: SettingsAccount) => {
+      if (payload?.rateLimitsError !== true) {
+        retryDelay.current = 8_000
+        if (retry.current !== null) clearTimeout(retry.current)
+        retry.current = null
+        return
+      }
+      if (retry.current !== null) return
+      const delay = retryDelay.current
+      retryDelay.current = Math.min(60_000, delay * 2)
+      retry.current = setTimeout(() => {
+        retry.current = null
+        ask()
+      }, delay)
+    }
     const stops = Promise.all([
       listen<SettingsAccount>(ACCOUNT, (event) => {
-        if (!disposed) setAccount(event.payload)
+        if (disposed) return
+        setAccount(event.payload)
+        scheduleRetry(event.payload)
       }),
       listen<string>(ACCOUNT_ERROR, (event) => {
         if (disposed) return
@@ -144,6 +221,8 @@ export function useSettingsAccount(): SettingsAccount | undefined {
     })
     return () => {
       disposed = true
+      if (retry.current !== null) clearTimeout(retry.current)
+      retry.current = null
       void stops.then((fns) => {
         for (const stop of fns) stop()
       })
@@ -169,6 +248,29 @@ export function useSettingsAgent(): SettingsAgent | undefined {
     }
   }, [])
   return agent
+}
+
+/** Settings window: the integrated model group from the main window, `undefined` until answered. */
+export function useSettingsNativeModels(): SettingsNativeModels | null | undefined {
+  const [models, setModels] = React.useState<SettingsNativeModels | null | undefined>(undefined)
+  React.useEffect(() => {
+    // Without the Tauri bridge `listen` throws while registering its callback, which surfaced as an
+    // unhandled rejection in every test (and in the Storybook/preview builds) that mounts this
+    // section. Nothing can answer the request there either, so stay unresolved instead.
+    if (!isTauri()) return
+    let disposed = false
+    const stop = listen<SettingsNativeModels | null>(NATIVE_MODELS, (event) => {
+      if (!disposed) setModels(event.payload)
+    })
+    void stop.then(() => {
+      if (!disposed) return emitTo("main", REQUEST_NATIVE_MODELS)
+    })
+    return () => {
+      disposed = true
+      void stop.then((fn) => fn())
+    }
+  }, [])
+  return models
 }
 
 /** Settings window: asks the main window to sign out of Codex. */
@@ -199,4 +301,17 @@ export function createSettingsAuthClient(events: SettingsEvents) {
   }
 }
 
-export const { requestSignOut, requestSignIn, requestActionResponse } = createSettingsAuthClient(nativeEvents)
+export function requestSignOut(): Promise<void> {
+  return requestAuth({ id: crypto.randomUUID(), action: "logout" }, tauriEvents())
+}
+
+export function requestSignIn(methodId: string, extra: Record<string, unknown>): Promise<void> {
+  return requestAuth({ id: crypto.randomUUID(), action: "login", methodId, extra }, tauriEvents())
+}
+
+export function requestActionResponse(
+  actionId: string,
+  answer: acp.RequestPermissionResponse | acp.CreateElicitationResponse
+): Promise<void> {
+  return requestAuth({ id: crypto.randomUUID(), action: "respond", actionId, answer }, tauriEvents())
+}

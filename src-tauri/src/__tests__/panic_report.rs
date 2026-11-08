@@ -28,7 +28,7 @@ fn unavailable_destination_does_not_prevent_installation_or_later_reports() {
         assert!(result.is_err());
         let report = std::fs::read_to_string(path).expect("installed hook must retry writing after recovery");
         assert!(report.contains("panic-report-recovery-marker"));
-        assert!(report.contains("ALwith U"));
+        assert!(report.contains("ALWith L"));
         return;
     }
 

@@ -4,6 +4,7 @@ import { type ReactNode, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
+import { describeError } from "@/lib/error-text"
 import { ShortcutKey } from "@/components/alwith-ui/shortcut-hint"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -55,7 +56,7 @@ export function GuideButton(): ReactNode {
             className="h-8 py-0"
             onClick={() =>
               void openGuideWindow().catch((error: unknown) =>
-                toast.error(error instanceof Error ? error.message : String(error))
+                toast.error(describeError(error))
               )
             }
           >

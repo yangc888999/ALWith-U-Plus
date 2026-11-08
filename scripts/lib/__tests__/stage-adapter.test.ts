@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs"
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
@@ -15,6 +15,7 @@ const HOST_TRIPLES: Partial<Record<`${NodeJS.Platform}-${string}`, string>> = {
 test("the staged toolchain runs with explicit resources outside the executable directory", () => {
   const triple = HOST_TRIPLES[`${process.platform}-${process.arch}`]
   if (triple === undefined) return
+  const resources = join(import.meta.dir, "../../../src-tauri/resources")
 
   const stage = Bun.spawnSync([process.execPath, "scripts/stage.ts", triple], {
     cwd: join(import.meta.dir, "../../.."),
@@ -42,27 +43,51 @@ test("the staged toolchain runs with explicit resources outside the executable d
   )
   expect(features.exitCode, features.stderr.toString()).toBe(0)
   expect(features.stdout.toString()).toMatch(/^default_mode_request_user_input\s+.*\s+true$/m)
-  for (const provider of providers) {
-    if (!provider.catalog) continue
-    const path = join(import.meta.dir, "../../../src-tauri/resources", provider.catalog)
-    const catalog = Bun.spawnSync(
-      [
-        join(import.meta.dir, `../../../src-tauri/binaries/codex-${triple}${suffix}`),
-        "-c",
-        `model_catalog_json=${JSON.stringify(path)}`,
-        "debug",
-        "models"
-      ],
-      { stdout: "pipe", stderr: "pipe", timeout: 10_000 }
-    )
-    expect(catalog.exitCode, catalog.stderr.toString()).toBe(0)
-    const parsed = JSON.parse(catalog.stdout.toString()) as { models: Array<{ slug: string }> }
-    for (const model of provider.models) {
-      expect(
-        parsed.models.map((entry) => entry.slug),
-        `${provider.id}/${model.id}`
-      ).toContain(model.id)
+  // Hand-written catalogs (Kimi, GLM, MiniMax) ship only identity, context window and effort
+  // levels; the app completes them from a full template entry before Codex ever reads the file
+  // (`complete_catalog_entry` in providers.rs). Feed Codex the same completed form, or this check
+  // would fail on files the app never hands over as-is.
+  const template = (JSON.parse(readFileSync(join(resources, "qwen/models.json"), "utf8")) as {
+    models: Array<Record<string, unknown>>
+  }).models[0]
+  const catalogDir = mkdtempSync(join(tmpdir(), "alwith-u-catalogs-"))
+  try {
+    for (const provider of providers) {
+      if (!provider.catalog) continue
+      const shipped = join(resources, provider.catalog)
+      let path = shipped
+      const raw = JSON.parse(readFileSync(shipped, "utf8")) as { models: Array<Record<string, unknown>> }
+      if (!raw.models.every((entry) => entry.shell_type !== undefined)) {
+        const models = raw.models.map((entry) => {
+          const merged = { ...template, ...entry }
+          // Another model's compaction hash would make Codex summarize against the wrong model.
+          delete merged.comp_hash
+          return merged
+        })
+        path = join(catalogDir, `${provider.id}.json`)
+        writeFileSync(path, JSON.stringify({ models }))
+      }
+      const catalog = Bun.spawnSync(
+        [
+          join(import.meta.dir, `../../../src-tauri/binaries/codex-${triple}${suffix}`),
+          "-c",
+          `model_catalog_json=${JSON.stringify(path)}`,
+          "debug",
+          "models"
+        ],
+        { stdout: "pipe", stderr: "pipe", timeout: 10_000 }
+      )
+      expect(catalog.exitCode, catalog.stderr.toString()).toBe(0)
+      const parsed = JSON.parse(catalog.stdout.toString()) as { models: Array<{ slug: string }> }
+      for (const model of provider.models) {
+        expect(
+          parsed.models.map((entry) => entry.slug),
+          `${provider.id}/${model.id}`
+        ).toContain(model.id)
+      }
     }
+  } finally {
+    rmSync(catalogDir, { recursive: true, force: true })
   }
   const directory = mkdtempSync(join(tmpdir(), "alwith-u 适配器-"))
   try {
@@ -82,9 +107,10 @@ test("the staged toolchain runs with explicit resources outside the executable d
     const resources = join(directory, "staged resources")
     mkdirSync(binaries)
     mkdirSync(join(resources, "adapter"), { recursive: true })
-    for (const provider of providers) {
-      const source = join(import.meta.dir, "../../../src-tauri/resources", provider.catalog)
-      const target = join(resources, provider.catalog)
+    // Native providers carry no bundled catalog: their models come from the engine itself.
+    for (const provider of providers.filter((entry) => entry.catalog !== undefined)) {
+      const source = join(import.meta.dir, "../../../src-tauri/resources", provider.catalog as string)
+      const target = join(resources, provider.catalog as string)
       mkdirSync(dirname(target), { recursive: true })
       copyFileSync(source, target)
     }
@@ -131,10 +157,10 @@ test("the staged toolchain runs with explicit resources outside the executable d
 
     const packagedResources = process.platform === "darwin" ? join(directory, "Resources") : binaries
     mkdirSync(join(packagedResources, "adapter"), { recursive: true })
-    for (const provider of providers) {
-      const target = join(packagedResources, provider.catalog)
+    for (const provider of providers.filter((entry) => entry.catalog !== undefined)) {
+      const target = join(packagedResources, provider.catalog as string)
       mkdirSync(dirname(target), { recursive: true })
-      copyFileSync(join(resources, provider.catalog), target)
+      copyFileSync(join(resources, provider.catalog as string), target)
     }
     copyFileSync(entry, join(packagedResources, "adapter/codex-acp-v2.mjs"))
     copyFileSync(join(resources, "adapter/codex-bootstrap.mjs"), join(packagedResources, "adapter/codex-bootstrap.mjs"))

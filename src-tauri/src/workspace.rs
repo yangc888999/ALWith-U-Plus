@@ -164,8 +164,13 @@ pub fn workspace_dirty(window: tauri::WebviewWindow, dirty: bool) -> Result<(), 
     DIRTY.store(dirty, std::sync::atomic::Ordering::Release);
     Ok(())
 }
+/// True while an editor buffer still needs a save confirmation before the app may exit.
+pub fn is_dirty() -> bool {
+    DIRTY.load(std::sync::atomic::Ordering::Acquire)
+}
+
 pub fn prevent_exit(app: &tauri::AppHandle) -> bool {
-    if !DIRTY.load(std::sync::atomic::Ordering::Acquire) {
+    if !is_dirty() {
         return false;
     }
     // Quit is also available while main is hidden; make its save confirmation reachable.
@@ -222,7 +227,7 @@ pub async fn workspace_import(
         format!("Copy these files or folders into {}?\n{}", destination.display(), names)
     };
     let (sender, receiver) = tokio::sync::oneshot::channel();
-    window.dialog().message(message).title("ALwith U").buttons(MessageDialogButtons::OkCancel).show(move |allowed| {
+    window.dialog().message(message).title("ALWith L").buttons(MessageDialogButtons::OkCancel).show(move |allowed| {
         let _ = sender.send(allowed);
     });
     if !receiver.await.map_err(|error| error.to_string())? {

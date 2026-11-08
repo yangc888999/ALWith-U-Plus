@@ -1,6 +1,8 @@
 import type * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { expect, test, vi } from "vitest"
 
+import { setSandboxSettings } from "@/lib/sandbox-preference"
+
 import { CodexClient } from "../client"
 import { createFakeAgent } from "./fake-agent"
 import { FakeHubPort } from "./fake-runtime-client"
@@ -28,6 +30,9 @@ function options(mode: string): acp.SessionConfigOption[] {
 }
 
 function fixture(trigger: "revision" | "preflight" | "reopen" | "fork") {
+  // These cases cover per-session approval modes while the sandbox is off; with the sandbox on
+  // the global sandbox preset is authoritative on resume instead (see client.test.ts).
+  setSandboxSettings({ enabled: false, projectWrite: true })
   const fake = createFakeAgent()
   // Match the adapter: an explicit host mode overrides the default on every open.
   fake.sessionOptions.current = (_model, meta) => options(String((meta?.codex as { mode?: string })?.mode ?? "agent"))
@@ -85,7 +90,7 @@ test.each(["revision", "preflight", "reopen", "fork"] as const)(
         "read-only"
       )
       expect(client.session(unrelated).configOptions.find((option) => option.configId === "mode")?.currentValue).toBe(
-        "agent"
+        "agent-full-access"
       )
       await vi.waitFor(() => expect(client.state.actions).toHaveLength(1))
       const action = client.state.actions[0]

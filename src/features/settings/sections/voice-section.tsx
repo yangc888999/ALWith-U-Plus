@@ -4,6 +4,7 @@ import { type ReactNode, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
+import { describeError } from "@/lib/error-text"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/alwith-ui/select"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -14,7 +15,7 @@ import { createVoiceSettingsHost, loadVoiceSettings, saveVoiceEnabled, voiceProf
 import { useVoiceEnabled } from "@/features/voice/use-voice-enabled"
 import { openExternal } from "@/lib/open"
 
-import { SettingGroup, SettingRow } from "./shared"
+import { SettingGroup, SettingRow, SettingsCard } from "./shared"
 const slots: VoiceSettingsSlots = {
   Group: SettingGroup,
   Row: SettingRow,
@@ -40,7 +41,7 @@ const slots: VoiceSettingsSlots = {
         event.stopPropagation()
         if (href === undefined) throw new Error("missing_voice_key_url")
         void openExternal(href).catch((error: unknown) =>
-          toast.error(error instanceof Error ? error.message : String(error))
+          toast.error(describeError(error))
         )
       }}
     >
@@ -85,7 +86,7 @@ export function VoiceSection(): ReactNode {
       if (profiles[settings.provider]) toast.success(t("voice.saved"))
       else toast.info(t("voice.configureKey"))
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : String(error))
+      toast.error(describeError(error))
     }
   }
   const changeEnabled = async (value: boolean): Promise<void> => {
@@ -93,15 +94,15 @@ export function VoiceSection(): ReactNode {
     try {
       await saveVoiceEnabled(value)
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : String(error))
+      toast.error(describeError(error))
     } finally {
       setSaving(false)
     }
   }
   return (
     <>
-      <SettingGroup>
-        <SettingRow title={t("voice.enabled")}>
+      <SettingsCard title={t("settings.cardVoice")} desc={t("settings.cardVoiceDesc")}>
+        <SettingRow title={t("voice.enabled")} desc={t("settings.cardVoiceHint")}>
           <Switch
             aria-label={t("voice.enabled")}
             checked={enabled === true}
@@ -112,14 +113,16 @@ export function VoiceSection(): ReactNode {
         <SettingRow title={t("voice.shortcut")} desc={t("voice.shortcutHint")}>
           <Kbd>{t("voice.shortcutKey")}</Kbd>
         </SettingRow>
-      </SettingGroup>
-      <VoiceSettingsForm
-        host={host}
-        slots={slots}
-        text={(key, values) => t(`voice.${key}`, values)}
-        onError={(error) => toast.error(error instanceof Error ? error.message : String(error))}
-        onSaved={() => void onSaved()}
-      />
+      </SettingsCard>
+      <SettingsCard title={t("settings.cardVoiceEngine")} desc={t("settings.cardVoiceEngineDesc")}>
+        <VoiceSettingsForm
+          host={host}
+          slots={slots}
+          text={(key, values) => t(`voice.${key}`, values)}
+          onError={(error) => toast.error(describeError(error))}
+          onSaved={() => void onSaved()}
+        />
+      </SettingsCard>
     </>
   )
 }

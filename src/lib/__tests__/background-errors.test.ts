@@ -4,6 +4,7 @@ import { toast } from "sonner"
 import { beforeEach, expect, test, vi } from "vitest"
 
 import { errorDetails, logBackgroundError, reportBackgroundError } from "../background-errors"
+import { armStartupWindow, markStartupReady, resetStartupWindow } from "../startup-window"
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }))
 beforeEach(() => vi.clearAllMocks())
@@ -40,4 +41,34 @@ test("Runtime errors retain ACP code and data alongside the stack", () => {
   expect(details).toContain("-32600")
   expect(details).toContain("initialize may only be requested once")
   expect(details).toContain("acpRequest")
+})
+
+test("a startup failure is logged but never toasted while the silent window is open", () => {
+  // This module calls `sonner` directly, so it used to be the one exit that ignored the startup
+  // gate: `connect()` sets `connection = "ready"` before providers are applied, and a failure in
+  // between painted the raw `acpRequest: …` line in the corner for a second (2026-11-08).
+  resetStartupWindow()
+  armStartupWindow()
+  try {
+    reportBackgroundError(
+      "provider-startup",
+      new Error("acpRequest: Codex process has exited with code 1: Error: Model provider 'alwith' not found")
+    )
+    expect(toast.error).not.toHaveBeenCalled()
+    expect(logError).toHaveBeenCalledTimes(1)
+  } finally {
+    resetStartupWindow()
+  }
+})
+
+test("the same failure is toasted once the engine is ready", () => {
+  resetStartupWindow()
+  armStartupWindow()
+  markStartupReady()
+  try {
+    reportBackgroundError("provider-startup", new Error("engine is gone"))
+    expect(toast.error).toHaveBeenCalledWith("engine is gone", expect.objectContaining({ id: "provider-startup" }))
+  } finally {
+    resetStartupWindow()
+  }
 })

@@ -116,7 +116,22 @@ function ImagePreview({ image, index, count }: { image: PreviewImage; index: num
   return (
     <>
       <header className="flex w-full shrink-0 items-center justify-between gap-3 px-4 py-3">
-        <DialogTitle className="min-w-0 truncate text-sm font-medium">{image.alt || name}</DialogTitle>
+        <div className="flex min-w-0 items-center gap-3">
+          <DialogClose
+            render={
+              <Button
+                variant="default"
+                size="lg"
+                className="shrink-0 rounded-full px-4 shadow-lg"
+                title={t("workspace.closePreview")}
+              />
+            }
+          >
+            <XIcon />
+            <span>{t("workspace.closePreview")}</span>
+          </DialogClose>
+          <DialogTitle className="min-w-0 truncate text-sm font-medium">{image.alt || name}</DialogTitle>
+        </div>
         <div className="flex shrink-0 items-center gap-2" role="toolbar" aria-label={t("chat.image.tools")}>
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -210,19 +225,6 @@ function ImagePreview({ image, index, count }: { image: PreviewImage; index: num
             <Maximize2Icon />
             <span className="hidden sm:inline">{t("chat.image.openSidePanel")}</span>
           </Button>
-          <DialogClose
-            render={
-              <Button
-                variant="outline"
-                size="icon"
-                className="rounded-full"
-                aria-label={t("actions.close")}
-                title={t("actions.close")}
-              />
-            }
-          >
-            <XIcon />
-          </DialogClose>
         </div>
       </header>
       <div ref={viewport} className="min-h-0 w-full flex-1 overflow-auto">

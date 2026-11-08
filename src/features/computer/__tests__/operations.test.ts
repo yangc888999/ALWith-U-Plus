@@ -4,20 +4,30 @@ const native = vi.hoisted(() => ({
   computerStart: vi.fn(),
   computerReconnect: vi.fn(),
   computerStop: vi.fn(),
-  computerStatus: vi.fn()
+  computerStatus: vi.fn(),
+  computerRequestPermissions: vi.fn()
 }))
 const settings = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn() }))
+const platform = vi.hoisted(() => ({ isMac: vi.fn() }))
 vi.mock("@/bindings", () => ({ commands: native }))
 vi.mock("@/lib/settings-store", () => ({
   settingsStore: { get: settings.get },
   updateSettings: settings.update
 }))
-import { enableComputer, reconnectComputer, restoreComputer, stopComputer } from "../operations"
+vi.mock("@/lib/platform", () => ({ isMac: platform.isMac }))
+import {
+  enableComputer,
+  reconnectComputer,
+  requestDefaultScreenCapture,
+  restoreComputer,
+  stopComputer
+} from "../operations"
 beforeEach(() => {
   vi.resetAllMocks()
   native.computerStart.mockResolvedValue(undefined)
   native.computerReconnect.mockResolvedValue(undefined)
   native.computerStop.mockResolvedValue(undefined)
+  native.computerRequestPermissions.mockResolvedValue(undefined)
   settings.update.mockResolvedValue(undefined)
 })
 test("global enable saves its preference only after native startup succeeds", async () => {
@@ -189,4 +199,52 @@ test("successful rollback preserves the exact original public rejection", async 
   settings.update.mockRejectedValueOnce(error)
   await expect(enableComputer()).rejects.toBe(error)
   expect(native.computerStop).toHaveBeenCalledOnce()
+})
+
+test("screen capture is requested once on macOS when the permission is missing", async () => {
+  platform.isMac.mockReturnValue(true)
+  native.computerStatus.mockResolvedValue({
+    enabled: false,
+    available: true,
+    permissions: { supported: true, accessibility: false, screenCapture: false }
+  })
+  await requestDefaultScreenCapture()
+  expect(native.computerRequestPermissions).toHaveBeenCalledExactlyOnceWith({
+    permission: "screenCapture",
+    request: true
+  })
+  expect(settings.update).toHaveBeenCalledExactlyOnceWith({
+    "computer.screenCaptureRequested": true
+  })
+  // The one-shot flag means the prompt is never repeated on later launches.
+  settings.get.mockReturnValue(true)
+  native.computerRequestPermissions.mockClear()
+  await requestDefaultScreenCapture()
+  expect(native.computerStatus).toHaveBeenCalledTimes(1)
+  expect(native.computerRequestPermissions).not.toHaveBeenCalled()
+})
+
+test("screen capture consent is skipped when already granted or unsupported", async () => {
+  platform.isMac.mockReturnValue(true)
+  native.computerStatus.mockResolvedValue({
+    enabled: false,
+    available: true,
+    permissions: { supported: true, accessibility: true, screenCapture: true }
+  })
+  await requestDefaultScreenCapture()
+  expect(native.computerRequestPermissions).not.toHaveBeenCalled()
+  native.computerStatus.mockResolvedValue({
+    enabled: false,
+    available: false,
+    permissions: { supported: false, accessibility: false, screenCapture: false }
+  })
+  await requestDefaultScreenCapture()
+  expect(native.computerRequestPermissions).not.toHaveBeenCalled()
+})
+
+test("screen capture consent is a macOS-only first-run flow", async () => {
+  platform.isMac.mockReturnValue(false)
+  await requestDefaultScreenCapture()
+  expect(native.computerStatus).not.toHaveBeenCalled()
+  expect(native.computerRequestPermissions).not.toHaveBeenCalled()
 })

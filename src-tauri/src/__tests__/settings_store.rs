@@ -35,6 +35,89 @@ fn ordinary_updates_reject_secrets_unknown_keys_and_stale_forms() {
     assert_eq!(s.values["voice.enabled"], false);
 }
 #[test]
+fn yup_drive_fixed_four_and_screen_capture_keys_are_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = SettingsStore::load(dir.path().into()).unwrap();
+    s.update(
+        changes(json!({
+            "drive.yupEnabled": false,
+            "appearance.fixedFour": true,
+            "computer.screenCaptureRequested": true
+        })),
+        None,
+    )
+    .unwrap();
+    assert_eq!(s.values["drive.yupEnabled"], false);
+    assert_eq!(s.values["appearance.fixedFour"], true);
+    assert_eq!(s.values["computer.screenCaptureRequested"], true);
+}
+#[test]
+fn four_columns_default_is_a_registered_boolean_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = SettingsStore::load(dir.path().into()).unwrap();
+    // The Appearance pane writes this key through `updateSettings`. Before it was registered,
+    // validate() answered "Unknown or private settings key" and the switch silently did nothing.
+    s.update(changes(json!({"appearance.fourColumnsDefault": false})), None)
+        .unwrap();
+    assert_eq!(s.values["appearance.fourColumnsDefault"], false);
+    let (known, private) = partition_settings(s.values.clone());
+    assert_eq!(known["appearance.fourColumnsDefault"], false);
+    assert!(!private.contains_key("appearance.fourColumnsDefault"));
+    assert!(s
+        .update(changes(json!({"appearance.fourColumnsDefault": "no"})), None)
+        .is_err());
+    let restarted = SettingsStore::load(dir.path().into()).unwrap();
+    assert_eq!(restarted.values["appearance.fourColumnsDefault"], false);
+}
+#[test]
+fn block_conflict_copies_is_a_registered_boolean_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = SettingsStore::load(dir.path().into()).unwrap();
+    // Written by the Drive settings pane through `updateSettings`; unregistered keys are rejected
+    // as private and the switch would silently do nothing.
+    s.update(changes(json!({"drive.blockConflictCopies": true})), None).unwrap();
+    assert_eq!(s.values["drive.blockConflictCopies"], true);
+    let (known, private) = partition_settings(s.values.clone());
+    assert_eq!(known["drive.blockConflictCopies"], true);
+    assert!(!private.contains_key("drive.blockConflictCopies"));
+    assert!(s.update(changes(json!({"drive.blockConflictCopies": 1})), None).is_err());
+    let restarted = SettingsStore::load(dir.path().into()).unwrap();
+    assert_eq!(restarted.values["drive.blockConflictCopies"], true);
+}
+#[test]
+fn workspace_column_visibility_is_a_persisted_boolean() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = SettingsStore::load(dir.path().into()).unwrap();
+    s.update(changes(json!({"workspace.treeVisible": false})), None).unwrap();
+    assert_eq!(s.values["workspace.treeVisible"], false);
+    // A closed file column survives the next launch.
+    let restarted = SettingsStore::load(dir.path().into()).unwrap();
+    assert_eq!(restarted.values["workspace.treeVisible"], false);
+    assert!(s.update(changes(json!({"workspace.treeVisible": "no"})), None).is_err());
+}
+#[test]
+fn local_profile_overrides_are_accepted_within_their_bounds() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = SettingsStore::load(dir.path().into()).unwrap();
+    s.update(
+        changes(json!({
+            "profile.nickname": "小哥哥",
+            "profile.owner": "6f1c2a34-0000-4000-8000-000000000000",
+            "profile.avatar": "data:image/jpeg;base64,AAAA"
+        })),
+        None,
+    )
+    .unwrap();
+    assert_eq!(s.values["profile.nickname"], "小哥哥");
+    assert_eq!(s.values["profile.avatar"], "data:image/jpeg;base64,AAAA");
+    // The picker never writes these shapes, so the store refuses them.
+    assert!(s.update(changes(json!({"profile.nickname": "x".repeat(65)})), None).is_err());
+    assert!(s.update(changes(json!({"profile.avatar": "https://cdn.example/leo.png"})), None).is_err());
+    // Dropping the override is always allowed; a null value removes the key.
+    s.update(changes(json!({"profile.avatar": null})), None).unwrap();
+    assert!(!s.values.contains_key("profile.avatar"));
+}
+#[test]
 fn voice_configuration_and_secret_survive_restart_together() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = SettingsStore::load(dir.path().into()).unwrap();
@@ -353,4 +436,39 @@ fn mobile_bridge_preference_survives_restart_and_rejects_non_boolean_values() {
     assert!(store.update(changes(json!({"mobile.bridgeEnabled": "true"})), None).is_err());
     let restarted = SettingsStore::load(dir.path().into()).unwrap();
     assert_eq!(restarted.values["mobile.bridgeEnabled"], true);
+}
+
+#[test]
+fn free_model_watch_and_completion_sound_are_registered_booleans() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = SettingsStore::load(dir.path().into()).unwrap();
+    assert!(store
+        .update(changes(json!({"providers.freeModelWatch": "yes"})), None)
+        .is_err());
+    assert!(store
+        .update(changes(json!({"automation.completionSound": "yes"})), None)
+        .is_err());
+    store
+        .update(
+            changes(json!({"providers.freeModelWatch": true, "automation.completionSound": true})),
+            None,
+        )
+        .unwrap();
+    let (known, private) = partition_settings(store.values.clone());
+    assert_eq!(known["providers.freeModelWatch"], true);
+    assert_eq!(known["automation.completionSound"], true);
+    assert!(!private.contains_key("providers.freeModelWatch"));
+    let restarted = SettingsStore::load(dir.path().into()).unwrap();
+    assert_eq!(restarted.values["automation.completionSound"], true);
+}
+
+#[test]
+fn auto_update_defaults_to_disabled_and_only_accepts_booleans() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = SettingsStore::load(dir.path().into()).unwrap();
+    assert!(store.values.get("updater.autoUpdate").is_none());
+    assert!(store.update(changes(json!({"updater.autoUpdate": "true"})), None).is_err());
+    store.update(changes(json!({"updater.autoUpdate": true})), None).unwrap();
+    let restarted = SettingsStore::load(dir.path().into()).unwrap();
+    assert_eq!(restarted.values["updater.autoUpdate"], true);
 }

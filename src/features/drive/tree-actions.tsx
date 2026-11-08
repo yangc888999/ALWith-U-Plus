@@ -12,6 +12,7 @@ import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import { ContextMenuItem } from "@/components/ui/context-menu"
+import { describeError } from "@/lib/error-text"
 
 import { drive } from "./controller"
 import { driveFileSystem } from "./filesystem"
@@ -44,7 +45,7 @@ export function DriveTreeActions({
   if (!snapshot?.running || !match || !scope) return null
   const realPath = path.replace(/\.yupcloud$/, "")
   const run = (action: () => Promise<void>): void => {
-    void action().catch((error) => toast.error(String(error)))
+    void action().catch((error) => toast.error(describeError(error)))
   }
   const link = async (desktop: boolean): Promise<void> => {
     const response = await drive.request({ type: "fileRemoteId", path: realPath })

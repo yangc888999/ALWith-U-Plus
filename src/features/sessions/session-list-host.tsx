@@ -11,6 +11,13 @@ function SessionPathAction({ cwd, onOpened }: { cwd: string; onOpened: () => voi
   return <ProjectPathAction cwd={cwd} onOpened={onOpened} appearance="session" />
 }
 
+/**
+ * The vendored list titles its own groups; the quick-chat group is U's 会话 section, whose hover
+ * card already uses `sidebar.quickChats`. Answering that one key from the app bundle keeps the
+ * group header and its popover title saying the same thing.
+ */
+const APP_STRING_KEYS: Readonly<Record<string, string>> = { "sessionList.quickChats": "sidebar.quickChats" }
+
 /** U's strings, toasts and folder action for `@alwith/module-chat`'s session list, over the app's client. */
 export function SessionListHostProvider({ children }: { children: ReactNode }) {
   const { i18n } = useTranslation()
@@ -18,7 +25,11 @@ export function SessionListHostProvider({ children }: { children: ReactNode }) {
   const host = useMemo(
     () =>
       ({
-        t: (key, values) => i18n.t(key, { ...values, ns: "alwithChat" }),
+        t: (key, values) => {
+          const appKey = APP_STRING_KEYS[key]
+          if (appKey !== undefined) return i18n.t(appKey)
+          return i18n.t(key, { ...values, ns: "alwithChat" })
+        },
         i18n: { language },
         PathAction: SessionPathAction,
         reportError: (error) => toast.error(error instanceof Error ? error.message : String(error))

@@ -2,7 +2,7 @@
   "platformAuth": {
     "code": "Код подтверждения",
     "signIn": "Войти",
-    "signOut": "Выйти из ALwith U"
+    "signOut": "Выйти из ALWith L"
   },
   "guide": {
     "help": "Получить помощь"
@@ -124,7 +124,7 @@
         "name": "Полный доступ",
         "description": "Используйте с осторожностью: Codex может изменять файлы вне этой рабочей области и обращаться к интернету без одобрения"
       },
-      "heading": "Как одобрять действия ALwith U?"
+      "heading": "Как одобрять действия ALWith L?"
     }
   },
   "composer": {
@@ -143,7 +143,6 @@
     "reset": "Сбросить"
   },
   "settings": {
-    "gamepad": "Gamepad",
     "general": "Общие",
     "versionLabel": "Версия",
     "engine": "Движок",
@@ -373,13 +372,8 @@
     "emptyNewTab": "Новая вкладка",
     "more": "Другие действия"
   },
-  "pet": {
-    "retry": "Повторить",
-    "lounge": "Комната отдыха Vibémon",
-    "recall": "Вернуть в комнату отдыха"
-  },
   "app": {
-    "name": "ALwith U"
+    "name": "ALWith L"
   },
   "notify": {
     "needsInput": "Требуется ваш ответ",

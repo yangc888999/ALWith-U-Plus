@@ -4,6 +4,13 @@ import { afterEach, beforeAll, expect, test, vi } from "vitest"
 import { initI18n } from "@/lib/i18n"
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: () => Promise.resolve(() => {}) }))
+vi.mock("@tauri-apps/api/window", async () => {
+  // 生产代码用窗口级 API（`getCurrentWindow`）：子 webview 有焦点时 `getCurrentWebviewWindow()`
+  // 会抛 "current webview is not a WebviewWindow"。测试里两者指向同一个假窗口。
+  const webviewWindow = await import("@tauri-apps/api/webviewWindow")
+  return { ...webviewWindow, getCurrentWindow: () => webviewWindow.getCurrentWebviewWindow() }
+})
+
 vi.mock("@tauri-apps/api/webviewWindow", () => ({
   getCurrentWebviewWindow: () => ({
     onCloseRequested: () => Promise.resolve(() => {}),
@@ -22,6 +29,7 @@ vi.mock("@/features/extensions/use-extensions", () => ({
 vi.mock("@/features/extensions/extensions-section", () => ({ ExtensionsSection: () => null }))
 vi.mock("@/features/workspace/editor-settings-dialog", () => ({ EditorSettingsSection: () => null }))
 vi.mock("../sections/general-section", () => ({ GeneralSection: () => null }))
+vi.mock("../sections/model-section", () => ({ ModelSection: () => null }))
 vi.mock("../sections/appearance-section", () => ({ AppearanceSection: () => null }))
 vi.mock("../sections/account-section", () => ({ AccountSection: () => null }))
 vi.mock("../sections/provider-section", () => ({ ProviderSection: () => null }))
@@ -37,18 +45,21 @@ afterEach(cleanup)
 test("settings has no visible window or sidebar title and keeps navigation accessible", () => {
   render(<SettingsPage />)
   expect(screen.queryByText("Settings")).not.toBeInTheDocument()
-  expect(screen.getAllByText("General")).toHaveLength(1)
+  // 标题现在长在内容区顶部（页面标题栏），导航里还有一个同名入口。
+  expect(screen.getByRole("heading", { level: 1, name: "General" })).toBeVisible()
+  expect(screen.getAllByText("General")).toHaveLength(2)
   expect(screen.getByRole("navigation", { name: "Settings" })).toBeVisible()
   expect(screen.getByRole("region", { name: "General" })).toBeVisible()
 })
 
 test("changing settings sections updates the accessible content label and current navigation item", () => {
   render(<SettingsPage />)
-  fireEvent.click(screen.getByRole("button", { name: "Appearance" }))
-  expect(screen.getByRole("region", { name: "Appearance" })).toBeVisible()
-  expect(screen.getByRole("button", { name: "Appearance" })).toHaveAttribute("aria-current", "page")
+  fireEvent.click(screen.getByRole("button", { name: "Theme & appearance" }))
+  expect(screen.getByRole("region", { name: "Theme & appearance" })).toBeVisible()
+  expect(screen.getByRole("button", { name: "Theme & appearance" })).toHaveAttribute("aria-current", "page")
   expect(screen.getByRole("button", { name: "General" })).not.toHaveAttribute("aria-current")
-  expect(screen.getAllByText("Appearance")).toHaveLength(1)
+  expect(screen.getByRole("heading", { level: 1, name: "Theme & appearance" })).toBeVisible()
+  expect(screen.getAllByText("Theme & appearance")).toHaveLength(2)
 })
 
 test("mobile connections are reachable from settings navigation", () => {

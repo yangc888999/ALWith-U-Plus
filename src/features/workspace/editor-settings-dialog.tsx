@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { SettingGroup, SettingRow } from "@/features/settings/sections/shared"
+import { describeError } from "@/lib/error-text"
 
 import { saveEditorIconTheme, saveEditorSettings } from "./editor-settings"
 import { useEditorPreferences } from "./use-editor-preferences"
@@ -15,7 +16,7 @@ export function EditorSettingsSection(): ReactNode {
   const { t } = useTranslation()
   const { settings, iconTheme } = useEditorPreferences()
   const save = (operation: () => Promise<void>): void => {
-    void operation().catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))
+    void operation().catch((error: unknown) => toast.error(describeError(error)))
   }
   return (
     <SettingGroup>

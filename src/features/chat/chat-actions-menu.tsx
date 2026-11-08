@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { client, useApp } from "@/lib/client"
+import { describeError } from "@/lib/error-text"
 
 import { openChatSearch } from "./dialogs/chat-search"
 import { McpDiagnostics } from "./mcp-diagnostics"
@@ -75,7 +76,7 @@ export function ChatActionsMenu({
   const submitting = useRef(false)
   const skipMenuFocus = useRef(false)
   const trigger = useRef<HTMLButtonElement>(null)
-  const report = (error: unknown) => toast.error(error instanceof Error ? error.message : String(error))
+  const report = (error: unknown) => toast.error(describeError(error))
   const submit = async () => {
     if (!session || submitting.current || dialog === null) return
     submitting.current = true

@@ -32,11 +32,21 @@ const Toaster = ({ ...props }: ToasterProps) => {
           "--normal-text": "var(--popover-foreground)",
           "--normal-border": "var(--border)",
           "--border-radius": "var(--radius)",
+          // Sonner defaults to a stacking level above every overlay, which buried the text
+          // selection pill (z-70) under a toast and made "复制" unclickable. Toasts still sit
+          // above dialogs (z-50); the pill stays reachable.
+          // Above the window's accent overlay (z-60): a toast must never sit under the wash or
+          // lose its close button to it.
+          zIndex: 80,
         } as React.CSSProperties
       }
+      // Every toast gets a real close button. The circled cross on the left is the status icon,
+      // and clicking it never dismissed anything — that is the "点了 X 没反应" report.
+      closeButton
       toastOptions={{
         classNames: {
           toast: "cn-toast",
+          closeButton: "cn-toast-close",
         },
       }}
       {...props}

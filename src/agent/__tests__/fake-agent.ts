@@ -12,6 +12,8 @@ export type FakeAgent = {
   gateways: Map<string, acp.SetProviderRequest>
   /** `_meta.alwith.model` hints seen on session/new, session/resume and session/fork. */
   modelHints: Map<string, string | null>
+  /** `_meta.codex.mode` (sandbox preset) seen on session/new and session/resume. */
+  modes: Map<string, string | null>
   forks: acp.ForkSessionRequest[]
   configDelay: { current: (() => Promise<void>) | null }
   newSessionDelay: { current: ((cwd: string) => Promise<void>) | null }
@@ -22,11 +24,24 @@ export type FakeAgent = {
   configResponse: {
     current: ((request: acp.SetSessionConfigOptionRequest) => acp.SetSessionConfigOptionResponse) | null
   }
+  /** Rejects a prompt with the returned error (e.g. a retired model) when set. */
+  promptError: { current: ((text: string) => Error | null) | null }
+  /** Makes `session/prompt` never acknowledge, simulating a hung agent turn. */
+  promptHang: { current: ((text: string) => boolean) | null }
+  /** Session ids the client asked to cancel (proves a hung turn is aborted). */
+  cancels: string[]
   fullListRequests: unknown[]
   listSessions: {
     current: ((request: acp.ListSessionsRequest) => acp.ListSessionsResponse | Promise<acp.ListSessionsResponse>) | null
   }
   configChanges: string[]
+  /** Text of every `session/prompt` request, in order (what the agent actually received). */
+  prompts: string[]
+  /** Configuration writes and prompts in the order the agent received them. */
+  events: Array<
+    | { type: "config"; request: acp.SetSessionConfigOptionRequest }
+    | { type: "prompt"; sessionId: string; text: string }
+  >
   /** Names set through `_codex/session_rename`. */
   renamed: Map<string, string>
   /** File search queries the client sent (`_codex/fuzzy_file_search`). */
@@ -46,6 +61,12 @@ function modelHintOf(params: { _meta?: unknown }): string | null {
   return typeof alwith?.model === "string" ? alwith.model : null
 }
 
+/** The sandbox preset the client asked for, as `_meta.codex.mode`. */
+function modeHintOf(params: { _meta?: unknown }): string | null {
+  const codex = (params._meta as { codex?: { mode?: unknown } } | undefined)?.codex
+  return typeof codex?.mode === "string" ? codex.mode : null
+}
+
 type GatewayGroup = { id: string; name: string; models: string[] }
 
 /** The native models this fake Codex offers; a client only writes a model the catalog offers, so the tests' picks must be here. */
@@ -61,9 +82,33 @@ const NATIVE_MODELS = [
   "chat-model"
 ]
 
+/** The adapter publishes each native model's own effort ladder with its model option. */
+const NATIVE_MODEL_EFFORTS: Record<string, { efforts: string[]; defaultEffort: string }> = {
+  "gpt-6.1-sol": { efforts: ["low", "medium", "high", "max"], defaultEffort: "medium" },
+  picked: { efforts: ["low", "medium", "high"], defaultEffort: "low" }
+}
+
+function nativeModelOption(value: string) {
+  const reasoning = NATIVE_MODEL_EFFORTS[value] ?? {
+    efforts: ["low", "medium", "high", "max"],
+    defaultEffort: "medium"
+  }
+  return {
+    value,
+    name: value === "gpt-6.1-sol" ? "GPT-6.1 Sol" : value,
+    _meta: {
+      alwith: {
+        supportedReasoningEfforts: reasoning.efforts,
+        defaultReasoningEffort: reasoning.defaultEffort
+      }
+    }
+  }
+}
+
 /** Model option as the adapter's catalog mode shapes it: a Codex group plus one group per gateway. */
 function modelOption(current: string, gateways: GatewayGroup[]): acp.SessionConfigOption {
-  const nativeOptions = NATIVE_MODELS.map((value) => ({ value, name: value === "gpt-6.1-sol" ? "GPT-6.1 Sol" : value }))
+  const nativeOptions: Array<{ value: string; name: string; _meta?: Record<string, unknown> }> =
+    NATIVE_MODELS.map(nativeModelOption)
   // The real adapter preserves unknown current values in the selector as synthetic choices.
   if (
     !nativeOptions.some((option) => option.value === current) &&
@@ -100,6 +145,7 @@ export function createFakeAgent(): FakeAgent {
   const gateway: FakeAgent["gateway"] = { current: null }
   const gateways: FakeAgent["gateways"] = new Map()
   const modelHints = new Map<string, string | null>()
+  const modes = new Map<string, string | null>()
   const forks: acp.ForkSessionRequest[] = []
   const origins = new Map<string, { nativeSessionId: string; forkedFromId: string; forkedAtTurnId: string | null }>()
   const configDelay: FakeAgent["configDelay"] = { current: null }
@@ -107,8 +153,13 @@ export function createFakeAgent(): FakeAgent {
   const sessionOptions: FakeAgent["sessionOptions"] = { current: null }
   const sessionCommands: FakeAgent["sessionCommands"] = { current: undefined }
   const configResponse: FakeAgent["configResponse"] = { current: null }
+  const promptError: FakeAgent["promptError"] = { current: null }
+  const promptHang: FakeAgent["promptHang"] = { current: null }
+  const cancels: string[] = []
   const listSessions: FakeAgent["listSessions"] = { current: null }
   const configChanges: string[] = []
+  const prompts: string[] = []
+  const events: FakeAgent["events"] = []
   const changingConfig = new Set<string>()
   const renamed = new Map<string, string>()
   const fileSearches: string[] = []
@@ -220,6 +271,7 @@ export function createFakeAgent(): FakeAgent {
     if (params.cwd === "/needs-auth" && !configuredGateway) throw acp.RequestError.authRequired()
     const id = sessionId()
     modelHints.set(id, hint)
+    modes.set(id, modeHintOf(params))
     return { sessionId: id, configOptions: optionsFor(hint, params._meta), availableCommands: sessionCommands.current }
   })
   app.onRequest("session/fork", async ({ params, client }) => {
@@ -284,6 +336,7 @@ export function createFakeAgent(): FakeAgent {
   app.onRequest("session/resume", async ({ params, client, signal }) => {
     const hint = modelHintOf(params)
     modelHints.set(params.sessionId, hint)
+    modes.set(params.sessionId, modeHintOf(params))
     if (params.replayFrom != null) {
       for (const update of replayUpdates) await client.notify("session/update", { sessionId: params.sessionId, update })
       await client.notify("session/update", {
@@ -344,6 +397,7 @@ export function createFakeAgent(): FakeAgent {
     }
   )
   app.onRequest("session/set_config_option", async ({ params }) => {
+    events.push({ type: "config", request: params })
     if (changingConfig.has(params.sessionId))
       throw acp.RequestError.invalidRequest(
         { sessionId: params.sessionId },
@@ -365,6 +419,10 @@ export function createFakeAgent(): FakeAgent {
   app.onRequest("session/prompt", async ({ params, client }) => {
     const id = params.sessionId
     const text = params.prompt.map((block) => (block.type === "text" ? block.text : "")).join("")
+    prompts.push(text)
+    events.push({ type: "prompt", sessionId: id, text })
+    const failure = promptError.current?.(text)
+    if (failure) throw failure
     const sequence = (promptSequence.get(id) ?? 0) + 1
     promptSequence.set(id, sequence)
     const messageId = sequence === 1 ? "u" : `u${sequence}`
@@ -373,6 +431,9 @@ export function createFakeAgent(): FakeAgent {
     active.set(id, controller)
     const emit = (update: acp.SessionUpdate) => client.notify("session/update", { sessionId: id, update })
     await emit({ sessionUpdate: "state_update", state: "running" })
+    // A hung agent turn: the acknowledgement never arrives, so the client's `prompt` stays pending
+    // forever — the exact condition the UI deadlock guard must recover from.
+    if (promptHang.current?.(text)) await new Promise<void>(() => {})
     void (async () => {
       try {
         await emit({
@@ -462,6 +523,7 @@ export function createFakeAgent(): FakeAgent {
     return { messageId }
   })
   app.onNotification("session/cancel", ({ params }) => {
+    cancels.push(params.sessionId)
     active.get(params.sessionId)?.abort()
   })
   app.onRequest(
@@ -491,15 +553,21 @@ export function createFakeAgent(): FakeAgent {
     gateway,
     gateways,
     modelHints,
+    modes,
     forks,
     configDelay,
     newSessionDelay,
     sessionOptions,
     sessionCommands,
     configResponse,
+    promptError,
+    promptHang,
+    cancels,
     listSessions,
     fullListRequests,
     configChanges,
+    prompts,
+    events,
     renamed,
     fileSearches,
     replayUpdates,

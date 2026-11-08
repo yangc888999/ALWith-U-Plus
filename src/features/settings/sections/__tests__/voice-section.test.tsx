@@ -45,23 +45,23 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-test("voice is enabled by default and its topmost switch persists changes", async () => {
+test("voice is disabled by default and its topmost switch persists changes", async () => {
   const view = render(<VoiceSection />)
   const toggle = await screen.findByRole("switch", { name: "voice.enabled" })
   await waitFor(() => expect(toggle).toBeEnabled())
-  expect(toggle).toBeChecked()
+  expect(toggle).not.toBeChecked()
   expect(
     toggle.compareDocumentPosition(screen.getByText("voice.shortcut")) & Node.DOCUMENT_POSITION_FOLLOWING
   ).toBeTruthy()
   fireEvent.click(toggle)
-  await waitFor(() => expect(toggle).not.toBeChecked())
+  await waitFor(() => expect(toggle).toBeChecked())
   await waitFor(() => expect(toggle).toBeEnabled())
   view.unmount()
   render(<VoiceSection />)
   await waitFor(() => expect(screen.getByRole("switch", { name: "voice.enabled" })).toBeEnabled())
-  expect(screen.getByRole("switch", { name: "voice.enabled" })).not.toBeChecked()
-  act(() => changed(true))
   expect(screen.getByRole("switch", { name: "voice.enabled" })).toBeChecked()
+  act(() => changed(false))
+  expect(screen.getByRole("switch", { name: "voice.enabled" })).not.toBeChecked()
 })
 
 test("a late initial read does not overwrite a newer voice preference", async () => {
@@ -87,13 +87,14 @@ test("a failed preference save reports the error and allows retrying", async () 
   mockOf(settingsStore, "write").mockRejectedValueOnce(new Error("disk full"))
   render(<VoiceSection />)
   const toggle = screen.getByRole("switch", { name: "voice.enabled" })
-  await waitFor(() => expect(toggle).toBeChecked())
+  await waitFor(() => expect(toggle).toBeEnabled())
+  expect(toggle).not.toBeChecked()
   fireEvent.click(toggle)
   await waitFor(() => expect(reportError).toHaveBeenCalledWith("disk full"))
   expect(toggle).toBeEnabled()
   fireEvent.click(toggle)
   await waitFor(() => expect(mockOf(settingsStore, "write")).toHaveBeenCalledTimes(2))
-  expect(toggle).not.toBeChecked()
+  expect(toggle).toBeChecked()
 })
 
 test("key links open once without reaching native plugin document handlers", () => {

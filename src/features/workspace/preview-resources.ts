@@ -41,3 +41,42 @@ export async function resolvePreviewResource(
   const extension = path.split(".").at(-1)?.toLowerCase() ?? ""
   return { bytes, path, mimeType: mimeTypes[extension] ?? "application/octet-stream" }
 }
+
+/**
+ * Toggles the document comment column.
+ *
+ * That column belongs to the drive module (collapsed it renders `comment-rail`, expanded it renders
+ * `comment-drawer`), and the module exposes no visibility prop — so the toggle drives its own DOM:
+ * the rail's button expands, the drawer's header button collapses. Structural selectors are used on
+ * purpose: the buttons' accessible labels are localized by the module.
+ */
+export function collapseCommentColumn(root: ParentNode = document): boolean {
+  const drawer = root.querySelector('[data-testid="comment-drawer"]')
+  if (drawer === null) return false
+  const collapse = drawer.querySelector(":scope > div:first-child > button:first-child")
+  if (collapse instanceof HTMLElement) {
+    collapse.click()
+    return true
+  }
+  return false
+}
+
+/** Persisted switch for the whole comment column. */
+const COMMENTS_HIDDEN_KEY = "alwith:comments-hidden"
+
+export function commentsHidden(): boolean {
+  return localStorage.getItem(COMMENTS_HIDDEN_KEY) === "1"
+}
+
+export function setCommentsHidden(hidden: boolean): void {
+  localStorage.setItem(COMMENTS_HIDDEN_KEY, hidden ? "1" : "0")
+  if (hidden) collapseCommentColumn()
+  // The CSS rule keys off this attribute, so the column disappears even though the drive module
+  // keeps it mounted.
+  document.documentElement.dataset.commentsHidden = hidden ? "true" : "false"
+}
+
+/** Applies the stored switch on boot, before the first drive document renders. */
+export function applyStoredCommentsVisibility(): void {
+  document.documentElement.dataset.commentsHidden = commentsHidden() ? "true" : "false"
+}

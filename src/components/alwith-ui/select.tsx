@@ -3,7 +3,7 @@ import type { ComponentProps } from "react"
 import { SelectContent as ShadcnSelectContent } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 
-export { Select, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+export { Select, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 /** Menus open below their trigger with a stable anchor width across app surfaces. */
 export function SelectContent({ className, ...props }: ComponentProps<typeof ShadcnSelectContent>) {

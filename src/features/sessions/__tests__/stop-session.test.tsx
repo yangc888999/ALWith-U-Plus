@@ -41,7 +41,8 @@ test.each(
     sessionId,
     state: sessionId === "background" ? state : "running",
     reusableDraft: false,
-    cwd: "/tmp",
+    // Distinct projects whose names do not collide with the session titles.
+    cwd: sessionId === "background" ? "/tmp/bg-work" : "/tmp/fg-work",
     title: sessionId,
     owner: "stdio",
     since: 0,
@@ -64,7 +65,11 @@ test.each(
     }))
   })
   client.applyRunStates(records)
-  useSessionsUiStore.setState({ view, projectOpen: new Map([["/tmp", true]]) })
+  useSessionsUiStore.setState({
+    view,
+    // One project per session so the default one-row-per-project reveal still shows both.
+    projectOpen: new Map([["/tmp/fg-work", true], ["/tmp/bg-work", true]])
+  })
   const screen = render(
     <SidebarProvider>
       <SessionSidebar
@@ -75,10 +80,10 @@ test.each(
         onNewChat={() => {}}
         onNewProjectChat={() => {}}
         onSearch={() => {}}
-        onOpenWindow={() => {}}
         onOpenSettings={() => {}}
         onOpenPlugins={() => {}}
         onOpenExtensions={() => {}}
+        onOpenAutomation={() => {}}
         onSwitchScreen={() => {}}
       />
     </SidebarProvider>

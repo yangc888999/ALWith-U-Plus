@@ -14,6 +14,48 @@ fn write_catalog(path: &Path, output: &mut impl Write) -> io::Result<()> {
     output.flush()
 }
 
+/// Fallback bearer for the loopback router. `providers.rs#ROUTER_TOKEN` is the source of truth and
+/// is forwarded as `ALWITH_U_ROUTER_TOKEN`; this value only covers a runtime that predates it.
+const DEFAULT_ROUTER_TOKEN: &str = "alwith-router";
+
+fn escape_toml(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// The router *table*, not only the key that names it.
+///
+/// Codex resolves `model_provider` against `model_providers` while it boots. A key that names a
+/// table the file does not contain makes it exit 1 with "Model provider `alwith` not found" —
+/// that is the failure another Mac kept hitting, because `~/.codex/config.toml` is shared with
+/// every other Codex client and can be rewritten behind our startup repair at any moment.
+///
+/// Measured against codex-cli 0.167.0 with throwaway `CODEX_HOME` directories:
+///   `model_provider = "alwith"`, no table            -> exit 1, provider not found
+///   same file + these overrides                      -> starts, banner reads `provider: alwith`
+///   no key and no table + `model_provider` override  -> starts
+/// So the engine no longer depends on that file at all. `base_url` is injected only once the
+/// bridge has bound a port: without it Codex still boots (measured), which is strictly better
+/// than refusing to start — the request then fails visibly instead of taking the ACP agent down.
+fn router_overrides(base: Option<&str>, token: Option<&str>) -> Vec<String> {
+    let mut overrides = vec![
+        "model_provider=\"alwith\"".to_string(),
+        "model_providers.alwith.name=\"ALWith Router\"".to_string(),
+    ];
+    if let Some(base) = base {
+        overrides.push(format!("model_providers.alwith.base_url=\"{}\"", escape_toml(base)));
+    }
+    overrides.push("model_providers.alwith.wire_api=\"responses\"".to_string());
+    // A capacity dip must surface as a failed turn, not four retries of about five minutes each
+    // while the reader waits for a turn that is going nowhere.
+    overrides.push("model_providers.alwith.request_max_retries=0".to_string());
+    overrides.push("model_providers.alwith.stream_max_retries=0".to_string());
+    overrides.push(format!(
+        "model_providers.alwith.experimental_bearer_token=\"{}\"",
+        escape_toml(token.unwrap_or(DEFAULT_ROUTER_TOKEN))
+    ));
+    overrides
+}
+
 #[cfg(not(test))]
 fn main() {
     if let Err(error) = run() {
@@ -35,6 +77,19 @@ fn run() -> io::Result<()> {
         return Err(io::Error::other("ALWITH_U_CODEX_PATH must name the original Codex executable"));
     }
     let mut command = std::process::Command::new(binary);
+    // Force U's shared router at process launch, and carry its definition with us.
+    //
+    // The old form injected only `model_provider="alwith"` and relied on `repair_router_provider`
+    // to have written `[model_providers.alwith]` into the shared `~/.codex/config.toml`. That file
+    // belongs to every Codex client on the machine: a desktop build, a CLI run, or a reconcile
+    // pass can drop the table after the repair and before this engine boots, and Codex then exits
+    // 1 with "Model provider `alwith` not found" before ACP can answer — so the repair that would
+    // have fixed it can never run again. Injecting the table here removes that dependency.
+    let base = std::env::var("ALWITH_U_ROUTER_BASE").ok().filter(|value| !value.trim().is_empty());
+    let token = std::env::var("ALWITH_U_ROUTER_TOKEN").ok().filter(|value| !value.trim().is_empty());
+    for override_value in router_overrides(base.as_deref(), token.as_deref()) {
+        command.args(["-c", override_value.as_str()]);
+    }
     // U renders ACP form elicitations in both collaboration modes. Enable Codex's
     // default-mode question tool for this process only, without editing user config.
     command.args(["--enable", "default_mode_request_user_input"]);
@@ -203,5 +258,41 @@ mod tests {
         write_catalog(&path, &mut output).unwrap();
         assert_eq!(output, bytes);
         assert!(write_catalog(&directory.path().join("missing"), &mut output).is_err());
+    }
+    #[test]
+    fn router_overrides_define_the_table_not_only_the_key_that_names_it() {
+        // A `model_provider` key without its table is precisely the state that makes Codex exit 1
+        // before ACP answers. Every key the block needs must ride on the command line.
+        let values = router_overrides(Some("http://127.0.0.1:60639/alwith"), Some("alwith-router"));
+        assert_eq!(values[0], "model_provider=\"alwith\"");
+        for expected in [
+            "model_providers.alwith.name=\"ALWith Router\"",
+            "model_providers.alwith.base_url=\"http://127.0.0.1:60639/alwith\"",
+            "model_providers.alwith.wire_api=\"responses\"",
+            "model_providers.alwith.request_max_retries=0",
+            "model_providers.alwith.stream_max_retries=0",
+            "model_providers.alwith.experimental_bearer_token=\"alwith-router\"",
+        ] {
+            assert!(values.iter().any(|value| value == expected), "missing {expected} in {values:?}");
+        }
+        // The value half is TOML: `0` must stay a bare integer, not a quoted string.
+        assert!(!values.iter().any(|value| value.contains("request_max_retries=\"0\"")));
+    }
+    #[test]
+    fn router_overrides_omit_base_url_when_the_bridge_has_no_port_yet() {
+        // Codex starts without `base_url` (measured), so a slow bridge must not turn into a
+        // provider-not-found failure. The request fails later, visibly, instead.
+        assert_eq!(DEFAULT_ROUTER_TOKEN, "alwith-router");
+        let values = router_overrides(None, None);
+        assert!(values.iter().all(|value| !value.contains("base_url")), "{values:?}");
+        assert!(values.iter().any(|value| value.ends_with(&format!("=\"{DEFAULT_ROUTER_TOKEN}\""))));
+    }
+    #[test]
+    fn router_overrides_escape_quotes_so_one_bad_value_cannot_inject_keys() {
+        let values = router_overrides(Some("http://127.0.0.1:1/alwith\""), Some("a\"b"));
+        let base = values.iter().find(|value| value.contains("base_url")).unwrap();
+        assert!(base.ends_with("\\\"\""), "{base}");
+        let token = values.iter().find(|value| value.contains("bearer_token")).unwrap();
+        assert!(token.contains("a\\\"b"), "{token}");
     }
 }

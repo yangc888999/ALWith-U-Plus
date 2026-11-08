@@ -1,7 +1,7 @@
 //! 命名 KV 存储的桌面侧入口(`@alwith/module-store` 的 Tauri 实现),与 ALwith Desktop
 //! `features/store.rs` 同一套,去掉其 provider 专属过滤。
 //!
-//! 登录态、Vibemon 资源这类前端杂项原先走 tauri-plugin-store —— 裸 `fs::write` 非原子,
+//! 登录态这类前端杂项原先走 tauri-plugin-store —— 裸 `fs::write` 非原子,
 //! 解析失败静默回退默认值;改走这里后与 Desktop 同一份实现(原子替换、`.bak`、损坏不静默重置)。
 //! 文件路径不变(`app_data_dir/<name>.json`,JSON 对象),已有数据原样读回。
 

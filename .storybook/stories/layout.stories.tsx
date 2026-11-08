@@ -70,7 +70,6 @@ export const LeadingApps: Story = {
             <>
               <LeadingNavigation
                 activePage={active ? null : "extensions"}
-                onOpenVibemon={() => setActive(null)}
                 onOpenPlugins={() => setActive(null)}
                 onOpenArchives={() => setActive(null)}
                 onOpenExtensions={() => setActive(null)}
@@ -95,7 +94,7 @@ export const LeadingApps: Story = {
     )
   },
   play: async ({ canvas, userEvent }) => {
-    const fixed = canvas.getByRole("button", { name: "Vibémon" })
+    const fixed = canvas.getByRole("button", { name: "Extensions" })
     const top = fixed.getBoundingClientRect().top
     const list = canvas.getByRole("region", { name: "Extension navigation" })
     await expect(list.scrollHeight).toBeGreaterThan(list.clientHeight)
@@ -112,7 +111,7 @@ export const LeadingFeatures: Story = {
   args: { screen: "leading" },
   globals: { locale: "zh-CN" },
   render: function Render(args) {
-    const [page, setPage] = useState<"vibemon" | "plugins" | "extensions" | "archives">("vibemon")
+    const [page, setPage] = useState<"plugins" | "extensions" | "archives">("plugins")
     return (
       <div className="h-[640px] bg-sidebar">
         <MainSidebarLayout
@@ -121,7 +120,6 @@ export const LeadingFeatures: Story = {
             <>
               <LeadingNavigation
                 activePage={page}
-                onOpenVibemon={() => setPage("vibemon")}
                 onOpenPlugins={() => setPage("plugins")}
                 onOpenExtensions={() => setPage("extensions")}
                 onOpenArchives={() => setPage("archives")}

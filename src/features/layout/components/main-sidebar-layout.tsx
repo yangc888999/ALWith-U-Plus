@@ -1,8 +1,7 @@
 import { SidebarOverlayContext } from "@alwith/module-chat/session-list"
 import "@nyssance/atlas/styles.css"
-import { desktopDefaults } from "@nyssance/atlas/layout"
 import { PanelLeftDashedIcon, PanelLeftIcon } from "lucide-react"
-import { type CSSProperties, type ReactNode, useCallback, useContext, useEffect, useId, useRef, useState } from "react"
+import { createContext, type CSSProperties, type ReactNode, useCallback, useContext, useEffect, useId, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -13,7 +12,15 @@ import {
   WindowsWorkspaceControlsContext
 } from "@/components/alwith-ui/windows-main-window-shell"
 import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { SidebarProvider } from "@/components/ui/sidebar"
+import { useWorkspaceLayout } from "@/features/workspace/use-workspace-layout"
+import { PanelDivider } from "@/features/workspace/panel-divider"
+import {
+  NAVIGATION_PX_MIN,
+  resolveRatioToPixels,
+  saveLayoutShare
+} from "@/features/workspace/layout-preferences"
 import { isMac } from "@/lib/platform"
 import { savePreference } from "@/lib/preferences"
 import { useWindowFullscreen } from "@/lib/use-window-fullscreen"
@@ -25,6 +32,9 @@ import { CanvasDots } from "./canvas-dots"
 
 export type MainScreen = "main" | "leading"
 
+/** Lets a toolbar hide/show the docked sidebar without knowing the layout internals. */
+export const SidebarToggleContext = createContext<{ toggle: () => void; docked: boolean } | null>(null)
+
 export function MainSidebarLayout({
   initialPinned,
   screen,
@@ -34,6 +44,8 @@ export function MainSidebarLayout({
   main,
   trailing,
   toolbar,
+  leadingActions,
+  headerTrailing,
   statusBar,
   children
 }: {
@@ -44,16 +56,44 @@ export function MainSidebarLayout({
   leading: ReactNode
   main: ReactNode
   trailing?: ReactNode
+  /** Window chrome docked to the end of the 32px title row (the workspace toggle mounts here). */
   toolbar?: ReactNode
+  /** A floating-window launcher docked to the top-right corner of the title row. */
+  headerTrailing?: ReactNode
+  /** Buttons docked to the start of the title row, right after the sidebar toggle. */
+  leadingActions?: ReactNode
   statusBar?: ReactNode
   children?: ReactNode
 }) {
   const { t } = useTranslation()
+  const layout = useWorkspaceLayout()
   const zoom = useStore(zoomStore, (state) => state.level)
+  // The sidebar is stored as a window fraction so it adapts to any window size; resolve it to a
+  // pixel width clamped to a usable range before handing it to the canvas.
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth : 0
+  )
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const onResize = (): void => setViewportWidth(window.innerWidth)
+    window.addEventListener("resize", onResize)
+    return () => window.removeEventListener("resize", onResize)
+  }, [])
+  // No pixel ceiling: the Settings percentage has to describe the real column even on a wide
+  // window. The old 460px cap turned 18% into 16% there and made the numbers look wrong.
+  const sidebarPx = resolveRatioToPixels(layout.navigationRatio, viewportWidth, 0, viewportWidth)
+  // A drag owns the pixel width until release; the persisted share takes over afterwards, so the
+  // next launch (or the Settings number) decides the column again.
+  const [dragPx, setDragPx] = useState<number | null>(null)
+  const dragPxRef = useRef(0)
+  // The width the pointer went down on. `PanelDivider` reports the distance from that point, not
+  // the distance since the last move, so this — not the live width — is what the delta applies to.
+  const dragStartPxRef = useRef(0)
+  const effectiveSidebarPx = dragPx ?? sidebarPx
   const titlebar = useContext(WindowsTitleBarContext)
   const workspaceControls = useContext(WindowsWorkspaceControlsContext)
   const fullscreen = useWindowFullscreen()
-  const [pinned, setPinned] = useState(initialPinned)
+    const [pinned, setPinned] = useState(initialPinned)
   const [presentation, setPresentation] = useState<"docked" | "floating">(initialPinned ? "docked" : "floating")
   const canvas = useMainCanvas(screen, pinned, onScreenChange, trailing !== undefined)
   const navigate = canvas.context.navigate
@@ -107,28 +147,41 @@ export function MainSidebarLayout({
   const sidebarToggle = (
     <div
       className={titlebar ? "windows-sidebar-toggle" : "main-sidebar-toggle"}
-      style={titlebar ? { width: 32 / zoom, height: 32 / zoom } : undefined}
+      style={titlebar ? { width: leadingActions === undefined ? 32 / zoom : undefined, height: 32 / zoom } : undefined}
     >
-      <Button
-        ref={toggle}
-        variant="ghost"
-        size="icon-xs"
-        role="switch"
-        aria-label={t("sidebar.pin")}
-        aria-checked={docked}
-        aria-expanded={visible}
-        aria-controls={panelId}
-        data-atlas-navigation-trigger
-        title={t(pinned ? "sidebar.unpin" : "sidebar.pin")}
-        className="text-sidebar-foreground"
-        onClick={() => changePinned(!docked)}
-      >
-        <ToggleIcon className="size-4 rtl:-scale-x-100" />
-      </Button>
+      {/* Tooltip, not `title`: the native one waits about a second, and this button sits next to
+          ones that open instantly. */}
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              ref={toggle}
+              variant="ghost"
+              size="icon-xs"
+              role="switch"
+              aria-label={t("sidebar.pin")}
+              aria-checked={docked}
+              aria-expanded={visible}
+              aria-controls={panelId}
+              data-atlas-navigation-trigger
+              className="text-sidebar-foreground"
+              onClick={() => changePinned(!docked)}
+            >
+              <ToggleIcon className="size-4 rtl:-scale-x-100" />
+            </Button>
+          }
+        />
+        <TooltipContent side="bottom">{t(pinned ? "sidebar.unpin" : "sidebar.pin")}</TooltipContent>
+      </Tooltip>
+      {leadingActions}
+      {/* macOS docks the workspace toggle in the leading cluster; Windows portals it into the
+          window controls, so it must not also render here (that produced two buttons). */}
+      {!titlebar && !workspaceControls && toolbar}
     </div>
   )
 
   return (
+    <SidebarToggleContext.Provider value={{ toggle: () => changePinned(!docked), docked }}>
     <SidebarProvider
       open={docked}
       onOpenChange={changePinned}
@@ -140,7 +193,7 @@ export function MainSidebarLayout({
       data-sidebar-presentation={docked || canvas.moving ? "docked" : presentation}
       style={
         {
-          "--sidebar-width": `${desktopDefaults.navigationWidth}px`,
+          "--sidebar-width": `${effectiveSidebarPx}px`,
           "--leading-sidebar-width": "var(--sidebar-width)",
           "--canvas-sidebar-offset": `${Math.max(0, (canvas.geometry.stops[canvas.selected] ?? 0) - canvas.geometry.leading)}px`,
           "--active-sidebar-width": docked ? "var(--sidebar-width)" : "0px",
@@ -151,7 +204,10 @@ export function MainSidebarLayout({
     >
       <header className="main-window-titlebar" data-tauri-drag-region>
         {showMainControls && !titlebar && sidebarToggle}
-        {showMainControls && !workspaceControls && toolbar}
+        {/* The floating-window launcher (a copy of the leading action) docks to the top-right corner. */}
+        {showMainControls && !titlebar && headerTrailing && (
+          <div className="main-window-header-actions">{headerTrailing}</div>
+        )}
       </header>
       {showMainControls && workspaceControls && toolbar && createPortal(toolbar, workspaceControls)}
       {showMainControls && titlebar && createPortal(sidebarToggle, titlebar)}
@@ -190,7 +246,12 @@ export function MainSidebarLayout({
                 {leading}
               </div>
               <SidebarOverlayContext.Provider value={retainOverlay}>
-                <div className="main-sidebar-shell" data-atlas-navigation ref={canvas.navigationRef}>
+                <div
+                  className="main-sidebar-shell"
+                  data-atlas-navigation
+                  data-resizing={dragPx !== null ? "" : undefined}
+                  ref={canvas.navigationRef}
+                >
                   <div className="main-sidebar-viewport" data-atlas-navigation-surface id={panelId}>
                     <div
                       ref={panel}
@@ -201,6 +262,41 @@ export function MainSidebarLayout({
                       {sidebar}
                     </div>
                   </div>
+                  {pinnedOnScreen && (
+                    <div className="main-sidebar-resize">
+                      <PanelDivider
+                        label={t("workspace.resize")}
+                        width={effectiveSidebarPx}
+                        direction={canvas.direction}
+                        onStart={() => {
+                          dragStartPxRef.current = effectiveSidebarPx
+                          dragPxRef.current = effectiveSidebarPx
+                        }}
+                        onDrag={(dx) => {
+                          // Dragging right widens the sidebar. `dx` is cumulative from pointer-down,
+                          // so it has to be applied to the width the drag started on: applying it to
+                          // the live width compounded every pointermove and a fast drag ran away.
+                          //
+                          // The bounds are taken relative to that start too. The stored share can
+                          // resolve below the 180px floor on a narrow window, and a fixed floor would
+                          // then swallow the first pixels of the drag and snap the divider in one go.
+                          const start = dragStartPxRef.current
+                          const floor = Math.min(NAVIGATION_PX_MIN, start)
+                          const ceiling = Math.max(Math.round(viewportWidth * 0.6), start)
+                          const next = Math.min(ceiling, Math.max(floor, start - dx))
+                          dragPxRef.current = next
+                          setDragPx(next)
+                        }}
+                        onEnd={() => {
+                          // Persist the settled share: the four-column model keeps chat/tree put and
+                          // lets the preview absorb the difference, so the total stays 100%.
+                          if (viewportWidth > 0)
+                            saveLayoutShare("navigation", (dragPxRef.current / viewportWidth) * 100)
+                          setDragPx(null)
+                        }}
+                      />
+                    </div>
+                  )}
                 </div>
               </SidebarOverlayContext.Provider>
               <div
@@ -234,5 +330,6 @@ export function MainSidebarLayout({
       </footer>
       {children}
     </SidebarProvider>
+    </SidebarToggleContext.Provider>
   )
 }

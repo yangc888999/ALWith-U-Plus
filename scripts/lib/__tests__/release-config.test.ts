@@ -108,13 +108,13 @@ test("tag runs validate release inputs and publish signed updater artifacts to a
   expect(step.with?.tagName).toBe("${{ github.ref_name }}")
   expect(step.with?.releaseId).toBe("${{ needs.release-preflight.outputs.release_id }}")
   expect(step.with?.tauriScript).toBe("bun tauri")
-  expect(step.with?.releaseName).toBe("ALwith U ${{ github.ref_name }}")
+  expect(step.with?.releaseName).toBe("ALWith L ${{ github.ref_name }}")
   expect(step.with?.releaseDraft).toBe(true)
   expect(step.with?.updaterJsonPreferNsis).toBe(true)
   expect(step.with?.releaseAssetNamePattern).toBe("alwith-u_[version]_[platform]_[arch][setup][ext]")
 })
 
-test("Tauri keeps ASCII technical identifiers while displaying ALwith U", () => {
+test("Tauri keeps ASCII technical identifiers while displaying ALWith L", () => {
   const config = JSON.parse(read("src-tauri/tauri.conf.json")) as {
     productName?: string
     mainBinaryName?: string
@@ -125,15 +125,15 @@ test("Tauri keeps ASCII technical identifiers while displaying ALwith U", () => 
   }
   const devConfig = JSON.parse(read("src-tauri/tauri.dev-instance.conf.json")) as { productName?: string }
 
-  expect(config.productName).toBe("ALwith U")
+  expect(config.productName).toBe("ALWith L")
   expect(config.mainBinaryName).toBe("alwith-u")
   expect(config.identifier).toBe("ai.alwith.u")
-  expect(config.app?.windows?.[0]?.title).toBe("ALwith U")
+  expect(config.app?.windows?.[0]?.title).toBe("ALWith L")
   expect(config.bundle?.publisher).toBe("alwith.ai")
   expect(config.plugins?.updater?.endpoints).toEqual([
     "https://api.alwith.ai/service/api/v1/open-source-versions/alwith-u/update/{{target}}-{{arch}}/{{current_version}}"
   ])
-  expect(devConfig.productName).toBe("ALwith U Dev")
+  expect(devConfig.productName).toBe("ALWith L Dev")
 })
 
 test("TOS mirroring follows successful tagged builds and can retry a draft release manually", () => {

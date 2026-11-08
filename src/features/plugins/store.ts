@@ -227,7 +227,7 @@ export function createPluginsStore(api: PluginsApi): PluginsStore {
       },
 
       install: async (entry) => {
-        if (entry.plugin.id in get().busyIds) throw new Error("Plugin operation already in progress")
+        if (entry.plugin.id in get().busyIds) throw new Error(i18n.t("plugins.error.operationInProgress"))
         const name = pluginTitle(entry.plugin)
         busy(entry.plugin.id, "installing")
         try {
@@ -257,7 +257,7 @@ export function createPluginsStore(api: PluginsApi): PluginsStore {
         let effectiveEnabled = plugin.enabled
         try {
           const remotePluginId = plugin.source.type === "remote" ? plugin.remotePluginId : undefined
-          if (remotePluginId === null) throw new Error("Remote plugin ID is missing")
+          if (remotePluginId === null) throw new Error(i18n.t("plugins.error.remotePluginIdMissing"))
           const response = await api.setPluginEnabled(plugin.id, enabled, remotePluginId)
           effectiveEnabled = response.enabled
           update(response.enabled)
@@ -285,7 +285,7 @@ export function createPluginsStore(api: PluginsApi): PluginsStore {
         busy(plugin.id, "uninstalling")
         try {
           const uninstallId = plugin.source.type === "remote" ? plugin.remotePluginId : plugin.id
-          if (!uninstallId) throw new Error("Remote plugin ID is missing")
+          if (!uninstallId) throw new Error(i18n.t("plugins.error.remotePluginIdMissing"))
           await api.uninstallPlugin(uninstallId)
           await refreshAfterChange()
           if (get().installed.some((entry) => entry.plugin.id === plugin.id)) {

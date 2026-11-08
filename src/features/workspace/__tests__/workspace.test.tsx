@@ -1,4 +1,5 @@
 import type { TextEditorProps } from "@alwith/module-editor"
+import { ownsItsContextMenu } from "../file-workspace"
 import { type FsAdapter, normalizePath, type WriteOptions } from "@alwith/module-fs"
 import type { NativeRequest } from "@alwith/module-fs/tauri"
 import { createMemoryAdapter } from "@alwith/module-fs/testing"
@@ -11,6 +12,7 @@ import { ChatHeader } from "@/features/chat/chat-header"
 import { openGuideWindow } from "@/features/guide/guide-window"
 import { CanvasContext } from "@/features/layout/lib/canvas-context"
 import { initI18n } from "@/lib/i18n"
+import { settingsStore } from "@/lib/settings-store"
 
 import { WorkspaceHeaderContext } from "../context"
 import { FileWorkspace } from "../file-workspace"
@@ -44,7 +46,7 @@ vi.mock("@tauri-apps/api/window", () => ({
     }
   })
 }))
-vi.mock("@tauri-apps/api/event", () => ({ listen: native.listen, emit: vi.fn() }))
+vi.mock("@tauri-apps/api/event", () => ({ listen: native.listen, emit: vi.fn(), emitTo: vi.fn() }))
 vi.mock("@/features/chat/codex/markdown-renderer", () => ({
   CodexMarkdownRenderer: ({ text }: { text: string }) => <article>{text}</article>
 }))
@@ -156,12 +158,27 @@ test("Windows moves only the workspace toggle into the title bar and preserves i
     target.remove()
   }
 })
-function Surface({ cwd, chatRevealRequest = 0 }: { cwd: string; chatRevealRequest?: number }) {
+function Surface({
+  cwd,
+  chatRevealRequest = 0,
+  defaultOpen = false,
+  columnsRequest = 0
+}: {
+  cwd: string
+  chatRevealRequest?: number
+  defaultOpen?: boolean
+  columnsRequest?: number
+}) {
   const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null)
   return (
     <WorkspaceHeaderContext.Provider value={toolbar}>
       <div ref={setToolbar} data-testid="window-titlebar" />
-      <FileWorkspace cwd={cwd} chatRevealRequest={chatRevealRequest}>
+      <FileWorkspace
+        cwd={cwd}
+        chatRevealRequest={chatRevealRequest}
+        defaultOpen={defaultOpen}
+        columnsRequest={columnsRequest}
+      >
         <ChatHeader title="Conversation" project={<span>Project</span>}>
           {null}
         </ChatHeader>
@@ -240,7 +257,7 @@ test("right workspace edits, renames and saves through installed packages", asyn
   fireEvent.click(screen.getByRole("button", { name: "Open preview area" }))
   fireEvent.click(await screen.findByRole("treeitem", { name: /one.txt/ }))
   expect(document.querySelector(".file-workspace-panel > header")).toBeNull()
-  expect(document.body).toContainOneByRole("button", { name: "Hide file tree" })
+  expect(screen.getByTestId("tree-toggle")).toHaveAttribute("aria-expanded", "true")
   const code = await screen.findByRole("textbox", { name: "Code" })
   fireEvent.change(code, { target: { value: "edited" } })
   fireEvent.contextMenu(screen.getByRole("treeitem", { name: "one.txt" }))
@@ -479,10 +496,10 @@ test("explorer icon toggles the tree while preserving the open document and sele
   fireEvent.click(screen.getByRole("button", { name: "Open preview area" }))
   fireEvent.click(await screen.findByRole("treeitem", { name: "one.txt" }))
   await screen.findByRole("textbox", { name: "Code" })
-  fireEvent.click(screen.getByRole("button", { name: "Hide file tree" }))
+  fireEvent.click(screen.getByTestId("tree-toggle"))
   expect(document.querySelector(".file-workspace-tree")).toHaveAttribute("data-collapsed", "true")
   expect(document.body).toContainOneByRole("tab", { name: "one.txt" })
-  fireEvent.click(screen.getByRole("button", { name: "Show file tree" }))
+  fireEvent.click(screen.getByTestId("tree-toggle"))
   expect(screen.getByRole("treeitem", { name: "one.txt" })).toHaveAttribute("aria-selected", "true")
   expect(screen.getByRole("navigation", { name: "File path" })).toHaveAttribute("title", "/a/one.txt")
   expect(screen.queryByRole("button", { name: "Save" })).toBeNull()
@@ -554,6 +571,35 @@ test("Desktop keyboard navigation accumulates shift selection and Home only chan
   expect(tree.getAttribute("aria-activedescendant")).toBe(screen.getByRole("treeitem", { name: "a" }).id)
 })
 
+test("the file tree keeps its own right-click menu", () => {
+  // A row inside the tree answers true; anything else in the editor surface stays with the text menu.
+  const tree = document.createElement("section")
+  tree.className = "alwith-file-tree"
+  const row = document.createElement("div")
+  row.setAttribute("data-file-path", "/a/one.txt")
+  const name = document.createElement("span")
+  row.append(name)
+  tree.append(row)
+
+  expect(ownsItsContextMenu(name)).toBe(true)
+  expect(ownsItsContextMenu(row)).toBe(true)
+  expect(ownsItsContextMenu(tree)).toBe(true)
+  expect(ownsItsContextMenu(document.createElement("p"))).toBe(false)
+})
+
+test("starting a chat in a project reopens the columns that were closed on a previous visit", async () => {
+  // A project opens its columns once per run; the reader then closes them and starts another chat
+  // in the same project. The instance stays mounted (that is how the real workspace behaves), so
+  // only the explicit signal can bring the columns back.
+  const view = render(<Surface cwd="/a" defaultOpen />)
+  expect(await screen.findByRole("treeitem", { name: /one.txt/ })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole("button", { name: "Close workspace" }))
+  await waitFor(() => expect(screen.queryByRole("treeitem", { name: /one.txt/ })).toBeNull())
+
+  view.rerender(<Surface cwd="/a" defaultOpen columnsRequest={1} />)
+  expect(await screen.findByRole("treeitem", { name: /one.txt/ })).toBeInTheDocument()
+})
+
 test("Desktop root context menu omits rename, copy and delete", async () => {
   render(<Surface cwd="/a" />)
   fireEvent.click(screen.getByRole("button", { name: "Open preview area" }))
@@ -593,6 +639,28 @@ test("workspace switch opens and closes the preview while retaining the chat", a
   expect(screen.queryByRole("tree")).toBeNull()
   expect(screen.getByRole("button", { name: "Open preview area" })).toHaveAttribute("aria-expanded", "false")
   expect(screen.getByText("Chat /a")).toBeVisible()
+})
+
+test("a chat keeps only the conversation while a project opens all four columns on its own", async () => {
+  const view = render(<Surface cwd="/a" />)
+  // A chat has no files next to it: the preview stays shut until the user asks for it.
+  expect(screen.getByRole("button", { name: "Open preview area" })).toHaveAttribute("aria-expanded", "false")
+  expect(native.invoke.mock.calls.filter(([command]) => command === "workspace_open")).toHaveLength(0)
+
+  // Choosing a project folder opens the tree, the editor and the preview without another click.
+  view.rerender(<Surface cwd="/a" defaultOpen />)
+  expect(await screen.findByRole("treeitem", { name: /one.txt/ })).toBeVisible()
+  expect(screen.getByRole("button", { name: "Close workspace" })).toHaveAttribute("aria-expanded", "true")
+  expect(document.querySelector(".file-workspace-layout")).toHaveAttribute("data-view-mode", "false")
+
+  // Closing the preview inside the project keeps it closed: a chat never reopens it, and coming
+  // back to the project must not either.
+  fireEvent.click(screen.getByRole("button", { name: "Close workspace" }))
+  view.rerender(<Surface cwd="/a" />)
+  view.rerender(<Surface cwd="/a" defaultOpen />)
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Open preview area" })).toHaveAttribute("aria-expanded", "false")
+  )
 })
 
 test("row drag prevents native text selection without blocking inline rename input", async () => {
@@ -726,15 +794,15 @@ test("project tree shortcut opens the preview and reopens a collapsed tree witho
   render(<Surface cwd="/a" />)
   fireEvent.keyDown(window, { key: "E", ctrlKey: true, shiftKey: true })
   expect(await screen.findByRole("treeitem", { name: /one.txt/ })).toBeVisible()
-  fireEvent.click(screen.getByRole("button", { name: "Hide file tree" }))
-  expect(screen.getByRole("button", { name: "Show file tree" })).toHaveAttribute("aria-expanded", "false")
+  fireEvent.click(screen.getByTestId("tree-toggle"))
+  expect(screen.getByTestId("tree-toggle")).toHaveAttribute("aria-expanded", "false")
   fireEvent.keyDown(window, { key: "e", metaKey: true, shiftKey: true })
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Hide file tree" })).toHaveAttribute("aria-expanded", "true")
+    expect(screen.getByTestId("tree-toggle")).toHaveAttribute("aria-expanded", "true")
   )
   fireEvent.keyDown(window, { key: "E", ctrlKey: true, shiftKey: true })
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "Hide file tree" })).toHaveAttribute("aria-expanded", "true")
+    expect(screen.getByTestId("tree-toggle")).toHaveAttribute("aria-expanded", "true")
   )
 })
 
@@ -746,6 +814,28 @@ test("native project tree menu opens the current workspace", async () => {
   expect(callback).toBeDefined()
   act(() => required(callback)())
   expect(await screen.findByRole("treeitem", { name: /one.txt/ })).toBeVisible()
+})
+
+test("a temporary chat that lands in a project opens the four-column layout", async () => {
+  // 新建任务 drops the reader into a two-column chat; the moment that chat is given a project,
+  // the preview and the file column have to come with it instead of waiting for a menu click.
+  const view = render(<Surface cwd="/quick" />)
+  expect(screen.queryByRole("tree")).toBeNull()
+  view.rerender(<Surface cwd="/a" defaultOpen />)
+  expect(await screen.findByRole("treeitem", { name: /one.txt/ })).toBeVisible()
+})
+
+test("a column the reader closed stays closed when the next project opens", async () => {
+  // The preference outlives the workspace: opening a project must not undo the reader's choice.
+  vi.spyOn(settingsStore, "get").mockImplementation(<T,>(key: string): T | undefined =>
+    key === "workspace.treeVisible" ? (false as T) : undefined
+  )
+  render(<Surface cwd="/a" defaultOpen />)
+  expect(await screen.findByTestId("tree-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "false"
+  )
+  expect(screen.queryByRole("treeitem", { name: /one.txt/ })).toBeNull()
 })
 
 test("project tree shortcut ignores a response belonging to a previous project", async () => {
@@ -771,7 +861,7 @@ test("new tabs keep the existing preview, support middle close and restore their
   const view = render(<Surface cwd="/a" />)
   fireEvent.click(screen.getByRole("button", { name: "Open preview area" }))
   expect(await screen.findByRole("tab", { name: "New tab" })).toHaveAttribute("aria-selected", "true")
-  expect(screen.getByRole("button", { name: "Discover ALwith U ALwith U Guide" })).toBeVisible()
+  expect(screen.getByRole("button", { name: "Discover ALWith L ALWith L Guide" })).toBeVisible()
   fireEvent.click(screen.getByRole("treeitem", { name: "one.txt" }))
   await screen.findByRole("tab", { name: "one.txt" })
   fireEvent.click(screen.getByRole("button", { name: "New tab" }))
@@ -795,11 +885,11 @@ test("new tabs keep the existing preview, support middle close and restore their
   expect(screen.getByRole("tab", { name: "two.txt" })).toHaveAttribute("aria-selected", "true")
 })
 
-test("the new-tab card opens the ALwith U guide", async () => {
+test("the new-tab card opens the ALWith L guide", async () => {
   vi.mocked(openGuideWindow).mockResolvedValueOnce()
   render(<Surface cwd="/a" />)
   fireEvent.click(screen.getByRole("button", { name: "Open preview area" }))
-  fireEvent.click(await screen.findByRole("button", { name: "Discover ALwith U ALwith U Guide" }))
+  fireEvent.click(await screen.findByRole("button", { name: "Discover ALWith L ALWith L Guide" }))
   await waitFor(() => expect(openGuideWindow).toHaveBeenCalledTimes(1))
   expect(screen.queryByRole("dialog")).toBeNull()
 })
@@ -861,7 +951,7 @@ test("chat reveal navigates the unified canvas back from a split preview", async
   await waitFor(() => expect(navigate).toHaveBeenLastCalledWith("chat"))
 })
 
-test("the titlebar restores a third-screen workspace before closing it on the next click", async () => {
+test("the titlebar restores an expanded workspace before closing it on the next click", async () => {
   const setWorkspace = vi.fn()
   const navigate = vi.fn()
   render(
@@ -883,11 +973,12 @@ test("the titlebar restores a third-screen workspace before closing it on the ne
   fireEvent.click(screen.getByRole("button", { name: "Open preview area" }))
   fireEvent.click(await screen.findByRole("treeitem", { name: "one.txt" }))
   fireEvent.change(await screen.findByRole("textbox", { name: "Code" }), { target: { value: "retained edit" } })
-  const divider = screen.getByRole("separator", { name: "Resize workspace" })
-  for (let i = 0; i < 6; i++) fireEvent.keyDown(divider, { key: "ArrowRight" })
-  expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 1000, preview: 1256, visible: true, maximized: false })
-  fireEvent.click(screen.getByRole("button", { name: "Close workspace" }))
-  expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 500, preview: 500, visible: true, maximized: false })
+  // Expanded (view mode) exercises the same restore branch as a preview paged onto a third screen.
+  fireEvent.click(screen.getByRole("button", { name: "Maximize" }))
+  expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 0, preview: 1000, visible: true, maximized: true })
+  // In view mode the toolbar toggle is labelled "Open preview area"; its first click restores.
+  fireEvent.click(screen.getByRole("button", { name: "Open preview area" }))
+  expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 320, preview: 680, visible: true, maximized: false })
   expect(navigate).toHaveBeenLastCalledWith("chat")
   expect(screen.getByRole("textbox", { name: "Code" })).toHaveValue("retained edit")
   expect(screen.getByRole("button", { name: "Close workspace" })).toHaveAttribute("aria-expanded", "true")

@@ -314,12 +314,31 @@ fn setting_validity(key: &str, value: &Value) -> Option<bool> {
     Some(match key {
         "mobile.bridgeEnabled"
         | "appearance.trackpadEnabled"
+        | "updater.autoUpdate"
         | "system.preventSleep"
         | "computer.enabled"
         | "voice.enabled"
         | "voice.smooth"
         | "appearance.sidebarPinned"
         | "appearance.threeFingerSwipe"
+        | "appearance.fixedFour"
+        // Project conversations opening with the preview column visible. Registered here so an
+        // `update` from the Appearance pane is not rejected as an unknown key (and so the value
+        // is projected to every webview instead of being dropped by partition_settings).
+        | "appearance.fourColumnsDefault"
+        | "workspace.treeVisible"
+        | "memory.injectOnNewSession"
+        | "chat.composerPredictions"
+        | "drive.yupEnabled"
+        // Hides Drive's conflict copies (`… （冲突副本 · user · 2026-11-06 0912）.md`) from the
+        // file tree. Display-only: sync keeps downloading them, so nothing is ever deleted from
+        // the cloud by flipping this.
+        | "drive.blockConflictCopies"
+        // Poll OpenRouter's public model catalog for newly published `:free` models.
+        | "providers.freeModelWatch"
+        // A short chime when a scheduled automation finishes (off by default).
+        | "automation.completionSound"
+        | "computer.screenCaptureRequested"
         | "editor.fontLigatures"
         | "editor.wordWrap"
         | "editor.minimap"
@@ -332,6 +351,13 @@ fn setting_validity(key: &str, value: &Value) -> Option<bool> {
         | "chat.navigationInstrument"
         | "voice.deviceId"
         | "voice.hotwords" => value.is_string(),
+        // Local profile override: a plain name, and a square data URL small enough to keep
+        // every settings snapshot cheap (the picker writes ~30 KB at 256px).
+        "profile.nickname" => value.as_str().is_some_and(|s| s.chars().count() <= 64),
+        "profile.owner" => value.as_str().is_some_and(|s| s.len() <= 64),
+        "profile.avatar" => value
+            .as_str()
+            .is_some_and(|s| s.len() <= 256 * 1024 && s.starts_with("data:image/")),
         "voice.doubao.resourceId" => {
             value.as_str().is_some_and(|v| v.trim().bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)))
         }
