@@ -26,8 +26,32 @@ let port: TauriRuntimeClient<CodexProvider> | null = null
  * next call hands out a fresh port, which makes Rust spawn a fresh Runtime.
  */
 export function runtimeClient(): Promise<TauriRuntimeClient<CodexProvider>> {
-  port ??= new TauriRuntimeClient<CodexProvider>()
+  port ??= retryProviderRestart(new TauriRuntimeClient<CodexProvider>())
   return Promise.resolve(port)
+}
+
+/**
+ * The Codex app-server restarts itself whenever the provider table changes — which is exactly what
+ * a launch does — and any request in flight at that moment is refused with an error the adapter
+ * marks `restartable`. Waiting briefly and asking once more turns a red flash into a pause.
+ *
+ * Wrapping `acpRequest` closes the hole that `client.ts` already handles for `replay`: that retry
+ * only covers reopening a conversation, while the refusal the reader actually saw came from an
+ * ordinary request racing the restart (2026-11-08).
+ */
+function retryProviderRestart(client: TauriRuntimeClient<CodexProvider>): TauriRuntimeClient<CodexProvider> {
+  const original = client.acpRequest.bind(client)
+  client.acpRequest = async (...args: Parameters<TauriRuntimeClient<CodexProvider>["acpRequest"]>) => {
+    try {
+      return await original(...args)
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error)
+      if (!/restarted for a provider change while this request ran/i.test(text)) throw error
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      return original(...args)
+    }
+  }
+  return client
 }
 
 /** Forgets the current port and closes it; the next `runtimeClient()` starts over. */
