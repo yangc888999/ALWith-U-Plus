@@ -154,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "alwith-u"
-version = "0.2.29"
+version = "0.3.0"
 dependencies = [
  "alwith-api",
  "alwith-browser",

@@ -749,6 +749,11 @@
     "customizationRepo": "ALwith U",
     "customizationOutro": "project. The main changes:",
     "customizationItems": [
+      "v0.3.0",
+      "A capacity notice no longer leaks between GPT models or to other vendors.",
+      "DeepSeek and other third-party gateways no longer report false interruptions.",
+      "Qwen gains the Plan API endpoint, and it is the default region.",
+      "Zhipu model connections work again.",
       "v0.2.29",
       "Scheduled tasks can notify you and chosen recipients through the Lark CLI assistant.",
       "Lark CLI as a component: in-app install/update, sign-in and scope requests.",
@@ -1205,6 +1210,7 @@
     "getKey": "Get an API key from {{name}}",
     "region": "Region",
     "regions": {
+      "plan": "Plan",
       "intl": "International",
       "cn": "China"
     },

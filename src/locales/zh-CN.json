@@ -749,6 +749,11 @@
     "customizationRepo": "ALwith U",
     "customizationOutro": "定制，主要调整内容如下：",
     "customizationItems": [
+      "v0.3.0",
+      "修复 GPT 不同型号、其他厂商模型误报「模型过载」的问题。",
+      "修复 DeepSeek、其他第三方站点误报「模型中断」的问题。",
+      "Qwen 新增 Plan 计划 API 接入点，并作为默认区域。",
+      "修复智谱模型 API 接入异常的问题。",
       "v0.2.29",
       "新增定时任务：可通过飞书CLI助手通知本人及指定账户。",
       "飞书CLI作为组件接入：应用内安装更新、登录与权限申请。",
@@ -1205,6 +1210,7 @@
     "getKey": "到 {{name}} 获取 API 密钥",
     "region": "区域",
     "regions": {
+      "plan": "Plan 计划",
       "intl": "国际",
       "cn": "中国"
     },
