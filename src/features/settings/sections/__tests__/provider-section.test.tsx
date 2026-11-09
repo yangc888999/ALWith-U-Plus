@@ -7,7 +7,7 @@ import { ALL_PROVIDERS, type ProviderSnapshot } from "@/lib/providers"
 import type { SettingsAccount } from "@/lib/settings-bridge"
 
 import { CodexAccountSummary } from "../codex-provider-section"
-import { CustomProviderEditor, ProviderRow, ProviderTabs } from "../provider-section"
+import { CustomProviderEditor, ProviderRow, ProviderTabs, retryOnRevisionConflict } from "../provider-section"
 
 beforeAll(async () => {
   await initI18n("en")
@@ -890,4 +890,30 @@ test("inverted delete keeps the selected models and drops every other row", asyn
   })
   const submitted = save.mock.calls[0]?.[1] as { api_id: string }[]
   expect(submitted.map((row) => row.api_id)).toEqual(["vendor/alpha:free", "vendor/beta:free"])
+})
+
+test("a connection save retries once when a model toggle moved the revision", async () => {
+  // One card writes twice: toggling a model saves the catalog (revision 7 → 8), then 保存连接
+  // sends the revision the card loaded with. The second write must not be reported as another
+  // window's edit when a refresh + retry can land it.
+  const conflict = new Error("Provider settings changed in another window; reload and retry")
+  const attempt = vi
+    .fn<(revision: number) => Promise<{ revision: number }>>()
+    .mockRejectedValueOnce(conflict)
+    .mockResolvedValueOnce({ revision: 8 })
+  const refresh = vi.fn(async () => ({ revision: 8 }))
+
+  await expect(retryOnRevisionConflict(attempt, 7, refresh)).resolves.toEqual({ revision: 8 })
+  expect(attempt.mock.calls).toEqual([[7], [8]])
+  expect(refresh).toHaveBeenCalledTimes(1)
+})
+
+test("a conflict that leaves the revision unchanged still surfaces", async () => {
+  const conflict = new Error("Provider settings changed in another window; reload and retry")
+  const attempt = vi.fn().mockRejectedValue(conflict)
+
+  await expect(retryOnRevisionConflict(attempt, 7, async () => ({ revision: 7 }))).rejects.toThrow(
+    /another window/
+  )
+  expect(attempt).toHaveBeenCalledTimes(1)
 })

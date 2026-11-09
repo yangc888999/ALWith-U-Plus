@@ -415,3 +415,15 @@ test("account-level capacity keeps its account-level wording in English", async 
     "account-level"
   )
 })
+
+test("a stale provider revision says what to do instead of naming another window", async () => {
+  await chinese()
+
+  const message = describeError(
+    new Error("Provider settings changed in another window; reload and retry")
+  )
+  // One card writes twice (model toggle, then 保存连接); the retry usually hides this, so the
+  // wording must not send the reader hunting for a second window that does not exist.
+  expect(message).toContain("更新模型列表")
+  expect(message).not.toContain("another window")
+})

@@ -398,6 +398,13 @@ const RULES: Rule[] = [
     key: "error.providerEndpointNotFound"
   },
   {
+    // The settings store is revision-guarded. One card writes twice (a model toggle, then
+    // 「保存连接」), so the second write can arrive one revision behind; the save path retries
+    // once, and this is what the reader sees if that still fails.
+    match: /changed in another window/i,
+    key: "error.providerChangedElsewhere"
+  },
+  {
     // The bridge ends a stream on the same 20-minute idle / 60-minute hard clocks as the UI and
     // writes one structured error event before EOF. Name that cause instead of showing the generic
     // "重试" a truncated socket used to produce.

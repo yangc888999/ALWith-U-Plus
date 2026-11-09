@@ -120,6 +120,29 @@ function isRevisionConflict(error: unknown): boolean {
   return /changed in another window/i.test(describe(error))
 }
 
+/**
+ * Runs a revision-guarded write, refreshing once if the store moved on.
+ *
+ * One card can write twice: toggling a model saves the catalog and bumps the revision, then the
+ * 保存连接 button sends the revision the card loaded with. The second write was rejected as a
+ * "changed in another window" conflict even though nothing else touched it. Refresh and retry
+ * once with the store's revision; anything else (or a second failure) is a real error.
+ */
+export async function retryOnRevisionConflict<T>(
+  attempt: (revision: number) => Promise<T>,
+  revision: number,
+  refresh: () => Promise<{ revision: number } | null>
+): Promise<T> {
+  try {
+    return await attempt(revision)
+  } catch (error) {
+    if (!isRevisionConflict(error)) throw error
+    const fresh = await refresh().catch(() => null)
+    if (fresh === null || fresh.revision === revision) throw error
+    return attempt(fresh.revision)
+  }
+}
+
 /** The catalog persisted but the runtime rejected the reconfiguration (e.g. -32602 while busy).
  * `schedule_apply` retries it on the next idle boundary, so this is recoverable, not a hard failure. */
 function isRecoverableApplyError(error: string): boolean {
@@ -236,7 +259,11 @@ export function ProviderSection() {
   ): Promise<ProviderSnapshot | null> => {
     setBusy(provider.id)
     try {
-      const result = await saveProviderKey(revision, provider.id, key)
+      const result = await retryOnRevisionConflict(
+        (expected) => saveProviderKey(expected, provider.id, key),
+        revision,
+        () => loadProviders()
+      )
       if (!result.error)
         setTestResults((current) => {
           const next = { ...current }
