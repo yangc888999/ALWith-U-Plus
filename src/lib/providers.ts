@@ -416,6 +416,45 @@ export function nativeModelOverrides(): CustomModel[] | null {
   }
 }
 
+/**
+ * The display name of a model on every surface — the one place a rename is resolved.
+ *
+ * A session's `configOptions` model list is written when the thread is prepared, so renaming a
+ * model in 设置 → 大模型 never reaches an already-open conversation. Reading that catalogue as the
+ * name left the chat picker on the old label while 设置 and fresh drafts showed the new one (the
+ * picker also preferred a bundled short alias over the user's own label). The saved overrides are
+ * the only source of truth for the *name*: native GPT rows live in localStorage, gateway rows in
+ * the provider snapshot. The engine catalogue is a fallback, never the answer.
+ *
+ * Returns null when the user never named this model, so a caller can keep its own compact alias.
+ */
+export function displayModelLabel(apiId: string, fallback?: string | null): string | null {
+  const fallbackLabel = fallback ?? null
+  if (apiId.startsWith("gateway:")) {
+    const rest = apiId.slice("gateway:".length)
+    const separator = rest.indexOf(":")
+    if (separator < 0) return fallbackLabel
+    let providerId: string
+    let modelId: string
+    try {
+      providerId = decodeURIComponent(rest.slice(0, separator))
+      modelId = decodeURIComponent(rest.slice(separator + 1))
+    } catch {
+      return fallbackLabel
+    }
+    const snapshot = getProviderSnapshot()
+    if (snapshot === null) return fallbackLabel
+    const builtIn = snapshot.builtInModels?.[providerId] ?? []
+    const custom = snapshot.customProviders.find((entry) => entry.id === providerId)?.models ?? []
+    const row = [...builtIn, ...custom].find((entry) => entry.api_id === modelId)
+    const label = row?.label?.trim()
+    return label !== undefined && label !== "" ? label : fallbackLabel
+  }
+  const row = (nativeModelOverrides() ?? []).find((entry) => entry.api_id === apiId)
+  const label = row?.label?.trim()
+  return label !== undefined && label !== "" ? label : fallbackLabel
+}
+
 /** What a surface knows about the engine's own catalog; only the id is required. */
 export type NativeCatalogEntry = {
   id: string

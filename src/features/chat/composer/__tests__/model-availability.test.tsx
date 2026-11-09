@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest"
 
-import type { CustomModel } from "@/lib/providers"
+import type { CustomModel, ProviderSnapshot } from "@/lib/providers"
 
 /**
  * Which saved rows the surfaces start from. `presentModelCatalog` reads this the way the real app
@@ -12,7 +12,8 @@ vi.mock("@/lib/providers", async (importOriginal) => {
   return { ...actual, nativeModelOverrides: () => saved.rows }
 })
 
-const { presentModelCatalog } = await import("../model-catalog")
+const { setProviderSnapshot } = await import("@/lib/providers")
+const { presentModelCatalog, modelTriggerLabel } = await import("../model-catalog")
 
 function row(apiId: string): CustomModel {
   return { api_id: apiId, label: "" } as CustomModel
@@ -61,4 +62,33 @@ test("a draft whose catalog has not arrived yet hides nothing", () => {
   ])
 
   expect(ids(groups)).toEqual(["gpt-6-astra", "gpt-6.1-terra"])
+})
+
+test("a renamed gateway model replaces the thread's stale catalogue label everywhere", () => {
+  saved.rows = null
+  // An already-open conversation still carries the label its thread was created with. The saved
+  // override is the only place the new name lives, so both the menu row and the trigger must read
+  // from it instead of from the thread catalogue or the bundled compact alias.
+  setProviderSnapshot({
+    revision: 9999,
+    appliedRevision: 9999,
+    status: "applied",
+    error: null,
+    providers: { deepseek: { configured: true, disabled: false, region: null, base_url: null } },
+    customProviders: [],
+    builtInModels: { deepseek: [{ api_id: "deepseek-flash", label: "闪电速答" }] },
+    managedProviders: []
+  } as unknown as ProviderSnapshot)
+
+  const groups = presentModelCatalog([
+    {
+      id: "deepseek",
+      name: "DeepSeek",
+      models: [{ api_id: "gateway:deepseek:deepseek-flash", label: "DeepSeek-Flash" }],
+    },
+  ])
+  const renamed = groups.find((group) => group.id === "deepseek")?.models[0]
+  expect(renamed?.label).toBe("闪电速答")
+  expect(renamed?.shortLabel).toBe("闪电速答")
+  expect(modelTriggerLabel(renamed!)).toBe("闪电速答")
 })

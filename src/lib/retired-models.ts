@@ -62,18 +62,39 @@ export function isModelRetired(id: string): boolean {
   return at !== undefined && Date.now() - at < TTL_MS
 }
 
-/** Records a refusal. Idempotent: a repeated rejection only refreshes the timestamp. */
+/** Records a refusal. A repeated rejection refreshes the timestamp instead of leaving it stale. */
 export function retireModel(id: string): void {
   if (id.trim() === "") return
   const all = readAll()
-  if (all[id] !== undefined && Date.now() - all[id] < TTL_MS) return
-  writeAll({ ...all, [id]: Date.now() })
+  const at = Date.now()
+  if (all[id] !== undefined && at - all[id] < TTL_MS) {
+    all[id] = at
+    writeAll(all)
+    return
+  }
+  writeAll({ ...all, [id]: at })
+}
+
+/**
+ * Drops every tombstone the engine's own catalog still lists.
+ *
+ * The catalog — not this saved list — is the source of truth for what can run. A provider that
+ * withdrew an id for an hour and put it back used to stay hidden for the whole TTL, because only
+ * a successful write to that exact model revived it. One catalog refresh is enough to believe it.
+ * Catalog ids are passed in by the caller: this module never guesses which list is authoritative.
+ */
+export function reviveCatalogModels(ids: Iterable<string>): void {
+  const all = readAll()
+  let rest: Record<string, number> | null = null
+  for (const id of ids) {
+    if (all[id] === undefined) continue
+    rest ??= { ...all }
+    delete rest[id]
+  }
+  if (rest !== null) writeAll(rest)
 }
 
 /** Drops a tombstone — used once the model is written successfully again. */
 export function reviveModel(id: string): void {
-  const all = readAll()
-  if (all[id] === undefined) return
-  const { [id]: _dropped, ...rest } = all
-  writeAll(rest)
+  reviveCatalogModels([id])
 }

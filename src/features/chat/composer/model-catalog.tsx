@@ -7,6 +7,7 @@ import openaiLogo from "@/components/icons/openai-logo.svg";
 import { ProviderMark } from "@/components/provider-mark";
 import modelPresentation from "@/lib/model-presentation.json";
 import {
+  displayModelLabel,
   gatewayModelId,
   getProviderSnapshot,
   nativeCatalogStatus,
@@ -108,8 +109,14 @@ function withSnapshotModels(groups: ModelGroup[]): ModelGroup[] {
     }
     for (const model of provider.models) {
       const apiId = gatewayModelId(provider.id, model.id)
-      if (!target.models.some((row) => row.api_id === apiId))
-        target.models.push({ api_id: apiId, label: model.label ?? model.id })
+      // The session's own catalogue was written when the thread was prepared, so it still carries
+      // the name the model had before the user renamed it. Refresh an existing row's label as well
+      // as adding new ones: the old `if (!some(...)) push` meant only brand-new models ever showed
+      // the new name, and every open conversation stayed on the stale one.
+      const label = displayModelLabel(apiId, model.label ?? model.id) ?? model.label ?? model.id
+      const existing = target.models.find((row) => row.api_id === apiId)
+      if (existing === undefined) target.models.push({ api_id: apiId, label })
+      else existing.label = label
     }
   }
   return next
@@ -129,31 +136,37 @@ export function presentModelCatalog(groups: ModelGroup[]): ModelGroup[] {
     // every model uses the same fixed icon box, independent of whether it is native or gateway.
     return {
       ...group,
-      models: group.models.map((model, index) => ({
-        ...model,
-        // Menu rows render the catalog label, so the routing prefix has to go there as well.
-        label: stripGatewayPrefix(model.label),
-        shortLabel: model.shortLabel ?? presentation[model.api_id]?.shortLabel,
-        // Decorative: the row's accessible name remains the model label. The data attribute lets
-        // host CSS restore provider headings even when the shared menu renders its compact catalog.
-        icon: (
-          <span
-            aria-hidden="true"
-            className="model-picker-icon"
-            data-model-group-title={index === 0 ? group.name : undefined}
-          >
-            {native ? (
-              <img src={openaiLogo} alt="" className="dark:invert" />
-            ) : provider ? (
-              // Keep each vendor's own mark: the picker's icon box already supplies the frame, and
-              // the brand colour is how the user recognises the provider at a glance.
-              <ProviderMark provider={provider} className="" />
-            ) : (
-              <Bot className="size-4" />
-            )}
-          </span>
-        ),
-      })),
+      models: group.models.map((model, index) => {
+        // A name the user set in 设置 → 大模型 wins over both the thread's stale catalogue label
+        // and the bundled compact alias: the trigger used to keep showing "4.1-Flash" forever.
+        const renamed = displayModelLabel(model.api_id)
+        const label = stripGatewayPrefix(renamed ?? model.label)
+        return {
+          ...model,
+          // Menu rows render the catalog label, so the routing prefix has to go there as well.
+          label,
+          shortLabel: renamed !== null ? label : (model.shortLabel ?? presentation[model.api_id]?.shortLabel),
+          // Decorative: the row's accessible name remains the model label. The data attribute lets
+          // host CSS restore provider headings even when the shared menu renders its compact catalog.
+          icon: (
+            <span
+              aria-hidden="true"
+              className="model-picker-icon"
+              data-model-group-title={index === 0 ? group.name : undefined}
+            >
+              {native ? (
+                <img src={openaiLogo} alt="" className="dark:invert" />
+              ) : provider ? (
+                // Keep each vendor's own mark: the picker's icon box already supplies the frame, and
+                // the brand colour is how the user recognises the provider at a glance.
+                <ProviderMark provider={provider} className="" />
+              ) : (
+                <Bot className="size-4" />
+              )}
+            </span>
+          ),
+        }
+      }),
     };
   });
 }

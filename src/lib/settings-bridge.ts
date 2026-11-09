@@ -10,6 +10,7 @@ import * as React from "react"
 import { toast } from "sonner"
 
 import type { PendingAction } from "@/agent/client"
+import { reviveCatalogModels } from "@/lib/retired-models"
 import type { AccountReadResponse, RateLimitSnapshot } from "@nyssance/codex-acp-v2/client"
 
 export type SettingsEvents = { listen: typeof listen; emitTo: typeof emitTo }
@@ -100,6 +101,11 @@ export function serveSettingsBridge(
     const signature = nativeSignature(nativeModels)
     if (signature !== lastNativeSignature) {
       lastNativeSignature = signature
+      // The engine's catalog is the only source of truth for what can run. A catalog change is
+      // proof that a provider which withdrew an id may have put it back, so believe it over any
+      // tombstone written during the outage. Done here — where the catalog originates — so it
+      // also happens when no settings window is open.
+      if (nativeModels !== null) reviveCatalogModels(nativeModels.models.map((model) => model.id))
       void emitTo("settings", NATIVE_MODELS, nativeModels)
     }
     lastAgent = agent

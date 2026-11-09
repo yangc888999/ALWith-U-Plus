@@ -25,10 +25,11 @@ import { useTranslation } from "react-i18next"
 import { subscribeGroupSpeaker } from "@/lib/group-runtime"
 
 import { selectedModelId } from "@/agent/native-models"
-import { dismissOverload, overloadNotice, subscribeOverload } from "./model-overload-alert"
+import { dismissOverload, matchesReportedModel, overloadNotice, subscribeOverload } from "./model-overload-alert"
 import { nudgeTurn } from "./nudge-turn"
 import { activeTool, awaitingUser } from "./turn-activity"
 import { getQueueSendMode, subscribeChatDisplayPreferences } from "@/lib/chat-display-preferences"
+import { displayModelLabel } from "@/lib/providers"
 import { cn } from "@/lib/utils"
 import { client } from "@/lib/client"
 import {
@@ -45,6 +46,9 @@ type Turn = {
   /** The model this turn is actually running on, captured when it started. A mid-turn switch only
    *  affects the NEXT turn, so reading the live config here would name a model that is not running. */
   model: string | null
+  /** The id behind `model`. A stall notice raised for model A must never be drawn on a turn that
+   *  is running B — the two used to share one module-level notice and one session id. */
+  modelId: string | null
 }
 
 const turns = new Map<string, Turn>()
@@ -72,7 +76,13 @@ function trackTurn(session: Session): Turn | null {
     // mid-turn starts from the real last activity instead of pretending the turn just began.
     const observed = session.clock > 0 && session.clock <= now ? session.clock : now
     const start = lastUser !== undefined && lastUser.at <= now && now - lastUser.at < 6 * 60 * 60_000 ? lastUser.at : observed
-    const turn = { start, last: Math.max(start, observed), clock: session.clock, model: modelLabel(session) }
+    const turn = {
+      start,
+      last: Math.max(start, observed),
+      clock: session.clock,
+      model: modelLabel(session),
+      modelId: selectedModelId(session.configOptions)
+    }
     turns.set(session.id, turn)
     return turn
   }
@@ -93,6 +103,10 @@ function modelLabel(session: Session): string | null {
  *  falling back to the raw id when the catalog no longer lists it. */
 function labelForModelId(session: Session, id: string | null): string | null {
   if (id === null) return null
+  // The thread catalogue was written when the thread was prepared; a rename in 设置 → 大模型 never
+  // reaches it. The saved overrides are the source of truth for the name on every surface.
+  const renamed = displayModelLabel(id)
+  if (renamed !== null) return renamed
   const option = session.configOptions.find((entry) => entry.category === "model" && entry.type === "select")
   if (option === undefined || option.type !== "select") return id
   const choices: unknown[] = Array.isArray(option.options) ? option.options : []
@@ -196,6 +210,17 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
   const { t } = useTranslation()
   const running = session.state === "running" || session.state === "requires_action"
   const notice = useSyncExternalStore(subscribeOverload, overloadNotice, overloadNotice)
+  // A model picked mid-turn is parked until the turn settles, so the session's `configOptions`
+  // still name the OLD model for the rest of the turn. Reading only those made a stalled GPT turn
+  // keep its amber "at capacity" row after the reader had already chosen DeepSeek — the exact
+  // "switched away and it still says overloaded" report. The pending choice is what the picker
+  // shows, so it is also what the row must respect.
+  const pendingModel = useSyncExternalStore(
+    client.onPendingModelChange.bind(client),
+    () => client.pendingModelFor(session.id),
+    () => null
+  )
+  const chosenModel = pendingModel ?? selectedModelId(session.configOptions)
   // In a group discussion the floor moves between roles, each on its own model. The session's
   // configured model is not what is answering, so the row names the member holding the floor.
   const [speaker, setSpeaker] = useState<string | null>(null)
@@ -208,11 +233,19 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
     const timer = setInterval(() => tick((value) => value + 1), 350)
     return () => clearInterval(timer)
   }, [running])
-  // The notice lives in a module store, so a turn that ends while overloaded must clear it —
-  // otherwise the next turn would open with a stale "at capacity" line.
+  // The notice lives in a module store, so a turn that ends OR resumes output while overloaded
+  // must clear it — otherwise the next turn opens with a stale "at capacity" line. `session.clock`
+  // moves on every applied update, the cheapest proof that tokens are still flowing.
   useEffect(() => {
     if (!running) dismissOverload(session.id)
-  }, [running, session.id])
+    else if (
+      notice !== null &&
+      notice.sessionId === session.id &&
+      // Output resumed, or the reader picked a different model: either way A's notice is over.
+      (session.clock > notice.at || !matchesReportedModel(chosenModel, notice.model))
+    )
+      dismissOverload(session.id)
+  }, [running, session.id, session.clock, session.configOptions, notice, chosenModel])
 
   // Every hook must run on every render. `trackTurn` returns null the moment a turn ends, and the
   // early return below would then skip the two subscriptions underneath — flipping the hook count
@@ -273,6 +306,12 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
     notice !== null &&
     notice.sessionId === session.id &&
     turn.last <= notice.at &&
+    // One model's capacity is not another model's. The notice is a module singleton, so without
+    // this a GPT model that stalled once kept every later turn on every sibling model amber.
+    matchesReportedModel(turn.modelId, notice.model) &&
+    // ...and a mid-turn pick is already a decision: the parked model is what the picker shows, so
+    // the amber row must not survive the reader switching away from the stalled one.
+    matchesReportedModel(chosenModel, notice.model) &&
     // The event can arrive after two seconds of a retry loop; the reader only needs to hear about
     // it once the wait is long enough to act on.
     silent >= NUDGE_MS &&

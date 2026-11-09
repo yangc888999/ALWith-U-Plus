@@ -86,37 +86,72 @@ function isRunningLocally(session: Session): boolean {
   return activeTool(session) !== null
 }
 
+/**
+ * The bridge names a gateway model `deepseek/deepseek-flash`; the session config names the same
+ * model `gateway:deepseek:deepseek-flash`. Both shapes must resolve to one turn, or a real stall is
+ * dropped while a notice raised for another conversation keeps being shown.
+ */
+export function matchesReportedModel(selected: string | null, reported: string): boolean {
+  if (selected === null) return false
+  if (selected === reported) return true
+  if (!selected.startsWith("gateway:")) return false
+  const rest = selected.slice("gateway:".length)
+  const separator = rest.indexOf(":")
+  if (separator < 0) return false
+  try {
+    return `${decodeURIComponent(rest.slice(0, separator))}/${decodeURIComponent(rest.slice(separator + 1))}` === reported
+  } catch {
+    return false
+  }
+}
+
 function runningSession(model: string): Session | null {
+  // Object.values order is not a contract. Two chats can run the same model, and "the first one"
+  // used to put the notice on an idle-by-observation window while the real turn sat elsewhere.
+  // The most recently updated matching session is the best available evidence.
+  let best: Session | null = null
   for (const session of Object.values(client.state.sessions)) {
     if (session === undefined) continue
     const active =
       session.state === "running" ||
       session.state === "requires_action" ||
       client.state.runStates[session.id]?.state === "running"
-    if (active && selectedModelId(session.configOptions) === model) return session
+    if (!active || !matchesReportedModel(selectedModelId(session.configOptions), model)) continue
+    if (best === null || session.clock > best.clock) best = session
   }
-  return null
+  return best
 }
 
 /** Subscribe once at startup. Returns the unsubscribe handle. */
 export async function startModelOverloadAlerts(): Promise<() => void> {
   return listen<StallEvent>("model:stalled", (event) => {
     const { model, retryAfter } = event.payload
-    const reason: StallReason = event.payload.reason === "no_ack" ? "no_ack" : "overloaded"
+    // An unknown or missing reason is not evidence of an overload. Defaulting every unexpected
+    // payload to `overloaded` used to turn a malformed event into 「当前模型已满负荷」.
+    const reason = event.payload.reason
+    if (reason !== "overloaded" && reason !== "no_ack") return
     if (typeof model !== "string" || model === "") return
     // A `retry-after` of a few seconds is the engine's own retry loop doing its job: the turn keeps
     // streaming, so a "model is at capacity" row would contradict the transcript right above it.
     // Only a wait the reader would actually feel deserves a notice.
-    if (reason === "overloaded" && retryAfter !== null && retryAfter < 30) return
-    // The engine retries the same turn several times; one notice per minute is plenty.
-    const now = Date.now()
-    if (now - (lastShown.get(model) ?? 0) < 60_000) return
+    if (reason === "overloaded" && typeof retryAfter === "number" && retryAfter < 30) return
+    // Resolve the session *before* throttling. The engine retries the same turn several times and
+    // one notice per minute is plenty — but that budget belongs to one conversation, not to the
+    // model name: two chats on the same model are separate turns, and a global per-model stamp
+    // silently swallowed the second chat's real stall.
     const session = runningSession(model)
     if (session === null) return
+    const now = Date.now()
+    const shownKey = `${session.id}:${model}`
+    if (now - (lastShown.get(shownKey) ?? 0) < 60_000) return
+    // Tokens are still being billed and the store is still applying updates: output is flowing, so
+    // this turn is not stalled. A retry notice from an earlier request must not stick to it — that
+    // is what made every later turn open with the same "at capacity" line.
+    if (session.clock > 0 && now - session.clock < 5_000) return
     // The bridge only sends `no_ack` while a request is open upstream. If the turn has since moved
     // on to a local tool, that request is gone and the turn is not stalled — drop the notice.
     if (reason === "no_ack" && isRunningLocally(session)) return
-    lastShown.set(model, now)
+    lastShown.set(shownKey, now)
     const minutes = typeof retryAfter === "number" && retryAfter > 0 ? Math.max(1, Math.round(retryAfter / 60)) : null
     notice = {
       sessionId: session.id,

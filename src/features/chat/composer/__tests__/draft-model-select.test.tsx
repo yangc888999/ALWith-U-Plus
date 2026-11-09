@@ -111,7 +111,7 @@ test("removing a provider does not silently switch a selected draft to Codex", (
   expect(view.getByRole("button").textContent).toContain("removed-model")
 })
 
-test("draft shows the model 设置 → 默认会话模型 picked, not the built-in fallback", async () => {
+test("draft shows the model 设置 → 默认会话模型 picked, with its saved name on the trigger", async () => {
   setDefaultModelChoice({ model: "gpt-6.1-sol", effort: null })
   localStorage.setItem(
     "alwith:native-model-overrides",
@@ -141,7 +141,9 @@ test("draft shows the model 设置 → 默认会话模型 picked, not the built-
     })
   })
   // The chat this draft starts uses `client.resolveModel(null)`, which honours the saved default.
-  expect(within(view.getByTestId("model-trigger")).getByText("6.1-Sol", { exact: true })).toBeVisible()
+  // A name the user set in 设置 → 大模型 now beats the bundled compact alias ("6.1-Sol") on the
+  // trigger too — that alias was exactly why a rename looked like it never took effect.
+  expect(within(view.getByTestId("model-trigger")).getByText("Sol", { exact: true })).toBeVisible()
   setDefaultModelChoice(null)
   localStorage.removeItem("alwith:native-model-overrides")
 })

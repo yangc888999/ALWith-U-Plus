@@ -8,9 +8,28 @@ import { setQueueSendMode } from "@/lib/chat-display-preferences"
 import { TurnProgressBar } from "../turn-progress"
 
 const nudgeTurn = vi.hoisted(() => vi.fn())
+const overload = vi.hoisted(() => ({
+  notice: null as null | {
+    sessionId: string
+    model: string
+    modelName: string
+    minutes: number | null
+    retryAfter: number | null
+    reason: "overloaded" | "no_ack"
+    at: number
+  }
+}))
 // `model-overload-alert` (pulled in by the strip) imports sonner; keep it inert in tests.
 vi.mock("sonner", () => ({ toast: { info: vi.fn(), error: vi.fn(), success: vi.fn() } }))
 vi.mock("../nudge-turn", () => ({ nudgeTurn }))
+// The real matcher is covered in model-overload-alert.test.ts; here we only need to control the
+// module-level notice and prove the row binds it to the model this turn is running on.
+vi.mock("../model-overload-alert", () => ({
+  matchesReportedModel: (selected: string | null, reported: string) => selected === reported,
+  overloadNotice: () => overload.notice,
+  dismissOverload: vi.fn(),
+  subscribeOverload: (_listener: () => void) => () => {}
+}))
 
 await initI18n("zh-CN")
 
@@ -195,6 +214,84 @@ test("a queued-send surface is not offered a nudge it could not deliver", () => 
     // The strip subscribes to the preference, so resetting it re-renders a still-mounted row.
     cleanup()
     act(() => setQueueSendMode("immediate"))
+  }
+})
+
+function noticeFor(model: string, sessionId: string, at: number) {
+  return {
+    sessionId,
+    model,
+    modelName: model,
+    minutes: 5,
+    retryAfter: 300,
+    reason: "overloaded" as const,
+    at
+  }
+}
+
+function modelOption(currentValue: string) {
+  return [
+    {
+      configId: "model",
+      category: "model",
+      type: "select",
+      currentValue,
+      options: [{ value: currentValue, name: currentValue }]
+    }
+  ] as never
+}
+
+test("a capacity notice for another model never paints this turn amber", () => {
+  const at = Date.now() - 45_000
+  overload.notice = noticeFor("gpt-6.1-sol", "turn-model-mismatch", at)
+  try {
+    // Everything else says "show the overload": same session, long silence, retry-after live.
+    // Only the model id differs — the notice belongs to a turn that is no longer this one.
+    const view = render(
+      <TurnProgressBar
+        session={session({ id: "turn-model-mismatch", clock: at, configOptions: modelOption("gpt-6.1-terra") })}
+      />
+    )
+    expect(view.container.textContent).not.toContain("过载")
+    expect(view.getByText(/连接中/)).toBeTruthy()
+  } finally {
+    overload.notice = null
+  }
+})
+
+test("a capacity notice for this model still paints the row amber", () => {
+  const at = Date.now() - 45_000
+  overload.notice = noticeFor("gpt-6.1-sol", "turn-model-match", at)
+  try {
+    const view = render(
+      <TurnProgressBar
+        session={session({ id: "turn-model-match", clock: at, configOptions: modelOption("gpt-6.1-sol") })}
+      />
+    )
+    expect(view.container.textContent).toContain("过载")
+  } finally {
+    overload.notice = null
+  }
+})
+
+test("picking another model mid-turn stops the stalled model's amber row", async () => {
+  // A mid-turn pick is parked until the turn settles, so `configOptions` keep naming the old
+  // model. Reading only those kept the amber "at capacity" row on screen after the reader had
+  // already chosen DeepSeek — the row must follow the picker (the pending choice), not the config.
+  const at = Date.now() - 45_000
+  overload.notice = noticeFor("gpt-6.1-sol", "turn-model-pending", at)
+  const { client } = await import("@/lib/client")
+  const pending = vi.spyOn(client, "pendingModelFor").mockReturnValue("deepseek-v4-pro")
+  try {
+    const view = render(
+      <TurnProgressBar
+        session={session({ id: "turn-model-pending", clock: at, configOptions: modelOption("gpt-6.1-sol") })}
+      />
+    )
+    expect(view.container.textContent).not.toContain("过载")
+  } finally {
+    pending.mockRestore()
+    overload.notice = null
   }
 })
 

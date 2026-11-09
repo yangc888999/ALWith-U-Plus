@@ -4,7 +4,7 @@ import { beforeEach, expect, test, vi } from "vitest"
 import { initI18n } from "@/lib/i18n"
 
 const host = vi.hoisted(() => ({
-  listeners: [] as ((event: { payload: { model: string; reason?: "overloaded" | "no_ack"; retryAfter: number | null } }) => void)[],
+  listeners: [] as ((event: { payload: { model: string; reason?: string; retryAfter: number | null } }) => void)[],
   warning: vi.fn(),
   info: vi.fn(),
   success: vi.fn(),
@@ -30,7 +30,8 @@ vi.mock("@/lib/client", () => ({
   }
 }))
 
-function session(current: string): Session {
+/** `clock` is the last applied update: old for a stalled turn, fresh while tokens are flowing. */
+function session(current: string, clock: number = Date.now() - 60_000): Session {
   return {
     id: "chat-1",
     cwd: "/tmp/project",
@@ -58,7 +59,7 @@ function session(current: string): Session {
     lastTurnUsage: null,
     turnUsage: {},
     turnEndedAt: {},
-    clock: Date.now(),
+    clock,
     lastStopReason: null,
     commands: [],
     terminals: {},
@@ -77,7 +78,7 @@ async function subscribe() {
   return mod
 }
 
-function emit(model: string, retryAfter: number | null = 324, reason: "overloaded" | "no_ack" = "overloaded") {
+function emit(model: string, retryAfter: number | null = 324, reason: string = "overloaded") {
   for (const listener of host.listeners) listener({ payload: { model, retryAfter, reason } })
 }
 
@@ -172,4 +173,72 @@ test("a stall event is ignored once the turn is running a tool locally", async (
   const mod = await subscribe()
   emit("gpt-6.1-sol", null, "no_ack")
   expect(mod.overloadNotice()).toBeNull()
+})
+
+test("an unknown reason is never reported as an overload", async () => {
+  host.sessions["chat-1"] = session("gpt-6.1-sol")
+  const mod = await subscribe()
+  emit("gpt-6.1-sol", 324, "something_else")
+  expect(mod.overloadNotice()).toBeNull()
+})
+
+test("a gateway model is recognized under the bridge's <gateway>/<model> name", async () => {
+  host.sessions["chat-1"] = session("gateway:deepseek:deepseek-flash")
+  const mod = await subscribe()
+  emit("deepseek/deepseek-flash", 324)
+  expect(mod.overloadNotice()?.sessionId).toBe("chat-1")
+})
+
+test("a turn that is still producing output is not reported as stalled", async () => {
+  // Tokens are being billed and the store just applied an update: a retry notice from an older
+  // request must not stick to this turn and then to every turn after it.
+  host.sessions["chat-1"] = session("gpt-6.1-sol", Date.now())
+  const mod = await subscribe()
+  emit("gpt-6.1-sol", 324)
+  expect(mod.overloadNotice()).toBeNull()
+})
+
+test("a notice is bound to one model id, not to every turn in the window", async () => {
+  const mod = await subscribe()
+  expect(mod.matchesReportedModel("gpt-6.1-sol", "gpt-6.1-sol")).toBe(true)
+  expect(mod.matchesReportedModel("gpt-6.1-terra", "gpt-6.1-sol")).toBe(false)
+  expect(mod.matchesReportedModel("gateway:deepseek:deepseek-flash", "deepseek/deepseek-flash")).toBe(true)
+  expect(mod.matchesReportedModel("gateway:kimi:kimi-k3", "deepseek/deepseek-flash")).toBe(false)
+})
+
+test("the notice keeps the model id it was raised for", async () => {
+  host.sessions["chat-1"] = session("gpt-6.1-sol")
+  const mod = await subscribe()
+  emit("gpt-6.1-sol", 324)
+  // The progress row needs this to prove A's capacity is not B's.
+  expect(mod.overloadNotice()?.model).toBe("gpt-6.1-sol")
+})
+
+test("two chats on one model: the notice goes to the most recently updated one", async () => {
+  const older = session("gpt-6.1-sol", Date.now() - 120_000)
+  older.id = "older"
+  const newer = session("gpt-6.1-sol", Date.now() - 90_000)
+  newer.id = "newer"
+  host.sessions = { older, newer }
+  const mod = await subscribe()
+  emit("gpt-6.1-sol", 324)
+  expect(mod.overloadNotice()?.sessionId).toBe("newer")
+})
+
+test("a second chat on the same model still gets its own notice", async () => {
+  // The one-notice-per-minute budget belongs to a conversation, not to a model name. Keyed by
+  // model alone, chat A's notice swallowed chat B's real stall for a full minute — and the reader
+  // saw nothing where the turn was actually stuck.
+  const first = session("gpt-6.1-sol", Date.now() - 120_000)
+  first.id = "chat-first"
+  const second = session("gpt-6.1-sol", Date.now() - 90_000)
+  second.id = "chat-second"
+  host.sessions = { first, second }
+  const mod = await subscribe()
+  emit("gpt-6.1-sol", 324)
+  expect(mod.overloadNotice()?.sessionId).toBe("chat-second")
+  // The reader moves to the other chat; it is now the most recent turn on the very same model.
+  first.clock = Date.now() - 10_000
+  emit("gpt-6.1-sol", 324)
+  expect(mod.overloadNotice()?.sessionId).toBe("chat-first")
 })

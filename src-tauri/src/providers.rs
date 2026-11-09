@@ -2482,7 +2482,7 @@ mod tests {
                 .unwrap();
         assert_eq!(saved.credentials["qwen"].api_key, "private-test-secret");
         assert_eq!(saved.credentials["qwen"].region.as_deref(), Some("cn"));
-        let inner = Inner { saved, applied: BTreeMap::new(), applied_revision: None, error: None, resource_dir: PathBuf::from("/") };
+        let inner = Inner { saved, applied: BTreeMap::new(), applied_revision: None, error: None, resource_dir: PathBuf::from("/"), managed_active: false };
         let public = serde_json::to_string(&inner.snapshot()).unwrap();
         assert!(!public.contains("private-test-secret"));
         assert!(!public.contains("apiKey"));
@@ -2513,6 +2513,7 @@ mod tests {
             applied_revision: None,
             error: None,
             resource_dir: PathBuf::from("/"),
+            managed_active: false,
         };
         let snapshot = inner.snapshot();
         assert_eq!(snapshot.providers["deepseek"].configured, false);
@@ -2596,7 +2597,7 @@ mod tests {
         assert_eq!(saved.credentials["deepseek"].base_url.as_deref(), Some("https://gateway.example.test/v1"));
         assert!(
             !serde_json::to_string(
-                &Inner { saved, applied: BTreeMap::new(), applied_revision: None, error: None, resource_dir: PathBuf::from("/") }.snapshot()
+                &Inner { saved, applied: BTreeMap::new(), applied_revision: None, error: None, resource_dir: PathBuf::from("/"), managed_active: false }.snapshot()
             )
             .unwrap()
             .contains("private-test-secret")
@@ -2626,7 +2627,7 @@ mod tests {
         assert_eq!(provider.models[0].api_id, "model-a");
         assert!(
             !serde_json::to_string(
-                &Inner { saved, applied: BTreeMap::new(), applied_revision: None, error: None, resource_dir: PathBuf::from("/") }.snapshot()
+                &Inner { saved, applied: BTreeMap::new(), applied_revision: None, error: None, resource_dir: PathBuf::from("/"), managed_active: false }.snapshot()
             )
             .unwrap()
             .contains("private-test-secret")
@@ -2726,7 +2727,7 @@ mod tests {
         use std::sync::atomic::AtomicBool;
         let (client, calls) = fake_runtime(Arc::new(AtomicBool::new(true)), Arc::new(AtomicBool::new(false)));
         let mut inner =
-            Inner { saved: Saved::default(), applied: BTreeMap::new(), applied_revision: None, error: None, resource_dir: PathBuf::from("/") };
+            Inner { saved: Saved::default(), applied: BTreeMap::new(), applied_revision: None, error: None, resource_dir: PathBuf::from("/"), managed_active: false };
         reconcile_test(&mut inner, &client).await.unwrap();
         assert_eq!(inner.snapshot().status, "applied");
         assert!(calls.lock().unwrap().is_empty());
@@ -2758,6 +2759,7 @@ mod tests {
             applied_revision: None,
             error: None,
             resource_dir: PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/resources")),
+            managed_active: false,
         }
     }
     fn fake_runtime(
@@ -2961,7 +2963,7 @@ mod tests {
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
         );
-        let mut inner = Inner { saved, applied: BTreeMap::new(), applied_revision: None, error: None, resource_dir: PathBuf::from("/") };
+        let mut inner = Inner { saved, applied: BTreeMap::new(), applied_revision: None, error: None, resource_dir: PathBuf::from("/"), managed_active: false };
         reconcile_test(&mut inner, &client).await.unwrap();
         {
             let recorded = calls.lock().unwrap();

@@ -9,8 +9,8 @@ import { NATIVE_MODEL_GROUP } from "@/agent/client";
 import type { ProviderSnapshot } from "@/lib/providers";
 import {
   defaultModelFallback,
+  displayModelLabel,
   gatewayModelId,
-  nativeModelOverrides,
   providerGroups,
   resolveSessionModel,
 } from "@/lib/providers";
@@ -24,14 +24,14 @@ const nativeModel: ChatModelOption = {
 };
 
 /**
- * The label 设置 → 可用模型 gave a model, so a draft can name the default before `session/new`
- * hands over the native catalog. Gateway ids keep their raw form; the trigger strips the prefix.
+ * The label 设置 → 大模型 gave a model, so a draft can name the default before `session/new`
+ * hands over the native catalog. Both native GPT and gateway rows resolve through the same
+ * `displayModelLabel` the chat picker uses; reading only native overrides here left a renamed
+ * gateway model showing its raw id on the trigger.
  */
-function savedNativeLabel(model: string | null): string | null {
+function savedModelLabel(model: string | null): string | null {
   if (model === null || model === "") return null;
-  const row = (nativeModelOverrides() ?? []).find((entry) => entry.api_id === model);
-  if (row === undefined) return null;
-  return row.label.trim() !== "" ? row.label : row.api_id;
+  return displayModelLabel(model, model);
 }
 
 /** Native model details arrive with session/new; gateway models are already in the catalog. */
@@ -73,11 +73,11 @@ export function DraftModelSelect({
     model === null
       ? (models.find((item) => item.api_id === defaultModel) ?? {
           api_id: defaultModel ?? "",
-          label: savedNativeLabel(defaultModel) ?? defaultModel ?? NATIVE_MODEL_GROUP.name,
+          label: savedModelLabel(defaultModel) ?? defaultModel ?? NATIVE_MODEL_GROUP.name,
         })
       : (models.find((item) => item.api_id === model) ?? {
           api_id: model,
-          label: savedNativeLabel(model) ?? model,
+          label: savedModelLabel(model) ?? model,
         });
   return (
     <ModelSelect
