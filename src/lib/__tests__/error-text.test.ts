@@ -44,6 +44,24 @@ test("a rejected overlapping handoff names the remedy instead of raw English", a
   )
 })
 
+test("the backend's own capacity sentence still says the model is full", async () => {
+  await chinese()
+
+  expect(describeError(new Error("Selected model is at capacity"))).toBe(
+    "当前模型已满负荷，直接在下方换一个模型再发一次就行。"
+  )
+})
+
+test("a bare 'at capacity' in an unrelated failure is not called a full model", async () => {
+  await chinese()
+
+  // A connection pool, a service, or a transcript quoting an old error used to reach the reader
+  // as 「当前模型已满负荷」 simply because the words appeared.
+  expect(describeError(new Error("Connection pool at capacity, retry later"))).toBe(
+    "操作没有完成：Connection pool at capacity, retry later"
+  )
+})
+
 test("a Drive deadline is not reported as a model timeout", async () => {
   await chinese()
 
@@ -321,4 +339,79 @@ test("a model the engine refuses is named instead of printing the raw sentence",
   const message = describeError(new Error("Unsupported model: 'gpt-6.1-terra'"))
   expect(message).toContain("gpt-6.1-terra")
   expect(message).not.toContain("Unsupported model")
+})
+
+test("ChatGPT backend capacity is reported as account-level, not as one full model", async () => {
+  await chinese()
+
+  // Every bare GPT id goes through one credential and one endpoint. Telling the reader to "换一个
+  // 模型" sent them through every sibling in the group, each failing for the same reason.
+  for (const raw of ["server_is_overloaded", "Flex capacity unavailable"]) {
+    const message = describeError(new Error(`The provider answered ${raw} after 316s`))
+    expect(message).toContain("ChatGPT")
+    expect(message).toContain("GPT 型号会一起排队")
+    expect(message).not.toMatch(/server_is_overloaded|Flex capacity/i)
+  }
+  // A single model being full is still model-level: switching *is* the remedy.
+  expect(describeError(new Error("Selected model is at capacity"))).toContain("换一个模型")
+})
+
+test("a missing ChatGPT credential says a sign-in is needed, not a model switch", async () => {
+  await chinese()
+
+  const message = describeError(new Error("router: native models need a ChatGPT sign-in"))
+  expect(message).toContain("登录")
+  expect(message).toContain("换型号没用")
+  expect(message).not.toMatch(/native models need/i)
+})
+
+test("a message that is already localized is not formatted a second time", async () => {
+  await chinese()
+
+  const once = describeError(new Error("stream disconnected before completion"))
+  expect(once).toBe("与模型的连接中断了，请重试。")
+  // The chat package installs `describeError` globally and the host runs it again for the toast.
+  // A second pass must not add another "操作没有完成：" to a finished Chinese sentence.
+  expect(describeError(new Error(once))).toBe(once)
+  const led = `操作没有完成：${once}`
+  expect(describeError(new Error(led))).toBe(led)
+})
+
+test("a localized message with interpolation is not formatted a second time", async () => {
+  await chinese()
+
+  // `error.providerHttpError` interpolates {{status}}. The idempotence check must compare against
+  // the rendered sentence, not the raw `...HTTP {{status}}...` template, or the second pass adds
+  // another "操作没有完成：" and the two error cards no longer even read the same.
+  const once = describeError(new Error("The provider returned HTTP 503: upstream down"))
+  expect(once).toContain("HTTP 503")
+  expect(describeError(new Error(once))).toBe(once)
+})
+
+test("a vendor 404 names the endpoint problem instead of dumping JSON", async () => {
+  await chinese()
+
+  const message = describeError(
+    new Error('unexpected status 404 Not Found: {"path":"/v4/responses"}, url: http://127.0.0.1:55556/alwith/responses')
+  )
+  expect(message).toContain("404")
+  expect(message).toContain("Base URL")
+  expect(message).not.toContain("unexpected status")
+})
+
+test("the bridge's own stream timeout names the real cause", async () => {
+  await chinese()
+
+  const message = describeError(new Error("bridge_stream_timeout: 上游超过 20 分钟没有输出"))
+  expect(message).toContain("长时间没有输出")
+  expect(message).not.toMatch(/bridge_stream_timeout/)
+})
+
+test("account-level capacity keeps its account-level wording in English", async () => {
+  await initI18n("en")
+
+  expect(describeError(new Error("server_is_overloaded"))).toContain("GPT model on this account")
+  expect(describeError(new Error("Quota exceeded. Check your plan and billing details."))).toContain(
+    "account-level"
+  )
 })

@@ -31,12 +31,20 @@ import {
 } from "./codex/navigation-audio"
 import { navigationSoundStore } from "./codex/navigation-sound-store"
 
+let lastReported: { message: string; at: number } | null = null
+
 function reportError(error: unknown) {
   // Cancelling a queued message is a user action, not a failure: the composer has already put
   // the text back, and a red toast would read as an error.
   if (isQueueCancelled(error)) return
   const description = (error as ReportedError | null)?.description
   const message = describeError(error)
+  // One engine failure reaches both the chat package's inline card and this toast. The formatter
+  // is idempotent now, so they read the same — collapse the pair anyway, or two identical cards
+  // still look like two separate interruptions.
+  const now = Date.now()
+  if (lastReported !== null && lastReported.message === message && now - lastReported.at < 2_000) return
+  lastReported = { message, at: now }
   if (description) toast.error(message, { description })
   else toast.error(message)
 }

@@ -22,7 +22,23 @@ const RULES: Rule[] = [
   // the broader auth/network rules — "Authentication required" and a failed token refresh are
   // sign-in problems with a specific remedy, not generic "not signed in" hints.
   {
-    match: /Selected model is at capacity|Flex capacity unavailable|server_is_overloaded|\bat capacity\b/i,
+    // `server_is_overloaded` is a ChatGPT backend error code, and Flex capacity is an account
+    // tier. Both are **account-level**: every bare GPT id shares one credential, one endpoint
+    // and one quota bucket (`forward_chatgpt` in bridge.rs), so switching from one GPT model to
+    // another cannot route around them. Saying "换一个模型" here sent the reader in circles.
+    // A bare "at capacity" elsewhere — a pool, a transcript quoting an old error — is not this.
+    match: /server_is_overloaded|Flex capacity unavailable/i,
+    key: "error.chatgptAtCapacity"
+  },
+  {
+    // The bridge answers this when the ChatGPT credential file is missing. The remedy is a
+    // sign-in, not a model switch: no GPT model can run without that one token.
+    match: /native models need a ChatGPT sign-in/i,
+    key: "error.nativeSignInRequired"
+  },
+  {
+    // A single model being full is genuinely model-level; switching is the right advice.
+    match: /Selected model is at capacity/i,
     key: "error.modelAtCapacity"
   },
   {
@@ -375,6 +391,20 @@ const RULES: Rule[] = [
     key: "error.contextLimit"
   },
   {
+    // A 404 from the vendor is not a model failure: the *endpoint* does not exist. The usual cause
+    // is a Chat Completions base URL (`/paas/v4`, `/chat/completions`) used with the Responses wire
+    // API this app always speaks. Name the remedy instead of dumping the vendor's raw JSON.
+    match: /unexpected status 404\b/i,
+    key: "error.providerEndpointNotFound"
+  },
+  {
+    // The bridge ends a stream on the same 20-minute idle / 60-minute hard clocks as the UI and
+    // writes one structured error event before EOF. Name that cause instead of showing the generic
+    // "重试" a truncated socket used to produce.
+    match: /bridge_stream_timeout/i,
+    key: "error.streamTimedOut"
+  },
+  {
     match: /stream disconnected|unexpected end of stream|connection reset by peer|error decoding response body/i,
     key: "error.streamInterrupted"
   },
@@ -581,6 +611,46 @@ function unwrapBody(message: string): string {
   }
 }
 
+/**
+ * `describeError` is also installed as a global formatter for the chat package, so one engine
+ * failure can pass through it twice: once for the inline card, once for the host's error toast.
+ * A sentence that is already localized must come back unchanged. Otherwise the second pass adds
+ * "操作没有完成：" to a finished Chinese sentence and the reader sees two different error cards
+ * for a single interruption.
+ */
+function alreadyDescribed(message: string, lead: string): boolean {
+  if (message.startsWith(`${lead}：`)) return true
+  for (const rule of RULES) {
+    const translated = i18n.t(rule.key)
+    if (typeof translated !== "string" || translated.length < 4) continue
+    // Without values, i18next hands back the template itself (`…HTTP {{status}}…`) while the
+    // sentence on screen has the value filled in (`…HTTP 503…`). Compare every fixed fragment in
+    // order, so interpolated rules are recognized as already localized too — otherwise the second
+    // pass adds another "操作没有完成：" and the two error cards no longer even read the same.
+    const parts = translated.split(/\{\{[^}]*\}\}/)
+    if (parts.length === 1) {
+      if (message.startsWith(translated)) return true
+      continue
+    }
+    const head = parts[0] ?? ""
+    if (head !== "" && !message.startsWith(head)) continue
+    let cursor = head.length
+    let matched = true
+    for (const part of parts.slice(1)) {
+      if (part === "") continue
+      const at = message.indexOf(part, cursor)
+      if (at < 0) {
+        matched = false
+        break
+      }
+      cursor = at + part.length
+    }
+    const tail = parts[parts.length - 1] ?? ""
+    if (matched && cursor > 0 && (tail === "" || message.endsWith(tail))) return true
+  }
+  return false
+}
+
 export function describeError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error)
   const message = unwrapBody(unwrap(raw))
@@ -598,7 +668,8 @@ export function describeError(error: unknown): string {
   // only. 189 `throw new Error("…")` sites are internal assertions; translating each one is neither
   // feasible nor useful, and this covers every one of them at the exit (2026-11-09).
   const lead = i18n.t("errors.didNotFinish")
-  return typeof lead === "string" && lead !== "" ? `${lead}：${message}` : message
+  if (typeof lead !== "string" || lead === "" || alreadyDescribed(message, lead)) return message
+  return `${lead}：${message}`
 }
 
 /** The chat package renders engine text itself and cannot translate it; it asks the app. */

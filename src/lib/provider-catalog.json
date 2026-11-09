@@ -133,7 +133,7 @@
   {
     "id": "zhipu",
     "name": "智谱 GLM",
-    "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+    "baseUrl": "https://open.bigmodel.cn/api/v1",
     "keyUrl": "https://open.bigmodel.cn/usercenter/apikeys",
     "favicon": "https://bigmodel.cn/static/images/favicon.png",
     "models": [

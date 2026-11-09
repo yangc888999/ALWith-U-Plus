@@ -5,6 +5,7 @@ import {
   DEFAULT_PROVIDER_ID,
   baseUrlLooksLikeEndpoint,
   defaultModelFallback,
+  displayModelLabel,
   normalizeProviderBaseUrl,
   gatewayModelId,
   nativeCatalogStatus,
@@ -13,10 +14,37 @@ import {
   providerGroups,
   PROVIDERS,
   type ProviderSnapshot,
+  rememberNativeOverrides,
   resolveSessionModel,
   retiredNativeRows,
-  servedNativeRows
+  servedNativeRows,
+  setProviderSnapshot
 } from "../providers"
+
+test("displayModelLabel resolves a renamed gateway model from the saved overrides", () => {
+  setProviderSnapshot({
+    revision: 9999,
+    appliedRevision: 9999,
+    status: "applied",
+    error: null,
+    providers: { deepseek: { configured: true, disabled: false, region: null, base_url: null } },
+    customProviders: [],
+    builtInModels: { deepseek: [{ api_id: "deepseek-flash", label: "闪电速答" }] },
+    managedProviders: []
+  } as ProviderSnapshot)
+  expect(displayModelLabel("gateway:deepseek:deepseek-flash", "DeepSeek-Flash")).toBe("闪电速答")
+})
+
+test("displayModelLabel resolves a renamed native GPT model", () => {
+  rememberNativeOverrides([{ api_id: "gpt-6.1-sol", label: "我的索尔" }])
+  expect(displayModelLabel("gpt-6.1-sol", "6.1 Sol")).toBe("我的索尔")
+  rememberNativeOverrides(null)
+})
+
+test("displayModelLabel keeps the fallback when the user never renamed the model", () => {
+  expect(displayModelLabel("gateway:qwen:qwen3", "Qwen3")).toBe("Qwen3")
+  expect(displayModelLabel("gpt-6-astra")).toBeNull()
+})
 
 test("every built-in provider is offered, and a new chat starts on the bundled DeepSeek-Flash", () => {
   expect(PROVIDERS.map((provider) => provider.id)).toEqual([
@@ -365,4 +393,16 @@ test("a pasted endpoint is normalized back to the Responses API root", () => {
   expect(normalizeProviderBaseUrl("https://api.deepseek.com/")).toBe("https://api.deepseek.com")
   expect(baseUrlLooksLikeEndpoint("https://api.deepseek.com/")).toBe(false)
   expect(normalizeProviderBaseUrl("")).toBe("")
+})
+
+test("a built-in provider never points at a Chat Completions-only endpoint", () => {
+  // Codex always speaks the Responses wire API and the bridge appends `/responses` to the base
+  // URL. Zhipu's `/api/paas/v4` is its Chat Completions endpoint, so every turn there answered
+  // 404 `{"path":"/v4/responses"}` until the catalog was pointed at `/api/v1`.
+  const zhipu = PROVIDERS.find((provider) => provider.id === "zhipu")
+  expect(zhipu?.baseUrl).toBe("https://open.bigmodel.cn/api/v1")
+  for (const provider of PROVIDERS) {
+    if (typeof provider.baseUrl !== "string") continue
+    expect(provider.baseUrl).not.toContain("/paas/v4")
+  }
 })
