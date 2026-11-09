@@ -257,7 +257,17 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
         .map_err(|error| format!("read body: {error}"))?;
     let mut parsed: Value = match serde_json::from_slice(&body) {
         Ok(value) => value,
-        Err(_) => return relay(request, "", &format!("{upstream_base}/responses"), authorization, &[], body),
+        Err(_) => {
+            return relay(
+                request,
+                "",
+                &format!("{upstream_base}/responses"),
+                authorization,
+                &[],
+                body,
+                false,
+            )
+        }
     };
     if strip_web_search_tools(&mut parsed) > 0 {
         log::info!("bridge: dropped web_search tool declaration(s) the gateway cannot run");
@@ -269,7 +279,9 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
         &format!("{upstream_base}/responses"),
         authorization,
         &[],
-        sanitize(&payload)
+        sanitize(&payload),
+        // A direct gateway route, not the ChatGPT backend: its error vocabulary is the vendor's.
+        false
     )
 }
 
@@ -310,7 +322,18 @@ fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
     };
     let payload = if route.sanitize { sanitize(&payload) } else { payload };
     let authorization = format!("Bearer {}", route.bearer_token);
-    relay(request, &selection, &format!("{}/responses", route.base_url), Some(&authorization), &[], payload)
+    relay(
+        request,
+        &selection,
+        &format!("{}/responses", route.base_url),
+        Some(&authorization),
+        &[],
+        payload,
+        // Gateway vendors neither emit ChatGPT's `server_is_overloaded` nor share its retry
+        // behaviour. Watching stalls here is what made a DeepSeek turn that merely quoted the
+        // phrase look overloaded, and a slow gateway answer look like a ChatGPT capacity wait.
+        false
+    )
 }
 
 /// POST /<router>/responses for a model Codex owns itself: sign it with the ChatGPT token and
@@ -359,7 +382,9 @@ fn forward_chatgpt(request: tiny_http::Request, parsed: &Value) -> Result<(), St
         CHATGPT_RESPONSES_URL,
         Some(&authorization),
         &headers,
-        payload
+        payload,
+        // The only route whose backend speaks `server_is_overloaded`.
+        true
     )
 }
 
@@ -397,6 +422,10 @@ fn drop_reasoning_items(body: &[u8]) -> Option<Vec<u8>> {
 /// sleeping and retrying **without emitting a single event**, so the reader sits at「正在思考」
 /// for five minutes with no way to know a different model would answer right now. Watching the
 /// bytes as they pass through costs nothing and lets the UI offer a switch.
+///
+/// This code belongs to that backend alone. Only a complete JSON `data:` event with that
+/// `error.code` counts, and both stall watches are armed only on the native ChatGPT route — see
+/// `overload_error_line` and `relay`'s `watch_stall` argument.
 const OVERLOAD_MARKER: &[u8] = b"server_is_overloaded";
 
 /// How long an upstream turn may accept the request without emitting **one byte** before the UI
@@ -409,18 +438,47 @@ const OVERLOAD_MARKER: &[u8] = b"server_is_overloaded";
 /// test is "accepted, then quiet" vs "never accepted", and only the latter is a stall.
 const NO_ACK_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Reads the `retry-after` value out of the same SSE error event (seconds, if present).
-fn retry_after_seconds(tail: &[u8]) -> Option<u64> {
-    let needle = b"\"retry-after\"";
-    let at = tail.windows(needle.len()).rposition(|window| window == needle)?;
-    let rest = &tail[at + needle.len()..];
-    let start = rest.iter().position(u8::is_ascii_digit)?;
-    let end = rest[start..]
-        .iter()
-        .position(|byte| !byte.is_ascii_digit())
-        .map(|offset| start + offset)
-        .unwrap_or(rest.len());
-    std::str::from_utf8(&rest[start..end]).ok()?.parse().ok()
+/// The one SSE data line that actually is a backend capacity error, if any.
+///
+/// `server_is_overloaded` is a ChatGPT error *code*, not a phrase. It also appears in model output
+/// (a reader asking about it), tool results and replayed transcripts. Matching the raw bytes made a
+/// DeepSeek turn that merely quoted the phrase look like a five-minute capacity wait while its
+/// tokens were still being billed. Require the whole line to be a JSON `data:` event whose
+/// `error.code` is the marker before reporting anything.
+fn overload_error_line(tail: &[u8]) -> Option<&[u8]> {
+    for line in tail.split(|byte| *byte == b'\n') {
+        if !line
+            .windows(OVERLOAD_MARKER.len())
+            .any(|window| window == OVERLOAD_MARKER)
+        {
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(line) else { continue };
+        let Some(body) = text.trim().strip_prefix("data:") else { continue };
+        let Ok(value) = serde_json::from_str::<Value>(body.trim()) else { continue };
+        let code = value
+            .get("error")
+            .and_then(|error| error.get("code"))
+            .and_then(Value::as_str);
+        if code == Some("server_is_overloaded") {
+            return Some(line);
+        }
+    }
+    None
+}
+
+/// Reads `retry-after` from that same structured error event — never from the first number that
+/// happens to follow the marker somewhere in the stream.
+fn retry_after_seconds(event_line: &[u8]) -> Option<u64> {
+    let text = std::str::from_utf8(event_line).ok()?.trim();
+    let body = text.strip_prefix("data:")?.trim();
+    let value: Value = serde_json::from_str(body).ok()?;
+    let raw = value.get("error")?.get("headers")?.get("retry-after")?;
+    match raw {
+        Value::String(seconds) => seconds.parse().ok(),
+        Value::Number(seconds) => seconds.as_u64(),
+        _ => None,
+    }
 }
 
 /// Why a turn is producing nothing, as far as the upstream is concerned.
@@ -430,6 +488,19 @@ fn retry_after_seconds(tail: &[u8]) -> Option<u64> {
 /// fire while the turn is running a local tool — that window has no upstream request in flight.
 const REASON_OVERLOADED: &str = "overloaded";
 const REASON_NO_ACK: &str = "no_ack";
+
+/// The bridge used to arm `reqwest`'s request timeout at 600s. That clock runs from the first
+/// connect byte until the **response body ends**, so on an SSE turn it was a ten-minute wall-clock
+/// cap, not an idle cap: a measured healthy `gpt-6.1-sol` turn ran 853s, and the backend can
+/// legitimately sleep `retry-after: 300` without emitting a byte. When it fired, the read error
+/// propagated through `OverloadWatch::read` into `tiny_http`, which logged
+/// `respond: request or response body error` and dropped the socket — the engine then reported
+/// `stream disconnected`. These two limits are the bridge's half of the UI's own contract in
+/// `client.ts#promptWithTimeout`: silence, not elapsed wall time, ends a stream.
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+const STREAM_HARD_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+/// Marker the UI localizes when the bridge ends a stream on its own clocks.
+const STREAM_TIMEOUT_CODE: &str = "bridge_stream_timeout";
 
 fn publish_stall(model: &str, reason: &str, retry_after: Option<u64>) {
     log::warn!("bridge: turn stalled model={model} reason={reason} retry-after={retry_after:?}s");
@@ -441,6 +512,130 @@ fn publish_stall(model: &str, reason: &str, retry_after: Option<u64>) {
     }
 }
 
+/// One piece of the upstream SSE stream, or the reason it stopped.
+enum StreamChunk {
+    Data(Vec<u8>),
+    End,
+    Failed(String),
+}
+
+/// Feeds `tiny_http` from a dedicated upstream reader thread.
+///
+/// Keeping the blocking `reqwest` read on its own thread lets us wait for the *next chunk* with a
+/// timeout instead of letting a whole-request timeout cut off a live turn. When either clock
+/// expires, or the upstream read fails, one structured error event is written before EOF; the
+/// old behaviour dropped the socket mid-response and reached the screen as a generic "连接中断".
+struct StreamReader {
+    rx: std::sync::mpsc::Receiver<StreamChunk>,
+    pending: Vec<u8>,
+    position: usize,
+    idle: Duration,
+    deadline: Instant,
+    finished: bool,
+    /// Set when tiny_http is done with this reader (the client disconnected or the stream ended),
+    /// so the upstream reader thread stops pulling bytes the moment it finishes its current read.
+    client_gone: Arc<AtomicBool>,
+}
+
+impl StreamReader {
+    fn new(
+        rx: std::sync::mpsc::Receiver<StreamChunk>,
+        idle: Duration,
+        hard: Duration,
+        client_gone: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            rx,
+            pending: Vec::new(),
+            position: 0,
+            idle,
+            deadline: Instant::now() + hard,
+            finished: false,
+            client_gone,
+        }
+    }
+
+    /// A final SSE event that says *why* the stream ended. Without it the client only sees a
+    /// truncated response and can offer nothing but "重试".
+    ///
+    /// Shape matters: codex 0.164 only understands the Responses API's `response.failed` event
+    /// (the binary carries `response.failed event received`; it has no handler for a bare
+    /// `type: "error"`). An `event: error` frame parses fine and is then ignored, so the engine
+    /// still ends the turn with `stream closed before response.completed` and our reason never
+    /// reaches the UI. `code`/`message` stay in the payload because error-text.ts matches the
+    /// `bridge_stream_timeout` reason there.
+    fn fail(&mut self, reason: &str) {
+        log::warn!("bridge: ending stream: {reason}");
+        let event = serde_json::json!({
+            "type": "response.failed",
+            "response": {
+                "status": "failed",
+                "error": {
+                    "code": STREAM_TIMEOUT_CODE,
+                    "message": format!("{STREAM_TIMEOUT_CODE}: {reason}")
+                }
+            }
+        })
+        .to_string();
+        // A blank line first: the upstream may have stopped in the middle of an event, and an
+        // event frame glued onto a half-written `data:` line is invalid JSON. An empty event is
+        // legal SSE, so the separator is harmless when the stream did end on a boundary.
+        self.pending = format!("\n\nevent: response.failed\ndata: {event}\n\n").into_bytes();
+        self.position = 0;
+        // The pending event still has to be delivered; the read after it returns EOF.
+        self.finished = true;
+    }
+}
+
+impl Drop for StreamReader {
+    fn drop(&mut self) {
+        self.client_gone.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Read for StreamReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if self.position < self.pending.len() {
+                let count = buf.len().min(self.pending.len() - self.position);
+                buf[..count].copy_from_slice(&self.pending[self.position..self.position + count]);
+                self.position += count;
+                return Ok(count);
+            }
+            if self.finished {
+                return Ok(0);
+            }
+            self.pending.clear();
+            self.position = 0;
+            let now = Instant::now();
+            if now >= self.deadline {
+                self.fail("本次请求已达到 60 分钟总上限");
+                continue;
+            }
+            let wait = self.idle.min(self.deadline - now);
+            match self.rx.recv_timeout(wait) {
+                Ok(StreamChunk::Data(bytes)) => self.pending = bytes,
+                Ok(StreamChunk::End) => {
+                    self.finished = true;
+                    return Ok(0);
+                }
+                Ok(StreamChunk::Failed(reason)) => self.fail(&format!("上游读取失败：{reason}")),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    self.fail("上游超过 20 分钟没有输出")
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    // The reader thread went away without even an `End` marker: the socket was
+                    // lost underneath us. A silent EOF here reads as a truncated answer; name it.
+                    self.fail("上游连接被关闭，没有收到结束标记")
+                }
+            }
+        }
+    }
+}
+
 /// A pass-through reader: every byte still reaches Codex unchanged, we only look at a bounded
 /// tail so an SSE event split across two reads is still recognized.
 struct OverloadWatch<R> {
@@ -448,9 +643,10 @@ struct OverloadWatch<R> {
     model: String,
     tail: Vec<u8>,
     fired: bool,
-    /// The marker can be seen before the rest of its SSE event arrives, so wait for the event to
-    /// finish before publishing — otherwise the reader never learns how long the retry will take.
-    pending: bool,
+    /// `server_is_overloaded` belongs to the ChatGPT backend. Gateway turns (DeepSeek, Qwen,
+    /// Kimi, …) have their own error vocabularies, and a gateway response merely containing that
+    /// phrase is never a capacity report — so the watch is only armed on the native route.
+    enabled: bool,
     /// Set on the first byte the upstream emits. `NoAckWatch` reads it to tell "accepted, then
     /// thinking" apart from "never accepted at all".
     acked: Arc<AtomicBool>,
@@ -497,14 +693,13 @@ impl<R: Read> Read for OverloadWatch<R> {
         } else {
             self.acked.store(true, Ordering::Relaxed);
         }
-        if self.fired {
+        if self.fired || !self.enabled {
             return Ok(count);
         }
+        // A stream that ended without a structured error event is simply finished. The old code
+        // published an overload here whenever the phrase had been seen anywhere, which is exactly
+        // how a quoted phrase in normal output turned into a "model at capacity" row.
         if count == 0 {
-            if self.pending {
-                self.fired = true;
-                publish_stall(&self.model, REASON_OVERLOADED, None);
-            }
             return Ok(count);
         }
         self.tail.extend_from_slice(&buf[..count]);
@@ -512,29 +707,29 @@ impl<R: Read> Read for OverloadWatch<R> {
             let excess = self.tail.len() - 32_768;
             self.tail.drain(..excess);
         }
-        if !self.pending && self.tail.windows(OVERLOAD_MARKER.len()).any(|window| window == OVERLOAD_MARKER) {
-            self.pending = true;
-        }
-        if self.pending {
-            let at = self
-                .tail
-                .windows(OVERLOAD_MARKER.len())
-                .rposition(|window| window == OVERLOAD_MARKER)
-                .unwrap_or(0);
-            let after = &self.tail[at + OVERLOAD_MARKER.len()..];
-            if let Some(seconds) = retry_after_seconds(after) {
-                self.fired = true;
-                publish_stall(&self.model, REASON_OVERLOADED, Some(seconds));
-            } else if after.contains(&b'\n') {
-                self.fired = true;
-                publish_stall(&self.model, REASON_OVERLOADED, None);
-            }
+        if let Some(line) = overload_error_line(&self.tail) {
+            self.fired = true;
+            publish_stall(&self.model, REASON_OVERLOADED, retry_after_seconds(line));
         }
         Ok(count)
     }
 }
 
+/// Both stall observers are armed together, and only for the native ChatGPT route.
+///
+/// `server_is_overloaded` is a ChatGPT error code and the two-minute no-ack clock describes
+/// ChatGPT's own retry behaviour. Gateway vendors have their own error vocabulary and retry
+/// policy; watching half of a gateway request used to publish `model:stalled` for a vendor that
+/// had said nothing of the kind, and the UI then attached that notice to whichever turn happened
+/// to be running. Keeping the decision in one place makes a half-watched route impossible.
+fn stall_observers(native_route: bool) -> (bool, bool) {
+    (native_route, native_route)
+}
+
 /// Streams one upstream turn back to Codex, preserving status codes and the SSE byte stream.
+///
+/// `watch_stall` is true only for `forward_chatgpt`. It gates **both** the structured overload
+/// reader and the no-ack timer; see `stall_observers`.
 fn relay(
     request: tiny_http::Request,
     model: &str,
@@ -542,12 +737,16 @@ fn relay(
     authorization: Option<&str>,
     headers: &[(&str, &str)],
     payload: Vec<u8>,
+    watch_stall: bool,
 ) -> Result<(), String> {
     let client = reqwest::blocking::Client::builder()
         // A route that silently swallows packets would otherwise hold the connect until the OS
         // gives up (75s on macOS), and the user reads that as "正在思考" with nothing happening.
         .connect_timeout(std::time::Duration::from_secs(15))
-        .timeout(std::time::Duration::from_secs(600))
+        // Absolute last resort only, aligned with the UI's 60-minute hard cap. This is NOT an
+        // idle limit — `StreamReader` owns silence detection. A 600s timeout here used to cut
+        // off healthy long turns at ten minutes and surface as "与模型的连接中断了".
+        .timeout(STREAM_HARD_TIMEOUT)
         .build()
         .map_err(|error| format!("http client: {error}"))?;
     let mut request_builder = client.post(url).header("Content-Type", "application/json");
@@ -640,17 +839,56 @@ fn relay(
         tiny_http::Header::from_bytes(&b"Cache-Control"[..], &b"no-cache"[..]).unwrap(),
         tiny_http::Header::from_bytes(&b"Connection"[..], &b"keep-alive"[..]).unwrap(),
     ];
+    // Read the upstream on its own thread so a silent socket can be timed out per chunk. A bounded
+    // channel gives us back-pressure, and dropping the receiver makes every later `send` fail
+    // immediately. `client_gone` additionally stops the loop after the current read, so an active
+    // upstream does not keep streaming into a channel nobody reads. A read that is *already*
+    // blocked while the upstream is silent cannot be interrupted (reqwest's blocking reader has no
+    // cancellation); that one still ends at the 60-minute whole-request timeout, not forever.
+    let (tx, rx) = std::sync::mpsc::sync_channel::<StreamChunk>(64);
+    let client_gone = Arc::new(AtomicBool::new(false));
+    let upstream_stop = Arc::clone(&client_gone);
+    std::thread::spawn(move || {
+        let mut upstream = response;
+        let mut chunk = [0u8; 8192];
+        loop {
+            if upstream_stop.load(Ordering::Relaxed) {
+                break;
+            }
+            match upstream.read(&mut chunk) {
+                Ok(0) => {
+                    let _ = tx.send(StreamChunk::End);
+                    break;
+                }
+                Ok(count) => {
+                    if tx.send(StreamChunk::Data(chunk[..count].to_vec())).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    log::warn!("bridge: upstream stream read failed: {error}");
+                    let _ = tx.send(StreamChunk::Failed(error.to_string()));
+                    break;
+                }
+            }
+        }
+    });
     let acked = Arc::new(AtomicBool::new(false));
     let closed = Arc::new(AtomicBool::new(false));
+    let (watch_overload, watch_no_ack_enabled) = stall_observers(watch_stall);
     // Start the no-ack clock with the request, not with the UI: only the bridge knows whether a turn
-    // is waiting on the upstream or on this machine's own tool execution.
-    watch_no_ack(model, acked.clone(), closed.clone());
+    // is waiting on the upstream or on this machine's own tool execution. Gateway routes are not
+    // watched — a vendor that never answers is that vendor's business, not a ChatGPT capacity
+    // report, and an unmatched event would be attached to some other model's turn.
+    if watch_no_ack_enabled {
+        watch_no_ack(model, acked.clone(), closed.clone());
+    }
     let watched = OverloadWatch {
-        inner: response,
+        inner: StreamReader::new(rx, STREAM_IDLE_TIMEOUT, STREAM_HARD_TIMEOUT, client_gone),
         model: model.to_string(),
         tail: Vec::new(),
         fired: false,
-        pending: false,
+        enabled: watch_overload,
         acked,
         closed,
     };
@@ -819,41 +1057,171 @@ mod tests {
         assert!(drop_reasoning_items(b"not json").is_none());
     }
 
-    #[test]
-    fn overload_error_yields_its_retry_after() {
-        let event = br#"data: {"type":"error","error":{"code":"server_is_overloaded","headers":{"retry-after": "316","retry-after-ms":"316000"}}}"#;
-        assert_eq!(retry_after_seconds(event), Some(316));
-        assert_eq!(retry_after_seconds(br#"data: {"type":"response.created"}"#), None);
-    }
-
-    #[test]
-    fn overload_watch_passes_every_byte_through_and_fires_once() {
-        let stream = b"data: {\"type\":\"error\",\"error\":{\"code\":\"server_is_overloaded\",\"headers\":{\"retry-after\":\"324\"}}".to_vec();
-        let mut watched = OverloadWatch {
-            inner: std::io::Cursor::new(stream.clone()),
+    fn watched(stream: Vec<u8>, enabled: bool) -> OverloadWatch<std::io::Cursor<Vec<u8>>> {
+        OverloadWatch {
+            inner: std::io::Cursor::new(stream),
             model: "gpt-6.1-sol".to_string(),
             tail: Vec::new(),
             fired: false,
-            pending: false,
+            enabled,
             acked: Arc::new(AtomicBool::new(false)),
             closed: Arc::new(AtomicBool::new(false)),
-        };
+        }
+    }
+
+    fn drain(reader: &mut OverloadWatch<std::io::Cursor<Vec<u8>>>) -> Vec<u8> {
         let mut received = Vec::new();
-        // Small reads prove the marker is still found when the SSE event is split across chunks.
+        // Small reads prove a split SSE event is still recognized as a whole line.
         let mut chunk = [0u8; 7];
         loop {
-            let count = watched.read(&mut chunk).unwrap();
+            let count = reader.read(&mut chunk).unwrap();
             if count == 0 {
                 break;
             }
             received.extend_from_slice(&chunk[..count]);
         }
-        assert_eq!(received, stream, "the engine must still see the untouched SSE bytes");
-        assert!(watched.fired);
-        assert_eq!(retry_after_seconds(&watched.tail), Some(324));
+        received
+    }
+
+    fn stream_reader(
+        chunks: Vec<StreamChunk>,
+        idle: Duration,
+        hard: Duration,
+    ) -> (StreamReader, std::sync::mpsc::SyncSender<StreamChunk>) {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<StreamChunk>(64);
+        for chunk in chunks {
+            tx.send(chunk).unwrap();
+        }
+        (StreamReader::new(rx, idle, hard, Arc::new(AtomicBool::new(false))), tx)
+    }
+
+    #[test]
+    fn dropping_the_reader_tells_the_upstream_thread_to_stop() {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<StreamChunk>(1);
+        let flag = Arc::new(AtomicBool::new(false));
+        let reader = StreamReader::new(rx, Duration::from_secs(60), Duration::from_secs(60), Arc::clone(&flag));
+        assert!(!flag.load(Ordering::Relaxed), "a live stream is not cancelled");
+        drop(reader);
+        assert!(flag.load(Ordering::Relaxed), "the upstream loop stops once tiny_http is done");
+        drop(tx);
+    }
+
+    fn drain_stream(reader: &mut StreamReader) -> Vec<u8> {
+        let mut received = Vec::new();
+        // Small reads prove a chunk spanning several reads is delivered in order.
+        let mut chunk = [0u8; 7];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(count) => received.extend_from_slice(&chunk[..count]),
+                Err(error) => panic!("a stream must never surface a read error: {}", error),
+            }
+        }
+        received
+    }
+
+    #[test]
+    fn stream_reader_delivers_upstream_bytes_untouched() {
+        let (mut reader, _tx) = stream_reader(
+            vec![
+                StreamChunk::Data(b"data: {\"type\":\"a\"}\n\n".to_vec()),
+                StreamChunk::Data(b"data: {\"type\":\"b\"}\n\n".to_vec()),
+                StreamChunk::End,
+            ],
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+        );
+        let text = String::from_utf8(drain_stream(&mut reader)).unwrap();
+        assert_eq!(text, "data: {\"type\":\"a\"}\n\ndata: {\"type\":\"b\"}\n\n");
+    }
+
+    #[test]
+    fn a_silent_upstream_gets_a_reason_instead_of_a_dropped_socket() {
+        let (mut reader, _tx) = stream_reader(vec![], Duration::from_millis(10), Duration::from_secs(60));
+        let text = String::from_utf8(drain_stream(&mut reader)).unwrap();
+        // `response.failed` is the only failure event codex 0.164 acts on; a bare `event: error`
+        // parses and is then ignored, leaving the generic "stream closed" message on screen.
+        assert!(text.starts_with("\n\n"), "an event frame must not glue onto a half-written one: {text}");
+        assert!(text.contains("event: response.failed"), "{}", text);
+        assert!(text.contains("\"type\":\"response.failed\""), "{}", text);
+        assert!(text.contains("\"status\":\"failed\""), "{}", text);
+        assert!(text.contains(STREAM_TIMEOUT_CODE), "{}", text);
+    }
+
+    #[test]
+    fn a_lost_upstream_thread_is_named_instead_of_ending_silently() {
+        let (mut reader, tx) = stream_reader(vec![], Duration::from_secs(60), Duration::from_secs(60));
+        drop(tx);
+        let text = String::from_utf8(drain_stream(&mut reader)).unwrap();
+        assert!(text.contains("event: response.failed"), "{}", text);
+        assert!(text.contains("上游连接被关闭"), "{}", text);
+    }
+
+    #[test]
+    fn an_upstream_read_error_becomes_a_structured_event() {
+        let (mut reader, _tx) = stream_reader(
+            vec![StreamChunk::Failed("connection reset".to_string())],
+            Duration::from_secs(60),
+            Duration::from_secs(60),
+        );
+        let text = String::from_utf8(drain_stream(&mut reader)).unwrap();
+        assert!(text.contains("connection reset"), "{}", text);
+        assert!(text.contains(STREAM_TIMEOUT_CODE), "{}", text);
+    }
+
+    #[test]
+    fn the_hard_cap_ends_a_stream_that_never_stops_emitting() {
+        let (mut reader, _tx) = stream_reader(vec![], Duration::from_secs(60), Duration::from_millis(0));
+        let text = String::from_utf8(drain_stream(&mut reader)).unwrap();
+        assert!(text.contains(STREAM_TIMEOUT_CODE), "{}", text);
+    }
+
+    #[test]
+    fn overload_error_yields_its_retry_after() {
+        let event = br#"data: {"type":"error","error":{"code":"server_is_overloaded","headers":{"retry-after": "316","retry-after-ms":"316000"}}}"#;
+        assert_eq!(retry_after_seconds(event), Some(316));
+        assert_eq!(retry_after_seconds(br#"data: {"type":"response.created"}"#), None);
+        assert_eq!(overload_error_line(event).map(<[u8]>::len), Some(event.len()));
+    }
+
+    #[test]
+    fn a_model_quoting_the_phrase_is_not_an_overload() {
+        // The reader asked about the error code; a gateway model answered with the phrase in normal
+        // output while its tokens were being billed. No error event, so no capacity notice.
+        let stream = b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"the backend replied server_is_overloaded with retry-after 316\"}\n\n".to_vec();
+        let mut watch = watched(stream.clone(), true);
+        assert_eq!(drain(&mut watch), stream, "the engine must still see the untouched SSE bytes");
+        assert!(!watch.fired);
+        assert!(overload_error_line(&watch.tail).is_none());
+    }
+
+    #[test]
+    fn a_gateway_stream_is_never_watched_for_a_chatgpt_error_code() {
+        let stream = b"data: {\"type\":\"error\",\"error\":{\"code\":\"server_is_overloaded\",\"headers\":{\"retry-after\":\"324\"}}}\n\n".to_vec();
+        let mut watch = watched(stream.clone(), false);
+        assert_eq!(drain(&mut watch), stream);
+        assert!(!watch.fired, "gateway vendors have their own error vocabulary");
+    }
+
+    #[test]
+    fn both_stall_observers_are_armed_together_and_only_on_the_native_route() {
+        // The overload reader alone used to be gated while the no-ack timer still ran for every
+        // vendor. A slow gateway turn then published `model:stalled` with a ChatGPT reason and
+        // the UI attached it to whichever GPT turn was open.
+        assert_eq!(stall_observers(false), (false, false));
+        assert_eq!(stall_observers(true), (true, true));
+    }
+
+    #[test]
+    fn overload_watch_passes_every_byte_through_and_fires_once() {
+        let stream = b"data: {\"type\":\"error\",\"error\":{\"code\":\"server_is_overloaded\",\"headers\":{\"retry-after\":\"324\"}}}\n\n".to_vec();
+        let mut watch = watched(stream.clone(), true);
+        assert_eq!(drain(&mut watch), stream, "the engine must still see the untouched SSE bytes");
+        assert!(watch.fired);
+        assert_eq!(retry_after_seconds(overload_error_line(&watch.tail).unwrap()), Some(324));
         // Bytes arrived, so the no-ack clock must have been cancelled for this request.
-        assert!(watched.acked.load(Ordering::Relaxed));
-        assert!(watched.closed.load(Ordering::Relaxed));
+        assert!(watch.acked.load(Ordering::Relaxed));
+        assert!(watch.closed.load(Ordering::Relaxed));
     }
 
     #[test]

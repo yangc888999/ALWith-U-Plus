@@ -49,6 +49,14 @@ fn router_overrides(base: Option<&str>, token: Option<&str>) -> Vec<String> {
     // while the reader waits for a turn that is going nowhere.
     overrides.push("model_providers.alwith.request_max_retries=0".to_string());
     overrides.push("model_providers.alwith.stream_max_retries=0".to_string());
+    // The engine's own per-chunk SSE idle timer defaults to ~300s. A healthy turn legitimately
+    // sits silent far longer than that (measured: one 309s gap between tool results on
+    // `gpt-6.1-sol` effort low; upstream `retry-after: 300` sleeps mid-turn), and with stream
+    // retries off the engine turns that silence into
+    // `stream disconnected before completion: idle timeout waiting for SSE` — the "model keeps
+    // interrupting" reports of 2026-11-08 (three turns of 425s/444s/525s, all healthy shapes).
+    // Align the engine with the app's one and only stream contract: 20 minutes of silence.
+    overrides.push("model_providers.alwith.stream_idle_timeout_ms=1200000".to_string());
     overrides.push(format!(
         "model_providers.alwith.experimental_bearer_token=\"{}\"",
         escape_toml(token.unwrap_or(DEFAULT_ROUTER_TOKEN))
@@ -271,6 +279,9 @@ mod tests {
             "model_providers.alwith.wire_api=\"responses\"",
             "model_providers.alwith.request_max_retries=0",
             "model_providers.alwith.stream_max_retries=0",
+            // The engine's default SSE idle cut (~300s) is shorter than a healthy turn's silent
+            // gaps; the launcher must carry the same 20-minute contract as bridge and UI.
+            "model_providers.alwith.stream_idle_timeout_ms=1200000",
             "model_providers.alwith.experimental_bearer_token=\"alwith-router\"",
         ] {
             assert!(values.iter().any(|value| value == expected), "missing {expected} in {values:?}");
