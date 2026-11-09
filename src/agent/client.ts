@@ -208,11 +208,18 @@ function modelValues(options: acp.SessionConfigOption[]): string[] {
  * the same group, then anything the catalog still offers. A retired id usually has a live sibling
  * that differs in one segment, and landing on a model from a whole other vendor would silently move
  * the conversation to a different price and context window.
+ *
+ * A tombstone is a **hint**, not a verdict. Filtering every retired id out of the candidate set
+ * at once made one transient refusal cascade: a couple of failures left `usable` empty, so the
+ * next prompt threw instead of switching, and every sibling model looked dead for a week. Prefer
+ * un-retired ids, but never let the hints empty the list.
  */
 function fallbackModel(options: acp.SessionConfigOption[], unsupported: string): string | null {
   const option = options.find((entry) => entry.category === "model" && entry.type === "select")
   if (option === undefined || !isSelectOption(option)) return null
-  const usable = modelValues(options).filter((value) => value !== unsupported && !isModelRetired(value))
+  const all = modelValues(options)
+  const preferred = all.filter((value) => value !== unsupported && !isModelRetired(value))
+  const usable = preferred.length > 0 ? preferred : all.filter((value) => value !== unsupported)
   if (usable.length === 0) return null
   // `gateway:vendor:model` is routing, not a family: only bare ids share a `gpt-6.1-` stem.
   const stem = unsupported.includes(":") ? null : unsupported.slice(0, unsupported.lastIndexOf("-") + 1)
@@ -1100,10 +1107,37 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * decided by what happened since the stop — any new turn clears the entry in `prompt`. A clock
    * would have to guess at that, and a chat left alone for ten minutes is exactly as finished as
    * one left for ten seconds.
+   *
+   * The clocks below are only used once that promise has settled. They are change detectors, not
+   * heartbeats: a live turn can stream for minutes without moving either one, so they must never
+   * outvote an in-flight prompt.
    */
   private readonly stoppedSessions = new Set<string>()
+  /**
+   * Sessions whose prompt promise has not settled yet — the only real live-turn heartbeat.
+   *
+   * The Runtime's `version` is monotonic per *state*, not per activity: it moves when the state or
+   * the interruption changes and deliberately stays put while a turn streams in one state. The
+   * session `clock` moves when a new timeline item is created, not while text chunks stream into
+   * an existing one. Neither can tell a healthy turn sitting inside a long tool call from a turn
+   * that died with the engine. The prompt promise can: it settles on any engine failure and is
+   * bounded by the 20-minute idle / 60-minute hard watchdog below.
+   */
+  private readonly promptInFlight = new Map<string, number>()
   /** The last time a session's Runtime run row actually changed (see `runtimeRunningFresh`). */
   private readonly runChanges = new Map<string, { signature: string; at: number }>()
+  /** The last time a session's own `clock` moved (see `sessionClockFresh`). */
+  private readonly sessionClockChanges = new Map<string, { clock: number; at: number }>()
+
+  private beginPrompt(id: string): void {
+    this.promptInFlight.set(id, (this.promptInFlight.get(id) ?? 0) + 1)
+  }
+
+  private endPrompt(id: string): void {
+    const remaining = (this.promptInFlight.get(id) ?? 1) - 1
+    if (remaining > 0) this.promptInFlight.set(id, remaining)
+    else this.promptInFlight.delete(id)
+  }
 
   /**
    * Whether the conversation is mid-turn right now.
@@ -1122,9 +1156,53 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * window, so the protection against switching mid-turn is unchanged.
    */
   private sessionBusy(id: string): boolean {
+    // An unsettled prompt is a live turn by definition, whatever the two change-detector clocks
+    // say. Without this guard a healthy turn silent for five minutes inside a tool call (or the
+    // backend's `retry-after: 300` sleep) reads stalled, and the parked-switch watcher lands a
+    // `setConfig` plus `cancel` in the middle of its stream — "stream disconnected".
+    if (this.promptInFlight.has(id)) return true
     const session = this.state.sessions[id]
-    if (session !== undefined && session.state !== "idle") return true
+    // A turn that died with an error often never delivers its final update, leaving `state` at
+    // "running" forever. Trusting that flag unconditionally parked every later model pick behind
+    // a turn that would never settle — one failed model made the entire conversation unusable on
+    // every other model. So a ghost turn is released once **both** clocks have gone stale.
+    //
+    // It must be both: a healthy turn can sit silent for minutes inside a single tool call or an
+    // upstream `retry-after` sleep, during which the session clock does not move. Reading only
+    // that clock declares a live turn idle, and the parked-switch watcher then lands a `setConfig`
+    // plus `cancel` in the middle of its stream — "stream disconnected before completion".
+    if (session !== undefined && session.state !== "idle")
+      return this.sessionClockFresh(id, session.clock) || this.runtimeRunningFresh(id)
     return this.runtimeRunningFresh(id)
+  }
+
+  /** Whether a session that still reads "running" has actually produced anything recently. */
+  private sessionClockFresh(id: string, clock: number): boolean {
+    const now = Date.now()
+    const seen = this.sessionClockChanges.get(id)
+    if (seen === undefined) {
+      // A resumed session arrives with the clock it had: honour it, so a minutes-old dead turn
+      // reads stale immediately instead of buying another full window.
+      const at = clock > 0 && clock <= now ? clock : now
+      this.sessionClockChanges.set(id, { clock, at })
+      return now - at < STALE_RUN_STATE_MS
+    }
+    if (seen.clock !== clock) {
+      this.sessionClockChanges.set(id, { clock, at: now })
+      return true
+    }
+    return now - seen.at < STALE_RUN_STATE_MS
+  }
+
+  /** A turn that stopped producing without telling anyone it ended. */
+  private stalledTurn(id: string): boolean {
+    // Only a settled prompt can be a ghost. While the promise is still pending the app's own
+    // watchdog owns the turn; declaring it stalled here would tear down a live stream.
+    if (this.promptInFlight.has(id)) return false
+    const session = this.state.sessions[id]
+    if (session === undefined || session.state === "idle") return false
+    if (this.runtimeRunningFresh(id)) return false
+    return !this.sessionClockFresh(id, session.clock)
   }
 
   /** True while the Runtime reports a turn that is genuinely still alive (see `sessionBusy`). */
@@ -1136,8 +1214,12 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // own `lastActivityAt`: that stamp is refreshed on every republish, so a row left behind by a
     // turn that died with the engine keeps looking alive forever. A parked model switch then waits
     // on a turn that will never settle — the "本轮后切换" badge stuck on screen while every retry
-    // reads busy. A live turn republishes with a new version well inside this window, so the guard
-    // against switching mid-turn is unchanged.
+    // reads busy.
+    //
+    // This is a change detector, NOT a heartbeat: the Runtime's `version` only moves when the
+    // state or the interruption changes, never with activity inside one state. A live turn is
+    // kept busy by `promptInFlight`; this clock only decides whether a leftover row has gone
+    // quiet once its prompt has settled.
     const changed = this.runChanges.get(id)?.at ?? 0
     return Date.now() - changed < STALE_RUN_STATE_MS
   }
@@ -1254,6 +1336,26 @@ export class CodexClient extends CodexAcpClient<AppState> {
           // now": end the turn and write the choice instead of parking it behind a turn that is
           // already over.
           if (await this.switchRightAfterStop(id, configId, value, requested)) return
+          // A turn that died with an error never delivers its final update. Parking every pick
+          // behind that ghost is what made "one model failed" read as "no model works in this
+          // chat": the badge stayed, the picker stayed put, and every prompt waited on a turn
+          // that had already ended. When both clocks have been quiet for a full stale window,
+          // end it and land the choice now.
+          if (this.stalledTurn(id)) {
+            const parked = this.pendingModelSwitches.get(id)
+            if (parked !== undefined) this.clearParkedModel(id, parked)
+            await this.cancel(id).catch(() => {})
+            try {
+              await this.landModelSwitch(id, configId, value, requested)
+              this.stoppedSessions.delete(id)
+              void info(`[pending-model] ghost-turn switch landed id=${id} model=${value}`)
+              return
+            } catch (error) {
+              void info(
+                `[pending-model] ghost-turn switch failed id=${id} model=${value} error=${String(error).slice(0, 200)}`
+              )
+            }
+          }
           this.parkModelSwitch(id, value)
           return
         }
@@ -1431,10 +1533,16 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * A session that reports idle is not mid-turn, so after a full stale window the write is safe.
    */
   private parkedSwitchOverdue(id: string): boolean {
-    const session = this.state.sessions[id]
-    if (session === undefined || session.state !== "idle") return false
     const at = this.parkedAt.get(id)
-    return at !== undefined && Date.now() - at >= STALE_RUN_STATE_MS
+    if (at === undefined || Date.now() - at < STALE_RUN_STATE_MS) return false
+    const session = this.state.sessions[id]
+    if (session === undefined) return false
+    if (session.state === "idle") return true
+    // A ghost turn never sends the idle update, but both of its clocks have stopped: waiting for
+    // `idle` here kept "本轮后切换" on screen forever after an errored turn. Both must be stale —
+    // `stalledTurn` also refuses while the prompt is still in flight, so a live silent turn is
+    // never mistaken for a ghost.
+    return this.stalledTurn(id)
   }
 
   /**
@@ -2328,9 +2436,13 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * `server_is_overloaded` with `retry-after: 300` during capacity dips, and the engine sleeps
    * that long and retries without emitting anything, so a healthy turn can legitimately sit
    * quiet for five to ten minutes. The idle cutoff is therefore set to `IDLE_MS` — well past a
-   * couple of those retry windows — while a dead socket is still reported earlier by the bridge
-   * (600s without a byte) with a concrete reason. The hard cap exists so a turn that keeps
-   * emitting events forever cannot pin the shared agent for an afternoon.
+   * couple of those retry windows. The bridge uses the very same two clocks (20 minutes of silence,
+   * 60 minutes total) and ends a silent stream with a structured error event; it must NOT use a
+   * whole-request timeout, which used to cut off healthy long turns at ten minutes. The hard cap
+   * exists so a turn that keeps emitting events forever cannot pin the shared agent for an afternoon.
+   *
+   * The unsettled promise is also the live-turn signal used by `sessionBusy`: it stays registered
+   * until one of the three settle paths below, and never outlives the watchdogs.
    */
   private promptWithTimeout(
     id: string,
@@ -2341,6 +2453,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     const HARD_MS = 60 * 60_000
     const signature = (session: Session | undefined): string =>
       session === undefined ? "none" : `${session.state}:${session.items.length}:${session.clock}`
+    this.beginPrompt(id)
     return new Promise<string>((resolve, reject) => {
       let settled = false
       let idleTimer: ReturnType<typeof setTimeout> | null = null
@@ -2348,6 +2461,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
       let unsubscribe: (() => void) | null = null
       let last = signature(this.state.sessions[id])
       const clear = (): void => {
+        this.endPrompt(id)
         if (idleTimer !== null) clearTimeout(idleTimer)
         if (hardTimer !== null) clearTimeout(hardTimer)
         if (unsubscribe !== null) unsubscribe()

@@ -3333,6 +3333,116 @@ test("a prompt on a retired model falls back to a sibling and resends once", asy
   expect(fake.prompts).toContain("hello")
 })
 
+test("several tombstones never leave the fallback with no candidate", async () => {
+  const storage = new Map<string, string>()
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, String(value)),
+    removeItem: (key: string) => storage.delete(key),
+    clear: () => storage.clear()
+  })
+  // Every live sibling has a tombstone. Filtering the whole set out at once used to leave the
+  // fallback with zero candidates, so one refused model made every other model unusable.
+  const ids = [
+    "gpt-6.1-sol", "picked", "main-picked", "chosen-model", "another-model",
+    "broken-model", "unavailable", "main-model", "chat-model"
+  ]
+  storage.set("alwith:retired-models", JSON.stringify(Object.fromEntries(ids.map((id) => [id, Date.now()]))))
+  try {
+    const { client, fake } = await make()
+    const id = await client.newSession("/tmp/all-retired", "gpt-6.1-terra")
+    let failed = false
+    fake.promptError.current = () => {
+      if (failed) return null
+      failed = true
+      return RequestError.invalidRequest(
+        { reason: "unsupported_model" },
+        "stream disconnected before completion: Unsupported model: 'gpt-6.1-terra'"
+      )
+    }
+    await client.prompt(id, [{ type: "text", text: "hello" }])
+    expect(failed).toBe(true)
+    const current = client.session(id).configOptions.find((option) => option.configId === "model")
+      ?.currentValue as string | undefined
+    expect(current).toBe("gpt-6.1-sol")
+    expect(fake.prompts).toContain("hello")
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test("a turn that died without an idle update stops counting as busy once its clock is stale", async () => {
+  const { client, fake } = await make()
+  const id = await client.newSession("/tmp/ghost-turn")
+  await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "running" })
+  const probe = client as unknown as {
+    sessionBusy: (id: string) => boolean
+    stalledTurn: (id: string) => boolean
+  }
+  expect(probe.sessionBusy(id)).toBe(true)
+  // Two minutes pass with no tokens and no final update. The old code trusted `state === "running"`
+  // unconditionally and parked every later model pick behind a turn that had already ended.
+  const clock = vi.spyOn(Date, "now")
+  clock.mockReturnValue(Date.now() + 2 * 60_000)
+  try {
+    expect(probe.sessionBusy(id)).toBe(false)
+    expect(probe.stalledTurn(id)).toBe(true)
+  } finally {
+    clock.mockRestore()
+  }
+})
+
+test("a live turn stays busy even when neither clock moves", async () => {
+  const { client, fake } = await make()
+  const id = await client.newSession("/tmp/long-tool-turn")
+  // A hung acknowledgement keeps the prompt promise pending, i.e. a genuinely live turn.
+  fake.promptHang.current = () => true
+  void client.prompt(id, [{ type: "text", text: "long turn" }]).catch(() => null)
+  await vi.waitFor(() => expect(client.session(id).state).toBe("running"))
+  const probe = client as unknown as {
+    sessionBusy: (id: string) => boolean
+    stalledTurn: (id: string) => boolean
+  }
+
+  // Real Runtime behaviour: `version` is monotonic per *state*, not per activity. A turn that
+  // streams for minutes republishes with a fresh `lastActivityAt` but the same version, same
+  // state and same task count, so the run-row signature never changes. `session.clock` is also
+  // frozen: text chunks append to an existing item instead of creating a new one.
+  const started = Date.now()
+  const since = started - 6 * 60_000
+  const row = (lastActivityAt: number): Parameters<typeof client.applyRunStates>[0][number] => ({
+    sessionId: id,
+    state: "running",
+    reusableDraft: false,
+    owner: "stdio",
+    cwd: "/tmp/long-tool-turn",
+    title: "Long turn",
+    since,
+    lastActivityAt,
+    version: 1,
+    interruption: null,
+    tasks: [],
+    listeningPorts: [],
+    executionId: null,
+    executionRole: null
+  })
+  client.applyRunStates([row(started)])
+  expect(probe.sessionBusy(id)).toBe(true)
+
+  const clock = vi.spyOn(Date, "now")
+  const future = started + 5 * 60_000
+  clock.mockReturnValue(future)
+  try {
+    client.applyRunStates([row(future)])
+    // Both change-detector clocks are stale now. Only the unsettled prompt keeps this turn busy;
+    // without that guard a parked model write would land and cancel the healthy stream.
+    expect(probe.sessionBusy(id)).toBe(true)
+    expect(probe.stalledTurn(id)).toBe(false)
+  } finally {
+    clock.mockRestore()
+  }
+})
+
 test("a prompt rejected with the runtime's catalog sentence still recovers", async () => {
   // The Runtime words a refused pick differently from the adapter: it lists every model it does
   // serve and ends with `"x" is not one of them`. That shape used to slip past the recovery check,
