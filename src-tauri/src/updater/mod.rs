@@ -1,5 +1,5 @@
-//! Auto-updater, ported from ALwith Desktop. The ALwith open-source version service supplies
-//! signed update metadata to `tauri-plugin-updater`. The service owns the
+//! Auto-updater, ported from ALwith Desktop. This build reads signed update metadata from its own
+//! GitHub release feed instead of the upstream ALwith version service. The service owns the
 //! state machine; the plugin only checks, downloads and installs. A downloaded archive survives
 //! restarts on disk and is re-verified (minisign + remote identity) before it is offered again.
 

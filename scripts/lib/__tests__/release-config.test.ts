@@ -131,7 +131,7 @@ test("Tauri keeps ASCII technical identifiers while displaying ALWith L", () => 
   expect(config.app?.windows?.[0]?.title).toBe("ALWith L")
   expect(config.bundle?.publisher).toBe("alwith.ai")
   expect(config.plugins?.updater?.endpoints).toEqual([
-    "https://api.alwith.ai/service/api/v1/open-source-versions/alwith-u/update/{{target}}-{{arch}}/{{current_version}}"
+    "https://github.com/yangc888999/alwith-l/releases/latest/download/latest.json"
   ])
   expect(devConfig.productName).toBe("ALWith L Dev")
 })
