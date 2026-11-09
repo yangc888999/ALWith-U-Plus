@@ -517,7 +517,8 @@
     "mermaidCopied": "Mermaid 源码已复制",
     "providerSwitching": "这条会话需要用 {{from}}，正在把内核从 {{to}} 切换过去…",
     "modelRetired": "模型「{{from}}」已被服务方下架，已切换到「{{to}}」。",
-    "folderLeftBehind": "这个会话在后台，它的文件夹没有一起清掉。打开这个会话再删除，就能连文件夹一起删。"
+    "folderLeftBehind": "这个会话在后台，它的文件夹没有一起清掉。打开这个会话再删除，就能连文件夹一起删。",
+    "openingSession": "正在打开会话…"
   },
   "composer": {
     "mode": "权限",
@@ -2476,6 +2477,8 @@
     "qrExpiredBadge": "已过期"
   },
   "errors": {
-    "didNotFinish": "操作没有完成"
+    "didNotFinish": "操作没有完成",
+    "surfaceOperationInProgress": "另一个窗口操作还在进行，请稍后再试",
+    "handoffStalled": "上一步窗口操作没有响应，界面已恢复，请重试"
   }
 }

@@ -16,6 +16,7 @@ import { ActivePreviewChip } from "@/features/workspace/active-preview-chip"
 import { client } from "@/lib/client"
 import { isTemporaryChatDir } from "@/lib/quick-chat"
 import { groupByDirectory } from "@/lib/groups"
+import { useHandoffBusy } from "@/lib/use-surface-operation"
 
 import { chatModelMenu } from "./composer/model-catalog"
 import { withoutWaitingForTurn } from "./composer/detach-submit"
@@ -164,6 +165,9 @@ export function ChatComposer({
   ...props
 }: Omit<ComposerProps, "actions" | "children" | "attachmentPolicy" | "predictions"> & { voiceResume?: VoiceResume }) {
   const predictions = useStore(predictionPreference, (state) => state.enabled)
+  // A window/draft handoff is about to replace what is typed here. Lock only for those operations —
+  // sending a message uses the same lock but must leave the input usable while the turn streams.
+  const handoffBusy = useHandoffBusy()
   const [menu, setMenu] = useState<ContextMenuTarget | null>(null)
   const shellRef = useRef<HTMLDivElement>(null)
   const sessionId = props.session.id
@@ -244,6 +248,7 @@ export function ChatComposer({
         {...props}
         onSubmit={submit}
         onHandOff={handOff}
+        disabled={props.disabled === true || handoffBusy}
         inputHeader={
           props.inputHeader ?? (
             // Chat merges the model-call notice into the chip row; a project keeps the two-row

@@ -106,11 +106,10 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
         setContentMounted(false)
         setSelectedId(null)
         setGeneration((value) => value + 1)
-      })
+      }, { handoff: true })
       .catch(report)
   }, [capture, hide, operation])
   const newChat = useCallback(() => {
-    if (operation.busy) return
     void operation
       .run(async () => {
         const directory = newChatDirectory(current.current.cwd)
@@ -120,7 +119,7 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
         setSelectedId(null)
         importDraft(DRAFT_SESSION_ID, null)
         setGeneration((value) => value + 1)
-      })
+      }, { handoff: true })
       .catch(report)
   }, [operation])
 
@@ -136,7 +135,7 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
         setSelectedId(null)
         importDraft(DRAFT_SESSION_ID, null)
         setGeneration((value) => value + 1)
-      })
+      }, { handoff: true })
       .catch(report)
   }, [operation])
 
@@ -155,7 +154,7 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
           await client.open(sessionRow.sessionId, sessionRow.cwd)
           setCwd(sessionRow.cwd)
           setSelectedId(sessionRow.sessionId)
-        })
+        }, { handoff: true })
         .catch(report)
     },
     [operation]
@@ -232,7 +231,7 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
             default:
               throw new Error("Unsupported chat window action")
           }
-        })
+        }, { handoff: true })
       )
       if (disposed) {
         stopSurface()
@@ -303,7 +302,6 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
 
   return (
     <main
-      inert={busy}
       aria-busy={busy}
       className="relative flex h-dvh flex-col overflow-hidden rounded-2xl border bg-background text-foreground"
       data-chat-window=""

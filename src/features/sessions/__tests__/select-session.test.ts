@@ -23,28 +23,61 @@ function deferred(): { promise: Promise<void>; resolve: () => void; reject: (err
   return { promise, resolve, reject }
 }
 
-function actions(open: () => Promise<void>, selected: string[], errors: unknown[]): SelectSessionActions {
+type Options = {
+  selected: string[]
+  errors: unknown[]
+  connect?: () => Promise<void>
+  unarchive?: () => Promise<void>
+  release?: () => Promise<ChatTransfer | null>
+  include?: () => void
+  open?: () => Promise<void>
+  onSettled?: () => void
+}
+
+function actions(options: Options): SelectSessionActions {
   return {
-    connect: async () => {},
-    unarchive: async () => {},
-    release: (): Promise<ChatTransfer | null> => Promise.resolve(null),
+    connect: options.connect ?? (async () => {}),
+    unarchive: options.unarchive ?? (async () => {}),
+    release: options.release ?? ((): Promise<ChatTransfer | null> => Promise.resolve(null)),
     importDraft: (_id: string, _draft: ComposerDraft | null) => {},
-    include: () => {},
-    open: async () => open(),
-    show: (id) => selected.push(id),
-    onOpenError: (error) => errors.push(error)
+    include: options.include ?? (() => {}),
+    open: options.open ?? (async () => {}),
+    show: (id) => options.selected.push(id),
+    onOpenError: (error) => options.errors.push(error),
+    onSettled: options.onSettled
   }
 }
+
+test("switches immediately even while preparation is stalled", async () => {
+  const connect = deferred()
+  const selected: string[] = []
+  const opened: string[] = []
+
+  selectSession(
+    sessionRow,
+    actions({
+      selected,
+      errors: [],
+      connect: () => connect.promise,
+      open: async () => {
+        opened.push(sessionRow.sessionId)
+      }
+    })
+  )
+
+  // The view changes in the same tick as the click; no engine, Drive or window request may gate it.
+  expect(selected).toEqual(["history-1"])
+  expect(opened).toEqual([])
+  connect.resolve()
+  await vi.waitFor(() => expect(opened).toEqual(["history-1"]))
+})
 
 test("selects a chat while its history is still restoring", async () => {
   const restoration = deferred()
   const selected: string[] = []
   const errors: unknown[] = []
 
-  await selectSession(
-    sessionRow,
-    actions(() => restoration.promise, selected, errors)
-  )
+  selectSession(sessionRow, actions({ selected, errors, open: () => restoration.promise }))
 
   expect(selected).toEqual(["history-1"])
   expect(errors).toEqual([])
@@ -52,41 +85,152 @@ test("selects a chat while its history is still restoring", async () => {
   await restoration.promise
 })
 
-test("includes a selected project chat before showing it, after restoring an archived chat", async () => {
-  const restoration = deferred()
+test("restores an archived chat before including and opening it", async () => {
+  const order: string[] = []
   const selected: string[] = []
-  const callbacks = actions(() => restoration.promise, selected, [])
-  const include = vi.fn()
-  callbacks.include = include
-  callbacks.unarchive = () => {
-    return Promise.try(() => {
-      expect(include).not.toHaveBeenCalled()
+
+  selectSession(
+    { ...sessionRow, archived: true },
+    actions({
+      selected,
+      errors: [],
+      unarchive: async () => {
+        order.push("unarchive")
+      },
+      include: () => order.push("include"),
+      open: async () => {
+        order.push("open")
+      }
     })
-  }
-  callbacks.show = (id) => {
-    expect(include).toHaveBeenCalledExactlyOnceWith(sessionRow)
-    selected.push(id)
-  }
-  await selectSession({ ...sessionRow, archived: true }, callbacks)
+  )
+
   expect(selected).toEqual([sessionRow.sessionId])
-  restoration.resolve()
-  await restoration.promise
+  await vi.waitFor(() => expect(order).toEqual(["unarchive", "include", "open"]))
 })
 
-test("reports a background restore failure after selecting the chat", async () => {
-  const restoration = deferred()
+test("reports a background restore failure without undoing the switch", async () => {
   const selected: string[] = []
   const errors: unknown[] = []
   const failure = new Error("resume failed")
 
-  await selectSession(
-    sessionRow,
-    actions(() => restoration.promise, selected, errors)
-  )
-  restoration.reject(failure)
-  await Promise.resolve()
-  await Promise.resolve()
+  selectSession(sessionRow, actions({ selected, errors, open: () => Promise.reject(failure) }))
 
   expect(selected).toEqual(["history-1"])
-  expect(errors).toEqual([failure])
+  await vi.waitFor(() => expect(errors).toEqual([failure]))
+  expect(selected).toEqual(["history-1"])
+})
+
+test("a failed connect reports itself but never looks like a dead click", async () => {
+  const selected: string[] = []
+  const errors: unknown[] = []
+  const opened: string[] = []
+  const failure = new Error("Drive request timed out: connect after 45000ms")
+
+  selectSession(
+    sessionRow,
+    actions({
+      selected,
+      errors,
+      connect: () => Promise.reject(failure),
+      open: async () => {
+        opened.push(sessionRow.sessionId)
+      }
+    })
+  )
+
+  expect(selected).toEqual(["history-1"])
+  await vi.waitFor(() => expect(errors).toEqual([failure]))
+  expect(opened).toEqual([])
+})
+
+test("only the last of several rapid clicks finishes preparation", async () => {
+  let generation = 0
+  const shown: string[] = []
+  const included: string[] = []
+  const opened: string[] = []
+  const settled: string[] = []
+  const errors: unknown[] = []
+  const gates: Array<ReturnType<typeof deferred>> = []
+
+  const pick = (id: string): void => {
+    const mine = ++generation
+    const gate = deferred()
+    gates.push(gate)
+    selectSession(
+      { ...sessionRow, sessionId: id },
+      actions({
+        selected: shown,
+        errors,
+        connect: () => gate.promise,
+        include: () => included.push(id),
+        open: async () => {
+          opened.push(id)
+        },
+        onSettled: () => settled.push(id)
+      }),
+      () => mine === generation
+    )
+  }
+
+  pick("a")
+  pick("b")
+  pick("c")
+  // Every click still switches the view immediately.
+  expect(shown).toEqual(["a", "b", "c"])
+  for (const gate of gates) gate.resolve()
+
+  await vi.waitFor(() => expect(opened).toEqual(["c"]))
+  expect(included).toEqual(["c"])
+  expect(settled).toEqual(["c"])
+  expect(errors).toEqual([])
+})
+
+test("a superseded chain never reports a failure for a conversation the reader left", async () => {
+  const errors: unknown[] = []
+  const settled: string[] = []
+  const first = deferred()
+  const second = deferred()
+  let firstIsCurrent = true
+
+  selectSession(
+    sessionRow,
+    actions({
+      selected: [],
+      errors,
+      connect: () => first.promise,
+      onSettled: () => settled.push("first")
+    }),
+    () => firstIsCurrent
+  )
+  // A second click wins; the first chain is now stale.
+  firstIsCurrent = false
+  selectSession(
+    sessionRow,
+    actions({ selected: [], errors, connect: () => second.promise, onSettled: () => settled.push("second") }),
+    () => true
+  )
+
+  first.reject(new Error("stale connect failed"))
+  second.resolve()
+  await vi.waitFor(() => expect(settled).toEqual(["second"]))
+  expect(errors).toEqual([])
+})
+
+test("clears the opening state even when preparation fails", async () => {
+  const errors: unknown[] = []
+  const settled: string[] = []
+  const failure = new Error("connect failed")
+
+  selectSession(
+    sessionRow,
+    actions({
+      selected: [],
+      errors,
+      connect: () => Promise.reject(failure),
+      onSettled: () => settled.push(sessionRow.sessionId)
+    })
+  )
+
+  await vi.waitFor(() => expect(errors).toEqual([failure]))
+  expect(settled).toEqual(["history-1"])
 })

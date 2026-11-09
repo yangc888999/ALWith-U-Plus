@@ -158,6 +158,12 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   // Windows keeps the focused-window controls, so this target is only used when it exists.
   const [workspaceTrailing, setWorkspaceTrailing] = useState<HTMLDivElement | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // While a picked conversation is being prepared, show an explicit "opening" surface instead of
+  // the draft composer. A stalled cloud/engine call must neither look like a dead click nor invite
+  // typing into a draft that is about to be replaced.
+  const [openingSessionId, setOpeningSessionId] = useState<string | null>(null)
+  // Monotonic token: only the last click is allowed to finish its preparation chain.
+  const selectionRef = useRef(0)
   useEffect(() => {
     if (isTauri()) void commands.bridgeSetActiveSession({ sessionId: selectedId })
   }, [selectedId])
@@ -236,7 +242,9 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   }, [leading, closePreviewExtension])
   const session = useSession(selectedId)
   const draftSessions = useApp((state) => state.draftSessions)
-  const { busy, operation } = useSurfaceOperation()
+  const { busy, operation } = useSurfaceOperation(() =>
+    toast.error(t("errors.handoffStalled"), { id: "surface-handoff-stalled" })
+  )
   const extensionSession = useRef(session)
   extensionSession.current = session
   useEffect(() => {
@@ -306,35 +314,44 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       // A project opened from history must have its memory file too, not only the ones picked in
       // the composer: the read-memory action would otherwise find nothing on older projects.
       void ensureProjectMemory(sessionRow.cwd)
+      const token = ++selectionRef.current
+      const isCurrent = () => token === selectionRef.current
       // Codex refuses to resume an archived session; opening one restores it first, as the
-      // official client does.
-      void operation
-        .run(() =>
-          selectSession(sessionRow, {
-            connect: async () => {
-              await client.connect()
-              if (client.state.draftSessions[sessionRow.sessionId] !== "main") await client.discardDraft("main")
-            },
-            unarchive: (id) => client.unarchive(id),
-            release: async (id) => {
-              const transfer = await releaseChatWindow(id)
-              await client.transferDraft(id, "main")
-              return transfer
-            },
-            importDraft,
-            include: (sessionRow) => client.includeSession(sessionRow),
-            open: (id, cwd) => client.open(id, cwd),
-            show: (id) => {
-              setSurfaceGeneration((value) => value + 1)
-              setView("chat")
-              setSelectedId(id)
-            },
-            onOpenError: (error: unknown) => toast.error(describeError(error))
-          })
-        )
-        .catch((error: unknown) => toast.error(describeError(error)))
+      // official client does. `selectSession` switches the view immediately and prepares the engine
+      // in the background, so no surface-operation lock is held here: holding one made the whole
+      // window inert while a preparation step stalled, which read as a dead click on the sidebar.
+      // The token replaces that lock's one-at-a-time guarantee with last-click-wins.
+      selectSession(
+        sessionRow,
+        {
+          connect: async () => {
+            await client.connect()
+            if (client.state.draftSessions[sessionRow.sessionId] !== "main") await client.discardDraft("main")
+          },
+          unarchive: (id) => client.unarchive(id),
+          release: async (id) => {
+            const transfer = await releaseChatWindow(id)
+            await client.transferDraft(id, "main")
+            return transfer
+          },
+          importDraft,
+          include: (sessionRow) => client.includeSession(sessionRow),
+          open: (id, cwd) => client.open(id, cwd),
+          show: (id) => {
+            setOpeningSessionId(id)
+            setSurfaceGeneration((value) => value + 1)
+            setView("chat")
+            setSelectedId(id)
+          },
+          onOpenError: (error: unknown) => toast.error(describeError(error)),
+          onSettled: () => {
+            if (isCurrent()) setOpeningSessionId(null)
+          }
+        },
+        isCurrent
+      )
     },
-    [operation]
+    []
   )
 
   // Bumped when the reader picks a project folder for a new chat. The workspace opens its columns
@@ -456,7 +473,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   } | null>(null)
   const newChatInDirectory = useCallback(
     (cwd?: string | null, collectionId?: string) => {
-      if (operation.busy) return
       void operation
         .run(async () => {
           const directory = newChatDirectory(cwd === undefined ? (extensionSession.current?.cwd ?? lastDirectory) : cwd)
@@ -470,7 +486,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           setChatRevealRequest((value) => value + 1)
           setView("chat")
           setSelectedId(null)
-        })
+        }, { handoff: true })
         .catch((error: unknown) => toast.error(describeError(error)))
     },
     [chooseDraftFolder, lastDirectory, operation, surfaceGeneration]
@@ -503,7 +519,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
    */
   const clearContextInPlace = useCallback(
     (sessionId: string, cwd: string) => {
-      if (operation.busy) return
       void operation
         .run(async () => {
           // Park the model and effort before the thread goes away; the first turn of the
@@ -521,7 +536,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           setChatRevealRequest((value) => value + 1)
           setView("chat")
           setSelectedId(null)
-        })
+        }, { handoff: true })
         .catch((error: unknown) => toast.error(describeError(error)))
     },
     [chooseDraftFolder, operation]
@@ -541,17 +556,22 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       const stopSurface = await serveChatSurface(async (action) => {
         switch (action.type) {
           case "present":
-            return operation.run(async () => {
+            return operation.run(async (signal) => {
               const transfer = action.transfer
               if (!transfer) throw new Error("Returning to main requires a chat transfer")
               await client.connect()
+              // The watchdog may have handed the lock to a newer request while this handoff was
+              // wedged. Stop before rewriting draft/window state that belongs to the newer one.
+              if (signal.abandoned) return null
               if (transfer.sessionId !== null) {
                 if (transfer.cwd === null) throw new Error("A chat session must have a working directory")
                 await client.transferDraft(transfer.sessionId, "main")
+                if (signal.abandoned) return null
                 await client.open(transfer.sessionId, transfer.cwd)
               } else {
                 await client.discardDraft("main")
               }
+              if (signal.abandoned) return null
               importDraft(transfer.sessionId ?? DRAFT_SESSION_ID, transfer.draft)
               setLastDirectory(transfer.cwd)
               setSelectedId(transfer.sessionId)
@@ -563,7 +583,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
               await win.show()
               await win.setFocus()
               return null
-            })
+            }, { handoff: true })
           case "markRead":
             await markRead(action.sessionId)
             return null
@@ -1102,7 +1122,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
             setLastDirectory(replacement.cwd)
             await client.open(replacement.sessionId, replacement.cwd)
           }
-        })
+        }, { handoff: true })
         .catch((error) => toast.error(describeError(error)))
     }
     const newProjectChat = newChat
@@ -1122,6 +1142,18 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
         toast.info(t("chat.folderLeftBehind"), { id: "chat-folder-left", duration: 8000 })
       }
     }
+    // A picked conversation whose preparation is still running gets its own surface. Rendering the
+    // draft composer here would let the reader type into a draft that `transferDraft`/`importDraft`
+    // is about to replace, and a slow resume would look like the click never landed. Matching the
+    // id also clears this state for every other path that changes the selection (new chat, clear
+    // context, a handoff back from the chat window).
+    if (openingSessionId !== null && openingSessionId === selectedId && session === null)
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+          <span className="size-5 animate-spin rounded-full border-2 border-muted-foreground/25 border-t-muted-foreground" />
+          <span>{t("chat.openingSession")}</span>
+        </div>
+      )
     if (session !== null && !draftSessions[session.id] && submittingDraftId !== session.id)
       return (
         <ChatView
@@ -1187,7 +1219,10 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   )
 
   return (
-    <div className="h-full" inert={busy} aria-busy={busy}>
+    // `aria-busy` only announces the handoff. The old root `inert` froze the sidebar, the file tree
+    // and every retry whenever a window request wedged; overlapping requests are already rejected by
+    // the surface-operation lock itself, and a stalled one now releases that lock on a watchdog.
+    <div className="h-full" aria-busy={busy}>
       <WallpaperBackground onError={reportExtensionError}>
         <MainSidebarLayout
           chatMode={isTemporaryChat}
@@ -1334,7 +1369,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                               setSelectedId(null)
                               setView("chat")
                             })
-                          })
+                          }, { handoff: true })
                         }
                       />,
                       driveSidebar

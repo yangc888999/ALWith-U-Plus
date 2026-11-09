@@ -36,6 +36,14 @@ test("an unknown failure keeps its sentence, loses the transport prefix and lead
   expect(describeError('{"detail":"Input must be a list"}')).toBe("操作没有完成：Input must be a list")
 })
 
+test("a rejected overlapping handoff names the remedy instead of raw English", async () => {
+  await chinese()
+
+  expect(describeError(new Error("A chat operation is already in progress"))).toBe(
+    "另一个窗口操作还在进行，请稍后再试"
+  )
+})
+
 test("a Drive deadline is not reported as a model timeout", async () => {
   await chinese()
 

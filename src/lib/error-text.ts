@@ -433,6 +433,14 @@ const RULES: Rule[] = [
     key: "error.historyUnreplayable"
   },
 
+  // The surface-operation lock rejects a second window handoff while one is running. It used to
+  // reach the toast as "操作没有完成：A chat operation is already in progress", which named no
+  // remedy; say what the reader can actually do.
+  {
+    match: /A chat operation is already in progress/i,
+    key: "errors.surfaceOperationInProgress"
+  },
+
   // --- Connected plugins & extensions: English errors thrown by the plugin/extension managers. ---
   // These reach the user through the patched `toast.error` (which routes every string through
   // `describeError`), so a rule here localizes them wherever they surface, without touching each
