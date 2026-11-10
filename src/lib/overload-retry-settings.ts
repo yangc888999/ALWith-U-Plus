@@ -29,3 +29,16 @@ export function subscribeOverloadRetryCount(listener: () => void): () => void {
   listeners.add(listener)
   return () => listeners.delete(listener)
 }
+
+// Settings and the main chat window are separate Tauri webviews sharing one origin. Apply writes
+// localStorage in the settings window; this window only sees a storage event, so re-read instead
+// of keeping the value cached at module load — otherwise the new budget needs an app restart.
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== STORAGE_KEY && event.key !== null) return
+    const next = read()
+    if (next === current) return
+    current = next
+    for (const listener of listeners) listener()
+  })
+}
