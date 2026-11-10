@@ -749,6 +749,10 @@
     "customizationRepo": "ALwith U",
     "customizationOutro": "project. The main changes:",
     "customizationItems": [
+      "v0.3.3",
+      "The bundled Tauri runtime and CLI now target v3.0.0-alpha.6.",
+      "codex-acp-v2 is pinned to 0.7.39, @alwith/api to 0.5.3, and the ACP SDK to 2.0.2, so a fresh install cannot drift into an incompatible build that breaks third-party model routing.",
+      "Rechecked the model call and switch paths: capacity notices, interruption messages, and mid-turn model switches show no regressions.",
       "v0.3.2",
       "The bundled Codex CLI is now v0.167.0.",
       "v0.3.1",

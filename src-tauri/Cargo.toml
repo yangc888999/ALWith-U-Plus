@@ -1,6 +1,6 @@
 [package]
 name = "alwith-u"
-version = "0.3.2"
+version = "0.3.3"
 description = "An independent desktop client for the OpenAI Codex CLI"
 authors = ["alwith.ai"]
 license = "Apache-2.0"
@@ -44,10 +44,10 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # The sanitizing proxy for gateways that reject reasoning history (tiny sync server, one thread per turn).
 tiny_http = "0.12"
 # Tauri 3 keeps its runtime in a separate crate; alpha.4 provides transparency without a private-API feature.
-tauri = { version = "3.0.0-alpha.5", features = ["protocol-asset", "specta", "tray-icon", "unstable"] }
+tauri = { version = "3.0.0-alpha.6", features = ["protocol-asset", "specta", "tray-icon", "unstable"] }
 specta = { version = "2.0.0-rc.27", features = ["derive", "function"] }
 tauri3-specta = "0.1.0-alpha.3"
-tauri-runtime-wry = "3.0.0-alpha.5"
+tauri-runtime-wry = "3.0.0-alpha.6"
 tauri-plugin-dialog = "3.0.0-alpha.4"
 tauri-plugin-clipboard-manager = "3.0.0-alpha.3"
 tauri-plugin-global-shortcut = "3.0.0-alpha.3"

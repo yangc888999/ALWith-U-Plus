@@ -749,6 +749,10 @@
     "customizationRepo": "ALwith U",
     "customizationOutro": "定制，主要调整内容如下：",
     "customizationItems": [
+      "v0.3.3",
+      "内置 Tauri 运行时与 CLI 升级到 v3.0.0-alpha.6。",
+      "锁定 codex-acp-v2 0.7.39、@alwith/api 0.5.3 与 ACP SDK 2.0.2，避免依赖自动漂移导致第三方模型路由失效。",
+      "复核模型调用与切换链路：过载提醒、断流提示、中途切换模型均无回归。",
       "v0.3.2",
       "内置 Codex CLI 升级到 v0.167.0 版本。",
       "v0.3.1",
