@@ -58,10 +58,17 @@ pub struct LedgerEntry {
     pub newest_at: i64,
     /// Shadow copy of the newest content, when small enough to keep.
     pub shadow: Option<PathBuf>,
+    /// Size and modification time (nanoseconds) of the file the ledger last looked at. A pass that
+    /// finds both unchanged skips hashing entirely, so the guard costs one `stat` per file instead
+    /// of reading the whole Drive every five minutes and competing with the sync daemon for disk.
+    /// Nanoseconds, not milliseconds: two saves inside the same millisecond are otherwise
+    /// indistinguishable and a rollback would be missed.
+    pub size: u64,
+    pub mtime_ns: i64,
 }
 
 impl LedgerEntry {
-    fn remember(&mut self, hash: &str, at: i64, shadow: Option<PathBuf>) {
+    fn remember(&mut self, hash: &str, at: i64, shadow: Option<PathBuf>, size: u64, mtime_ns: i64) {
         if self.history.iter().any(|known| known == hash) {
             self.history.retain(|known| known != hash);
         }
@@ -71,6 +78,8 @@ impl LedgerEntry {
         }
         self.newest = hash.to_string();
         self.newest_at = at;
+        self.size = size;
+        self.mtime_ns = mtime_ns;
         if shadow.is_some() {
             self.shadow = shadow;
         }
@@ -135,13 +144,22 @@ impl Ledger {
     }
 
     /// Applies a verdict to the ledger. Returns true when the caller must restore the shadow copy.
-    pub fn observe(&self, path: &Path, hash: &str, now_ms: i64, verdict: Verdict, shadow: Option<PathBuf>) -> bool {
+    pub fn observe(
+        &self,
+        path: &Path,
+        hash: &str,
+        now_ms: i64,
+        verdict: Verdict,
+        shadow: Option<PathBuf>,
+        size: u64,
+        mtime_ns: i64,
+    ) -> bool {
         let Ok(mut entries) = self.entries.lock() else { return false };
         let entry = entries.entry(path.to_path_buf()).or_default();
         match verdict {
             Verdict::Unchanged => false,
             Verdict::Baseline | Verdict::UserEdit | Verdict::Newer => {
-                entry.remember(hash, now_ms, shadow);
+                entry.remember(hash, now_ms, shadow, size, mtime_ns);
                 false
             }
             // A rollback keeps the newest hash in `history` so a second identical push is still a
@@ -194,14 +212,15 @@ pub struct ScanReport {
     pub skipped: u32,
 }
 
-/// Walks the given Drive roots once and applies the ledger.
+/// Walks the given Drive roots once and records what should happen.
 ///
 /// Deliberately synchronous and coarse: it runs on a blocking thread from a Tauri command, never on
-/// the UI thread. Restoring writes the shadow bytes back over the file the daemon just produced, so
-/// the newest local content wins until the daemon uploads it again.
-pub fn scan(ledger: &Ledger, roots: &[PathBuf], shadow_root: &Path, app: Option<&tauri::AppHandle>) -> ScanReport {
-    use tauri::Emitter;
-    let mut report = ScanReport::default();
+/// the UI thread. Restores are only *planned* here — `PendingRestore` is applied by the caller
+/// inside a Drive transaction, so the sync daemon learns about the write before it lands and
+/// uploads it as a normal local change instead of treating it as an outside edit and minting a
+/// conflict copy.
+pub fn scan(ledger: &Ledger, roots: &[PathBuf], shadow_root: &Path) -> ScanPlan {
+    let mut plan = ScanPlan::default();
     let at = now_ms();
     for root in roots {
         let mut stack = vec![root.clone()];
@@ -225,46 +244,53 @@ pub fn scan(ledger: &Ledger, roots: &[PathBuf], shadow_root: &Path, app: Option<
                 if path.extension().and_then(|extension| extension.to_str()) == Some("yupcloud") {
                     continue;
                 }
-                let Some(hash) = hash_file(&path) else { continue };
-                let size = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
-                let shadow = if size <= SHADOW_SIZE_CAP {
-                    let relative = path.strip_prefix(root).unwrap_or(&path);
-                    let target = shadow_root.join(sanitize(relative));
-                    Some(target)
-                } else {
-                    report.skipped += 1;
-                    None
-                };
+                // Conflict copies are sync artefacts, not deliverables. Watching them would keep
+                // shadowing and "restoring" files the tree deliberately hides, so the guard stays
+                // out of the resolver's way and lets the user decide what the copy is worth.
+                if path.file_name().and_then(|name| name.to_str()).is_some_and(is_conflict_copy) {
+                    continue;
+                }
+                // One `stat` decides most files: the daemon writes change both size and mtime, so a
+                // pass over an idle Drive never reads content at all. This keeps a five-minute
+                // guard from competing with the sync daemon for disk on a large project.
+                let meta = entry.metadata().ok();
+                let size = meta.as_ref().map(|meta| meta.len()).unwrap_or(0);
+                let mtime_ns = meta
+                    .as_ref()
+                    .and_then(|meta| meta.modified().ok())
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|elapsed| elapsed.as_nanos() as i64)
+                    .unwrap_or(0);
                 let known = {
                     let Ok(entries) = ledger.entries.lock() else { continue };
                     entries.get(&path).cloned()
                 };
+                if let Some(known) = &known
+                    && known.mtime_ns == mtime_ns
+                    && known.size == size
+                {
+                    continue;
+                }
+                let Some(hash) = hash_file(&path) else { continue };
+                let shadow = if size <= SHADOW_SIZE_CAP {
+                    let relative = path.strip_prefix(root).unwrap_or(&path);
+                    Some(shadow_root.join(sanitize(relative)))
+                } else {
+                    plan.report.skipped += 1;
+                    None
+                };
                 let verdict = decide(known.as_ref(), &hash, at, ledger.user_write_at(&path));
                 if verdict == Verdict::Rollback {
                     if let Some(previous) = ledger.shadow_for(&path) {
-                        if let Ok(bytes) = std::fs::read(&previous) {
-                            if std::fs::write(&path, bytes).is_ok() {
-                                report.restored.push(path.to_string_lossy().to_string());
-                                if let Some(app) = app {
-                                    let _ = app.emit(
-                                        "drive:version-guard-restored",
-                                        serde_json::json!({ "path": path.to_string_lossy() }),
-                                    );
-                                }
-                                // The ledger's newest stays what it was: the restored bytes ARE that
-                                // newest content. Recording the rolled-back hash here would make the
-                                // next scan treat the genuine newest as a rollback and restore in a
-                                // loop.
-                                continue;
-                            }
-                        }
+                        plan.restores.push(PendingRestore { path, shadow: previous });
+                        continue;
                     }
                     // Nothing to restore from (shadow missing): leave the file alone and keep the
                     // ledger untouched so the next identical push is still reported as a rollback.
                     continue;
                 }
                 if verdict != Verdict::Unchanged {
-                    report.recorded += 1;
+                    plan.report.recorded += 1;
                 }
                 let shadow_path = match &shadow {
                     Some(target) if verdict != Verdict::Unchanged => {
@@ -279,13 +305,41 @@ pub fn scan(ledger: &Ledger, roots: &[PathBuf], shadow_root: &Path, app: Option<
                     }
                     _ => None,
                 };
-                ledger.observe(&path, &hash, at, verdict, shadow_path);
+                ledger.observe(&path, &hash, at, verdict, shadow_path, size, mtime_ns);
             }
         }
     }
     ledger.mark_scan(at);
-    report
+    plan
 }
+
+/// One rollback the caller still has to write back. The ledger is left untouched until the write
+/// succeeds, so a failed restore is retried on the next pass instead of being forgotten.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRestore {
+    pub path: PathBuf,
+    pub shadow: PathBuf,
+}
+
+#[derive(Debug, Default)]
+pub struct ScanPlan {
+    pub report: ScanReport,
+    pub restores: Vec<PendingRestore>,
+}
+
+/// Copies the shadow bytes over the file. Test-only: production restores run inside
+/// `DriveService::with_filesystem`, never as a bare write, so the daemon stays informed.
+#[cfg(test)]
+pub fn apply_restore(restore: &PendingRestore) -> bool {
+    let Ok(bytes) = std::fs::read(&restore.shadow) else { return false };
+    std::fs::write(&restore.path, bytes).is_ok()
+}
+
+/// The same marker the tree filter uses for `… （冲突副本 · user · 2026-11-06 0912）.md`.
+fn is_conflict_copy(name: &str) -> bool {
+    name.contains("冲突副本") || name.to_lowercase().contains("conflicted copy")
+}
+
 
 /// Shadow file names mirror the Drive tree, with the separators folded so one directory per file.
 fn sanitize(relative: &Path) -> String {
@@ -321,17 +375,23 @@ pub fn drive_guard_enabled(state: tauri::State<'_, GuardState>) -> bool {
 }
 
 /// One scan pass over every indexed Drive root. Cheap when the switch is off: it returns at once.
+///
+/// Restores are written inside `DriveService::with_filesystem`, the same transaction every save
+/// from the editor uses. That ordering matters: the daemon is told which path is about to change,
+/// so the restored bytes are uploaded as a normal local edit instead of being seen as an outside
+/// change and answered with a conflict copy.
 #[tauri3_specta::command]
 pub async fn drive_guard_scan(
     app: tauri::AppHandle,
     state: tauri::State<'_, GuardState>,
 ) -> Result<ScanReport, String> {
+    use tauri::Emitter;
     use tauri::Manager;
     if !state.0.enabled() {
         return Ok(ScanReport::default());
     }
     let drive = app.state::<crate::drive::DriveState>();
-    let service = drive.service()?;
+    let service = drive.shared()?;
     let snapshot = service.snapshot();
     let roots: Vec<PathBuf> = snapshot
         .roots
@@ -347,9 +407,28 @@ pub async fn drive_guard_scan(
     std::fs::create_dir_all(&shadow_root).map_err(|error| error.to_string())?;
     // Hashing a whole Drive is blocking work; never run it on the async runtime's worker.
     let ledger = std::sync::Arc::clone(&state.0);
-    tauri::async_runtime::spawn_blocking(move || scan(&ledger, &roots, &shadow_root, Some(&app)))
+    let plan = tauri::async_runtime::spawn_blocking(move || scan(&ledger, &roots, &shadow_root))
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    let mut report = plan.report;
+    for restore in plan.restores {
+        let path = restore.path.clone();
+        let shadow = restore.shadow.clone();
+        let write = async move {
+            let bytes = std::fs::read(&shadow).map_err(|error| error.to_string())?;
+            std::fs::write(&path, bytes).map_err(|error| error.to_string())
+        };
+        match service.with_filesystem(&[restore.path.clone()], &[], write).await {
+            Ok(()) => {
+                let restored = restore.path.to_string_lossy().to_string();
+                report.restored.push(restored.clone());
+                let _ = app.emit("drive:version-guard-restored", serde_json::json!({ "path": restored }));
+            }
+            // A failed restore stays in the ledger as a rollback, so the next pass retries it.
+            Err(error) => log::warn!("drive guard: restore failed for {}: {error}", restore.path.display()),
+        }
+    }
+    Ok(report)
 }
 
 #[cfg(test)]
@@ -362,6 +441,8 @@ mod tests {
             history: VecDeque::from([hash.to_string()]),
             newest_at: 1_000,
             shadow: None,
+            size: 0,
+            mtime_ns: 0,
         }
     }
 
@@ -380,7 +461,7 @@ mod tests {
     fn a_returning_old_version_is_a_rollback() {
         // The file was "a", then "b" (newest). The daemon now writes "a" again.
         let mut known = entry("a");
-        known.remember("b", 1_500, None);
+        known.remember("b", 1_500, None, 0, 0);
         assert_eq!(decide(Some(&known), "a", 2_000, 0), Verdict::Rollback);
     }
 
@@ -393,7 +474,7 @@ mod tests {
     #[test]
     fn a_save_right_after_the_users_own_write_is_trusted() {
         let mut known = entry("a");
-        known.remember("b", 1_500, None);
+        known.remember("b", 1_500, None, 0, 0);
         // The user edited "a" back in deliberately two seconds ago: not a rollback.
         assert_eq!(decide(Some(&known), "a", 10_000, 8_000), Verdict::UserEdit);
     }
@@ -401,7 +482,7 @@ mod tests {
     #[test]
     fn the_user_grace_window_expires() {
         let mut known = entry("a");
-        known.remember("b", 1_500, None);
+        known.remember("b", 1_500, None, 0, 0);
         let late = 8_000 + USER_WRITE_GRACE_MS + 1;
         assert_eq!(decide(Some(&known), "a", late, 8_000), Verdict::Rollback);
     }
@@ -410,12 +491,12 @@ mod tests {
     fn history_is_bounded_and_moves_the_newest_to_the_back() {
         let mut known = LedgerEntry::default();
         for index in 0..(HISTORY_CAP + 10) {
-            known.remember(&format!("h{index}"), 1_000 + index as i64, None);
+            known.remember(&format!("h{index}"), 1_000 + index as i64, None, 0, 0);
         }
         assert_eq!(known.history.len(), HISTORY_CAP);
         assert_eq!(known.newest, format!("h{}", HISTORY_CAP + 9));
         // Re-seeing an old hash moves it to the back and drops nothing else out of order.
-        known.remember("h20", 9_999, None);
+        known.remember("h20", 9_999, None, 0, 0);
         assert_eq!(known.history.back().map(String::as_str), Some("h20"));
         assert_eq!(known.history.len(), HISTORY_CAP);
     }
@@ -424,11 +505,11 @@ mod tests {
     fn the_ledger_reports_a_restore_only_for_a_rollback() {
         let ledger = Ledger::default();
         let path = Path::new("/drive/notes.md");
-        assert!(!ledger.observe(path, "a", 1_000, Verdict::Baseline, None));
-        assert!(!ledger.observe(path, "b", 2_000, Verdict::Newer, None));
-        assert!(ledger.observe(path, "a", 3_000, Verdict::Rollback, None));
+        assert!(!ledger.observe(path, "a", 1_000, Verdict::Baseline, None, 0, 0));
+        assert!(!ledger.observe(path, "b", 2_000, Verdict::Newer, None, 0, 0));
+        assert!(ledger.observe(path, "a", 3_000, Verdict::Rollback, None, 0, 0));
         // The newest stays "b": a repeated push of "a" is still a rollback, not a baseline.
-        assert!(ledger.observe(path, "a", 4_000, Verdict::Rollback, None));
+        assert!(ledger.observe(path, "a", 4_000, Verdict::Rollback, None, 0, 0));
         assert_eq!(ledger.shadow_for(path), None);
     }
 
@@ -463,20 +544,26 @@ mod tests {
 
         let ledger = Ledger::default();
         ledger.set_enabled(true);
-        let first = scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path(), None);
-        assert_eq!(first.recorded, 1);
-        assert!(first.restored.is_empty());
+        let first = scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path());
+        assert_eq!(first.report.recorded, 1);
+        assert!(first.restores.is_empty());
 
         // The newest content arrives (a real edit, whether by this user or a newer client).
         std::fs::write(&doc, b"newest version").unwrap();
-        let second = scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path(), None);
-        assert!(second.restored.is_empty(), "unseen content is a newer edit, never a rollback");
+        let second = scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path());
+        assert!(second.restores.is_empty(), "unseen content is a newer edit, never a rollback");
 
         // Another device pushes the old draft back through the closed daemon.
         std::fs::write(&doc, b"old version").unwrap();
-        let third = scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path(), None);
-        assert_eq!(third.restored.len(), 1, "the known old content must be restored away");
+        let third = scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path());
+        assert_eq!(third.restores.len(), 1, "the known old content must be restored away");
+        assert!(apply_restore(&third.restores[0]));
         assert_eq!(std::fs::read_to_string(&doc).unwrap(), "newest version");
+        // A restore is not recorded as a new edit: the newest hash stays what it was, so the same
+        // rollback is still recognised on the next pass instead of looping.
+        let fourth = scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path());
+        assert!(fourth.restores.is_empty());
+        assert_eq!(fourth.report.recorded, 0);
     }
 
     #[test]
@@ -488,30 +575,56 @@ mod tests {
 
         let ledger = Ledger::default();
         ledger.set_enabled(true);
-        scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path(), None);
+        scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path());
         std::fs::write(&doc, b"a,b,c,d").unwrap();
-        scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path(), None);
+        scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path());
 
         // The user deliberately reverts to the earlier content and saves through the app.
         std::fs::write(&doc, b"a,b,c").unwrap();
         ledger.note_user_write(&doc, now_ms());
-        let report = scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path(), None);
-        assert!(report.restored.is_empty(), "a user save must never be treated as a rollback");
+        let plan = scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path());
+        assert!(plan.restores.is_empty(), "a user save must never be treated as a rollback");
         assert_eq!(std::fs::read_to_string(&doc).unwrap(), "a,b,c");
     }
 
     #[test]
-    fn the_guard_skips_its_own_shadow_tree_and_placeholders() {
+    fn the_guard_skips_its_own_shadow_tree_placeholders_and_conflict_copies() {
         let drive_root = tempfile::tempdir().unwrap();
         let shadow_root = tempfile::tempdir().unwrap();
         std::fs::write(drive_root.path().join("real.md"), b"x").unwrap();
         std::fs::write(drive_root.path().join("cloud.yupcloud"), b"{}").unwrap();
         std::fs::create_dir(drive_root.path().join(".alwith-shadow")).unwrap();
         std::fs::write(drive_root.path().join(".alwith-shadow/copy.md"), b"x").unwrap();
+        // The tree hides these; the guard must not keep shadowing or "restoring" them either.
+        std::fs::write(drive_root.path().join("报告（冲突副本 · leo · 2026-11-06 0912）.md"), b"conflict").unwrap();
+        std::fs::write(drive_root.path().join("notes (conflicted copy 2026-11-06).md"), b"conflict").unwrap();
 
         let ledger = Ledger::default();
         ledger.set_enabled(true);
-        let report = scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path(), None);
-        assert_eq!(report.recorded, 1, "only the real document is tracked");
+        let plan = scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path());
+        assert_eq!(plan.report.recorded, 1, "only the real document is tracked");
+    }
+
+    #[test]
+    fn a_missing_shadow_is_not_reported_as_a_restore() {
+        let drive_root = tempfile::tempdir().unwrap();
+        let shadow_root = tempfile::tempdir().unwrap();
+        let doc = drive_root.path().join("report.md");
+        std::fs::write(&doc, b"a").unwrap();
+
+        let ledger = Ledger::default();
+        ledger.set_enabled(true);
+        scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path());
+        std::fs::write(&doc, b"b").unwrap();
+        scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path());
+        // Simulate a lost shadow file, then let the old version come back.
+        for entry in std::fs::read_dir(shadow_root.path()).unwrap().flatten() {
+            let _ = std::fs::remove_file(entry.path());
+        }
+        std::fs::write(&doc, b"a").unwrap();
+        let plan = scan(&ledger, &[drive_root.path().to_path_buf()], shadow_root.path());
+        assert_eq!(plan.restores.len(), 1, "the rollback is still detected");
+        assert!(!apply_restore(&plan.restores[0]), "without a shadow nothing is written");
+        assert_eq!(std::fs::read_to_string(&doc).unwrap(), "a", "the file is left untouched");
     }
 }

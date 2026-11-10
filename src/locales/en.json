@@ -757,6 +757,10 @@
     "customizationRepo": "ALwith U",
     "customizationOutro": "project. The main changes:",
     "customizationItems": [
+      "v0.3.6",
+      "Fixes the “Stop old versions overwriting local files” switch failing to save.",
+      "Drive guard restores now run inside the sync transaction, so they are no longer treated as outside edits that mint conflict copies.",
+      "The guard skips conflict copies and compares modification times between passes, cutting the disk it takes from sync.",
       "v0.3.5",
       "Models → ChatGPT gains a “Mute GPT model overload notices” switch: when on, no overload notice is shown and the bridge silently replays the same request until a real response arrives. Takes effect immediately.",
       "OpenRouter gains a “Model error alerts” switch: when off, HTTP 429 and SSE error.code=10000 are retried silently with a short backoff instead of showing “too many requests”.",

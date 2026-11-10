@@ -85,6 +85,22 @@ fn block_conflict_copies_is_a_registered_boolean_setting() {
     assert_eq!(restarted.values["drive.blockConflictCopies"], true);
 }
 #[test]
+fn version_guard_is_a_registered_boolean_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = SettingsStore::load(dir.path().into()).unwrap();
+    // The Drive pane's own switch. It was missing from the registry in 0.3.5, so flipping it
+    // surfaced "这个设置项未被识别" and the guard could never be enabled — the value never
+    // persisted, which also left the periodic scan permanently off.
+    s.update(changes(json!({"drive.versionGuard": true})), None).unwrap();
+    assert_eq!(s.values["drive.versionGuard"], true);
+    let (known, private) = partition_settings(s.values.clone());
+    assert_eq!(known["drive.versionGuard"], true);
+    assert!(!private.contains_key("drive.versionGuard"));
+    assert!(s.update(changes(json!({"drive.versionGuard": "on"})), None).is_err());
+    let restarted = SettingsStore::load(dir.path().into()).unwrap();
+    assert_eq!(restarted.values["drive.versionGuard"], true);
+}
+#[test]
 fn workspace_column_visibility_is_a_persisted_boolean() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = SettingsStore::load(dir.path().into()).unwrap();

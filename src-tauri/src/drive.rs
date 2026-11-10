@@ -80,6 +80,15 @@ impl DriveState {
         }
         self.service.as_deref().map_err(Clone::clone)
     }
+
+    /// Shared handle for callers that must hold the service across `.await` points (the version
+    /// guard restores a file inside a Drive transaction, on another task).
+    pub fn shared(&self) -> Result<Arc<DriveService>, String> {
+        if self.closing.load(Ordering::Acquire) {
+            return Err("Application is closing".into());
+        }
+        self.service.as_ref().map(Arc::clone).map_err(Clone::clone)
+    }
 }
 
 #[tauri3_specta::command]

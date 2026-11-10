@@ -334,6 +334,11 @@ fn setting_validity(key: &str, value: &Value) -> Option<bool> {
         // file tree. Display-only: sync keeps downloading them, so nothing is ever deleted from
         // the cloud by flipping this.
         | "drive.blockConflictCopies"
+        // Local guard against a rolled-back Drive file. Purely on this machine: it keeps content
+        // fingerprints and shadow copies, so the value belongs in the settings store like any
+        // other switch. Missing from this list, the toggle answered "Unknown or private settings
+        // key" and the feature could never be turned on at all.
+        | "drive.versionGuard"
         // Poll OpenRouter's public model catalog for newly published `:free` models.
         | "providers.freeModelWatch"
         // A short chime when a scheduled automation finishes (off by default).
