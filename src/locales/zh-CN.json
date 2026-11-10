@@ -288,7 +288,9 @@
       "switched": "已停止等待并切到 {{model}}。刚才那条消息需要重新发送一次，新模型才会开始回答。",
       "switchFailed": "已停止等待，但自动切换失败，请在底部模型选择器手动换一个。",
       "switchParked": "当前回合还占着旧模型，切换已排队；等这一轮结束或再次点击即可生效",
-      "pickManually": "已停止等待。请在底部模型选择器换一个模型再发。"
+      "pickManually": "已停止等待。请在底部模型选择器换一个模型再发。",
+      "retrying": "模型过载，正在自动重试（第 {{attempt}} 次）",
+      "retryFailed": "自动重试失败，请稍后重试或切换模型。"
     },
     "historyInterrupted": "已停止。Codex 历史可能未保存停止前的未完成回复。",
     "interrupted": "已停止",
@@ -749,10 +751,14 @@
     "customizationRepo": "ALwith U",
     "customizationOutro": "定制，主要调整内容如下：",
     "customizationItems": [
+      "v0.3.4",
+      "修复 Base URL 双斜杠和网络异常提示问题。",
+      "模型过载默认自动重试 5 次，可在大模型设置中调整，并按会话和模型独立计数。",
+      "增加云盘本地编辑防护与快照校验，降低旧版本覆盖风险。",
+      "Codex CLI 随应用包同步更新。",
       "v0.3.3",
-      "内置 Tauri 运行时与 CLI 升级到 v3.0.0-alpha.6。",
-      "锁定 codex-acp-v2 0.7.39、@alwith/api 0.5.3 与 ACP SDK 2.0.2，避免依赖自动漂移导致第三方模型路由失效。",
-      "复核模型调用与切换链路：过载提醒、断流提示、中途切换模型均无回归。",
+      "升级 Tauri 运行时与 CLI 至 v3.0.0-alpha.6。",
+      "固定 ACP、codex-acp-v2 与 @alwith/api 版本，避免第三方模型路由漂移。",
       "v0.3.2",
       "内置 Codex CLI 升级到 v0.167.0 版本。",
       "v0.3.1",
@@ -1320,7 +1326,9 @@
     "divisionApply": "立即应用",
     "divisionApplyHint": "应用后，新开启的分工直接使用这对模型",
     "divisionSaved": "分工默认已保存",
-    "divisionScopeNote": "只影响新开启分工的会话；已经开着分工的会话保留自己那一对，不会被这里覆盖。"
+    "divisionScopeNote": "只影响新开启分工的会话；已经开着分工的会话保留自己那一对，不会被这里覆盖。",
+    "overloadRetryCount": "过载自动重试次数",
+    "overloadRetryDescription": "默认 5 次；仅 GPT 过载事件计数，各会话和模型相互独立。"
   },
   "updater": {
     "installing": "正在安装更新…完成后将自动重启。",
@@ -2119,6 +2127,9 @@
     "providerSwitchFailedDetail": "切换厂商失败（{{detail}}），请新建一条会话继续。",
     "fileNotFound": "文件不存在：路径或资源未找到，检查文件是否还在原来的位置。",
     "networkUnreachable": "网络连接失败，请检查网络后重试。",
+    "providerUnreachable": "无法连接模型服务，请检查网络、代理或 VPN 后重试。",
+    "providerConnectionTimedOut": "连接模型服务超时，请稍后重试或切换模型。",
+    "providerRequestFailed": "模型服务请求失败，请稍后重试或切换模型。",
     "notSignedIn": "你还没有登录，请先登录 ALwith 账号。",
     "codexNotSignedIn": "还没有登录 Codex：点右上角头像完成 ChatGPT 登录后再试。",
     "sessionGone": "内核里找不到这条会话（{{id}}）：可能已被删除，或还没保存就随内核重启消失了。",

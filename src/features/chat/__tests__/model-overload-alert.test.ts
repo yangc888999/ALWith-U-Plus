@@ -41,7 +41,7 @@ function session(current: string, clock: number = Date.now() - 60_000): Session 
     restoring: false,
     readOnly: false,
     error: null,
-    items: [],
+    items: [{ id: "user-1", at: clock, replayed: false, _meta: null, kind: "user", content: [], echo: null }] as never,
     configOptions: [
       {
         configId: "model",
@@ -82,6 +82,10 @@ function emit(model: string, retryAfter: number | null = 324, reason: string = "
   for (const listener of host.listeners) listener({ payload: { model, retryAfter, reason } })
 }
 
+function emitOverload(model: string, retryAfter: number | null = 324) {
+  for (let attempt = 0; attempt < 5; attempt++) emit(model, retryAfter)
+}
+
 /** A tool still running locally: the upstream request is over, so a stall must not be claimed. */
 function runningTool() {
   const at = Date.now()
@@ -120,7 +124,7 @@ beforeEach(async () => {
 test("an overload event publishes a notice for the running session, not a floating toast", async () => {
   host.sessions["chat-1"] = session("gpt-6.1-sol")
   const mod = await subscribe()
-  emit("gpt-6.1-sol", 324)
+  emitOverload("gpt-6.1-sol", 324)
   const notice = mod.overloadNotice()
   expect(notice?.sessionId).toBe("chat-1")
   expect(notice?.modelName).toBe("6.1 Sol")
@@ -133,8 +137,7 @@ test("repeated retries of the same turn do not republish the notice", async () =
   const mod = await subscribe()
   let published = 0
   mod.subscribeOverload(() => published++)
-  emit("gpt-6.1-sol")
-  emit("gpt-6.1-sol")
+  emitOverload("gpt-6.1-sol")
   expect(published).toBe(1)
 })
 
@@ -148,7 +151,7 @@ test("no running session on that model means no notice", async () => {
 test("the close button only dismisses its own session's notice", async () => {
   host.sessions["chat-1"] = session("gpt-6.1-sol")
   const mod = await subscribe()
-  emit("gpt-6.1-sol")
+  emitOverload("gpt-6.1-sol")
   mod.dismissOverload("another-chat")
   expect(mod.overloadNotice()).not.toBeNull()
   mod.dismissOverload("chat-1")
@@ -185,7 +188,7 @@ test("an unknown reason is never reported as an overload", async () => {
 test("a gateway model is recognized under the bridge's <gateway>/<model> name", async () => {
   host.sessions["chat-1"] = session("gateway:deepseek:deepseek-flash")
   const mod = await subscribe()
-  emit("deepseek/deepseek-flash", 324)
+  emitOverload("deepseek/deepseek-flash", 324)
   expect(mod.overloadNotice()?.sessionId).toBe("chat-1")
 })
 
@@ -209,7 +212,7 @@ test("a notice is bound to one model id, not to every turn in the window", async
 test("the notice keeps the model id it was raised for", async () => {
   host.sessions["chat-1"] = session("gpt-6.1-sol")
   const mod = await subscribe()
-  emit("gpt-6.1-sol", 324)
+  emitOverload("gpt-6.1-sol", 324)
   // The progress row needs this to prove A's capacity is not B's.
   expect(mod.overloadNotice()?.model).toBe("gpt-6.1-sol")
 })
@@ -221,7 +224,7 @@ test("two chats on one model: the notice goes to the most recently updated one",
   newer.id = "newer"
   host.sessions = { older, newer }
   const mod = await subscribe()
-  emit("gpt-6.1-sol", 324)
+  emitOverload("gpt-6.1-sol", 324)
   expect(mod.overloadNotice()?.sessionId).toBe("newer")
 })
 
@@ -235,10 +238,10 @@ test("a second chat on the same model still gets its own notice", async () => {
   second.id = "chat-second"
   host.sessions = { first, second }
   const mod = await subscribe()
-  emit("gpt-6.1-sol", 324)
+  emitOverload("gpt-6.1-sol", 324)
   expect(mod.overloadNotice()?.sessionId).toBe("chat-second")
   // The reader moves to the other chat; it is now the most recent turn on the very same model.
   first.clock = Date.now() - 10_000
-  emit("gpt-6.1-sol", 324)
+  emitOverload("gpt-6.1-sol", 324)
   expect(mod.overloadNotice()?.sessionId).toBe("chat-first")
 })

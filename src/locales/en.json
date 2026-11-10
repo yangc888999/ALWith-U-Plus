@@ -288,7 +288,9 @@
       "switched": "Stopped waiting and switched to {{model}}. Resend your last message so the new model can answer it.",
       "switchFailed": "Stopped waiting, but the automatic switch failed. Pick another model in the composer.",
       "switchParked": "The current turn still holds the old model; the switch is queued for the next turn",
-      "pickManually": "Stopped waiting. Pick another model in the composer and send again."
+      "pickManually": "Stopped waiting. Pick another model in the composer and send again.",
+      "retrying": "Model overloaded; retrying automatically (attempt {{attempt}})",
+      "retryFailed": "Automatic retry failed. Try again later or switch models."
     },
     "historyInterrupted": "Stopped. Codex history may not contain the unfinished response.",
     "interrupted": "Stopped",
@@ -749,10 +751,14 @@
     "customizationRepo": "ALwith U",
     "customizationOutro": "project. The main changes:",
     "customizationItems": [
+      "v0.3.4",
+      "Fixed double-slash Base URLs and misleading network errors.",
+      "Model overloads retry five times by default; the count is configurable and isolated per session and model.",
+      "Added local editing protection and snapshots to reduce cloud-drive overwrite risk.",
+      "Codex CLI now updates with the application package.",
       "v0.3.3",
-      "The bundled Tauri runtime and CLI now target v3.0.0-alpha.6.",
-      "codex-acp-v2 is pinned to 0.7.39, @alwith/api to 0.5.3, and the ACP SDK to 2.0.2, so a fresh install cannot drift into an incompatible build that breaks third-party model routing.",
-      "Rechecked the model call and switch paths: capacity notices, interruption messages, and mid-turn model switches show no regressions.",
+      "Upgraded the Tauri runtime and CLI to v3.0.0-alpha.6.",
+      "Pinned ACP, codex-acp-v2, and @alwith/api to prevent third-party routing drift.",
       "v0.3.2",
       "The bundled Codex CLI is now v0.167.0.",
       "v0.3.1",
@@ -1320,7 +1326,9 @@
     "divisionApply": "Apply division defaults",
     "divisionApplyHint": "New splits start from this pair",
     "divisionSaved": "Division defaults saved",
-    "divisionScopeNote": "Only chats that start a new split pick this up; a chat that already has one keeps its own pair and is never overwritten."
+    "divisionScopeNote": "Only chats that start a new split pick this up; a chat that already has one keeps its own pair and is never overwritten.",
+    "overloadRetryCount": "Automatic overload retries",
+    "overloadRetryDescription": "Default 5; GPT overload events are counted independently per session and model."
   },
   "updater": {
     "installing": "Installing update… The app will restart automatically.",
@@ -2119,6 +2127,9 @@
     "providerSwitchFailedDetail": "Changing the provider failed ({{detail}}). Start a new chat to continue.",
     "fileNotFound": "File not found: the path or resource is missing (HTTP 404).",
     "networkUnreachable": "Could not reach the network. Check the connection and try again.",
+    "providerUnreachable": "Could not connect to the model service. Check your network, proxy, or VPN, then retry.",
+    "providerConnectionTimedOut": "Connecting to the model service timed out. Retry later or switch models.",
+    "providerRequestFailed": "The request to the model service failed. Retry later or switch models.",
     "notSignedIn": "You are not signed in yet. Sign in with your ALwith account first.",
     "codexNotSignedIn": "Not signed in to Codex — sign in to ChatGPT first, then try again.",
     "sessionGone": "The engine cannot find this chat ({{id}}): it may have been deleted, or it was never saved before the engine restarted.",

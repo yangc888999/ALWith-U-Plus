@@ -18,6 +18,7 @@ import { info } from "@tauri-apps/plugin-log"
 import { selectedModelId } from "@/agent/native-models"
 import { client } from "@/lib/client"
 import { activeTool } from "./turn-activity"
+import { overloadRetryCount } from "@/lib/overload-retry-settings"
 
 type StallReason = "overloaded" | "no_ack"
 type StallEvent = { model: string; reason?: StallReason; retryAfter: number | null }
@@ -36,6 +37,7 @@ export type OverloadNotice = {
 }
 
 const lastShown = new Map<string, number>()
+const overloadAttempts = new Map<string, number>()
 const listeners = new Set<() => void>()
 let notice: OverloadNotice | null = null
 
@@ -79,6 +81,11 @@ function choices(session: Session): Choice[] {
 
 function label(session: Session, value: string): string {
   return choices(session).find((choice) => choice.value === value)?.name ?? value
+}
+
+function turnKey(session: Session, model: string): string | null {
+  const user = [...session.items].reverse().find((item) => item.kind === "user")
+  return user === undefined ? null : `${session.id}:${model}:${user.id}`
 }
 
 /** A turn executing a local tool has no upstream request open, so it cannot be stalling upstream. */
@@ -142,7 +149,14 @@ export async function startModelOverloadAlerts(): Promise<() => void> {
     const session = runningSession(model)
     if (session === null) return
     const now = Date.now()
-    const shownKey = `${session.id}:${model}`
+    const shownKey = turnKey(session, model)
+    if (shownKey === null) return
+    const attempt = (overloadAttempts.get(shownKey) ?? 0) + 1
+    overloadAttempts.set(shownKey, attempt)
+    if (reason === "overloaded" && attempt < overloadRetryCount()) {
+      void info(`[stall] automatic retry session=${session.id} model=${model} attempt=${attempt}`)
+      return
+    }
     if (now - (lastShown.get(shownKey) ?? 0) < 60_000) return
     // Tokens are still being billed and the store is still applying updates: output is flowing, so
     // this turn is not stalled. A retry notice from an earlier request must not stick to it — that

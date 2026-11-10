@@ -16,6 +16,9 @@ type Rule = {
 }
 
 const RULES: Rule[] = [
+  { match: /bridge_upstream_timeout/i, key: "error.providerConnectionTimedOut" },
+  { match: /bridge_upstream_unreachable/i, key: "error.providerUnreachable" },
+  { match: /bridge_upstream_request_failed/i, key: "error.providerRequestFailed" },
   // Sentences the Codex binary, the ACP adapter and ChatGPT's 401 body hand back verbatim.
   // They are translated by shape here, never rewritten at the source: the English originals stay
   // in the logs and diagnostics, and stay available to every other locale. Keep these ahead of

@@ -149,7 +149,7 @@ fn handle(request: tiny_http::Request) -> Result<(), String> {
 
     match (method.as_str(), action) {
         ("post", "responses") => forward_responses(request, &upstream_base, authorization.as_deref()),
-        ("get", "models") => forward_plain(request, &format!("{upstream_base}/models"), "GET", authorization.as_deref()),
+        ("get", "models") => forward_plain(request, &upstream_endpoint(&upstream_base, "models"), "GET", authorization.as_deref()),
         _ => respond(request, 404, "application/json", br#"{"error":{"message":"bridge: unsupported path"}}"#),
     }
 }
@@ -249,6 +249,10 @@ fn strip_web_search_tools(parsed: &mut Value) -> usize {
 }
 
 /// POST /responses: sanitize the body, then stream the upstream answer straight back.
+fn upstream_endpoint(base_url: &str, path: &str) -> String {
+    format!("{}/{}", base_url.trim_end_matches('/'), path.trim_start_matches('/'))
+}
+
 fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, authorization: Option<&str>) -> Result<(), String> {
     let mut body = Vec::new();
     request
@@ -261,7 +265,7 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
             return relay(
                 request,
                 "",
-                &format!("{upstream_base}/responses"),
+                &upstream_endpoint(upstream_base, "responses"),
                 authorization,
                 &[],
                 body,
@@ -276,7 +280,7 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
     relay(
         request,
         parsed.get("model").and_then(Value::as_str).unwrap_or(""),
-        &format!("{upstream_base}/responses"),
+        &upstream_endpoint(upstream_base, "responses"),
         authorization,
         &[],
         sanitize(&payload),
@@ -325,7 +329,7 @@ fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
     relay(
         request,
         &selection,
-        &format!("{}/responses", route.base_url),
+        &upstream_endpoint(&route.base_url, "responses"),
         Some(&authorization),
         &[],
         payload,
@@ -783,13 +787,7 @@ fn relay(
             // on (switch model, check the proxy) in the same second the connection failed.
             Err(error) => {
                 log::warn!("bridge: upstream unreachable: {error}");
-                let body = serde_json::json!({
-                    "error": {
-                        "message": format!("连接模型网关失败：{error}"),
-                        "type": "bridge_upstream_unreachable"
-                    }
-                })
-                .to_string();
+                let body = upstream_error_body(&error);
                 return respond(request, 502, "application/json", body.as_bytes());
             }
         };
@@ -913,19 +911,28 @@ fn forward_plain(request: tiny_http::Request, url: &str, method: &str, authoriza
         // Same rule as `relay`: a model list that cannot be fetched is an answer, not silence.
         Err(error) => {
             log::warn!("bridge: model list unreachable: {error}");
-            let body = serde_json::json!({
-                "error": {
-                    "message": format!("连接模型网关失败：{error}"),
-                    "type": "bridge_upstream_unreachable"
-                }
-            })
-            .to_string();
+            let body = upstream_error_body(&error);
             return respond(request, 502, "application/json", body.as_bytes());
         }
     };
     let status = response.status().as_u16();
     let payload = response.bytes().map_err(|error| format!("upstream body: {error}"))?;
     respond(request, status, "application/json", &payload)
+}
+
+fn upstream_error(error: &reqwest::Error) -> (&'static str, &'static str) {
+    if error.is_timeout() {
+        ("bridge_upstream_timeout", "连接模型服务超时，请稍后重试或切换模型。")
+    } else if error.is_connect() {
+        ("bridge_upstream_unreachable", "无法连接模型服务，请检查网络、代理或 VPN 后重试。")
+    } else {
+        ("bridge_upstream_request_failed", "模型服务请求失败，请稍后重试或切换模型。")
+    }
+}
+
+fn upstream_error_body(error: &reqwest::Error) -> String {
+    let (code, message) = upstream_error(error);
+    serde_json::json!({"error": {"message": format!("{code}: {message}"), "type": code}}).to_string()
 }
 
 fn respond(request: tiny_http::Request, status: u16, content_type: &str, payload: &[u8]) -> Result<(), String> {
@@ -1001,6 +1008,12 @@ mod tests {
         let mut body: Value = serde_json::from_slice(br#"{"model":"m","input":[]}"#).unwrap();
         assert_eq!(strip_web_search_tools(&mut body), 0);
         assert!(body.get("tools").is_none());
+    }
+
+    #[test]
+    fn endpoint_join_trims_both_sides() {
+        assert_eq!(upstream_endpoint("https://api.example.com", "responses"), "https://api.example.com/responses");
+        assert_eq!(upstream_endpoint("https://api.example.com///", "/responses"), "https://api.example.com/responses");
     }
 
     #[test]

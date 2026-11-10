@@ -1,6 +1,6 @@
 import { getVersion } from "@tauri-apps/api/app"
 import { invoke, isTauri } from "@tauri-apps/api/core"
-import { ChevronsRightIcon, RefreshCw } from "lucide-react"
+import { ChevronsRightIcon } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -14,8 +14,6 @@ import { openExternal } from "@/lib/open"
 import appIcon from "../../../../src-tauri/icons/128x128@2x.png"
 
 import { AutoUpdateRow } from "./auto-update-row"
-import { Spinner } from "@/components/ui/spinner"
-
 import { SettingRow, SettingsCard } from "./shared"
 
 const UPSTREAM_PROJECT_URL = "https://github.com/ALwith-ai/alwith-u"
@@ -55,13 +53,6 @@ export function AboutSection() {
       disposed = true
     }
   }, [])
-  // The engine row rewrites the CLI binary; re-reading it here keeps 关于 honest after install.
-  const refreshCliVersion = (): void => {
-    if (!isTauri()) return
-    void invoke<string>("codex_version")
-      .then(setCliVersion)
-      .catch(() => undefined)
-  }
   useEffect(() => {
     if (!isTauri()) return
     void useUpdaterStore
@@ -159,6 +150,13 @@ export function AboutSection() {
 
         <SettingsCard title={t("settings.updates")}>
           <AutoUpdateRow compact />
+        </SettingsCard>
+
+        <SettingsCard title={t("settings.buildInfo")}>
+          <EngineUpdateRow cliVersion={cliVersion} />
+        </SettingsCard>
+
+        <SettingsCard title={t("settings.changeLog")}>
           <button
             type="button"
             onClick={() => setChangeLogOpen(true)}
@@ -167,10 +165,6 @@ export function AboutSection() {
             <span className="text-sm leading-5 font-medium">{t("settings.changeLog")}</span>
             <ChevronsRightIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           </button>
-        </SettingsCard>
-
-        <SettingsCard title={t("settings.buildInfo")}>
-          <EngineUpdateRow cliVersion={cliVersion} onInstalled={refreshCliVersion} />
           {buildTime !== null && (
             <SettingRow compact title={t("settings.buildTime")}>
               <span className="text-sm text-muted-foreground">{buildTime}</span>
@@ -234,86 +228,13 @@ function ChangeLogDialog({
 }
 
 /**
- * 引擎行：版本号 + 检查更新按钮。
- *
- * 检查走 npm registry 镜像（GitHub release 资产在这台机器上不可达）；有新版本时给出安装
- * 按钮——下载平台二进制包、装入 `codex-override`，重启应用后生效（引擎表优先用它）。
+ * 引擎行：显示内置 Codex CLI 版本。Codex CLI 随 ALWith L 应用包更新，不提供独立更新入口。
  */
-function EngineUpdateRow({ cliVersion, onInstalled }: { cliVersion: string | null; onInstalled: () => void }) {
+function EngineUpdateRow({ cliVersion }: { cliVersion: string | null }) {
   const { t } = useTranslation()
-  const [checking, setChecking] = useState(false)
-  const [installing, setInstalling] = useState(false)
-  const [status, setStatus] = useState<{ current: string; latest: string | null; hasUpdate: boolean } | null>(null)
-  const [note, setNote] = useState<string | null>(null)
-
-  const check = (): void => {
-    setChecking(true)
-    setNote(null)
-    invoke<{ current: string; latest: string | null; hasUpdate: boolean }>("codex_check_engine_update")
-      .then((result) => {
-        setStatus(result)
-        if (!result.latest) setNote(t("settings.engineCheckFailed"))
-      })
-      .catch((error: unknown) => {
-        setNote(t("settings.engineCheckFailed"))
-        toast.error(error instanceof Error ? error.message : String(error))
-      })
-      .finally(() => setChecking(false))
-  }
-
-  const install = (): void => {
-    if (status?.latest === null || status?.latest === undefined) return
-    setInstalling(true)
-    invoke<string>("codex_install_engine_update", { version: status.latest })
-      .then(() => {
-        setNote(t("settings.engineInstalled", { version: status.latest }))
-        setStatus({ ...status, hasUpdate: false })
-        toast.success(t("settings.engineInstalled", { version: status.latest }))
-        // Re-read the CLI on disk: the row used to keep showing the version the app launched with
-        // until the settings window was reopened.
-        onInstalled()
-      })
-      .catch((error: unknown) => {
-        toast.error(error instanceof Error ? error.message : String(error))
-      })
-      .finally(() => setInstalling(false))
-  }
-
-  const upToDate = status !== null && !status.hasUpdate && status.latest !== null
   return (
-    <>
-      <SettingRow compact title={t("settings.engine")}>
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">
-            {t("settings.codexVersion", { version: cliVersion ?? "—" })}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 gap-1.5 px-2.5 text-xs"
-            disabled={checking || installing}
-            onClick={check}
-          >
-            {checking ? (
-              <Spinner data-icon="inline-start" />
-            ) : (
-              <RefreshCw className="size-3.5" aria-hidden="true" />
-            )}
-            {t("settings.engineCheckUpdate")}
-          </Button>
-          {status?.hasUpdate === true && status.latest !== null && (
-            <Button size="sm" className="h-7 px-2 text-xs" disabled={installing} onClick={install}>
-              {installing && <Spinner data-icon="inline-start" />}
-              {t("settings.engineInstall", { version: status.latest })}
-            </Button>
-          )}
-        </div>
-      </SettingRow>
-      {(upToDate || note !== null) && (
-        <p className="px-4 text-xs text-muted-foreground">
-          {upToDate ? t("settings.engineUpToDate") : note}
-        </p>
-      )}
-    </>
+    <SettingRow compact title={t("settings.engine")}>
+      <span className="text-sm text-muted-foreground">{t("settings.codexVersion", { version: cliVersion ?? "—" })}</span>
+    </SettingRow>
   )
 }

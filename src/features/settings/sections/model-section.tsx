@@ -17,6 +17,8 @@ import {
   SelectValue
 } from "@/components/alwith-ui/select"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { MAX_OVERLOAD_RETRY_COUNT, MIN_OVERLOAD_RETRY_COUNT, overloadRetryCount, setOverloadRetryCount, subscribeOverloadRetryCount } from "@/lib/overload-retry-settings"
 import { NATIVE_MODEL_GROUP } from "@/agent/native-models"
 import {
   setDefaultModelChoice,
@@ -180,6 +182,8 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
     modelFastModeSnapshot
   )
   const draftFast = draftModel !== AUTO && fastModes[draftModel] === true
+  const [retryCount, setRetryCount] = useState(overloadRetryCount)
+  useSyncExternalStore(subscribeOverloadRetryCount, overloadRetryCount, overloadRetryCount)
   const dirty = draftModel !== (selected ?? AUTO) || draftEffort !== (effort ?? AUTO)
 
   const apply = (): void => {
@@ -307,6 +311,27 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
           {t("defaultModel.catalogUnavailable")}
         </p>
       )}
+      <div className="mb-3 flex items-center justify-between gap-3 rounded-md border px-3 py-2">
+        <div>
+          <p className="text-sm font-medium">{t("defaultModel.overloadRetryCount")}</p>
+          <p className="text-xs text-muted-foreground">{t("defaultModel.overloadRetryDescription")}</p>
+        </div>
+        <Input
+          type="number"
+          min={MIN_OVERLOAD_RETRY_COUNT}
+          max={MAX_OVERLOAD_RETRY_COUNT}
+          value={retryCount}
+          className="w-20"
+          onChange={(event) => {
+            const value = Number(event.target.value)
+            if (!Number.isNaN(value)) {
+              setRetryCount(value)
+              setOverloadRetryCount(value)
+            }
+          }}
+          aria-label={t("defaultModel.overloadRetryCount")}
+        />
+      </div>
       {/* Same four columns as 分工默认模型: 角色 | 默认模型 | 默认 Effort | 加速. The top inset comes
           from the card body rule, so it matches every other card. */}
       <div className="space-y-2 pb-3">
