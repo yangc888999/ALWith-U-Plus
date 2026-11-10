@@ -86,7 +86,7 @@ function CompactField({
   return (
     <div
       className={cn(
-        "flex min-w-0 flex-col gap-0.5 rounded-lg border border-border/70 bg-muted/15 px-2.5 py-2 transition-colors focus-within:border-ring/60",
+        "flex min-w-0 flex-col gap-1 px-3.5 py-2.5 transition-colors focus-within:bg-muted/15",
         className
       )}
     >
@@ -312,15 +312,15 @@ export function NewTaskDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[92vh] min-h-0 flex-col overflow-hidden sm:max-w-2xl">
-        <DialogHeader className="shrink-0">
+      <DialogContent className="flex max-h-[92vh] min-h-0 flex-col overflow-hidden border-border/70 bg-background/95 p-0 shadow-2xl sm:max-w-3xl">
+        <DialogHeader className="shrink-0 border-b border-border/60 px-6 pb-4 pt-6">
           <DialogTitle>{t(task === null ? "automation.newTitle" : "automation.editTitle")}</DialogTitle>
           <DialogDescription className="text-xs leading-5">{t("automation.newDesc")}</DialogDescription>
         </DialogHeader>
 
         <form
           id="automation-task-form"
-          className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto py-2"
+          className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-5"
           onSubmit={(event) => {
             event.preventDefault()
             submit()
@@ -334,11 +334,11 @@ export function NewTaskDialog({
             onChange={(event) => patch({ name: event.target.value })}
             placeholder={t("automation.fieldNamePlaceholder")}
             autoFocus
-            className="h-10 rounded-lg border-border/70 bg-transparent px-3 text-sm shadow-none"
+            className="h-11 rounded-lg border-border/60 bg-muted/20 px-3.5 text-sm shadow-none transition-colors focus-visible:bg-background"
           />
 
           {/* 提示词：一个大输入区，工作空间 / 完全访问做成它底部的两个小胶囊。 */}
-          <div className="flex flex-col overflow-hidden rounded-xl border border-border/70 bg-muted/15 transition-colors focus-within:border-ring/60">
+          <div className="flex flex-col overflow-hidden rounded-xl border border-border/60 bg-muted/10 transition-colors focus-within:border-ring/60 focus-within:bg-muted/15">
             <Textarea
               id="automation-prompt"
               aria-label={t("automation.fieldPrompt")}
@@ -406,8 +406,8 @@ export function NewTaskDialog({
             </div>
           </div>
 
-          {/* 调度：重复 / 时间 / 有效期，三个并排的小格子（对齐参考图的一行三下拉）。 */}
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {/* 调度：重复 / 时间 / 有效期共用一个容器，内部用细分隔线分成三格。 */}
+          <div className="grid grid-cols-1 overflow-hidden rounded-xl border border-border/60 bg-muted/10 [&>*+*]:border-t [&>*+*]:border-border/50 sm:grid-cols-3 sm:[&>*+*]:border-l sm:[&>*+*]:border-t-0">
             <CompactField label={t("automation.fieldRepeat")} htmlFor="automation-repeat">
               <select
                 id="automation-repeat"
@@ -480,8 +480,8 @@ export function NewTaskDialog({
             </CompactField>
           </div>
 
-          {/* 运行模型：模型独占一行（名字长），Effort / 加速并排。同样不套分组卡片。 */}
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {/* 运行模型：模型独占一行（名字长），Effort / 加速并排，共用一个容器。 */}
+          <div className="grid grid-cols-1 overflow-hidden rounded-xl border border-border/60 bg-muted/10 sm:grid-cols-2">
             <CompactField className="sm:col-span-2" label={t("automation.fieldModel")} htmlFor="automation-model">
               <select
                 id="automation-model"
@@ -510,7 +510,11 @@ export function NewTaskDialog({
                 {t("automation.modelHint")}
               </p>
             </CompactField>
-            <CompactField label={t("automation.fieldEffort")} htmlFor="automation-effort">
+            <CompactField
+              className="border-t border-border/50 sm:border-r"
+              label={t("automation.fieldEffort")}
+              htmlFor="automation-effort"
+            >
               <select
                 id="automation-effort"
                 className={bareFieldClass}
@@ -531,7 +535,11 @@ export function NewTaskDialog({
                 </p>
               )}
             </CompactField>
-            <CompactField label={t("automation.fieldFast")} htmlFor="automation-fast">
+            <CompactField
+              className="border-t border-border/50"
+              label={t("automation.fieldFast")}
+              htmlFor="automation-fast"
+            >
               <select
                 id="automation-fast"
                 className={bareFieldClass}
@@ -548,7 +556,7 @@ export function NewTaskDialog({
           </div>
 
           {/* 推送结果到飞书：常驻可见，新建任务默认打开（收件人 = 授权人本人）。单层边框，无内套。 */}
-          <div className="flex flex-col gap-2.5 rounded-xl border border-border/70 bg-muted/15 px-3 py-2.5">
+          <div className="flex flex-col gap-3 rounded-xl border border-border/60 bg-muted/10 px-4 py-3">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <span className="text-sm font-medium text-foreground">{t("automation.fieldLark")}</span>
@@ -668,7 +676,7 @@ export function NewTaskDialog({
 
           {/* 右下：取消 / 确定 */}
         </form>
-        <DialogFooter className="shrink-0 gap-2 border-t border-border pt-3">
+        <DialogFooter className="shrink-0 gap-2 border-t border-border/60 bg-muted/10 px-6 py-4">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             {t("actions.cancel")}
           </Button>

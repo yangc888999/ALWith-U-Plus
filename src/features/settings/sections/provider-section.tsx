@@ -59,6 +59,13 @@ import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { defaultModelSnapshot, subscribeDefaultModel } from "@/lib/default-model"
 import {
+  MAX_OVERLOAD_RETRY_COUNT,
+  MIN_OVERLOAD_RETRY_COUNT,
+  overloadRetryCount,
+  setOverloadRetryCount,
+  subscribeOverloadRetryCount
+} from "@/lib/overload-retry-settings"
+import {
   modelFastModeSnapshot,
   setModelFastMode,
   subscribeModelFastMode
@@ -250,7 +257,6 @@ export function ProviderSection() {
   }, [])
   const [customDraftVersion, setCustomDraftVersion] = useState(0)
   const [testResults, setTestResults] = useState<Record<string, ProviderTestResult>>({})
-  const [freeWatch, setFreeWatch] = useBooleanSetting(FREE_MODEL_WATCH_SETTING)
 
   const save = async (
     revision: number,
@@ -457,19 +463,6 @@ export function ProviderSection() {
               {t("provider.applyNow")}
             </Button>
           )}
-          {/* Global watch: it polls OpenRouter's public catalog, so it belongs above the per-vendor
-              tabs rather than inside one provider card. */}
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
-            <div className="min-w-0">
-              <p className="text-xs font-medium">{t("provider.freeWatchTitle")}</p>
-              <p className="text-[11px] leading-4 text-muted-foreground">{t("provider.freeWatchDesc")}</p>
-            </div>
-            <Switch
-              checked={freeWatch}
-              onCheckedChange={setFreeWatch}
-              aria-label={t("provider.freeWatchTitle")}
-            />
-          </div>
           {snapshot && (
           <>
             <ProviderTabs
@@ -958,6 +951,9 @@ export function ProviderRow({
   // exactly as they were for day-to-day editing.
   const [modelFilter, setModelFilter] = useState("")
   const [freeOnly, setFreeOnly] = useState(false)
+  const [retryCount, setRetryCount] = useState(overloadRetryCount)
+  useSyncExternalStore(subscribeOverloadRetryCount, overloadRetryCount, overloadRetryCount)
+  const [freeWatch, setFreeWatch] = useBooleanSetting(FREE_MODEL_WATCH_SETTING)
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedKeys, setSelectedKeys] = useState<ReadonlySet<string>>(() => new Set())
   // The manual 保存模型 action needs to know whether the pending edit was an add/remove, so the
@@ -1620,10 +1616,40 @@ export function ProviderRow({
                 </Field>
               </CollapsibleContent>
             </Collapsible>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">{t("defaultModel.overloadRetryCount")}</p>
+                <p className="text-xs text-muted-foreground">{t("defaultModel.overloadRetryDescription")}</p>
+              </div>
+              <Input
+                type="number"
+                min={MIN_OVERLOAD_RETRY_COUNT}
+                max={MAX_OVERLOAD_RETRY_COUNT}
+                value={retryCount}
+                className="w-20"
+                onChange={(event) => {
+                  const value = Number(event.target.value)
+                  if (!Number.isNaN(value)) {
+                    setRetryCount(value)
+                    setOverloadRetryCount(value)
+                  }
+                }}
+                aria-label={t("defaultModel.overloadRetryCount")}
+              />
+            </div>
           </section>
         </>
       )}
       <Separator />
+      {provider.id === "openrouter" && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
+          <div className="min-w-0">
+            <p className="text-sm font-medium">{t("provider.freeWatchTitle")}</p>
+            <p className="text-xs text-muted-foreground">{t("provider.freeWatchDesc")}</p>
+          </div>
+          <Switch checked={freeWatch} onCheckedChange={setFreeWatch} aria-label={t("provider.freeWatchTitle")} />
+        </div>
+      )}
       <section className="space-y-3 pb-2" aria-labelledby={`${provider.id}-models`}>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h4 id={`${provider.id}-models`} className="text-sm font-medium">
