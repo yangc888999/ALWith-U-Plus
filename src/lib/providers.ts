@@ -218,6 +218,17 @@ export function providerGroups(
         label: model.label,
         ...(model.description == null ? {} : { description: model.description })
       }))
+    })),
+    // Managed providers are saved through a different path but reach the engine through the
+    // same catalog. Leaving them out made a saved managed model invisible to every picker.
+    ...(snapshot.managedProviders ?? []).map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      models: provider.models.map((model) => ({
+        id: model.api_id,
+        label: model.label,
+        ...(model.description == null ? {} : { description: model.description })
+      }))
     }))
   ]
 }

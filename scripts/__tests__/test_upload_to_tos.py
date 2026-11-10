@@ -18,6 +18,7 @@ class UploadToTosTests(unittest.TestCase):
             "alwith-u_0.1.0_windows_x64-setup.exe",
             "alwith-u_0.1.0_windows_x64-setup.exe.sig",
             "alwith-u_0.1.0_windows_x64.msi",
+            "alwith-u_0.1.0_windows_x64.msi.sig",
         ]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -51,6 +52,28 @@ class UploadToTosTests(unittest.TestCase):
             file.write_bytes(b"fixture")
             with self.assertRaisesRegex(ValueError, "version"):
                 uploader.mirror_release(root, "v0.2.0", upload)
+
+    def test_requires_a_signature_for_every_updater_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "alwith-u_0.1.0_macos_aarch64.app.tar.gz").write_bytes(b"fixture")
+
+            def upload(file: Path, key: str) -> None:
+                self.fail("Invalid input must not reach TOS")
+
+            with self.assertRaisesRegex(ValueError, "Missing updater signature"):
+                uploader.mirror_release(root, "v0.1.0", upload)
+
+    def test_rejects_a_signature_with_no_matching_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "alwith-u_0.1.0_windows_x64-ghost.exe.sig").write_bytes(b"signed")
+
+            def upload(file: Path, key: str) -> None:
+                self.fail("Invalid input must not reach TOS")
+
+            with self.assertRaisesRegex(ValueError, "no matching archive"):
+                uploader.mirror_release(root, "v0.1.0", upload)
 
     def test_upload_failure_propagates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

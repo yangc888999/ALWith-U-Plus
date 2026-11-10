@@ -263,7 +263,24 @@ describe("任务 CRUD 与启停", () => {
     store.setTaskEnabled(task.id, true)
     // 刚启用会重算到未来，手动把排期推进到「已到点」再验证筛选。
     store.markTaskFired(task.id, at(2026, 1, 4, 9, 0))
-    expect(store.dueTasks(at(2026, 1, 5, 9, 0))).toHaveLength(1)
+    // A schedule that just missed its slot is still due; a day-old one is deliberately skipped.
+    expect(store.dueTasks(at(2026, 1, 5, 8, 5) + 30_000)).toHaveLength(1)
+    expect(store.dueTasks(at(2026, 1, 5, 9, 0))).toHaveLength(0)
+  })
+
+  test("a persisted schedule is not replayed after its validity ended or a long sleep", async () => {
+    const store = await fresh()
+    store.createTask(draft({ validUntil: "2026-01-02" }))
+    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}") as {
+      tasks: Array<Record<string, unknown>>
+      runs: unknown[]
+    }
+    raw.tasks[0]!.nextRunAt = at(2026, 1, 1, 8, 5)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(raw))
+    store.reloadFromStorage()
+    expect(store.dueTasks(at(2026, 1, 1, 8, 5) + 30_000)).toHaveLength(1)
+    // Outside the validity window, and far past the slot after a sleep/relaunch.
+    expect(store.dueTasks(at(2026, 1, 9, 9, 0))).toHaveLength(0)
   })
 
   test("createTask：有效期已过 → nextRunAt 为 null", async () => {
@@ -467,6 +484,14 @@ describe("运行记录裁剪与运行中标记", () => {
     // 对不存在的 id 是空操作，不新增也不报错
     store.patchRunRecord("nope", { needsAuth: true })
     expect(store.listRuns()).toHaveLength(1)
+  })
+
+  test("needsAuth survives a storage round-trip", async () => {
+    const store = await fresh()
+    const run = store.startAutomationRun(req())
+    store.patchRunRecord(run.id, { needsAuth: true })
+    store.reloadFromStorage()
+    expect(store.listRuns()[0]?.needsAuth).toBe(true)
   })
 
   test("运行记录超过上限后只保留最近 200 条，最旧的被丢弃", async () => {

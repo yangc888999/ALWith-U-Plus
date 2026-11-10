@@ -3395,9 +3395,11 @@ test("a turn that died without an idle update stops counting as busy once its cl
 test("a live turn stays busy even when neither clock moves", async () => {
   const { client, fake } = await make()
   const id = await client.newSession("/tmp/long-tool-turn")
-  // A hung acknowledgement keeps the prompt promise pending, i.e. a genuinely live turn.
-  fake.promptHang.current = () => true
-  void client.prompt(id, [{ type: "text", text: "long turn" }]).catch(() => null)
+  // The prompt is accepted at once (receipt resolves); only the terminal `idle` is withheld —
+  // the real shape of a long silent turn. The live-turn heartbeat must survive that receipt.
+  fake.promptHoldIdle.current = () => true
+  const receipt = await client.prompt(id, [{ type: "text", text: "long turn" }])
+  expect(typeof receipt).toBe("string")
   await vi.waitFor(() => expect(client.session(id).state).toBe("running"))
   const probe = client as unknown as {
     sessionBusy: (id: string) => boolean
@@ -3438,6 +3440,32 @@ test("a live turn stays busy even when neither clock moves", async () => {
     // without that guard a parked model write would land and cancel the healthy stream.
     expect(probe.sessionBusy(id)).toBe(true)
     expect(probe.stalledTurn(id)).toBe(false)
+  } finally {
+    clock.mockRestore()
+  }
+})
+
+test("an accepted turn is not misjudged stale after a long silent stretch", async () => {
+  const { client, fake } = await make()
+  const id = await client.newSession("/tmp/silent-stretch")
+  fake.promptHoldIdle.current = () => true
+  // The receipt has resolved; from here on the turn emits nothing at all (one long tool call).
+  const receipt = await client.prompt(id, [{ type: "text", text: "silent" }])
+  expect(typeof receipt).toBe("string")
+  await vi.waitFor(() => expect(client.session(id).state).toBe("running"))
+  const probe = client as unknown as {
+    sessionBusy: (id: string) => boolean
+    stalledTurn: (id: string) => boolean
+  }
+  // Both change-detector clocks go stale during the silence. Only the heartbeat that survived the
+  // receipt keeps this turn busy; ending it at acceptance would read as a ghost and cancel the
+  // healthy stream to land a parked model switch.
+  const clock = vi.spyOn(Date, "now")
+  clock.mockReturnValue(Date.now() + 10 * 60_000)
+  try {
+    expect(probe.sessionBusy(id)).toBe(true)
+    expect(probe.stalledTurn(id)).toBe(false)
+    expect(fake.cancels).not.toContain(id)
   } finally {
     clock.mockRestore()
   }
@@ -3546,46 +3574,37 @@ test("a reopened chat stops replaying a model the provider already dropped", asy
   }
 })
 
-test("a hung agent turn auto-cancels and rejects instead of freezing the app", async () => {
+test("a turn that never becomes idle is cancelled by the watchdog instead of pinning the agent", async () => {
   const { client, fake } = await make()
   const id = await client.newSession("/tmp/hang")
   const other = await client.newSession("/tmp/other")
-  // A model that never answers (misconfigured gateway, dropped provider) would otherwise pin the
-  // shared agent forever: the composer spins and every other session stops loading.
-  fake.promptHang.current = () => true
+  // The engine accepts the prompt but never reports the terminal `idle` (a misconfigured gateway,
+  // dropped provider). Without the watchdog this pins the shared agent forever.
+  fake.promptHoldIdle.current = () => true
   vi.useFakeTimers()
-  const sending = client.prompt(id, [{ type: "text", text: "hang" }])
-  // Observe the rejection before the timer fires so it is never reported as unhandled.
-  let settled = false
-  const outcome = sending.then(
-    () => {
-      settled = true
-      return null
-    },
-    (error) => {
-      settled = true
-      return error as Error
-    }
-  )
+  const probe = client as unknown as { sessionBusy: (id: string) => boolean }
   try {
+    // Acceptance resolves `client.prompt` at once; the heartbeat and watchdogs keep watching.
+    const receipt = await client.prompt(id, [{ type: "text", text: "hang" }])
+    expect(typeof receipt).toBe("string")
+    expect(probe.sessionBusy(id)).toBe(true)
     // A `max` effort reasoning model can be silent for a minute or two before its first token;
-    // the old 90s cutoff cancelled exactly those healthy turns. A healthy `gpt-6.1-sol` thread was
-    // measured staying silent for 309s between two tool results, so 400s must still be waited out.
+    // a healthy `gpt-6.1-sol` thread stayed silent for 309s between tool results, so 400s must
+    // still be waited out.
     await vi.advanceTimersByTimeAsync(400_000)
-    expect(settled).toBe(false)
+    expect(probe.sessionBusy(id)).toBe(true)
+    expect(fake.cancels).not.toContain(id)
     // The idle cutoff sits just above the bridge's own 600s read timeout: a dead socket is reported
     // there with a concrete reason, and this timer only catches an agent that stopped talking.
     await vi.advanceTimersByTimeAsync(850_000)
-    const error = await outcome
-    expect(error).toBeInstanceOf(Error)
-    if (!(error instanceof Error)) throw new Error("expected the prompt to reject with an Error")
-    expect(String(error.message)).toMatch(/无响应|超时/)
     expect(fake.cancels).toContain(id)
+    // The watchdog settled the heartbeat, so the ghost turn no longer reads busy.
+    expect(probe.sessionBusy(id)).toBe(false)
   } finally {
     vi.useRealTimers()
   }
   // The agent is freed: a follow-up prompt on another session still completes.
-  fake.promptHang.current = null
+  fake.promptHoldIdle.current = null
   const sending2 = client.prompt(other, [{ type: "text", text: "hello" }])
   await sending2
   await vi.waitFor(() => expect(client.session(other).items.some((item) => item.kind === "assistant")).toBe(true))
@@ -3594,8 +3613,8 @@ test("a hung agent turn auto-cancels and rejects instead of freezing the app", a
 test("queued send mode holds the next message until the running turn settles", async () => {
   const { client, fake } = await make()
   const id = await client.newSession("/tmp/queue-mode")
-  // A hung turn keeps the session non-idle without needing timing luck.
-  fake.promptHang.current = () => true
+  // An accepted turn with no terminal `idle` keeps the session non-idle without timing luck.
+  fake.promptHoldIdle.current = () => true
   void client.prompt(id, [{ type: "text", text: "first" }]).catch(() => {})
   await vi.waitFor(() => expect(client.session(id).state).toBe("running"))
 

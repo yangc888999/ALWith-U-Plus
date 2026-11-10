@@ -70,13 +70,7 @@ import { rememberGroupSessionRow, replaceGroupSessionRows } from "@/lib/group-se
 import { groupByDirectory } from "@/lib/groups"
 import { isModelRetired, retireModel, reviveModel } from "@/lib/retired-models"
 import { beginQueuedPrompt, cancelQueuedPrompt, endQueuedPrompt, QueueCancelledError } from "@/lib/queued-prompt"
-import {
-  type ApprovalRequestLike,
-  sandboxCapability,
-  sandboxGrants,
-  sandboxMode,
-  sandboxSettings
-} from "@/lib/sandbox-preference"
+import { sandboxAllows, sandboxCapabilities, sandboxMode, sandboxSettings } from "@/lib/sandbox-preference"
 import { orchestrationFor, type SessionOrchestration } from "@/lib/session-orchestration"
 
 import { forkTitle } from "./fork-title"
@@ -366,7 +360,11 @@ export class CodexClient extends CodexAcpClient<AppState> {
    *
    * The sandbox still enforces its boundary; the switches only decide whether a permission it would
    * ask for still interrupts the turn. A capability left off keeps the normal prompt, so nothing is
-   * silently denied — the user still sees the request and can allow it once.
+   * silently denied — the user still sees the request and can allow it once. The adapter bundles
+   * network and every file path into one additional-permission request, so the whole composite is
+   * pre-approved only when every capability it asks for is granted; otherwise the visible dialog
+   * stays. `input.permissions` is the object itself, not the request or its params — passing either
+   * of those yields no capabilities and never pre-approves.
    */
   private prefillSandboxApprovals(): void {
     this.requests.onReceived((request) => {
@@ -374,14 +372,9 @@ export class CodexClient extends CodexAcpClient<AppState> {
       const settings = sandboxSettings()
       if (!settings.enabled) return
       const session = this.state.sessions[request.sessionId]
-      const capability = sandboxCapability(
-        {
-          sessionId: request.sessionId,
-          params: request.params as ApprovalRequestLike["params"]
-        },
-        session?.cwd ?? null
-      )
-      if (!sandboxGrants(settings, capability)) return
+      const params = request.params as { subject?: { toolCall?: { input?: { permissions?: unknown } } } }
+      const capabilities = sandboxCapabilities(params.subject?.toolCall?.input?.permissions, session?.cwd ?? null)
+      if (!sandboxAllows(capabilities, settings)) return
       const options = request.params.options
       const option =
         options.find((entry) => entry.kind === "allow_once") ?? options.find((entry) => entry.kind === "allow_always")
@@ -2441,8 +2434,13 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * whole-request timeout, which used to cut off healthy long turns at ten minutes. The hard cap
    * exists so a turn that keeps emitting events forever cannot pin the shared agent for an afternoon.
    *
-   * The unsettled promise is also the live-turn signal used by `sessionBusy`: it stays registered
-   * until one of the three settle paths below, and never outlives the watchdogs.
+   * The ACP v2 prompt response is only an acceptance (see AGENTS.md: "Prompt responses are
+   * acceptance, not completion"). The real terminal state is a `state_update` with `state:"idle"`,
+   * the same one `waitForTurn` waits on. The `promptInFlight` heartbeat and both watchdogs
+   * therefore stay registered past the receipt until that idle arrives; ending them at the receipt
+   * left a long tool call with only the change-detector clocks, so `sessionBusy`/`stalledTurn`
+   * misjudged a healthy silent turn as stale and cancelled it to switch models. The idle/hard
+   * watchdogs remain as the fallback that guarantees the heartbeat can never stay unsettled.
    */
   private promptWithTimeout(
     id: string,
@@ -2456,25 +2454,35 @@ export class CodexClient extends CodexAcpClient<AppState> {
     this.beginPrompt(id)
     return new Promise<string>((resolve, reject) => {
       let settled = false
+      let cleared = false
+      let receiptId: string | null = null
       let idleTimer: ReturnType<typeof setTimeout> | null = null
       let hardTimer: ReturnType<typeof setTimeout> | null = null
       let unsubscribe: (() => void) | null = null
       let last = signature(this.state.sessions[id])
+      // A steered prompt has no `turnEndedAt` entry of its own; the turn's idle still ends it.
+      const startingState = this.state.sessions[id]?.state
+      let sawActive = startingState !== undefined && startingState !== "idle"
       const clear = (): void => {
+        if (cleared) return
+        cleared = true
         this.endPrompt(id)
         if (idleTimer !== null) clearTimeout(idleTimer)
         if (hardTimer !== null) clearTimeout(hardTimer)
         if (unsubscribe !== null) unsubscribe()
       }
       const fail = (message: string): void => {
-        if (settled) return
-        settled = true
+        if (cleared) return
         clear()
         // Free the shared agent so the rest of the app recovers.
         void this.cancel(id).catch(() => {})
-        reject(new Error(message))
+        if (!settled) {
+          settled = true
+          reject(new Error(message))
+        }
       }
       const armIdle = (): void => {
+        if (cleared) return
         if (idleTimer !== null) clearTimeout(idleTimer)
         idleTimer = setTimeout(
           () => fail("已 20 分钟没有任何输出，按超时停止本次请求。多为上游过载持续重试，可换模型或稍后重试。"),
@@ -2482,7 +2490,21 @@ export class CodexClient extends CodexAcpClient<AppState> {
         )
       }
       unsubscribe = this.store.subscribe(() => {
-        const next = signature(this.state.sessions[id])
+        const session = this.state.sessions[id]
+        if (session !== undefined && session.state !== "idle") sawActive = true
+        // The precise protocol signal, keyed by the accepted message id (what `waitForTurn` uses).
+        if (receiptId !== null && session?.turnEndedAt[receiptId] !== undefined) {
+          clear()
+          return
+        }
+        // A steered prompt's own id is never ended; the turn reaching idle still settles it.
+        // Only after the receipt: an idle seen during the pre-dispatch tool refresh is not this
+        // turn ending, and clearing there would drop the heartbeat before the turn even starts.
+        if (receiptId !== null && sawActive && session?.state === "idle") {
+          clear()
+          return
+        }
+        const next = signature(session)
         if (next !== last) {
           last = next
           armIdle()
@@ -2492,13 +2514,15 @@ export class CodexClient extends CodexAcpClient<AppState> {
       hardTimer = setTimeout(() => fail("请求超时，已自动取消。"), HARD_MS)
       super.prompt(id, prompt, options).then(
         (receipt) => {
-          if (settled) return
+          if (cleared) return
+          receiptId = receipt
           settled = true
-          clear()
+          // Release the caller on acceptance, but keep monitoring until the real terminal state.
           resolve(receipt)
+          if (this.state.sessions[id]?.turnEndedAt[receipt] !== undefined) clear()
         },
         (error) => {
-          if (settled) return
+          if (cleared) return
           settled = true
           clear()
           // A turn that failed is over. Nothing is left to wait for, so the model picked next must

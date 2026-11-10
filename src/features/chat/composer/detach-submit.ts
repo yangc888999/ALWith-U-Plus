@@ -33,20 +33,29 @@ export type SubmitReceipt = string
  * Resolves once the message is accepted; rejects while it is still being refused.
  *
  * `task` is the promise the client returned; `accept` receives its receipt once the engine
- * confirms the message (the voice handoff relies on it). A rejection after the window is
- * swallowed on purpose — it already reaches the reader as an error item in the conversation, and
- * leaving it unhandled would also trip the window's global handler.
+ * confirms the message (the voice handoff relies on it). A rejection after the window used to be
+ * swallowed on the assumption that it always shows up as an error item in the conversation. The
+ * engine also rejects when it refuses the dispatch *before* inserting the message (its `!inserted`
+ * branch, which removes the optimistic bubble): there is no error item then, so the draft and
+ * attachments would be silently lost. When `onLateFailure` is provided it is notified for exactly
+ * that case — the window already ended as a success, a real rejection arrived afterwards, and no
+ * receipt was ever received — so the composer can put the draft back and report the error. A
+ * rejection that produced a receipt (message inserted) stays quiet: its error item is the notice.
  */
 export function withoutWaitingForTurn(
   task: Promise<unknown>,
-  accept?: (receipt: SubmitReceipt) => void
+  accept?: (receipt: SubmitReceipt) => void,
+  onLateFailure?: (error: unknown) => void
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     let settled = false
+    let succeeded = false
+    let gotReceipt = false
     let windowTimer: ReturnType<typeof setTimeout> | null = null
     const settle = (failure: { error: unknown } | null): void => {
       if (settled) return
       settled = true
+      succeeded = failure === null
       if (windowTimer !== null) clearTimeout(windowTimer)
       if (failure === null) resolve()
       else reject(failure.error)
@@ -56,9 +65,16 @@ export function withoutWaitingForTurn(
       (receipt) => {
         // The handoff needs the receipt even when the turn took longer than the window.
         if (accept !== undefined && typeof receipt === "string") accept(receipt)
+        gotReceipt = typeof receipt === "string"
         settle(null)
       },
-      (error: unknown) => settle({ error })
+      (error: unknown) => {
+        if (settled && succeeded && !gotReceipt) {
+          onLateFailure?.(error)
+          return
+        }
+        settle({ error })
+      }
     )
   })
 }

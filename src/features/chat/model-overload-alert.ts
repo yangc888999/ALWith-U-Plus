@@ -18,10 +18,17 @@ import { info } from "@tauri-apps/plugin-log"
 import { selectedModelId } from "@/agent/native-models"
 import { client } from "@/lib/client"
 import { activeTool } from "./turn-activity"
-import { overloadRetryCount } from "@/lib/overload-retry-settings"
+import { overloadNoticeEnabled } from "@/lib/overload-retry-settings"
 
 type StallReason = "overloaded" | "no_ack"
-type StallEvent = { model: string; reason?: StallReason; retryAfter: number | null }
+type StallEvent = {
+  model: string
+  reason?: StallReason
+  retryAfter: number | null
+  /** Real 1-based overload attempt from the engine; absent on legacy bridge events. */
+  attempt?: number
+  requestId?: string
+}
 type Choice = { value: string; name: string }
 
 export type OverloadNotice = {
@@ -37,7 +44,6 @@ export type OverloadNotice = {
 }
 
 const lastShown = new Map<string, number>()
-const overloadAttempts = new Map<string, number>()
 const listeners = new Set<() => void>()
 let notice: OverloadNotice | null = null
 
@@ -113,10 +119,10 @@ export function matchesReportedModel(selected: string | null, reported: string):
 }
 
 function runningSession(model: string): Session | null {
-  // Object.values order is not a contract. Two chats can run the same model, and "the first one"
-  // used to put the notice on an idle-by-observation window while the real turn sat elsewhere.
-  // The most recently updated matching session is the best available evidence.
-  let best: Session | null = null
+  // The bridge reports a model, never a session id. Guessing "the most recently updated one" used
+  // to attach the notice to an idle-by-observation window while the real turn sat in another chat.
+  // With more than one plausible target, stay silent rather than blame the wrong conversation.
+  let candidate: Session | null = null
   for (const session of Object.values(client.state.sessions)) {
     if (session === undefined) continue
     const active =
@@ -124,20 +130,27 @@ function runningSession(model: string): Session | null {
       session.state === "requires_action" ||
       client.state.runStates[session.id]?.state === "running"
     if (!active || !matchesReportedModel(selectedModelId(session.configOptions), model)) continue
-    if (best === null || session.clock > best.clock) best = session
+    if (candidate !== null) return null
+    candidate = session
   }
-  return best
+  return candidate
 }
 
 /** Subscribe once at startup. Returns the unsubscribe handle. */
 export async function startModelOverloadAlerts(): Promise<() => void> {
   return listen<StallEvent>("model:stalled", (event) => {
-    const { model, retryAfter } = event.payload
+    const { model, retryAfter, requestId } = event.payload
     // An unknown or missing reason is not evidence of an overload. Defaulting every unexpected
     // payload to `overloaded` used to turn a malformed event into 「当前模型已满负荷」.
     const reason = event.payload.reason
     if (reason !== "overloaded" && reason !== "no_ack") return
     if (typeof model !== "string" || model === "") return
+    // The mute switch is a UI→bridge contract: when it is on, the bridge swallows the refusal and
+    // replays until something real comes back, so an `overloaded` stall that still reaches the UI
+    // is a replay that also failed — and the user asked to be left alone. Drop it here rather than
+    // surfacing a notice the switch was meant to silence. `no_ack` is not a capacity refusal and is
+    // unaffected: a request that never answered is still worth reporting.
+    if (reason === "overloaded" && !overloadNoticeEnabled()) return
     // A `retry-after` of a few seconds is the engine's own retry loop doing its job: the turn keeps
     // streaming, so a "model is at capacity" row would contradict the transcript right above it.
     // Only a wait the reader would actually feel deserves a notice.
@@ -149,28 +162,25 @@ export async function startModelOverloadAlerts(): Promise<() => void> {
     const session = runningSession(model)
     if (session === null) return
     const now = Date.now()
-    const shownKey = turnKey(session, model)
-    if (shownKey === null) return
-    // Count only overload retries: the configured budget means "stay silent for N automatic
-    // retries". The (N+1)th stall is the first one the reader is told about. A `no_ack` event is
-    // not a retry and must be reported immediately.
-    if (reason === "overloaded") {
-      const attempt = (overloadAttempts.get(shownKey) ?? 0) + 1
-      overloadAttempts.set(shownKey, attempt)
-      if (attempt <= overloadRetryCount()) {
-        void info(`[stall] automatic retry session=${session.id} model=${model} attempt=${attempt}`)
-        return
-      }
-    }
-    if (now - (lastShown.get(shownKey) ?? 0) < 60_000) return
+    const turn = turnKey(session, model)
+    if (turn === null) return
+    // Keep distinct upstream requests apart so a later request's real stall is not swallowed by an
+    // earlier one's throttle stamp. Legacy events have no request id and fall back to the turn key.
+    const dedupeKey = typeof requestId === "string" && requestId !== "" ? `${turn}:${requestId}` : turn
+    // The mute switch is the only control left. When it is on the bridge swallows every
+    // `server_is_overloaded` and replays without a ceiling, so this handler never sees one; when
+    // it is off the refusal is real and the notice is shown, deduped per upstream request and
+    // throttled to one a minute. A `no_ack` is not a capacity refusal and is reported immediately.
+    if (now - (lastShown.get(dedupeKey) ?? 0) < 60_000) return
     // Tokens are still being billed and the store is still applying updates: output is flowing, so
     // this turn is not stalled. A retry notice from an earlier request must not stick to it — that
-    // is what made every later turn open with the same "at capacity" line.
-    if (session.clock > 0 && now - session.clock < 5_000) return
+    // is what made every later turn open with the same "at capacity" line. Bridge-tagged replays
+    // carry their own request identity and must not be dropped by this clock heuristic.
+    if (typeof requestId !== "string" && session.clock > 0 && now - session.clock < 5_000) return
     // The bridge only sends `no_ack` while a request is open upstream. If the turn has since moved
     // on to a local tool, that request is gone and the turn is not stalled — drop the notice.
     if (reason === "no_ack" && isRunningLocally(session)) return
-    lastShown.set(shownKey, now)
+    lastShown.set(dedupeKey, now)
     const minutes = typeof retryAfter === "number" && retryAfter > 0 ? Math.max(1, Math.round(retryAfter / 60)) : null
     notice = {
       sessionId: session.id,

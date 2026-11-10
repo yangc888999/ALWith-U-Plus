@@ -45,8 +45,9 @@ fn router_overrides(base: Option<&str>, token: Option<&str>) -> Vec<String> {
         overrides.push(format!("model_providers.alwith.base_url=\"{}\"", escape_toml(base)));
     }
     overrides.push("model_providers.alwith.wire_api=\"responses\"".to_string());
-    // A capacity dip must surface as a failed turn, not four retries of about five minutes each
-    // while the reader waits for a turn that is going nowhere.
+    // The engine must not retry on its own: on `server_is_overloaded` it would honour the
+    // backend's `retry-after` (about 300s) and sleep silently. The bridge owns the retry budget
+    // and replays the request immediately without waiting, so keep this at zero.
     overrides.push("model_providers.alwith.request_max_retries=0".to_string());
     overrides.push("model_providers.alwith.stream_max_retries=0".to_string());
     // The engine's own per-chunk SSE idle timer defaults to ~300s. A healthy turn legitimately
@@ -305,5 +306,15 @@ mod tests {
         assert!(base.ends_with("\\\"\""), "{base}");
         let token = values.iter().find(|value| value.contains("bearer_token")).unwrap();
         assert!(token.contains("a\\\"b"), "{token}");
+    }
+
+    #[test]
+    fn router_overrides_never_let_the_engine_sleep_on_retry_after() {
+        let values = router_overrides(None, None);
+        // Replaying an overloaded request without waiting is the bridge's job. If the engine
+        // retries too, it honours `retry-after` and the reader waits about five minutes per try.
+        assert!(values.iter().any(|v| v == "model_providers.alwith.request_max_retries=0"));
+        assert!(values.iter().any(|v| v == "model_providers.alwith.stream_max_retries=0"));
+        assert!(values.iter().any(|v| v == "model_providers.alwith.stream_idle_timeout_ms=1200000"));
     }
 }

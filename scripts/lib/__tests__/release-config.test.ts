@@ -99,7 +99,7 @@ test("tag runs validate release inputs and publish signed updater artifacts to a
   expect(preflight.permissions).toEqual({ contents: "write" })
   expect(release).toBeDefined()
   expect(release.if).toBe("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
-  expect(release.needs).toBe("release-preflight")
+  expect(release.needs).toEqual(["release-preflight", "quality-gate"])
   expect(release.permissions).toEqual({ contents: "write" })
   expect(release.strategy?.matrix?.include).toEqual(releaseTargets)
 
@@ -199,4 +199,29 @@ test("Windows installers include both sandbox helpers without replacing the shar
   ])
   expect(base.bundle.externalBin).not.toContain("binaries/codex-windows-sandbox-setup")
   expect(base.bundle.externalBin).not.toContain("binaries/codex-command-runner")
+})
+
+test("tag releases wait on a full quality gate and CI covers release branches", () => {
+  const jobs = releaseWorkflow()
+  const gate = jobs["quality-gate"]
+  expect(gate).toBeDefined()
+  expect(gate.if).toBe("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
+  expect(gate.steps?.some((step) => step.run === "bun check --no-script -b")).toBe(true)
+  expect(gate.steps?.some((step) => step.run === "bun run test")).toBe(true)
+  expect(jobs.release.needs).toEqual(["release-preflight", "quality-gate"])
+
+  const ci = Bun.YAML.parse(read(".github/workflows/ci.yml")) as {
+    on?: { push?: { branches?: string[] } }
+    jobs?: Record<string, Job>
+  }
+  expect(ci.on?.push?.branches).toContain("release/**")
+})
+
+test("signed release bundles are verified and signatures are mandatory assets", () => {
+  const jobs = releaseWorkflow()
+  const verify = jobs.release.steps!.find((step) => step.name === "Verify packaged toolchain (macOS)")!
+  expect(verify.env?.APPLE_SIGNING_IDENTITY).toBe("${{ secrets.APPLE_SIGNING_IDENTITY }}")
+  const download = jobs["upload-to-tos"].steps!.find((step) => step.name === "Download release assets")!.run!
+  expect(download).toContain("\\.sig$")
+  expect(download).not.toContain("(\\.sig)?$")
 })

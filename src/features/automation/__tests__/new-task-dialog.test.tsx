@@ -222,10 +222,13 @@ test("with no resolved Lark account yet, delivery stays off until it is switched
   // Nothing selected yet: the dialog says so instead of saving a task that silently sends nowhere.
   expect(screen.getByText(/nothing will be sent/i)).toBeTruthy()
 
+  // Delivery is on but no recipient has been selected: saving would create a task that
+  // silently never sends anything, so the dialog must not let it through.
+  expect(screen.getByRole("button", { name: /confirm/i }).hasAttribute("disabled")).toBe(true)
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: /confirm/i }))
   })
-  expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({ larkNotify: true, larkIdentity: "bot" })
+  expect(onSubmit).not.toHaveBeenCalled()
 })
 
 test("a new task pushes to Lark by default, addressed to the signed-in user", async () => {

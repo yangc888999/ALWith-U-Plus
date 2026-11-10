@@ -1,41 +1,51 @@
 import { beforeEach, expect, test, vi } from "vitest"
 
+const { invokeMock } = vi.hoisted(() => ({
+  invokeMock: vi.fn(() => Promise.resolve())
+}))
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }))
+
 beforeEach(() => {
   localStorage.clear()
-  // A fresh module per test also resets the cached value and the listener set.
+  invokeMock.mockClear()
   vi.resetModules()
 })
 
-/** The settings window is a separate webview: Apply lands here only as a storage event. */
 function applyElsewhere(value: string | null) {
-  if (value === null) localStorage.removeItem("chat.overload-retry-count")
-  else localStorage.setItem("chat.overload-retry-count", value)
-  window.dispatchEvent(
-    new StorageEvent("storage", { key: "chat.overload-retry-count", newValue: value })
-  )
+  if (value === null) localStorage.removeItem("chat.overload-notice-enabled")
+  else localStorage.setItem("chat.overload-notice-enabled", value)
+  window.dispatchEvent(new StorageEvent("storage", { key: "chat.overload-notice-enabled", newValue: value }))
 }
 
-test("an Apply in the settings window reaches a running chat without a reload", async () => {
+test("the setting is enabled by default, so notices remain visible", async () => {
   const mod = await import("../overload-retry-settings")
-  const seen: number[] = []
-  mod.subscribeOverloadRetryCount(() => seen.push(mod.overloadRetryCount()))
-  applyElsewhere("9")
-  expect(mod.overloadRetryCount()).toBe(9)
-  expect(seen).toEqual([9])
+  expect(mod.overloadNoticeEnabled()).toBe(true)
+  expect(invokeMock).toHaveBeenCalledWith("set_overload_mute", { mute: false })
 })
 
-test("an unrelated key does not republish the retry count", async () => {
+test("a settings-window change reaches a running chat without reload", async () => {
+  const mod = await import("../overload-retry-settings")
+  const seen: boolean[] = []
+  mod.subscribeOverloadNoticeEnabled(() => seen.push(mod.overloadNoticeEnabled()))
+  applyElsewhere("false")
+  expect(mod.overloadNoticeEnabled()).toBe(false)
+  expect(seen).toEqual([false])
+})
+
+test("an unrelated key does not republish the switch", async () => {
   const mod = await import("../overload-retry-settings")
   const listener = vi.fn()
-  mod.subscribeOverloadRetryCount(listener)
+  mod.subscribeOverloadNoticeEnabled(listener)
   window.dispatchEvent(new StorageEvent("storage", { key: "chat.something-else", newValue: "1" }))
   expect(listener).not.toHaveBeenCalled()
-  expect(mod.overloadRetryCount()).toBe(mod.DEFAULT_OVERLOAD_RETRY_COUNT)
+  expect(mod.overloadNoticeEnabled()).toBe(true)
 })
 
-test("clearing the stored value falls back to the default", async () => {
+test("turning the reminder off mutes overloads in the bridge", async () => {
   const mod = await import("../overload-retry-settings")
-  mod.setOverloadRetryCount(9)
-  applyElsewhere(null)
-  expect(mod.overloadRetryCount()).toBe(mod.DEFAULT_OVERLOAD_RETRY_COUNT)
+  mod.setOverloadNoticeEnabled(false)
+  expect(invokeMock).toHaveBeenLastCalledWith("set_overload_mute", { mute: true })
+  mod.setOverloadNoticeEnabled(true)
+  expect(invokeMock).toHaveBeenLastCalledWith("set_overload_mute", { mute: false })
 })

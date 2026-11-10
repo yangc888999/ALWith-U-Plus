@@ -22,6 +22,9 @@ const resources = process.argv[3]
     ? resolve(directory, "../Resources")
     : directory
 const suffix = process.platform === "win32" ? ".exe" : ""
+// Release builds set APPLE_SIGNING_IDENTITY (see release.yml); unsigned CI test bundles and local
+// ad-hoc builds do not. Only a genuinely signed release must satisfy strict codesign verification.
+const signedRelease = Boolean(process.env.APPLE_SIGNING_IDENTITY)
 const versions = toolchainVersions(manifest)
 const codexHome = mkdtempSync(join(tmpdir(), "alwith-u 工具链-"))
 
@@ -57,6 +60,26 @@ const adapterVersion = await withCleanup(
       })
       if (signature.error) throw signature.error
       if (signature.status !== 0) throw new Error(`Packaged Bun signature is invalid: ${signature.stderr}`)
+      // Verify the .app bundle itself, not just the Bun sidecar. Ad-hoc local/test builds carry no
+      // CodeResources and legitimately fail --strict; a signed release must pass or the job fails.
+      const appBundle = resolve(directory, "..", "..")
+      if (existsSync(join(appBundle, "Contents", "Info.plist"))) {
+        const appSignature = spawnSync("/usr/bin/codesign", ["--verify", "--strict", appBundle], {
+          encoding: "utf8",
+          timeout: 15_000
+        })
+        if (appSignature.error) throw appSignature.error
+        if (appSignature.status !== 0) {
+          const detail = (appSignature.stderr || appSignature.stdout || "").trim()
+          if (signedRelease) throw new Error(`Application bundle signature is invalid: ${detail}`)
+          console.warn(
+            `WARNING: ${appBundle} failed 'codesign --verify --strict': ${detail}\n` +
+              "Local ad-hoc builds have no CodeResources; release builds must be signed and notarised."
+          )
+        } else {
+          console.log(`Application bundle signature verified: ${appBundle}`)
+        }
+      }
     }
     // Exercise JS execution too: --version alone does not exercise JavaScriptCore in a signed bundle.
     assertVersion(

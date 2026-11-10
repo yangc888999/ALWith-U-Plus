@@ -21,7 +21,6 @@ import {
   groupRoles,
   newRoleId,
   removeGroupRole,
-  resetGroupRoles,
   roleBot,
   setGroupRole,
   type GroupRole
@@ -186,14 +185,6 @@ export function GroupSection() {
             >
               <FolderOpenIcon className="size-3.5" />
               {t("groups.openRoleFolder")}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              title={t("groups.restoreRolesHint")}
-              onClick={() => setRoles(resetGroupRoles())}
-            >
-              {t("groups.restoreRoles")}
             </Button>
             <Button
               variant="ghost"

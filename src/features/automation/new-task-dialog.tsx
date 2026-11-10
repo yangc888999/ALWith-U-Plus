@@ -294,7 +294,9 @@ export function NewTaskDialog({
   const canSubmit =
     form.name.trim() !== "" &&
     form.prompt.trim() !== "" &&
-    (!workspaceCustom || form.cwd.trim() !== "")
+    (!workspaceCustom || form.cwd.trim() !== "") &&
+    // A task with delivery on but no recipient would be saved and then silently never send.
+    (!form.larkNotify || form.larkTargets.length > 0)
 
   /** Pick the working directory through the OS dialog: hand-typed absolute paths are easy to get
    *  wrong and cannot be validated without touching the filesystem. */

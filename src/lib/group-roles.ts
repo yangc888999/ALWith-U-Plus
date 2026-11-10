@@ -147,11 +147,8 @@ function writeAll(next: GroupRole[]): void {
  * without clearing the roles the user kept.
  */
 const DEFAULT_ROLES: ReadonlyArray<Omit<GroupRole, "id" | "persona" | "skill"> & { bot: string }> = [
-  // Three roles ship by default: two discuss, Donny closes the round. The moderator sits last so
-  // the speaking order reads as an actual conversation.
-  { name: "Elsa", model: "gpt-6.1-sol", effort: null, moderator: false, bot: "elsa" },
-  { name: "Matt", model: "claude-opus-5-5", effort: null, moderator: false, bot: "matt" },
-  { name: "Donny", model: "claude-fable-5-1", effort: null, moderator: true, bot: "donny" }
+  // No roles ship any more: the user asked for the built-in personas to be gone. A fresh install
+  // starts with an empty roster, and the three that used to be seeded are retired below.
 ]
 
 /** Bots that used to ship by default. Their seeded roles are removed the next time the page loads. */
@@ -160,7 +157,11 @@ const RETIRED_DEFAULT_IDS = new Set([
   "role-default-wee",
   "role-default-joey",
   "role-default-liz",
-  "role-default-meryl"
+  "role-default-meryl",
+  // The last three bundled personas: removed on the next page load, and not seeded again.
+  "role-default-elsa",
+  "role-default-matt",
+  "role-default-donny"
 ])
 
 function dropRetiredDefaults(): GroupRole[] {

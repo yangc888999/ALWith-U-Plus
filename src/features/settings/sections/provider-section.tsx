@@ -59,11 +59,9 @@ import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { defaultModelSnapshot, subscribeDefaultModel } from "@/lib/default-model"
 import {
-  MAX_OVERLOAD_RETRY_COUNT,
-  MIN_OVERLOAD_RETRY_COUNT,
-  overloadRetryCount,
-  setOverloadRetryCount,
-  subscribeOverloadRetryCount
+  overloadNoticeEnabled,
+  setOverloadNoticeEnabled,
+  subscribeOverloadNoticeEnabled
 } from "@/lib/overload-retry-settings"
 import {
   modelFastModeSnapshot,
@@ -73,6 +71,11 @@ import {
 import { describeError } from "@/lib/error-text"
 import { openExternal } from "@/lib/open"
 import { FREE_MODEL_WATCH_SETTING } from "@/features/providers/free-model-watch"
+import {
+  overload429ReminderEnabled,
+  setOverload429ReminderEnabled,
+  subscribeOverload429ReminderEnabled
+} from "@/lib/overload-429-settings"
 import { useSettingsNativeModels } from "@/lib/settings-bridge"
 import { useBooleanSetting } from "@/lib/use-boolean-setting"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -951,20 +954,19 @@ export function ProviderRow({
   // exactly as they were for day-to-day editing.
   const [modelFilter, setModelFilter] = useState("")
   const [freeOnly, setFreeOnly] = useState(false)
-  // The field is staged: typing must not rewrite the retry budget for every other chat mid-keystroke.
-  const appliedRetryCount = useSyncExternalStore(
-    subscribeOverloadRetryCount,
-    overloadRetryCount,
-    overloadRetryCount
+  // A switch has no staged text: the value is live, so the settings window and the chat window
+  // share one store and either side's toggle reaches the bridge on the same tick.
+  const overloadNoticeEnabledValue = useSyncExternalStore(
+    subscribeOverloadNoticeEnabled,
+    overloadNoticeEnabled,
+    overloadNoticeEnabled
   )
-  const [retryCount, setRetryCount] = useState(String(appliedRetryCount))
-  useEffect(() => {
-    setRetryCount(String(appliedRetryCount))
-  }, [appliedRetryCount])
-  const parsedRetryCount = Math.round(Number(retryCount))
-  const retryCountDirty =
-    retryCount.trim() !== "" && Number.isFinite(parsedRetryCount) && parsedRetryCount !== appliedRetryCount
   const [freeWatch, setFreeWatch] = useBooleanSetting(FREE_MODEL_WATCH_SETTING)
+  const reminder429Value = useSyncExternalStore(
+    subscribeOverload429ReminderEnabled,
+    overload429ReminderEnabled,
+    overload429ReminderEnabled
+  )
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedKeys, setSelectedKeys] = useState<ReadonlySet<string>>(() => new Set())
   // The manual 保存模型 action needs to know whether the pending edit was an add/remove, so the
@@ -1627,76 +1629,35 @@ export function ProviderRow({
                 </Field>
               </CollapsibleContent>
             </Collapsible>
-            <div className="flex flex-col gap-2 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">{t("defaultModel.overloadRetryCount")}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {t("defaultModel.overloadRetryDescription")}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="number"
-                    inputMode="numeric"
-                    step={1}
-                    min={MIN_OVERLOAD_RETRY_COUNT}
-                    max={MAX_OVERLOAD_RETRY_COUNT}
-                    value={retryCount}
-                    className="w-20"
-                    onChange={(event) => setRetryCount(event.target.value)}
-                    onBlur={() => {
-                      // Clamp on the way out so an out-of-range value never sits in the box looking saved.
-                      const parsed = Math.round(Number(retryCount))
-                      setRetryCount(
-                        Number.isFinite(parsed)
-                          ? String(
-                              Math.min(
-                                MAX_OVERLOAD_RETRY_COUNT,
-                                Math.max(MIN_OVERLOAD_RETRY_COUNT, parsed)
-                              )
-                            )
-                          : String(appliedRetryCount)
-                      )
-                    }}
-                    aria-label={t("defaultModel.overloadRetryCount")}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={!retryCountDirty}
-                    onClick={() => {
-                      const parsed = Math.min(
-                        MAX_OVERLOAD_RETRY_COUNT,
-                        Math.max(MIN_OVERLOAD_RETRY_COUNT, Math.round(Number(retryCount)))
-                      )
-                      setRetryCount(String(parsed))
-                      setOverloadRetryCount(parsed)
-                    }}
-                  >
-                    {t("defaultModel.overloadRetryApply")}
-                  </Button>
-                </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">{t("defaultModel.overloadMute")}</p>
+                <p className="text-xs text-muted-foreground">
+                  {t("defaultModel.overloadMuteDescription")}
+                </p>
               </div>
-              <p className="text-[11px] leading-4 text-muted-foreground/80">
-                {t("defaultModel.overloadRetryRange", {
-                  min: MIN_OVERLOAD_RETRY_COUNT,
-                  max: MAX_OVERLOAD_RETRY_COUNT
-                })}
-              </p>
+              <Switch checked={overloadNoticeEnabledValue} onCheckedChange={setOverloadNoticeEnabled} aria-label={t("defaultModel.overloadMute")} />
             </div>
           </section>
         </>
       )}
       <Separator />
       {provider.id === "openrouter" && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
-          <div className="min-w-0">
-            <p className="text-sm font-medium">{t("provider.freeWatchTitle")}</p>
-            <p className="text-xs text-muted-foreground">{t("provider.freeWatchDesc")}</p>
+        <div className="flex flex-col gap-2 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">{t("provider.freeWatchTitle")}</p>
+              <p className="text-xs text-muted-foreground">{t("provider.freeWatchDesc")}</p>
+            </div>
+            <Switch checked={freeWatch} onCheckedChange={setFreeWatch} aria-label={t("provider.freeWatchTitle")} />
           </div>
-          <Switch checked={freeWatch} onCheckedChange={setFreeWatch} aria-label={t("provider.freeWatchTitle")} />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">{t("provider.overload429Reminder")}</p>
+              <p className="text-xs text-muted-foreground">{t("provider.overload429ReminderDesc")}</p>
+            </div>
+            <Switch checked={reminder429Value} onCheckedChange={setOverload429ReminderEnabled} aria-label={t("provider.overload429Reminder")} />
+          </div>
         </div>
       )}
       <section className="space-y-3 pb-2" aria-labelledby={`${provider.id}-models`}>

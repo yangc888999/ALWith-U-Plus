@@ -10,9 +10,11 @@ import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
+import { ExternalLinkIcon } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ActionCard } from "@/features/chat/action-card"
 import { LoginCard } from "@/features/connection/login-card"
+import { openExternal } from "@/lib/open"
 import {
   requestActionResponse,
   requestSignIn,
@@ -160,6 +162,7 @@ export function CodexAccountSummary({
 }
 
 export function CodexProviderSection() {
+  const { t } = useTranslation()
   const agent = useSettingsAgent()
   const account = useSettingsAccount()
   const [signingOut, setSigningOut] = useState(false)
@@ -179,10 +182,26 @@ export function CodexProviderSection() {
               .finally(() => setSigningOut(false))
           }}
         />
-        {account != null && !account.account.account && agent && (
-          <LoginCard methods={agent.authMethods} signIn={requestSignIn} />
-        )}
-        {agent?.actions.map((action) => (
+{account != null && !account.account.account && agent && (
+        <LoginCard methods={agent.authMethods} signIn={requestSignIn} />
+      )}
+      <div className="flex justify-end">
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="h-auto p-0 text-xs text-muted-foreground"
+          onClick={() =>
+            void openExternal("https://chatgpt.com/settings/usage?tab=overview").catch((error: unknown) =>
+              toast.error(error instanceof Error ? error.message : String(error))
+            )
+          }
+        >
+          {t("usage.viewOnline")}
+          <ExternalLinkIcon className="size-3" aria-hidden="true" />
+        </Button>
+      </div>
+      {agent?.actions.map((action) => (
           <ActionCard
             key={action.id}
             action={action}

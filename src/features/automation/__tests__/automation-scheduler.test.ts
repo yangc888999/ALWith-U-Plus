@@ -241,3 +241,66 @@ test("stopping the scheduler clears both timers", async () => {
   expect(run).not.toHaveBeenCalled()
   expect(store.listRuns()).toHaveLength(0)
 })
+
+test("a queued run is skipped when its task was deleted, disabled or edited before dequeue", async () => {
+  const { store, scheduler } = await fresh()
+  const draft = {
+    name: "排队任务",
+    prompt: "hi",
+    cwd: "",
+    fullAccess: true,
+    model: "",
+    effort: "",
+    fastMode: false,
+    larkNotify: false,
+    larkTargets: [],
+    larkIdentity: "bot",
+    repeat: "daily" as const,
+    intervalMinutes: 60,
+    time: "08:05",
+    validUntil: null,
+    enabled: true
+  }
+  const deleted = store.createTask({ ...draft, name: "被删除" })
+  const disabled = store.createTask({ ...draft, name: "被停用" })
+  const edited = store.createTask({ ...draft, name: "被修改" })
+  const healthy = store.createTask({ ...draft, name: "未改动" })
+  const firedAt = Date.now()
+
+  // Mirrors the production dequeue guard in app.tsx.
+  const stillValid = (req: AutomationRunRequest): boolean => {
+    if (req.taskFiredAt === undefined) return true
+    const current = store.getTask(req.taskId)
+    return current !== undefined && current.enabled && current.updatedAt <= req.taskFiredAt
+  }
+  const run = vi.fn(async (req: AutomationRunRequest) => success(req))
+  const execute = scheduler.serialAutomationExecutor(run, stillValid)
+  const queued = (taskId: string): AutomationRunRequest => ({
+    runId: `run-${taskId}`,
+    taskId,
+    taskName: "排队任务",
+    prompt: "hi",
+    cwd: "",
+    fullAccess: true,
+    model: "",
+    effort: "",
+    fastMode: false,
+    larkNotify: false,
+    larkTargets: [],
+    larkIdentity: "bot",
+    monitorSessionId: null,
+    taskFiredAt: firedAt
+  })
+
+  store.removeTask(deleted.id)
+  store.setTaskEnabled(disabled.id, false)
+  vi.advanceTimersByTime(1)
+  store.updateTask(edited.id, { prompt: "changed" })
+
+  await expect(execute(queued(deleted.id))).resolves.toMatchObject({ status: "failed" })
+  await expect(execute(queued(disabled.id))).resolves.toMatchObject({ status: "failed" })
+  await expect(execute(queued(edited.id))).resolves.toMatchObject({ status: "failed" })
+  await expect(execute(queued(healthy.id))).resolves.toMatchObject({ status: "success" })
+  // A run that never started must not leave a running record behind.
+  expect(run).toHaveBeenCalledOnce()
+})

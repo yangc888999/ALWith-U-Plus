@@ -325,7 +325,7 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
   // The row's one action is a nudge, offered together with the silence badge: it is cheap and
   // reversible, so it does not need a separate, later threshold. A turn running a tool or parked on
   // a prompt is busy elsewhere or waiting on the reader — nudging either would be noise, and while
-  // the upstream is retrying an overload, a nudge cannot reach it.
+  // the bridge is replaying an overload, a nudge cannot reach it.
   const canNudge = quiet && steering && !localBusy && !parked && overload === null
   // `·` → `··` → `···` on the same 350ms beat as the re-render, so the row reads as alive
   // instead of ending in a static ellipsis that looks like truncated text.

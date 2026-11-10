@@ -119,21 +119,14 @@ test("the list keeps one reference until storage changes", () => {
   expect(groups()).toBe(groups())
 })
 
-test("a fresh roster is seeded from the bundled rob_models folder", async () => {
+test("a fresh roster starts empty and the retired built-ins never come back", async () => {
   const { ensureDefaultGroupRoles, resetGroupRoles } = await import("@/lib/group-roles")
-  const seeded = ensureDefaultGroupRoles()
-  expect(seeded.map((item) => item.name)).toEqual(["Elsa", "Matt", "Donny"])
-  expect(seeded.find((item) => item.moderator)?.name).toBe("Donny")
-  // One folder per bot, with the main persona markdown inside it.
-  expect(seeded[0]?.persona).toEqual({
-    kind: "file",
-    path: "~/.codex/rob_models/elsa/skill-elsa.md"
-  })
-  // The personas are deletable: a deliberate clear sticks instead of being reseeded on the next open.
-  for (const item of groupRoles()) removeGroupRole(item.id)
-  expect(ensureDefaultGroupRoles()).toHaveLength(0)
-  // "Restore built-in roles" puts them back and never clears what is already there.
-  const restored = resetGroupRoles()
-  expect(restored).toHaveLength(3)
-  expect(restored.some((item) => item.name === "Elsa")).toBe(true)
+  // The bundled personas were removed on request: a fresh install seeds nothing.
+  expect(ensureDefaultGroupRoles()).toEqual([])
+  // "Restore built-in roles" is a no-op now — there is nothing to restore.
+  expect(resetGroupRoles()).toEqual([])
+  // A roster the user builds by hand is preserved.
+  const { setGroupRole } = await import("@/lib/group-roles")
+  setGroupRole({ id: "mine", name: "我的角色", model: "gpt-6.1-sol", effort: null, persona: { kind: "inline", text: "" }, skill: null, moderator: false })
+  expect(ensureDefaultGroupRoles()).toHaveLength(1)
 })

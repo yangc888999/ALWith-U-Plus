@@ -12,12 +12,17 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 import { authClient, loginPlatform, usePlatformAuth } from "./store"
 
-type Mode = "code" | "password" | "register"
+type Mode = "code" | "password" | "register" | "passphrase"
 
 /** "Use it without an account" is remembered across launches: the reader who picked it should not
  *  be asked again on every start, and the account service is unreachable outside the company
  *  network — which is exactly when they need the local features to keep working. */
 const SKIP_KEY = "alwith:platform-login-skipped"
+
+/** The local passphrase fallback. Deliberately a single fixed word: it is an escape hatch for the
+ *  days the account service cannot be reached, not a second credential system. */
+export const LOCAL_PASSPHRASE = "YUP"
+const PASSPHRASE_KEY = "alwith:platform-passphrase-unlocked"
 
 /** Exported for the test that pins the escape hatch; not part of the public surface. */
 export function readSkipped(): boolean {
@@ -37,20 +42,37 @@ export function rememberSkipped(): void {
   }
 }
 
+/** Whether the local passphrase has been used on this machine. */
+export function readPassphraseUnlocked(): boolean {
+  try {
+    return localStorage.getItem(PASSPHRASE_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+
+export function rememberPassphraseUnlocked(): void {
+  try {
+    localStorage.setItem(PASSPHRASE_KEY, "1")
+  } catch {
+    // Same as above: the current session still works without persistence.
+  }
+}
+
 export function AuthGate({ children, auxiliary = false }: { children: ReactNode; auxiliary?: boolean }) {
   const authenticated = usePlatformAuth((s) => s.isAuthenticated)
   const loading = usePlatformAuth((s) => s.isLoading)
-  const [skipped, setSkipped] = useState(readSkipped)
+  const [unlocked, setUnlocked] = useState(readPassphraseUnlocked)
   if (loading)
     return (
       <div className="flex h-dvh items-center justify-center">
         <Spinner />
       </div>
     )
-  // Skipping does not fake a login: `isAuthenticated` stays false, so Drive and the account-managed
-  // ALwith provider stay hidden exactly as they should, while the Codex engine and every other
-  // vendor's models keep working.
-  if (authenticated || skipped) return children
+  // The passphrase is a local fallback, not a login: `isAuthenticated` stays false, so Drive and
+  // the account-managed ALwith provider stay hidden exactly as they should, while the Codex engine
+  // and every other vendor's models keep working.
+  if (authenticated || unlocked) return children
   // Auxiliary windows render nothing until signed in — correct for the chat bubble, which has
   // nothing to say without an account. Settings is different: it is a page the reader asked for,
   // and 设置 → 账号 renders the sign-in form itself. Gating the window put the form in front of
@@ -58,20 +80,27 @@ export function AuthGate({ children, auxiliary = false }: { children: ReactNode;
   if (getCurrentWindow().label === "settings") return children
   return auxiliary ? null : (
     <PlatformLogin
-      onSkip={() => {
-        rememberSkipped()
-        setSkipped(true)
+      onPassphrase={() => {
+        rememberPassphraseUnlocked()
+        setUnlocked(true)
       }}
     />
   )
 }
 
-export function PlatformLogin({ onSkip, embedded = false }: { onSkip?: () => void; embedded?: boolean }) {
+export function PlatformLogin({
+  onPassphrase,
+  embedded = false
+}: {
+  onPassphrase?: () => void
+  embedded?: boolean
+}) {
   const { t } = useTranslation()
   const [mode, setMode] = useState<Mode>("code")
   const [email, setEmail] = useState("")
   const [code, setCode] = useState("")
   const [password, setPassword] = useState("")
+  const [passphrase, setPassphrase] = useState("")
   const [pendingAction, setPendingAction] = useState<"sendCode" | "submit" | null>(null)
   const busy = pendingAction !== null
   const [error, setError] = useState("")
@@ -111,6 +140,13 @@ export function PlatformLogin({ onSkip, embedded = false }: { onSkip?: () => voi
     setNow(Date.now())
   }
   async function submit() {
+    // The local passphrase never touches the network: it is the way in when the account service
+    // cannot be reached at all.
+    if (mode === "passphrase") {
+      if (passphrase.trim() !== LOCAL_PASSPHRASE) throw new Error(t("platformAuth.passphraseWrong"))
+      onPassphrase?.()
+      return
+    }
     if (mode === "register" && !isValidPassword(password)) throw new Error(t("platformAuth.passwordRule"))
     const response =
       mode === "register"
@@ -142,7 +178,8 @@ export function PlatformLogin({ onSkip, embedded = false }: { onSkip?: () => voi
           value={mode}
           onValueChange={(value) => {
             const mode: unknown = value
-            if (mode !== "code" && mode !== "password" && mode !== "register") throw new Error("Invalid login mode")
+            if (mode !== "code" && mode !== "password" && mode !== "register" && mode !== "passphrase")
+              throw new Error("Invalid login mode")
             setMode(mode)
             setCode("")
             setPassword("")
@@ -159,6 +196,9 @@ export function PlatformLogin({ onSkip, embedded = false }: { onSkip?: () => voi
             <TabsTrigger value="register" disabled={busy}>
               {t("platformAuth.register")}
             </TabsTrigger>
+            <TabsTrigger value="passphrase" disabled={busy}>
+              {t("platformAuth.passphraseLogin")}
+            </TabsTrigger>
           </TabsList>
         </Tabs>
         <form
@@ -168,6 +208,7 @@ export function PlatformLogin({ onSkip, embedded = false }: { onSkip?: () => voi
           }}
         >
           <FieldGroup>
+            {mode !== "passphrase" && (
             <Field data-disabled={busy}>
               <FieldLabel htmlFor="alwith-email">{t("platformAuth.email")}</FieldLabel>
               <Input
@@ -180,7 +221,23 @@ export function PlatformLogin({ onSkip, embedded = false }: { onSkip?: () => voi
                 onChange={(event) => setEmail(event.target.value)}
               />
             </Field>
-            {mode !== "password" && (
+            )}
+            {mode === "passphrase" && (
+              <Field data-disabled={busy}>
+                <FieldLabel htmlFor="alwith-passphrase">{t("platformAuth.passphrase")}</FieldLabel>
+                <Input
+                  id="alwith-passphrase"
+                  type="password"
+                  autoComplete="off"
+                  required
+                  disabled={busy}
+                  value={passphrase}
+                  onChange={(event) => setPassphrase(event.target.value)}
+                />
+                <FieldDescription>{t("platformAuth.passphraseHint")}</FieldDescription>
+              </Field>
+            )}
+            {mode !== "password" && mode !== "passphrase" && (
               <Field data-disabled={busy}>
                 <FieldLabel htmlFor="alwith-code">{t("platformAuth.code")}</FieldLabel>
                 <div className="flex items-center gap-2">
@@ -206,7 +263,7 @@ export function PlatformLogin({ onSkip, embedded = false }: { onSkip?: () => voi
                 </div>
               </Field>
             )}
-            {mode !== "code" && (
+            {mode !== "code" && mode !== "passphrase" && (
               <Field data-disabled={busy}>
                 <FieldLabel htmlFor="alwith-password">{t("platformAuth.password")}</FieldLabel>
                 <Input
@@ -228,19 +285,35 @@ export function PlatformLogin({ onSkip, embedded = false }: { onSkip?: () => voi
             )}
             <Button type="submit" disabled={busy}>
               {pendingAction === "submit" && <Spinner data-icon="inline-start" />}
-              {t(mode === "register" ? "platformAuth.register" : "platformAuth.signIn")}
+              {t(
+                mode === "register"
+                  ? "platformAuth.register"
+                  : mode === "passphrase"
+                    ? "platformAuth.passphraseUnlock"
+                    : "platformAuth.signIn"
+              )}
             </Button>
           </FieldGroup>
         </form>
         <p className="text-xs text-muted-foreground">{t("platformAuth.independent")}</p>
         {/* The account service only answers inside the company network, so a reader away from it
-            would otherwise face a wall they cannot pass. Local features do not need an account. */}
-        {onSkip && (
+            would otherwise face a wall they cannot pass. The passphrase is that door: local only,
+            never sent anywhere, and it does not fake an account. */}
+        {onPassphrase && mode !== "passphrase" && (
           <div className="flex flex-col items-center gap-1">
-            <Button type="button" variant="outline" size="sm" disabled={busy} onClick={onSkip}>
-              {t("platformAuth.skip")}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                setMode("passphrase")
+                setError("")
+              }}
+            >
+              {t("platformAuth.usePassphrase")}
             </Button>
-            <p className="text-center text-xs text-muted-foreground">{t("platformAuth.skipHint")}</p>
+            <p className="text-center text-xs text-muted-foreground">{t("platformAuth.passphraseHint")}</p>
           </div>
         )}
       </div>

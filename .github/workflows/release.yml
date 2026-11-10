@@ -67,6 +67,21 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/alwith_u.pdb
           if-no-files-found: error
 
+  quality-gate:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun scripts/check-toolchain.ts
+      - run: bun install --frozen-lockfile
+      - run: bun check --no-script -b
+      - run: bun run test
+
   release-preflight:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
@@ -127,7 +142,7 @@ jobs:
 
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: release-preflight
+    needs: [release-preflight, quality-gate]
     permissions:
       contents: write
     strategy:
@@ -181,6 +196,9 @@ jobs:
           args: --target ${{ matrix.target }}
       - name: Verify packaged toolchain (macOS)
         if: runner.os == 'macOS'
+        env:
+          # A signed release must pass strict codesign verification of the .app bundle.
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: bun scripts/verify-bundled-toolchain.ts "src-tauri/target/${{ matrix.target }}/release/bundle/macos/ALWith L.app/Contents/MacOS"
       - name: Verify built toolchain with staged resources (Windows)
         if: runner.os == 'Windows'
@@ -252,8 +270,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/tos-release"
           while read -r release_id; do
             echo "Downloading assets from release $release_id"
+            # Signatures are mandatory updater assets; match archives and .sig files explicitly.
             gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" |
-              jq -rs '.[][] | select(.name | test("\\.(dmg|exe|msi|app\\.tar\\.gz)(\\.sig)?$")) | [.id, .name] | @tsv' > "$RUNNER_TEMP/tos-assets.tsv"
+              jq -rs '.[][] | select(.name | test("\\.(dmg|exe|msi|app\\.tar\\.gz)\\.sig$|\\.(dmg|exe|msi|app\\.tar\\.gz)$")) | [.id, .name] | @tsv' > "$RUNNER_TEMP/tos-assets.tsv"
             while IFS=$'\t' read -r asset_id asset_name; do
               if [[ "$asset_name" == */* || "$asset_name" == *\\* ]]; then
                 echo "Invalid asset name: $asset_name" >&2

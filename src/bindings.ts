@@ -324,6 +324,34 @@ export const commands = {
   codexVersion: (): Promise<string> => __t3Invoke<string>("codex_version"),
   codexBundledModels: (): Promise<BundledModelEntry_Serialize[]> =>
     __t3Invoke<BundledModelEntry_Serialize[]>("codex_bundled_models"),
+  /**
+   *  Pushes the UI's mute switch into the bridge. `forward_chatgpt` reads the shared atomic on
+   *  every upstream request, so a change applies immediately without restarting the engine. The
+   *  engine itself never retries (`request_max_retries=0`): honouring the upstream `retry-after`
+   *  would stall the turn for minutes, so the bridge owns the immediate replay loop instead.
+   *  When muted, the bridge swallows `server_is_overloaded` and re-sends the same request with no
+   *  ceiling — the 60-minute whole-request timeout is the only backstop.
+   */
+  setOverloadMute: (args: { mute: boolean }): Promise<null> => __t3Invoke<null>("set_overload_mute", args),
+  /**
+   *  OpenRouter answers a burst with HTTP 429 instead of the structured `server_is_overloaded`
+   *  event. When the user switches the OpenRouter「模型异常提醒」off, the bridge treats a 429 as
+   *  a transient hiccup and re-sends the same request once, so the turn either completes or
+   *  fails on its own merits instead of stopping at `请求太频繁`.
+   */
+  setOverload429Mute: (args: { mute: boolean }): Promise<null> => __t3Invoke<null>("set_overload_429_mute", args),
+  driveGuardSetEnabled: (args: { enabled: boolean }): Promise<null> =>
+    __t3Invoke<null>("drive_guard_set_enabled", args),
+  driveGuardEnabled: (): Promise<boolean> => __t3Invoke<boolean>("drive_guard_enabled"),
+  /**
+   *  Called from the app's own file-write path. A save the user just made is trusted by the next
+   *  scan instead of being mistaken for a rollback.
+   */
+  driveGuardNoteWrite: (args: { path: string }): Promise<null> => __t3Invoke<null>("drive_guard_note_write", args),
+  /**
+   *  One scan pass over every indexed Drive root. Cheap when the switch is off: it returns at once.
+   */
+  driveGuardScan: (): Promise<ScanReport> => __t3Invoke<ScanReport>("drive_guard_scan"),
   skillsList: (): Promise<SkillEntry[]> => __t3Invoke<SkillEntry[]>("skills_list"),
   skillsSetEnabled: (args: { id: string; enabled: boolean }): Promise<null> =>
     __t3Invoke<null>("skills_set_enabled", args),
@@ -765,6 +793,12 @@ export type CommandErrors = {
   restartRuntimeEngine: string
   codexVersion: string
   codexBundledModels: string
+  setOverloadMute: never
+  setOverload429Mute: never
+  driveGuardSetEnabled: never
+  driveGuardEnabled: never
+  driveGuardNoteWrite: never
+  driveGuardScan: string
   skillsList: string
   skillsSetEnabled: string
   skillsInstall: string
@@ -1792,6 +1826,16 @@ export type RuntimeLines = string[]
 
 export type Scan = Scan_Serialize | Scan_Deserialize
 
+/**  What one scan pass did. Returned to the UI so it can tell the user what was rescued. */
+export type ScanReport = {
+  /**  Files whose old content was pushed back and replaced by the shadow copy. */
+  restored: string[]
+  /**  Files recorded for the first time, or accepted as a newer edit. */
+  recorded: number
+  /**  Files skipped because they are too large to shadow. */
+  skipped: number
+}
+
 export type Scan_Deserialize = {
   operationId?: string | null
   tasks: string[]
@@ -1919,6 +1963,8 @@ export type State_Deserialize =
   | { type: "disabled"; reason: DisablementReason }
   | { type: "idle" }
   | { type: "checkingForUpdates" }
+  /**  A check failed; keep the reason so the UI can report it instead of claiming "up to date". */
+  | { type: "checkFailed"; message: string }
   | { type: "availableForDownload"; update: UpdateInfo_Deserialize }
   | { type: "downloading"; update: UpdateInfo_Deserialize; downloadedBytes?: number | null; totalBytes?: number | null }
   | { type: "ready"; update: UpdateInfo_Deserialize }
@@ -1933,6 +1979,8 @@ export type State_Serialize =
   | { type: "disabled"; reason: DisablementReason }
   | { type: "idle" }
   | { type: "checkingForUpdates" }
+  /**  A check failed; keep the reason so the UI can report it instead of claiming "up to date". */
+  | { type: "checkFailed"; message: string }
   | { type: "availableForDownload"; update: UpdateInfo_Serialize }
   | { type: "downloading"; update: UpdateInfo_Serialize; downloadedBytes: number | null; totalBytes: number | null }
   | { type: "ready"; update: UpdateInfo_Serialize }

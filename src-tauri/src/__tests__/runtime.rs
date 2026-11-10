@@ -161,6 +161,17 @@ fn an_unresponsive_peer_cannot_prevent_shutdown_completion() {
 }
 
 #[test]
+fn a_timed_out_shutdown_no_longer_blocks_a_repeated_quit() {
+    let state = RuntimeState::default();
+    assert!(state.blocks_exit());
+    assert!(state.begin_shutdown());
+    assert!(state.blocks_exit());
+    // The 5s drain timed out; prevent_exit() force-marks completion before calling app.exit().
+    state.shutdown_complete.store(true, Ordering::Release);
+    assert!(!state.blocks_exit());
+}
+
+#[test]
 fn active_prompt_admission_uses_the_explicit_target_session() {
     for (method, params) in [
         ("prompt", json!({"sessionId": "active"})),

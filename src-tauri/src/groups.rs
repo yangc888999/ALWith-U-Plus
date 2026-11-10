@@ -188,12 +188,33 @@ pub fn group_document_read(document: String) -> Result<String, String> {
     read_text_file_at(&document)
 }
 
+/// A save that fires before the read has finished used to flush an empty string over the real
+/// document. Refuse to overwrite a document we could not have loaded in full, or to wipe an
+/// existing one with empty content. A first write (the file does not exist yet) is always
+/// allowed, so creating a group's document is never blocked.
+fn guard_document_write(document: &Path, content: &str) -> Result<(), String> {
+    let Ok(metadata) = fs::metadata(document) else {
+        return Ok(());
+    };
+    if !metadata.is_file() {
+        return Ok(());
+    }
+    if metadata.len() > MAX_TEXT_BYTES {
+        return Err("群文档超出可读取大小，拒绝覆盖".into());
+    }
+    if content.trim().is_empty() && metadata.len() > 0 {
+        return Err("拒绝用空内容覆盖已有群文档".into());
+    }
+    Ok(())
+}
+
 /// Writes a group's own document.
 #[tauri3_specta::command]
 pub fn group_document_write(document: String, content: String) -> Result<(), String> {
     if let Some(parent) = Path::new(&document).parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
+    guard_document_write(Path::new(&document), &content)?;
     fs::write(&document, content).map_err(|error| error.to_string())
 }
 
@@ -411,6 +432,20 @@ mod tests {
         let path = std::env::temp_dir().join("alwith-role-test.png");
         fs::write(&path, b"not text").unwrap();
         assert!(read_text_file_at(&path.to_string_lossy()).is_err());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn document_write_guard_allows_first_write_and_rejects_destructive_ones() {
+        let path = std::env::temp_dir().join("alwith-group-document-guard.md");
+        let _ = fs::remove_file(&path);
+        // A document that does not exist yet is always writable, empty content included.
+        assert!(guard_document_write(&path, "").is_ok());
+        fs::write(&path, "# real document").unwrap();
+        assert!(guard_document_write(&path, "edited").is_ok());
+        assert!(guard_document_write(&path, "   ").is_err());
+        fs::write(&path, "x".repeat(MAX_TEXT_BYTES as usize + 1)).unwrap();
+        assert!(guard_document_write(&path, "small").is_err());
         let _ = fs::remove_file(&path);
     }
 }

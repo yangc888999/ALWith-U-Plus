@@ -6,12 +6,36 @@ interface Host {
   fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
   storage: Storage
   refresh: (token: string) => Promise<{ access_token: string; refresh_token: string }>
-  expired: () => Promise<void>
+  expired: (generation: number) => Promise<void>
 }
 
 /** App transport only: authentication contracts and native refresh belong to @alwith/module-auth. */
 class UnauthorizedError extends Error {
   readonly kind = "unauthorized"
+}
+
+/** Shared login epoch across webviews; localStorage is the cross-window bus. */
+export const AUTH_GENERATION_KEY = "alwith:auth-generation"
+
+/** Read the shared epoch; unavailable storage (engine/node) starts at zero. */
+export function readAuthGeneration(): number {
+  if (typeof localStorage === "undefined") return 0
+  const raw = localStorage.getItem(AUTH_GENERATION_KEY)
+  const value = raw === null ? 0 : Number.parseInt(raw, 10)
+  return Number.isFinite(value) ? value : 0
+}
+
+/** Bump on a real login/logout; the write broadcasts a storage event to the other webviews. */
+export function bumpAuthGeneration(): number {
+  const next = readAuthGeneration() + 1
+  if (typeof localStorage !== "undefined") {
+    try {
+      localStorage.setItem(AUTH_GENERATION_KEY, String(next))
+    } catch {
+      // Storage can be unavailable; the shared epoch stays best-effort in that case.
+    }
+  }
+  return next
 }
 
 export function createAuthTransport(host: Host) {
@@ -23,18 +47,25 @@ export function createAuthTransport(host: Host) {
   async function refresh(expected: number) {
     if (pending) return pending
     const work = (async () => {
+      const generation = readAuthGeneration()
       const token = await host.storage.tokenStorage.getRefresh()
       current(expected)
       try {
         if (!token) throw new UnauthorizedError("No refresh token")
         const result = await host.refresh(token)
         current(expected)
+        // A login/logout in any webview (or a rotated refresh token) supersedes this result.
+        // Discard it before persisting so the old account never overwrites the current one.
+        if (readAuthGeneration() !== generation || (await host.storage.tokenStorage.getRefresh()) !== token) {
+          revision++
+          return
+        }
         await host.storage.tokenStorage.save(result.access_token, result.refresh_token)
       } catch (error) {
         current(expected)
         if (typeof error === "object" && error !== null && "kind" in error && error.kind === "unauthorized") {
           revision++
-          await host.expired()
+          await host.expired(generation)
         }
         throw error
       }
@@ -89,6 +120,23 @@ export function createAuthTransport(host: Host) {
     if (!text) return undefined as T
     return JSON.parse(text) as T
   }
+  // Shared between explicit account transitions and cross-window storage notifications.
+  async function invalidate(): Promise<void> {
+    revision++
+    await pending?.catch(() => {})
+  }
+  // A generation bump in another webview arrives only as a storage event. Invalidate this
+  // window's in-flight requests; invalidate never writes the epoch, so it cannot echo a loop.
+  let lastGeneration = readAuthGeneration()
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    window.addEventListener("storage", (event) => {
+      if (event.key !== AUTH_GENERATION_KEY && event.key !== null) return
+      const next = readAuthGeneration()
+      if (next === lastGeneration) return
+      lastGeneration = next
+      void invalidate()
+    })
+  }
   return {
     request,
     /** Native operations return only sanitized data; share account refresh and generation checks. */
@@ -115,9 +163,6 @@ export function createAuthTransport(host: Host) {
       }
     },
     // Wait for an already-started save before replacing/clearing the account.
-    async invalidate() {
-      revision++
-      await pending?.catch(() => {})
-    }
+    invalidate
   }
 }

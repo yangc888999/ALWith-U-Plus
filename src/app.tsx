@@ -27,6 +27,7 @@ import { ChatProjectMenu } from "@/features/chat/project-session-popover"
 import { useDriveArchive } from "@/features/drive/archive-runtime"
 import { DriveDeleteConfirmation, DrivePage, DriveStatus, useDriveConnection } from "@/features/drive/drive"
 import { useDrivePluginBridge } from "@/features/drive/plugin-bridge-hook"
+import { useDriveVersionGuard } from "@/features/drive/version-guard-runtime"
 import { sendExtensionMessage, setExtensionDraft } from "@/features/extensions/chat/chat"
 import { connectExtensionNavigation } from "@/features/extensions/chat/navigation"
 import { ExtensionNavigation } from "@/features/extensions/extension-navigation"
@@ -52,7 +53,7 @@ import {
   serialAutomationExecutor,
   startAutomationScheduler
 } from "@/features/automation/automation-scheduler"
-import { patchRunRecord, setTaskMonitorSession } from "@/features/automation/task-store"
+import { getTask, patchRunRecord, setTaskMonitorSession } from "@/features/automation/task-store"
 import type { OnRunTask } from "@/features/automation/types"
 import { useVoiceHandoff } from "@/features/voice/use-voice-handoff"
 import { WorkspaceHeaderContext } from "@/features/workspace/context"
@@ -132,6 +133,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   useDriveConnection()
   useDrivePluginBridge()
   useDriveArchive()
+  useDriveVersionGuard()
   const { host: extensions, runtime: extensionRuntime, state: extensionState } = useExtensions()
   const { t } = useTranslation()
   const connection = useApp((state) => state.connection)
@@ -943,6 +945,14 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     // 定时器和「立即运行」共用一条队列：引擎是单进程，并行发起只会让两个任务互相等。
     // Completion cues are handled once in the runStates effect above, for every conversation;
     // playing a chime here too would make a scheduled task sound twice.
+    // A queued run may wait up to 15 minutes behind another turn. Re-read the task at dequeue
+    // time so deleting, disabling or editing it while queued cancels that run. Requests without
+    // taskFiredAt come from the user's "run now" button and are exempt.
+    const taskStillRunnable = (request: { taskId: string; taskFiredAt?: number }): boolean => {
+      if (request.taskFiredAt === undefined) return true
+      const task = getTask(request.taskId)
+      return task !== undefined && task.enabled && task.updatedAt <= request.taskFiredAt
+    }
     const execute = serialAutomationExecutor(async (request) => {
       const result = await executeAutomationRun(run, request)
       // Notifications are best effort: a Lark outage must never turn a successful task into a
@@ -970,7 +980,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           .catch((cause: unknown) => toast.error(describeError(cause)))
       }
       return result
-    })
+    }, taskStillRunnable)
     const bridge = serveAutomationBridge(execute)
     // 引擎未就绪时跳过这一轮，不消耗排期、不写失败记录；连上后下一轮自然会跑。
     const stopScheduler = startAutomationScheduler(execute, () => client.state.connection === "ready")

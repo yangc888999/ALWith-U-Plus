@@ -110,13 +110,13 @@ test("integration settings stay pending until attachment and then enable control
   await act(async () => {})
   expect(screen.queryByRole("alert")).not.toBeInTheDocument()
   // Only the switches that read Drive preferences have to wait: they have nothing to show until
-  // the daemon publishes them. The conflict-copy filter is a local display preference and is
-  // deliberately usable before attachment, so it is checked separately below.
+  // the daemon publishes them. The conflict-copy filter and the version guard are local
+  // preferences and are deliberately usable before attachment, so they are checked separately.
   const pending = () => screen.getAllByRole("switch").filter((control) => control.dataset.localPreference !== "true")
   for (const control of pending()) expect(control).toHaveAttribute("aria-disabled", "true")
   const local = screen.getAllByRole("switch").filter((control) => control.dataset.localPreference === "true")
-  expect(local).toHaveLength(1)
-  expect(local[0]).not.toHaveAttribute("aria-disabled", "true")
+  expect(local).toHaveLength(2)
+  for (const control of local) expect(control).not.toHaveAttribute("aria-disabled", "true")
   await act(() => drive.attach())
   await waitFor(() => {
     for (const control of pending()) expect(control).not.toHaveAttribute("aria-disabled", "true")

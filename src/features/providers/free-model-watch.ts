@@ -11,14 +11,19 @@
 
 import { commands } from "@/bindings"
 import i18n from "@/lib/i18n"
-import { notifyConversation } from "@/lib/notify"
+import { notifyConversation, notifyFreeModels } from "@/lib/notify"
 import { settingsStore } from "@/lib/settings-store"
 
 export const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 
 export const FREE_MODEL_WATCH_SETTING = "providers.freeModelWatch"
 const KNOWN_KEY = "alwith:free-model-watch/known"
-const CHECK_INTERVAL_MS = 30 * 60_000
+// One hour on average, with a random jitter so several copies of the app (or a restart inside
+// the same hour) do not all hammer the catalog at the same second. The jitter is bounded: a
+// 59-65 minute cycle still reads as "about an hour", and a user who opens the app at a random
+// minute should not wait 90 minutes for the first check.
+const CHECK_INTERVAL_MS = 60 * 60_000
+const CHECK_JITTER_MS = 6 * 60_000
 const FIRST_CHECK_MS = 60_000
 const RETRY_MS = 5 * 60_000
 const MAX_KNOWN = 2000
@@ -78,10 +83,12 @@ export function formatNewFreeModels(ids: readonly string[]): string {
 
 export function notifyNewFreeModels(ids: readonly string[]): void {
   if (ids.length === 0) return
-  void notifyConversation(
-    i18n.t("provider.freeWatchNotifyTitle", { count: ids.length }),
-    i18n.t("provider.freeWatchNotifyBody", { models: formatNewFreeModels(ids) })
-  )
+  const title = i18n.t("provider.freeWatchNotifyTitle", { count: ids.length })
+  const body = i18n.t("provider.freeWatchNotifyBody", { models: formatNewFreeModels(ids) })
+  // The OS notification is a background surface; the toast makes the same event visible to someone
+  // sitting in another window. Voice was intentionally removed.
+  void notifyConversation(title, body)
+  notifyFreeModels(title, body)
 }
 
 export type FreeModelCheckOptions = {
@@ -113,13 +120,15 @@ export function startFreeModelWatch(): () => void {
   let failures = 0
   const enabled = (): boolean => settingsStore.get<boolean>(FREE_MODEL_WATCH_SETTING) === true
 
+  const nextInterval = (): number => CHECK_INTERVAL_MS + Math.floor(Math.random() * CHECK_JITTER_MS)
+
   const schedule = (delay: number): void => {
     if (disposed) return
     if (timer !== null) clearTimeout(timer)
     timer = setTimeout(() => {
       timer = null
       if (!enabled() || checking) {
-        schedule(CHECK_INTERVAL_MS)
+        schedule(nextInterval())
         return
       }
       checking = true
@@ -132,7 +141,7 @@ export function startFreeModelWatch(): () => void {
         })
         .finally(() => {
           checking = false
-          schedule(failures === 0 ? CHECK_INTERVAL_MS : Math.min(RETRY_MS * 2 ** Math.min(failures, 3), CHECK_INTERVAL_MS))
+          schedule(failures === 0 ? nextInterval() : Math.min(RETRY_MS * 2 ** Math.min(failures, 3), CHECK_INTERVAL_MS))
         })
     }, delay)
   }

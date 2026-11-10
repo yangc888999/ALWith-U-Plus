@@ -1,4 +1,4 @@
-import { lstatSync, readdirSync, readFileSync } from "node:fs"
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
 import { valid } from "semver"
@@ -39,9 +39,19 @@ export function releaseArtifacts(directory: string, tag: string): Artifact[] {
     if (target === "windows" && arch !== "windows-x86_64") throw new Error(`Unsupported release architecture: ${arch}`)
     const stat = lstatSync(join(directory, filename))
     if (!stat.isFile() || stat.size === 0) throw new Error(`Release asset is not a nonempty file: ${filename}`)
-    // A signature marks an updater package in the admin API. DMGs are installers only.
-    const signature = format === "dmg" ? "" : readFileSync(join(directory, `${filename}.sig`), "utf8").trim()
-    if (format !== "dmg" && !signature) throw new Error(`Missing updater signature: ${filename}`)
+    // A signature marks an updater package in the admin API. DMGs are installers only. Check
+    // existence first: reading a missing .sig directly throws ENOENT and hides the real cause.
+    let signature = ""
+    if (format !== "dmg") {
+      const signaturePath = join(directory, `${filename}.sig`)
+      if (!existsSync(signaturePath)) throw new Error(`Missing updater signature: ${filename}`)
+      const signatureStat = lstatSync(signaturePath)
+      if (!signatureStat.isFile() || signatureStat.size === 0) {
+        throw new Error(`Updater signature is not a nonempty file: ${filename}.sig`)
+      }
+      signature = readFileSync(signaturePath, "utf8").trim()
+      if (!signature) throw new Error(`Missing updater signature: ${filename}`)
+    }
     artifacts.push({
       download_url: `https://static.alwith.ai/alwith-u/release/${encodeURIComponent(tag)}/${encodeURIComponent(filename)}`,
       target,
@@ -57,6 +67,13 @@ export function releaseArtifacts(directory: string, tag: string): Artifact[] {
             : "64-bit",
       signature_text: signature
     })
+  }
+  // Signatures and archives must pair by name: a stray .sig would otherwise ship as a phantom asset.
+  for (const filename of readdirSync(directory)) {
+    if (!filename.endsWith(".sig")) continue
+    if (!existsSync(join(directory, filename.slice(0, -4)))) {
+      throw new Error(`Updater signature has no matching archive: ${filename}`)
+    }
   }
   for (const [arch, format] of [
     ["darwin-aarch64", "tar.gz"],

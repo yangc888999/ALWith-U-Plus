@@ -996,12 +996,6 @@ async fn reconcile_target(
             let upstream_token = bearer_token.clone();
             // Threads written before the router existed are bound to their own provider and are
             // still resumed through it, so keep that route alive next to the shared one.
-            if is_sanitized {
-                crate::bridge::register_route(&runtime_id, &upstream_base);
-            }
-            // Every gateway is reachable through the one shared provider; the bridge decides where
-            // a turn actually goes from the `<gateway>/<model>` name Codex sends.
-            crate::bridge::register_router_route(&runtime_id, &upstream_base, &upstream_token, is_sanitized);
             let base_url = crate::bridge::router_base_url().unwrap_or_else(|| upstream_base.clone());
             if !already {
                 let result = client.acp_request(agent_id, "providers/set", json!({"providerId":"openai", "apiType":"openai", "baseUrl":base_url,
@@ -1016,6 +1010,15 @@ async fn reconcile_target(
                 // Normalise the stored order so the next reconciliation can take the fast path.
                 inner.applied.insert(id.clone(), selected.clone());
             }
+            // Register the live route only after the adapter accepted the catalog. Registering
+            // first used to leave the bridge forwarding to credentials the engine never applied
+            // whenever the adapter rejected the request because sessions were busy.
+            if is_sanitized {
+                crate::bridge::register_route(&runtime_id, &upstream_base);
+            }
+            // Every gateway is reachable through the one shared provider; the bridge decides where
+            // a turn actually goes from the `<gateway>/<model>` name Codex sends.
+            crate::bridge::register_router_route(&runtime_id, &upstream_base, &upstream_token, is_sanitized);
             // codex resolves a thread's provider from config.toml when resuming, so a runtime
             // registration alone leaves it "not found". Record a managed block as well.
             // codex 0.164 dropped wire_api = "chat"; the config block only exists so

@@ -80,6 +80,8 @@ export function AboutSection() {
         return t("updater.checking")
       case "disabled":
         return t("updater.disabled")
+      case "checkFailed":
+        return t("updater.checkFailed", { message: state.message })
       default:
         return t("updater.upToDate")
     }
@@ -90,7 +92,9 @@ export function AboutSection() {
       ? "bg-amber-500"
       : state.type === "checkingForUpdates" || state.type === "downloading"
         ? "bg-sky-500"
-        : "bg-emerald-500"
+        : state.type === "checkFailed"
+          ? "bg-red-500"
+          : "bg-emerald-500"
 
   return (
     <>

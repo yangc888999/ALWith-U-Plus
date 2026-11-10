@@ -33,17 +33,34 @@ export function GroupDocumentDialog({
   const { t } = useTranslation()
   const [text, setText] = useState("")
   const [loading, setLoading] = useState(false)
+  const [readError, setReadError] = useState<string | null>(null)
+  const [retryToken, setRetryToken] = useState(0)
 
   useEffect(() => {
     if (!open || group === null) return
+    // A late read from the previous group must not overwrite the one being shown now.
+    let cancelled = false
     setLoading(true)
+    setReadError(null)
     void invoke<string>("group_document_read", { document: group.document })
-      .then(setText)
-      .catch(() => setText(""))
-      .finally(() => setLoading(false))
-  }, [open, group])
+      .then((value) => {
+        if (cancelled) return
+        setText(value)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setReadError(error instanceof Error ? error.message : String(error))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, group, retryToken])
 
   const save = (): void => {
+    if (loading || readError) return
     if (group === null) return
     void invoke("group_document_write", { document: group.document, content: text })
       .then(() => {
@@ -60,17 +77,31 @@ export function GroupDocumentDialog({
           <DialogTitle>{t("groups.documentTitle", { name: group?.name ?? "" })}</DialogTitle>
           <DialogDescription>{group?.document}</DialogDescription>
         </DialogHeader>
-        <textarea
-          aria-label={t("groups.documentTitle", { name: group?.name ?? "" })}
-          className="h-80 w-full resize-y rounded-md border border-border/70 bg-background p-3 text-sm leading-relaxed"
-          value={loading ? "" : text}
-          onChange={(event) => setText(event.target.value)}
-        />
+        {readError !== null ? (
+          <p className="h-80 w-full rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+            {readError}
+          </p>
+        ) : (
+          <textarea
+            aria-label={t("groups.documentTitle", { name: group?.name ?? "" })}
+            className="h-80 w-full resize-y rounded-md border border-border/70 bg-background p-3 text-sm leading-relaxed"
+            value={loading ? "" : text}
+            onChange={(event) => setText(event.target.value)}
+            disabled={loading}
+          />
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
             {t("actions.cancel")}
           </Button>
-          <Button onClick={save}>{t("groups.save")}</Button>
+          {readError !== null && (
+            <Button variant="outline" onClick={() => setRetryToken((token) => token + 1)}>
+              {t("actions.retry")}
+            </Button>
+          )}
+          <Button onClick={save} disabled={loading || readError !== null}>
+            {t("groups.save")}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

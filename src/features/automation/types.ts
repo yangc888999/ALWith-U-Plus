@@ -129,6 +129,9 @@ export interface AutomationRunRequest {
   larkIdentity: string
   /** 复用的监控会话；省略 / null 表示主窗口需要新建一条并回写任务（兼容旧版请求）。 */
   monitorSessionId?: string | null
+  /** The scheduler tick that queued this run. Only scheduled requests carry it; the dequeue
+   * check uses it to tell a stale queued request from a user-triggered "run now". */
+  taskFiredAt?: number
 }
 
 /** 主窗口 → 设置窗口：一次执行的结果。 */

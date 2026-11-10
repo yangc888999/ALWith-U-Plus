@@ -28,6 +28,10 @@ pub enum State {
     },
     Idle,
     CheckingForUpdates,
+    /// A check failed; keep the reason so the UI can report it instead of claiming "up to date".
+    CheckFailed {
+        message: String,
+    },
     AvailableForDownload {
         update: UpdateInfo,
     },
@@ -72,6 +76,16 @@ mod tests {
         };
         let state = State::Ready { update };
         let json = serde_json::to_string(&state).unwrap();
+        let back: State = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, back);
+    }
+
+    #[test]
+    fn check_failed_serializes_type_tag_and_message() {
+        let state = State::CheckFailed { message: "network unreachable".into() };
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.contains("\"type\":\"checkFailed\""));
+        assert!(json.contains("\"message\":\"network unreachable\""));
         let back: State = serde_json::from_str(&json).unwrap();
         assert_eq!(state, back);
     }

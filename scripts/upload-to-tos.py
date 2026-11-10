@@ -6,6 +6,14 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+# Two explicit asset classes instead of an optional "(\.sig)?" tail: archives and their updater
+# signatures are both mirrored, and the pairing below makes signatures mandatory. DMGs, EXEs, MSIs
+# and .app.tar.gz archives all stay recognisable.
+ARCHIVE = re.compile(r"\.(?:dmg|exe|msi|app\.tar\.gz)$")
+SIGNATURE = re.compile(r"\.(?:dmg|exe|msi|app\.tar\.gz)\.sig$")
+# DMGs are full installers, not updater packages; Tauri does not produce a signature for them.
+SIGNED_ARCHIVE = re.compile(r"\.(?:exe|msi|app\.tar\.gz)$")
+
 
 def mirror_release(directory: Path, tag: str, upload: Callable[[Path, str], None]) -> int:
     number = r"(?:0|[1-9][0-9]*)"
@@ -15,16 +23,25 @@ def mirror_release(directory: Path, tag: str, upload: Callable[[Path, str], None
     files = sorted(
         file for file in directory.iterdir()
         if file.is_file() and not file.is_symlink()
-        and re.search(r"\.(dmg|exe|msi|app\.tar\.gz)(\.sig)?$", file.name)
+        and (ARCHIVE.search(file.name) or SIGNATURE.search(file.name))
     )
     if not files:
         raise ValueError("No release assets found to mirror")
+    names = {file.name for file in files}
     # Validate the whole set before the first write to TOS.
     for file in files:
         if not file.name.startswith(f"alwith-u_{tag[1:]}_"):
             raise ValueError(f"Asset version does not match {tag}: {file.name}")
         if file.stat().st_size == 0:
             raise ValueError(f"Release asset is empty: {file.name}")
+    # Signatures and archives must pair by name; every signed archive needs a nonempty signature.
+    for file in files:
+        if SIGNATURE.search(file.name):
+            if file.name[:-4] not in names:
+                raise ValueError(f"Updater signature has no matching archive: {file.name}")
+        elif SIGNED_ARCHIVE.search(file.name):
+            if f"{file.name}.sig" not in names:
+                raise ValueError(f"Missing updater signature: {file.name}")
     for file in files:
         upload(file, f"alwith-u/release/{tag}/{file.name}")
     return len(files)

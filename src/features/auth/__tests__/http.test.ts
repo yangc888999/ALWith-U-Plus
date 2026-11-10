@@ -1,7 +1,11 @@
 import { createTokenStorage } from "@alwith/module-auth"
-import { describe, expect, test } from "vitest"
+import { beforeEach, describe, expect, test } from "vitest"
 
-import { createAuthTransport } from "../http"
+import { AUTH_GENERATION_KEY, bumpAuthGeneration, createAuthTransport, readAuthGeneration } from "../http"
+
+beforeEach(() => {
+  localStorage.clear()
+})
 
 /** Native and transport layers reject with plain values; tests reproduce that exactly. */
 const nonError = (value: unknown): unknown => value
@@ -193,6 +197,48 @@ describe("ALwith account HTTP adapter", () => {
     await storage.clearAllAuth()
     expect(await request).toBeInstanceOf(Error)
     expect(await storage.tokenStorage.getAccess()).toBe("")
+  })
+  test("a late refresh from the old account cannot overwrite a new login", async () => {
+    const result = deferred<typeof fresh>()
+    const started = deferred<void>()
+    const { transport, storage } = await setup(
+      () => Promise.try(() => new Response(null, { status: 401 })),
+      async () => {
+        started.resolve()
+        return result.promise
+      }
+    )
+    const request = transport.request("/api/v1/me/profile", "GET").catch((error: unknown) => error)
+    await started.promise
+    // A different webview signed into a new account: bump the shared epoch and persist its tokens.
+    // No storage event is fired in this window, so only the save() generation guard can protect it.
+    bumpAuthGeneration()
+    await storage.tokenStorage.save("new-account-access", "new-account-refresh")
+    result.resolve(fresh)
+    await request
+    expect(await storage.tokenStorage.getAccess()).toBe("new-account-access")
+    expect(await storage.tokenStorage.getRefresh()).toBe("new-account-refresh")
+  })
+  test("a generation bump broadcast from another webview aborts an in-flight refresh", async () => {
+    const result = deferred<typeof fresh>()
+    const started = deferred<void>()
+    const { transport, storage } = await setup(
+      () => Promise.try(() => new Response(null, { status: 401 })),
+      async () => {
+        started.resolve()
+        return result.promise
+      }
+    )
+    const request = transport.request("/api/v1/me/profile", "GET").catch((error: unknown) => error)
+    await started.promise
+    bumpAuthGeneration()
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: AUTH_GENERATION_KEY, newValue: String(readAuthGeneration()) })
+    )
+    result.resolve(fresh)
+    await request
+    // The old refresh was invalidated before it could persist anything.
+    expect(await storage.tokenStorage.getAccess()).toBe("old-access")
   })
   test("requests outside the API namespace are rejected", async () => {
     const { transport } = await setup(

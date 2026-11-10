@@ -229,7 +229,8 @@ function coerceRun(raw: unknown): RunRecord | null {
     status,
     summary: typeof value.summary === "string" ? value.summary : "",
     sessionId: typeof value.sessionId === "string" ? value.sessionId : null,
-    error: typeof value.error === "string" ? value.error : null
+    error: typeof value.error === "string" ? value.error : null,
+    needsAuth: value.needsAuth === true
   }
 }
 
@@ -461,10 +462,20 @@ export function markTaskFired(id: string, at: number = Date.now()): void {
   })
 }
 
-/** 到期的任务（已启用 + 有排期 + 排期 <= now）。 */
+/** A persisted nextRunAt can be days old after sleep or a relaunch. Only a task whose schedule
+ * is still inside its validity and just missed its slot counts as due; anything older is skipped
+ * rather than replayed, matching the "missed runs are not caught up" rule. */
+const CATCH_UP_WINDOW_MS = 60_000
+
+/** 到期的任务（已启用 + 有排期 + 排期 <= now + 仍在有效期内 + 未过期太久）。 */
 export function dueTasks(now: number = Date.now()): ScheduledTask[] {
   return snapshot.tasks.filter(
-    (task) => task.enabled && task.nextRunAt !== null && task.nextRunAt <= now
+    (task) =>
+      task.enabled &&
+      task.nextRunAt !== null &&
+      task.nextRunAt <= now &&
+      now - task.nextRunAt <= CATCH_UP_WINDOW_MS &&
+      now <= validityEnd(task.validUntil)
   )
 }
 

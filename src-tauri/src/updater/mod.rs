@@ -66,7 +66,8 @@ pub trait UpdateChecker: Send + Sync {
 
 impl UpdaterService {
     pub fn check_for_updates(&self, checker: &dyn UpdateChecker) {
-        if !matches!(self.state(), State::Idle) {
+        // A failed check is retryable: the hourly loop must not be stuck outside `Idle` forever.
+        if !matches!(self.state(), State::Idle | State::CheckFailed { .. }) {
             return;
         }
         self.set_state(State::CheckingForUpdates);
@@ -75,7 +76,7 @@ impl UpdaterService {
             Ok(None) => self.set_state(State::Idle),
             Err(error) => {
                 log::warn!("automatic update check failed: {error}");
-                self.set_state(State::Idle);
+                self.set_state(State::CheckFailed { message: error });
             }
         }
     }
@@ -588,16 +589,28 @@ mod tests {
     }
 
     #[test]
-    fn check_miss_or_error_returns_to_idle_and_non_idle_is_noop() {
-        let (svc, _) = recording_service();
+    fn check_miss_returns_idle_error_is_reported_and_other_states_are_noop() {
+        let (svc, emitted) = recording_service();
         svc.set_state(State::idle());
         svc.check_for_updates(&MockChecker(Ok(None)));
         assert!(matches!(svc.state(), State::Idle));
+
+        emitted.lock().unwrap().clear();
         svc.check_for_updates(&MockChecker(Err("net down".into())));
-        assert!(matches!(svc.state(), State::Idle));
+        assert!(matches!(svc.state(), State::CheckFailed { ref message } if message == "net down"));
+        assert!(emitted.lock().unwrap().iter().any(|s| matches!(s, State::CheckFailed { .. })));
+
         svc.set_state(State::Downloading { update: sample_update("0.2.0"), downloaded_bytes: None, total_bytes: None });
         svc.check_for_updates(&MockChecker(Ok(Some(sample_update("0.3.0")))));
         assert!(matches!(svc.state(), State::Downloading { .. }));
+    }
+
+    #[test]
+    fn check_can_retry_from_failed_state_so_the_hourly_loop_is_not_stuck() {
+        let (svc, _) = recording_service();
+        svc.set_state(State::CheckFailed { message: "net down".into() });
+        svc.check_for_updates(&MockChecker(Ok(Some(sample_update("0.3.0")))));
+        assert!(matches!(svc.state(), State::AvailableForDownload { .. }));
     }
 
     // ── download ──

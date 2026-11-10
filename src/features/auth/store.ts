@@ -18,7 +18,7 @@ import { create } from "zustand"
 import { commands } from "@/bindings"
 import { openStore } from "@/lib/store"
 
-import { createAuthTransport } from "./http"
+import { bumpAuthGeneration, createAuthTransport, readAuthGeneration } from "./http"
 import { assertActiveLogin } from "./login-response"
 import { createAccountTransition, createManagedProviders } from "./managed-providers"
 
@@ -42,11 +42,16 @@ const transport = createAuthTransport({
   fetch,
   storage,
   refresh: (refreshToken) => commands.refreshTokens({ apiBaseUrl: API_BASE_URL, refreshToken }),
-  expired: async () => {
+  expired: async (generation) => {
+    // A newer login/logout already superseded this refresh's account; dropping the expiry keeps a
+    // stale refresh from kicking the new login out. The event still carries the epoch so the main
+    // window can make the same check if the two webviews race.
+    if (generation !== readAuthGeneration()) return
     if (!isMain()) {
-      await emitTo("main", LOGOUT_EVENT)
+      await emitTo("main", LOGOUT_EVENT, { generation })
       return
     }
+    bumpAuthGeneration()
     await clearAccountProviders()
     for (const listener of expiredListeners) listener()
     await storage.clearAllAuth()
@@ -135,8 +140,9 @@ export const usePlatformAuth = create<AuthState & AuthActions>(
 
 const transitionAccount = createAccountTransition()
 export function logoutPlatform(): Promise<void> {
-  if (!isMain()) return emitTo("main", LOGOUT_EVENT)
+  if (!isMain()) return emitTo("main", LOGOUT_EVENT, { generation: readAuthGeneration() })
   return transitionAccount(async () => {
+    bumpAuthGeneration()
     await clearAccountProviders()
     await transport.invalidate()
     await usePlatformAuth.getState().logout()
@@ -150,6 +156,7 @@ export function loginPlatform(response: LoginResponse): Promise<void> {
   if (!isMain()) return emitTo("main", LOGIN_EVENT, response)
   assertActiveLogin(response)
   return transitionAccount(async () => {
+    bumpAuthGeneration()
     await clearAccountProviders()
     await transport.invalidate()
     await usePlatformAuth.getState().login(response)
@@ -159,11 +166,17 @@ export function loginPlatform(response: LoginResponse): Promise<void> {
 /** Register listeners before restoring credentials; called once by each window bootstrap. */
 export async function initPlatformAuth(): Promise<void> {
   await listen<AuthStateEvent>(STATE_EVENT, (event) => {
+    // A login/logout in any webview invalidates this window's in-flight account requests. It is
+    // fire-and-forget: invalidate never emits a state event or writes the epoch, so it cannot loop.
+    if (event.payload.action === "login" || event.payload.action === "logout") void transport.invalidate()
     for (const listener of stateListeners) listener(event.payload)
   })
   if (isMain()) await listen(PROVIDERS_REFRESH_EVENT, refreshAccountProviders)
   if (isMain())
-    await listen(LOGOUT_EVENT, () => {
+    await listen<{ generation?: number }>(LOGOUT_EVENT, (event) => {
+      const generation = event.payload?.generation
+      // A delayed expiry from an old account must not log out a newer login.
+      if (generation !== undefined && generation !== readAuthGeneration()) return
       void logoutPlatform().catch(() => console.error("[auth] local logout failed"))
     })
   if (isMain())

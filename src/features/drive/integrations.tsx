@@ -10,6 +10,7 @@ import { Switch } from "@/components/ui/switch"
 
 import { useBlockConflictCopies } from "./block-conflict-copies-preference"
 import { drive } from "./controller"
+import { useVersionGuard } from "./version-guard-preference"
 
 // Cheap structural comparison so the 5s refresh doesn't re-render when nothing changed.
 function contentEqual<T>(previous: T | null, next: T): boolean {
@@ -24,6 +25,7 @@ export function DriveIntegrations(): ReactNode {
   // Local switch, not a Drive preference: it is read by the filesystem wrapper, so it needs no
   // connection and still applies while the daemon is stopped.
   const [blockConflictCopies, setBlockConflictCopies] = useBlockConflictCopies()
+  const [versionGuard, setVersionGuard] = useVersionGuard()
   const [preferences, setPreferences] = useState<Preferences | null>(null)
   const [archive, setArchive] = useState<ArchiveStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -153,6 +155,20 @@ export function DriveIntegrations(): ReactNode {
           checked={preferences?.knowledgeInject ?? false}
           disabled={!connected || busy || !preferences}
           onCheckedChange={(value) => change("knowledgeInject", value)}
+        />
+      </div>
+      <div className="alwith-drive-setting">
+        <div>
+          <strong>{translate("versionGuard.title")}</strong>
+          <p>{translate("versionGuard.desc")}</p>
+        </div>
+        <Switch
+          aria-label={translate("versionGuard.title")}
+          // Local guard, not a Drive preference: it runs entirely on this machine and must stay
+          // usable before the daemon attaches (and while it is stopped).
+          data-local-preference="true"
+          checked={versionGuard}
+          onCheckedChange={setVersionGuard}
         />
       </div>
       <div className="alwith-drive-setting">

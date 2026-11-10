@@ -2,9 +2,11 @@
  * U's composer: the package composer with U's dictation and realtime voice, native file drops,
  * model catalog and prediction preference.
  */
+import type * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { usePromptInputAttachments } from "@alwith/module-chat/composer-context"
-import { Composer, type ComposerProps, useComposer } from "@alwith/module-chat/conversation"
+import { Composer, type ComposerProps, setComposerDraft, useComposer } from "@alwith/module-chat/conversation"
 import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useRef, useState } from "react"
+import { toast } from "sonner"
 import { useStore } from "zustand"
 
 import { observeVoiceTurn } from "@/core/voice-turn"
@@ -141,10 +143,32 @@ function ComposerVoice({ voiceResume }: { voiceResume?: VoiceResume }) {  const 
   )
 }
 
-function ComposerFileDrop() {
+function ComposerFileDrop({
+  restoreRef
+}: {
+  restoreRef: { current: ((content: acp.ContentBlock[]) => void) | null }
+}) {
   const composer = useComposer()
   const attachments = usePromptInputAttachments()
   const group = groupByDirectory(composer.session.cwd)
+  useEffect(() => {
+    // A dispatch refused before insertion never produced an error item; put the images back in the
+    // tray from the content blocks the composer had already built.
+    restoreRef.current = (content) => {
+      for (const block of content) {
+        if (block.type !== "image") continue
+        const image = block as unknown as { data?: unknown; mimeType?: unknown }
+        if (typeof image.data !== "string" || typeof image.mimeType !== "string") continue
+        const binary = atob(image.data)
+        const bytes = new Uint8Array(binary.length)
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+        attachments.add([new File([bytes], "restored-image", { type: image.mimeType })])
+      }
+    }
+    return () => {
+      restoreRef.current = null
+    }
+  }, [attachments, restoreRef])
   return (
     <NativeFileDrop
       sessionId={composer.session.id}
@@ -170,6 +194,8 @@ export function ChatComposer({
   const handoffBusy = useHandoffBusy()
   const [menu, setMenu] = useState<ContextMenuTarget | null>(null)
   const shellRef = useRef<HTMLDivElement>(null)
+  // Registered by the in-composer bridge, which owns the attachment tray's `add` handle.
+  const restoreAttachments = useRef<((content: acp.ContentBlock[]) => void) | null>(null)
   const sessionId = props.session.id
   // A chat lives in the quick-chat folder; anything else is a project. `groupByDirectory` looked
   // right but only matches directories the reader registered as a group, so a normal project
@@ -184,7 +210,9 @@ export function ChatComposer({
    * spinner that never came back, and a second message could not be sent until the model finished.
    * The turn is already visible through the stop button beside it, so the wait belongs in the
    * background. Only a refusal raised before dispatch (no session, nothing to send) still fails the
-   * submit, which is what puts the draft back into the input.
+   * submit, which is what puts the draft back into the input. A refusal that arrives *after* the
+   * window — the engine rejecting before it inserted the message — is reported through
+   * `onLateFailure`, which restores the draft and attachments instead of losing them silently.
    */
   const submit = useCallback<NonNullable<ComposerProps["onSubmit"]>>(
     (content, accept) => {
@@ -205,7 +233,23 @@ export function ChatComposer({
       // Nothing left to wait for: release the composer and let the turn run in the background. The
       // receipt a voice handoff needs arrives with the answer, so it is handed over from inside the
       // window helper instead of holding the button for the whole turn.
-      return withoutWaitingForTurn(task, accept)
+      return withoutWaitingForTurn(task, accept, (error) => {
+        // The engine refused the dispatch before inserting the message, so there is no error item
+        // in the transcript. Put the typed text back (the package's guarded restore refuses to
+        // clobber a draft the reader has already started) and re-add the attachments.
+        const text = content
+          .filter((block): block is Extract<acp.ContentBlock, { type: "text" }> => block.type === "text")
+          .map((block) => block.text)
+          .join("")
+        try {
+          if (text !== "") setComposerDraft(sessionId, text)
+          restoreAttachments.current?.(content)
+        } catch {
+          // The composer cannot take the draft back (e.g. it is busy); the toast below still tells
+          // the reader the send failed.
+        }
+        toast.error(error instanceof Error ? error.message : String(error))
+      })
     },
     [onSubmit, sessionId]
   )
@@ -293,7 +337,7 @@ export function ChatComposer({
         attachmentPolicy={nativeAttachmentPolicy}
         actions={<ComposerVoice voiceResume={voiceResume} />}
       >
-        <ComposerFileDrop />
+        <ComposerFileDrop restoreRef={restoreAttachments} />
       </Composer>
       <ChatContextMenu target={menu} onClose={() => setMenu(null)} />
     </div>

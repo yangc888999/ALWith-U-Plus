@@ -41,6 +41,12 @@ impl RuntimeState {
         self.closing.load(Ordering::Acquire)
     }
 
+    /// Exit is blocked only while there is still cleanup to drain. A timed-out drain force-marks
+    /// completion so the `app.exit()` it triggers is not intercepted a second time.
+    fn blocks_exit(&self) -> bool {
+        !self.shutdown_complete.load(Ordering::Acquire)
+    }
+
     pub fn current(&self) -> Result<Arc<RuntimeClient>, String> {
         if self.is_closing() {
             return Err("Application is closing".into());
@@ -105,7 +111,7 @@ pub async fn restart_runtime_engine(state: State<'_, RuntimeState>) -> Result<()
 /// Blocking this thread can strand a Tokio worker waiting for a WebKit response.
 pub fn prevent_exit(app: &AppHandle, code: Option<i32>) -> bool {
     let state = app.state::<RuntimeState>();
-    if state.shutdown_complete.load(Ordering::Acquire) {
+    if !state.blocks_exit() {
         return false;
     }
     if state.begin_shutdown() {
@@ -123,6 +129,10 @@ pub fn prevent_exit(app: &AppHandle, code: Option<i32>) -> bool {
             };
             if tokio::time::timeout(std::time::Duration::from_secs(5), drain).await.is_err() {
                 log::error!("Runtime shutdown timed out; exiting anyway");
+                // The drain was abandoned, so shutdown() never set the completion flag. Force it
+                // now: app.exit() re-enters ExitRequested, and a second prevent_exit() must not
+                // block the quit forever. Cleanup is necessarily partial after this point.
+                app.state::<RuntimeState>().shutdown_complete.store(true, Ordering::Release);
             }
             app.exit(code.unwrap_or(0));
         });

@@ -93,12 +93,33 @@ function withSerialTimeout(
   })
 }
 
-export function serialAutomationExecutor(run: AutomationExecutor): AutomationExecutor {
+/** Re-checked at dequeue time: a task deleted, disabled or edited while queued must not start. */
+export type RunStillValid = (request: AutomationRunRequest) => boolean
+
+export function serialAutomationExecutor(
+  run: AutomationExecutor,
+  stillValid: RunStillValid = () => true
+): AutomationExecutor {
   let tail: Promise<void> = Promise.resolve()
   return (request) => {
     // `run(request)` is invoked only once the previous task has settled, preserving the serial
-    // guarantee; the timeout wraps the actual run so a hung turn still frees the queue.
-    const result = tail.then(() => withSerialTimeout(run(request), request))
+    // guarantee; the timeout wraps the actual run so a hung turn still frees the queue. A queued
+    // request can be up to 15 minutes old, so validity is checked here rather than at enqueue.
+    const result = tail.then((): Promise<AutomationRunResult> => {
+      if (!stillValid(request)) {
+        const skipped: AutomationRunResult = {
+          runId: request.runId,
+          taskId: request.taskId,
+          status: "failed",
+          summary: "",
+          sessionId: null,
+          error: "任务在排队期间被删除、停用或修改，已跳过本次执行",
+          finishedAt: Date.now()
+        }
+        return Promise.resolve(skipped)
+      }
+      return withSerialTimeout(run(request), request)
+    })
     tail = result.then(
       () => undefined,
       () => undefined
@@ -123,8 +144,8 @@ export function startAutomationScheduler(
     try {
       const now = Date.now()
       for (const task of dueTasks(now)) {
-        // 先推进排期再执行，避免 30s 内重复触发；单次任务会在这里自动停用。
-        markTaskFired(task.id, now)
+        // Snapshot the task before advancing the schedule: markTaskFired rewrites updatedAt,
+        // and the dequeue check compares that timestamp against this tick.
         const request: AutomationRunRequest = {
           runId: newRunId(),
           taskId: task.id,
@@ -138,8 +159,11 @@ export function startAutomationScheduler(
           larkNotify: task.larkNotify,
           larkTargets: task.larkTargets,
           larkIdentity: task.larkIdentity,
-          monitorSessionId: task.monitorSessionId
+          monitorSessionId: task.monitorSessionId,
+          taskFiredAt: now
         }
+        // 先推进排期再执行，避免 30s 内重复触发；单次任务会在这里自动停用。
+        markTaskFired(task.id, now)
         void execute(request).catch(() => undefined)
       }
     } finally {

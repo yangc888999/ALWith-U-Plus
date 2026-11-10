@@ -74,6 +74,30 @@ test("a failed Codex version check reports the error and still displays the app 
   }
 })
 
+test("a failed update check shows the error instead of claiming the app is up to date", async () => {
+  const native = vi.spyOn(core, "isTauri").mockReturnValue(true)
+  const init = vi.spyOn(useUpdaterStore.getState(), "init").mockResolvedValue()
+  const originalState = useUpdaterStore.getState()
+  useUpdaterStore.setState({ state: { type: "checkFailed", message: "network unreachable" } })
+  mockIPC((command) => {
+    if (command === "plugin:app|version") return "0.2.0"
+    if (command === "codex_version") return "0.159.2"
+    throw new Error(`Unexpected command: ${command}`)
+  })
+  const view = render(<AboutSection />)
+  try {
+    await waitFor(() => {
+      expect(view.getByText("Update check failed: network unreachable")).toBeDefined()
+    })
+    expect(view.queryByText("Up to date")).toBeNull()
+  } finally {
+    view.unmount()
+    useUpdaterStore.setState(originalState, true)
+    native.mockRestore()
+    init.mockRestore()
+  }
+})
+
 test("the update log opens from the version row instead of sitting on the page", async () => {
   const native = vi.spyOn(core, "isTauri").mockReturnValue(true)
   const init = vi.spyOn(useUpdaterStore.getState(), "init").mockResolvedValue()

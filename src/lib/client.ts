@@ -12,7 +12,7 @@ import { computerContextRevision, hostSessionContext, prepareComputerTools } fro
 import { RemoteChatClient } from "@/lib/chat-window-client"
 import { DesktopCodexClient } from "@/lib/desktop-client"
 import { isMac } from "@/lib/platform"
-import { applyProvidersWhenIdle, getProviderSnapshot, loadProviders, resolveSessionModel } from "@/lib/providers"
+import { applyProvidersWhenIdle, defaultModelFallback, getProviderSnapshot, loadProviders, resolveSessionModel } from "@/lib/providers"
 import { CODEX_AGENT_ID, runtimeClient } from "@/lib/runtime"
 
 export const client =
@@ -30,6 +30,12 @@ export const client =
           let providers = getProviderSnapshot() ?? (await loadProviders())
           if (providers.status === "pending") providers = await applyProvidersWhenIdle()
           return providers.status === "pending" ? null : resolveSessionModel(model, providers)
+        },
+        defaultModel: () => {
+          // Drafts used to fall back to the previous session's model even when the user had
+          // configured a default in settings; the option was defined but never supplied here.
+          const snapshot = getProviderSnapshot()
+          return snapshot === null ? null : defaultModelFallback(snapshot)
         },
         sessionContext: hostSessionContext,
         sessionContextRevision: computerContextRevision,

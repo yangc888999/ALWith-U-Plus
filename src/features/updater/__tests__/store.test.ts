@@ -59,6 +59,14 @@ test("state events update the store", async () => {
   })
 })
 
+test("a failed check is mirrored as checkFailed state instead of being hidden", async () => {
+  const { io, emit } = fakeIo({ type: "idle" })
+  const store = createUpdaterStore(io)
+  await store.getState().init(false)
+  emit({ type: "checkFailed", message: "network unreachable" })
+  expect(store.getState().state).toEqual({ type: "checkFailed", message: "network unreachable" })
+})
+
 test("a ready update asks to relaunch once per version and installs only on acceptance", async () => {
   const declined = fakeIo({ type: "idle" })
   const store = createUpdaterStore(declined.io)

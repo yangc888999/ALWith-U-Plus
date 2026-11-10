@@ -2,16 +2,16 @@ import type { Session } from "@alwith/api"
 import { beforeEach, expect, test, vi } from "vitest"
 
 import { initI18n } from "@/lib/i18n"
-import { DEFAULT_OVERLOAD_RETRY_COUNT } from "@/lib/overload-retry-settings"
 
 const host = vi.hoisted(() => ({
-  listeners: [] as ((event: { payload: { model: string; reason?: string; retryAfter: number | null } }) => void)[],
+  listeners: [] as ((event: { payload: { model: string; reason?: string; retryAfter: number | null; attempt?: number; requestId?: string } }) => void)[],
   warning: vi.fn(),
   info: vi.fn(),
   success: vi.fn(),
   error: vi.fn(),
   sessions: {} as Record<string, Session | undefined>,
-  runStates: {} as Record<string, { state: string } | undefined>
+  runStates: {} as Record<string, { state: string } | undefined>,
+  noticeEnabled: true
 }))
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -29,6 +29,12 @@ vi.mock("@/lib/client", () => ({
   client: {
     state: { get sessions() { return host.sessions }, get runStates() { return host.runStates } }
   }
+}))
+// The mute switch is read by the handler; a getter keeps the test in control of it.
+vi.mock("@/lib/overload-retry-settings", () => ({
+  overloadNoticeEnabled: () => host.noticeEnabled,
+  setOverloadNoticeEnabled: () => {},
+  subscribeOverloadNoticeEnabled: () => () => {}
 }))
 
 /** `clock` is the last applied update: old for a stalled turn, fresh while tokens are flowing. */
@@ -79,13 +85,13 @@ async function subscribe() {
   return mod
 }
 
-function emit(model: string, retryAfter: number | null = 324, reason: string = "overloaded") {
-  for (const listener of host.listeners) listener({ payload: { model, retryAfter, reason } })
-}
-
-function emitOverload(model: string, retryAfter: number | null = 324) {
-  // The notice appears only after the automatic-retry budget is exhausted.
-  for (let attempt = 0; attempt <= DEFAULT_OVERLOAD_RETRY_COUNT; attempt++) emit(model, retryAfter)
+function emit(
+  model: string,
+  retryAfter: number | null = 324,
+  reason: string = "overloaded",
+  extra: { attempt?: number; requestId?: string } = {}
+) {
+  for (const listener of host.listeners) listener({ payload: { model, retryAfter, reason, ...extra } })
 }
 
 /** A tool still running locally: the upstream request is over, so a stall must not be claimed. */
@@ -121,12 +127,13 @@ beforeEach(async () => {
   host.error.mockClear()
   host.sessions = {}
   host.runStates = {}
+  host.noticeEnabled = true
 })
 
 test("an overload event publishes a notice for the running session, not a floating toast", async () => {
   host.sessions["chat-1"] = session("gpt-6.1-sol")
   const mod = await subscribe()
-  emitOverload("gpt-6.1-sol", 324)
+  emit("gpt-6.1-sol", 324)
   const notice = mod.overloadNotice()
   expect(notice?.sessionId).toBe("chat-1")
   expect(notice?.modelName).toBe("6.1 Sol")
@@ -134,21 +141,24 @@ test("an overload event publishes a notice for the running session, not a floati
   expect(host.warning).not.toHaveBeenCalled()
 })
 
-test("automatic retries stay silent until the configured count is exceeded", async () => {
+test("the notice fades after the per-request throttle window", async () => {
   host.sessions["chat-1"] = session("gpt-6.1-sol")
   const mod = await subscribe()
-  for (let attempt = 0; attempt < DEFAULT_OVERLOAD_RETRY_COUNT; attempt++) emit("gpt-6.1-sol")
-  expect(mod.overloadNotice()).toBeNull()
-  emit("gpt-6.1-sol")
+  emit("gpt-6.1-sol", 324, "overloaded", { requestId: "req-1" })
+  expect(mod.overloadNotice()?.sessionId).toBe("chat-1")
+  mod.dismissOverload("chat-1")
+  // A different upstream request within the same turn is a fresh stall, not a republish.
+  emit("gpt-6.1-sol", 324, "overloaded", { requestId: "req-2" })
   expect(mod.overloadNotice()?.sessionId).toBe("chat-1")
 })
 
-test("repeated retries of the same turn do not republish the notice", async () => {
+test("repeated events from the same upstream request do not republish the notice", async () => {
   host.sessions["chat-1"] = session("gpt-6.1-sol")
   const mod = await subscribe()
   let published = 0
   mod.subscribeOverload(() => published++)
-  emitOverload("gpt-6.1-sol")
+  emit("gpt-6.1-sol", 324, "overloaded", { requestId: "req-1" })
+  emit("gpt-6.1-sol", 324, "overloaded", { requestId: "req-1" })
   expect(published).toBe(1)
 })
 
@@ -162,7 +172,7 @@ test("no running session on that model means no notice", async () => {
 test("the close button only dismisses its own session's notice", async () => {
   host.sessions["chat-1"] = session("gpt-6.1-sol")
   const mod = await subscribe()
-  emitOverload("gpt-6.1-sol")
+  emit("gpt-6.1-sol")
   mod.dismissOverload("another-chat")
   expect(mod.overloadNotice()).not.toBeNull()
   mod.dismissOverload("chat-1")
@@ -199,7 +209,7 @@ test("an unknown reason is never reported as an overload", async () => {
 test("a gateway model is recognized under the bridge's <gateway>/<model> name", async () => {
   host.sessions["chat-1"] = session("gateway:deepseek:deepseek-flash")
   const mod = await subscribe()
-  emitOverload("deepseek/deepseek-flash", 324)
+  emit("deepseek/deepseek-flash", 324)
   expect(mod.overloadNotice()?.sessionId).toBe("chat-1")
 })
 
@@ -223,36 +233,48 @@ test("a notice is bound to one model id, not to every turn in the window", async
 test("the notice keeps the model id it was raised for", async () => {
   host.sessions["chat-1"] = session("gpt-6.1-sol")
   const mod = await subscribe()
-  emitOverload("gpt-6.1-sol", 324)
+  emit("gpt-6.1-sol", 324)
   // The progress row needs this to prove A's capacity is not B's.
   expect(mod.overloadNotice()?.model).toBe("gpt-6.1-sol")
 })
 
-test("two chats on one model: the notice goes to the most recently updated one", async () => {
+test("multiple active sessions on one model suppress the notice rather than guessing", async () => {
+  // Two chats running the same model cannot be told apart from the payload; a notice on the wrong
+  // one is worse than no notice at all.
   const older = session("gpt-6.1-sol", Date.now() - 120_000)
   older.id = "older"
   const newer = session("gpt-6.1-sol", Date.now() - 90_000)
   newer.id = "newer"
   host.sessions = { older, newer }
   const mod = await subscribe()
-  emitOverload("gpt-6.1-sol", 324)
-  expect(mod.overloadNotice()?.sessionId).toBe("newer")
+  emit("gpt-6.1-sol", 324)
+  expect(mod.overloadNotice()).toBeNull()
 })
 
-test("a second chat on the same model still gets its own notice", async () => {
-  // The one-notice-per-minute budget belongs to a conversation, not to a model name. Keyed by
-  // model alone, chat A's notice swallowed chat B's real stall for a full minute — and the reader
-  // saw nothing where the turn was actually stuck.
-  const first = session("gpt-6.1-sol", Date.now() - 120_000)
-  first.id = "chat-first"
-  const second = session("gpt-6.1-sol", Date.now() - 90_000)
-  second.id = "chat-second"
-  host.sessions = { first, second }
+test("only the session matching the reported model is considered", async () => {
+  // An unrelated running chat must not make the single real candidate ambiguous.
+  const other = session("gpt-6.1-terra", Date.now() - 120_000)
+  other.id = "chat-other"
+  const active = session("gpt-6.1-sol", Date.now() - 90_000)
+  active.id = "chat-active"
+  host.sessions = { other, active }
   const mod = await subscribe()
-  emitOverload("gpt-6.1-sol", 324)
-  expect(mod.overloadNotice()?.sessionId).toBe("chat-second")
-  // The reader moves to the other chat; it is now the most recent turn on the very same model.
-  first.clock = Date.now() - 10_000
-  emitOverload("gpt-6.1-sol", 324)
-  expect(mod.overloadNotice()?.sessionId).toBe("chat-first")
+  emit("gpt-6.1-sol", 324)
+  expect(mod.overloadNotice()?.sessionId).toBe("chat-active")
+})
+
+test("with the reminder switched off an overload never becomes a notice", async () => {
+  host.noticeEnabled = false
+  host.sessions["chat-1"] = session("gpt-6.1-sol")
+  const mod = await subscribe()
+  emit("gpt-6.1-sol", 324, "overloaded", { requestId: "req-muted" })
+  expect(mod.overloadNotice()).toBeNull()
+})
+
+test("the mute switch only silences overloads, not a silent upstream", async () => {
+  host.noticeEnabled = false
+  host.sessions["chat-1"] = session("gpt-6.1-sol")
+  const mod = await subscribe()
+  emit("gpt-6.1-sol", null, "no_ack")
+  expect(mod.overloadNotice()?.reason).toBe("no_ack")
 })

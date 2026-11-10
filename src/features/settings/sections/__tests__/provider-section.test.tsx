@@ -910,7 +910,7 @@ test("a connection save retries once when a model toggle moved the revision", as
   expect(refresh).toHaveBeenCalledTimes(1)
 })
 
-test("the overload retry count is staged until Apply, then takes effect", () => {
+test("the overload reminder switch is on by default and turns off in one click", () => {
   const saveConnection = vi.fn(() => Promise.try(() => snapshot(1)))
   const view = render(
     <ProviderRow
@@ -925,14 +925,12 @@ test("the overload retry count is staged until Apply, then takes effect", () => 
     />
   )
 
-  const input = view.getByLabelText("Automatic overload retries") as HTMLInputElement
-  expect(input.value).toBe("5")
-  fireEvent.change(input, { target: { value: "9" } })
-  // Typing must not rewrite the budget every other chat reads mid-keystroke.
-  expect(localStorage.getItem("chat.overload-retry-count")).toBeNull()
-
-  fireEvent.click(view.getByRole("button", { name: "Apply" }))
-  expect(localStorage.getItem("chat.overload-retry-count")).toBe("9")
+  const toggle = view.getByRole("switch", { name: "Mute model overload notices" })
+  expect(toggle.getAttribute("aria-checked")).toBe("true")
+  fireEvent.click(toggle)
+  expect(toggle.getAttribute("aria-checked")).toBe("false")
+  // The preference is written immediately: there is nothing to stage, unlike the old count field.
+  expect(localStorage.getItem("chat.overload-notice-enabled")).toBe("false")
 })
 
 test("a conflict that leaves the revision unchanged still surfaces", async () => {

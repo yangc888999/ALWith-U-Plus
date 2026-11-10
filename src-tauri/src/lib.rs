@@ -19,6 +19,7 @@ mod chat_window;
 mod computer;
 mod draft_directory;
 mod drive;
+mod drive_guard;
 mod extension_capabilities;
 mod extension_inbox;
 mod extension_wire;
@@ -186,6 +187,7 @@ pub fn run() {
             // first request can never be reached. The port is known now, so write it here.
             providers::repair_router_provider();
             drive::initialize(app.handle())?;
+            app.manage(drive_guard::GuardState(std::sync::Arc::new(drive_guard::Ledger::default())));
             trackpad::install(app.handle())?;
             computer::initialize(app.handle())?;
             // Ship the operator personas with the app and drop them into `$CODEX_HOME/rob_models`
@@ -314,6 +316,30 @@ pub fn run() {
     });
 }
 
+/// Commands live in a module: `tauri3_specta::command` defines `#[macro_export]` helper macros
+/// that collide with a crate-root re-import when the function is declared at the crate root.
+mod overload_commands {
+    /// Pushes the UI's mute switch into the bridge. `forward_chatgpt` reads the shared atomic on
+    /// every upstream request, so a change applies immediately without restarting the engine. The
+    /// engine itself never retries (`request_max_retries=0`): honouring the upstream `retry-after`
+    /// would stall the turn for minutes, so the bridge owns the immediate replay loop instead.
+    /// When muted, the bridge swallows `server_is_overloaded` and re-sends the same request with no
+    /// ceiling — the 60-minute whole-request timeout is the only backstop.
+    #[tauri3_specta::command]
+    pub fn set_overload_mute(mute: bool) {
+        crate::bridge::set_overload_mute(mute);
+    }
+
+    /// OpenRouter answers a burst with HTTP 429 instead of the structured `server_is_overloaded`
+    /// event. When the user switches the OpenRouter「模型异常提醒」off, the bridge treats a 429 as
+    /// a transient hiccup and re-sends the same request once, so the turn either completes or
+    /// fails on its own merits instead of stopping at `请求太频繁`.
+    #[tauri3_specta::command]
+    pub fn set_overload_429_mute(mute: bool) {
+        crate::bridge::set_overload_429_mute(mute);
+    }
+}
+
 /// The native handler and TypeScript exporter use this same command and event graph.
 pub fn bindings() -> tauri3_specta::Bindings {
     macro_rules! commands {
@@ -419,6 +445,12 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 runtime::restart_runtime_engine,
                 runtime::codex_version,
                 runtime::codex_bundled_models,
+                overload_commands::set_overload_mute,
+                overload_commands::set_overload_429_mute,
+                drive_guard::drive_guard_set_enabled,
+                drive_guard::drive_guard_enabled,
+                drive_guard::drive_guard_note_write,
+                drive_guard::drive_guard_scan,
                 skills::skills_list,
                 skills::skills_set_enabled,
                 skills::skills_install,

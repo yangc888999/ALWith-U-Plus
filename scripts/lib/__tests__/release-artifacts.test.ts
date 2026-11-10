@@ -162,3 +162,21 @@ test("rejects Windows ARM64 release assets", () => {
     "Unsupported release architecture"
   )
 })
+
+test("reports a clear error when an updater signature file is missing", () => {
+  const directory = fixture()
+  rmSync(join(directory, "alwith-u_26.9.24_windows_x64-setup.exe.sig"))
+  expect(() => releaseArtifacts(directory, "v26.9.24")).toThrow("Missing updater signature")
+})
+
+test("rejects an empty signature file as a nonempty-file violation", () => {
+  const directory = fixture()
+  writeFileSync(join(directory, "alwith-u_26.9.24_macos_aarch64.app.tar.gz.sig"), "")
+  expect(() => releaseArtifacts(directory, "v26.9.24")).toThrow("Updater signature is not a nonempty file")
+})
+
+test("rejects a signature that has no matching archive", () => {
+  const directory = fixture()
+  writeFileSync(join(directory, "alwith-u_26.9.24_windows_x64-ghost.exe.sig"), "signed\n")
+  expect(() => releaseArtifacts(directory, "v26.9.24")).toThrow("Updater signature has no matching archive")
+})

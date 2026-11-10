@@ -12,7 +12,7 @@
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::Read;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
@@ -87,6 +87,40 @@ static PORT: OnceLock<u16> = OnceLock::new();
 pub fn gateway_base_url(runtime_id: &str) -> Option<String> {
     let port = *PORT.get()?;
     Some(format!("http://127.0.0.1:{port}/{runtime_id}"))
+}
+
+/// Pushed by the UI through `set_overload_mute`. Default false keeps today's behaviour: an
+/// overload reaches the user as a notice. When the user flips the mute switch, `relay` swallows
+/// `server_is_overloaded` and replays the same request without a ceiling until a real response
+/// comes back or the stream ends — the 60-minute whole-request timeout is the only backstop.
+/// `relay` reads it for every upstream request, so a settings change takes effect immediately —
+/// no engine restart required.
+static OVERLOAD_MUTE: AtomicBool = AtomicBool::new(false);
+
+/// Whether the user has asked to mute every overload notice and replay in silence.
+pub fn set_overload_mute(mute: bool) {
+    OVERLOAD_MUTE.store(mute, Ordering::Relaxed);
+}
+
+/// Whether `relay` should swallow `server_is_overloaded` and replay immediately.
+pub fn overload_mute() -> bool {
+    OVERLOAD_MUTE.load(Ordering::Relaxed)
+}
+
+/// Pushed by the UI through `set_overload_429_mute`. Default false keeps today's behaviour: an
+/// upstream HTTP 429 reaches the engine and the UI as `error.providerRateLimited`. When the user
+/// switches the OpenRouter「模型异常提醒」off, `relay` treats a 429 as a transient hiccup and
+/// re-sends the same request instead of answering with the refusal. `relay` reads it for every
+/// upstream request, so a settings change takes effect immediately — no engine restart required.
+static OVERLOAD_429_MUTE: AtomicBool = AtomicBool::new(false);
+
+/// Whether `relay` should swallow an upstream HTTP 429 and replay immediately.
+pub fn set_overload_429_mute(mute: bool) {
+    OVERLOAD_429_MUTE.store(mute, Ordering::Relaxed);
+}
+
+pub fn overload_429_mute() -> bool {
+    OVERLOAD_429_MUTE.load(Ordering::Relaxed)
 }
 
 /// Starts the bridge once; later calls are no-ops. Returns the bound port.
@@ -270,6 +304,7 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
                 &[],
                 body,
                 false,
+                false,
             )
         }
     };
@@ -284,8 +319,8 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
         authorization,
         &[],
         sanitize(&payload),
-        // A direct gateway route, not the ChatGPT backend: its error vocabulary is the vendor's.
-        false
+        false,
+        false,
     )
 }
 
@@ -336,7 +371,10 @@ fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
         // Gateway vendors neither emit ChatGPT's `server_is_overloaded` nor share its retry
         // behaviour. Watching stalls here is what made a DeepSeek turn that merely quoted the
         // phrase look overloaded, and a slow gateway answer look like a ChatGPT capacity wait.
-        false
+        false,
+        // Only OpenRouter documents this 429 / error.code=10000 pair. Other gateway 429s must
+        // retain their own error handling and are never swallowed by this preference.
+        gateway == "openrouter",
     )
 }
 
@@ -387,8 +425,10 @@ fn forward_chatgpt(request: tiny_http::Request, parsed: &Value) -> Result<(), St
         Some(&authorization),
         &headers,
         payload,
-        // The only route whose backend speaks `server_is_overloaded`.
-        true
+        // The only route whose backend speaks `server_is_overloaded`. Read the mute switch per
+        // request so a settings change applies without restarting the engine.
+        true,
+        false,
     )
 }
 
@@ -471,6 +511,35 @@ fn overload_error_line(tail: &[u8]) -> Option<&[u8]> {
     None
 }
 
+/// OpenRouter answers a burst with an HTTP 429, or — when the request is malformed or the
+/// upstream is rate-limiting mid-stream — with a JSON error injected into the SSE stream
+/// carrying `error.code: 10000`. Both are transient: re-sending the same request usually works.
+/// When the user has switched the OpenRouter「模型异常提醒」off, treat either as a hiccup and
+/// replay instead of answering with the refusal.
+///
+/// Structured like `overload_error_line`: a bare `10000` anywhere in the stream is not enough —
+/// a model can output that number in a tool result — so require the whole line to be a JSON
+/// `data:` event whose `error.code` is the marker.
+const OPENROUTER_ERROR_CODE: u64 = 10000;
+
+fn openrouter_error_line(tail: &[u8]) -> Option<&[u8]> {
+    for line in tail.split(|byte| *byte == b'\n') {
+        let Ok(text) = std::str::from_utf8(line) else { continue };
+        let Some(body) = text.trim().strip_prefix("data:") else { continue };
+        let Ok(value) = serde_json::from_str::<Value>(body.trim()) else { continue };
+        let code = value.get("error").and_then(|error| error.get("code"));
+        let matched = match code {
+            Some(Value::String(s)) => s.parse::<u64>().ok() == Some(OPENROUTER_ERROR_CODE),
+            Some(Value::Number(n)) => n.as_u64() == Some(OPENROUTER_ERROR_CODE),
+            _ => false,
+        };
+        if matched {
+            return Some(line);
+        }
+    }
+    None
+}
+
 /// Reads `retry-after` from that same structured error event — never from the first number that
 /// happens to follow the marker somewhere in the stream.
 fn retry_after_seconds(event_line: &[u8]) -> Option<u64> {
@@ -506,13 +575,44 @@ const STREAM_HARD_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 /// Marker the UI localizes when the bridge ends a stream on its own clocks.
 const STREAM_TIMEOUT_CODE: &str = "bridge_stream_timeout";
 
-fn publish_stall(model: &str, reason: &str, retry_after: Option<u64>) {
-    log::warn!("bridge: turn stalled model={model} reason={reason} retry-after={retry_after:?}s");
+/// An upstream can accept the TCP connection and then never send response headers. The client
+/// below has only a 15s connect timeout and a 60min whole-request timeout, so a bare `.send()`
+/// could hold one of the six workers for the entire hour. Bound **only** the wait for headers;
+/// the established stream keeps STREAM_IDLE_TIMEOUT / STREAM_HARD_TIMEOUT untouched.
+const HEADER_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Short, increasing id the frontend uses as a dedup key for `model:stalled` events of one
+/// upstream request. Generated once per relay below.
+static STALL_REQUEST_SEQ: AtomicU32 = AtomicU32::new(0);
+/// Process-wide diagnostic count of *real* `server_is_overloaded` events. The no-ack timer never
+/// increments it. This is NOT a per-turn index: the frontend owns turn identity and counts real
+/// events per turn, using `requestId` to dedupe; `attempt` is only a log/telemetry field.
+static OVERLOAD_ATTEMPT_SEQ: AtomicU32 = AtomicU32::new(0);
+
+fn next_request_id() -> String {
+    format!("r{}", STALL_REQUEST_SEQ.fetch_add(1, Ordering::Relaxed) + 1)
+}
+
+fn next_overload_attempt() -> u32 {
+    OVERLOAD_ATTEMPT_SEQ.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+/// Builds the `model:stalled` payload. Kept pure so the new `attempt`/`requestId` fields are
+/// unit-testable without a Tauri app handle.
+fn stall_payload(model: &str, reason: &str, retry_after: Option<u64>, attempt: u32, request_id: &str) -> Value {
+    serde_json::json!({
+        "model": model,
+        "reason": reason,
+        "retryAfter": retry_after,
+        "attempt": attempt,
+        "requestId": request_id,
+    })
+}
+
+fn publish_stall(model: &str, reason: &str, retry_after: Option<u64>, attempt: u32, request_id: &str) {
+    log::warn!("bridge: turn stalled model={model} reason={reason} retry-after={retry_after:?}s attempt={attempt} request={request_id}");
     if let Some(app) = APP_HANDLE.get() {
-        let _ = app.emit(
-            "model:stalled",
-            serde_json::json!({ "model": model, "reason": reason, "retryAfter": retry_after }),
-        );
+        let _ = app.emit("model:stalled", stall_payload(model, reason, retry_after, attempt, request_id));
     }
 }
 
@@ -645,6 +745,8 @@ impl Read for StreamReader {
 struct OverloadWatch<R> {
     inner: R,
     model: String,
+    /// Shared with the no-ack watcher; the frontend uses it as the dedup key for this request.
+    request_id: String,
     tail: Vec<u8>,
     fired: bool,
     /// `server_is_overloaded` belongs to the ChatGPT backend. Gateway turns (DeepSeek, Qwen,
@@ -669,7 +771,7 @@ fn no_ack_expired(acked: bool, closed: bool, elapsed: Duration) -> bool {
 /// Deliberately separate from `OverloadWatch`: that one needs bytes to notice an error, and an
 /// upstream that sends nothing can never hand it any. Checking `acked` from a timer thread is the
 /// only way to observe an absence.
-fn watch_no_ack(model: &str, acked: Arc<AtomicBool>, closed: Arc<AtomicBool>) {
+fn watch_no_ack(model: &str, acked: Arc<AtomicBool>, closed: Arc<AtomicBool>, request_id: String) {
     let model = model.to_string();
     std::thread::spawn(move || {
         let start = Instant::now();
@@ -677,7 +779,9 @@ fn watch_no_ack(model: &str, acked: Arc<AtomicBool>, closed: Arc<AtomicBool>) {
             let ack = acked.load(Ordering::Relaxed);
             let done = closed.load(Ordering::Relaxed);
             if no_ack_expired(ack, done, start.elapsed()) {
-                publish_stall(&model, REASON_NO_ACK, None);
+                // No real overload event fired, so `attempt` stays 0; `requestId` still tags the
+                // upstream request. The frontend counts attempts from real overload events only.
+                publish_stall(&model, REASON_NO_ACK, None, 0, &request_id);
                 return;
             }
             // Acknowledged or finished: this turn is accounted for, stop looking at it.
@@ -713,7 +817,10 @@ impl<R: Read> Read for OverloadWatch<R> {
         }
         if let Some(line) = overload_error_line(&self.tail) {
             self.fired = true;
-            publish_stall(&self.model, REASON_OVERLOADED, retry_after_seconds(line));
+            // Count only real, structured overload events (deduped by `fired`), never the no-ack
+            // timer. The number is process-wide telemetry; the frontend keeps the per-turn budget.
+            let attempt = next_overload_attempt();
+            publish_stall(&self.model, REASON_OVERLOADED, retry_after_seconds(line), attempt, &self.request_id);
         }
         Ok(count)
     }
@@ -730,10 +837,75 @@ fn stall_observers(native_route: bool) -> (bool, bool) {
     (native_route, native_route)
 }
 
+/// Result of waiting for upstream response headers on a detached `.send()` thread.
+enum HeaderWait {
+    Response(reqwest::blocking::Response),
+    Error(reqwest::Error),
+    Timeout,
+}
+
+/// Runs `.send()` on its own thread and waits only `timeout` for the response headers. A slow
+/// upstream that never answers otherwise pins one of the six workers for the whole 60min client
+/// timeout. On success the `Response` is handed back to the caller — `reqwest::blocking::Response`
+/// is `Send` (the existing streaming thread already moves one across threads) — and streamed under
+/// the unchanged idle/hard clocks. Only the header phase is bounded.
+fn send_with_header_timeout(builder: reqwest::blocking::RequestBuilder, timeout: Duration) -> HeaderWait {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(builder.send());
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(response)) => HeaderWait::Response(response),
+        Ok(Err(error)) => HeaderWait::Error(error),
+        // Timeout, or a sender that disconnected without answering: no headers arrived in time.
+        Err(_) => HeaderWait::Timeout,
+    }
+}
+
 /// Streams one upstream turn back to Codex, preserving status codes and the SSE byte stream.
 ///
+/// A capacity refusal is replayed at once; this tiny gap only keeps five attempts from hitting
+/// the backend in the same millisecond. It deliberately ignores the backend's `retry-after`.
+const REPLAY_GAP: Duration = Duration::from_millis(200);
+/// How many silent HTTP-429 replays one request may make. `REPLAY_GAP * 2^n` caps the wait at 6.4s,
+/// so eight attempts span roughly half a minute — enough for a transient burst, short enough that a
+/// genuinely blocked key still surfaces the refusal instead of hanging until the 60-minute cap.
+const MAX_429_REPLAYS: u32 = 8;
+/// Buffer cap for the first SSE event. A healthy first event is small; a huge one is simply
+/// forwarded as-is instead of being held while we look for a capacity refusal.
+const FIRST_EVENT_CAP: usize = 16 * 1024;
+
+/// Re-sends the exact same upstream request. The engine never sees the capacity refusal, so it
+/// cannot honour `retry-after` and sleep. A non-2xx replay is reported as a failure instead of
+/// being spliced into the SSE stream.
+fn replay_upstream(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    authorization: Option<&str>,
+    headers: &[(String, String)],
+    payload: &[u8],
+) -> Result<reqwest::blocking::Response, String> {
+    let mut builder = client.post(url).header("Content-Type", "application/json");
+    if let Some(authorization) = authorization {
+        builder = builder.header("Authorization", authorization);
+    }
+    for (name, value) in headers {
+        builder = builder.header(name.as_str(), value.as_str());
+    }
+    let response = builder
+        .body(payload.to_vec())
+        .send()
+        .map_err(|error| format!("http client: {error}"))?;
+    if !(200..=299).contains(&response.status().as_u16()) {
+        return Err(format!("upstream answered {}", response.status()));
+    }
+    Ok(response)
+}
+
 /// `watch_stall` is true only for `forward_chatgpt`. It gates **both** the structured overload
-/// reader and the no-ack timer; see `stall_observers`.
+/// reader and the no-ack timer; see `stall_observers`. When the user has muted overload notices,
+/// `relay` swallows `server_is_overloaded` and replays the same request without a ceiling — the
+/// 60-minute whole-request timeout is the only backstop.
 fn relay(
     request: tiny_http::Request,
     model: &str,
@@ -742,6 +914,7 @@ fn relay(
     headers: &[(&str, &str)],
     payload: Vec<u8>,
     watch_stall: bool,
+    watch_openrouter_errors: bool,
 ) -> Result<(), String> {
     let client = reqwest::blocking::Client::builder()
         // A route that silently swallows packets would otherwise hold the connect until the OS
@@ -763,18 +936,18 @@ fn relay(
     let mut payload = payload;
     let mut attempted_recovery = false;
     let mut attempted_connect = false;
+    let mut replays_429 = 0u32;
     let response = loop {
-        let sent = request_builder
+        let attempt = request_builder
             .try_clone()
             .ok_or_else(|| "http client: request not cloneable".to_string())?
-            .body(payload.clone())
-            .send();
-        let response = match sent {
-            Ok(response) => response,
+            .body(payload.clone());
+        let response = match send_with_header_timeout(attempt, HEADER_TIMEOUT) {
+            HeaderWait::Response(response) => response,
             // The native ChatGPT route rides whatever tunnel/proxy the user runs; a single dropped
             // handshake there is common and used to surface as a turn that sat at 正在思考 until
             // the watchdog fired. One quick retry covers the transient case.
-            Err(error) if !attempted_connect && error.is_connect() => {
+            HeaderWait::Error(error) if !attempted_connect && error.is_connect() => {
                 attempted_connect = true;
                 log::warn!("bridge: retrying after connect failure: {error}");
                 std::thread::sleep(std::time::Duration::from_millis(400));
@@ -785,10 +958,22 @@ fn relay(
             // never speak and the composer stayed at "正在思考" until its own 90s watchdog fired.
             // Answer with the failure instead — the turn then ends with a reason the user can act
             // on (switch model, check the proxy) in the same second the connection failed.
-            Err(error) => {
+            HeaderWait::Error(error) => {
                 log::warn!("bridge: upstream unreachable: {error}");
                 let body = upstream_error_body(&error);
                 return respond(request, 502, "application/json", body.as_bytes());
+            }
+            // Headers never arrived: free this worker (and one of the six slots) with a 504 now
+            // instead of holding it until the 60min whole-request timeout. Only the header phase
+            // is cut; a stream that already started keeps its 20min idle / 60min hard clocks.
+            HeaderWait::Timeout => {
+                log::warn!("bridge: upstream response headers timed out after {}s", HEADER_TIMEOUT.as_secs());
+                return respond(
+                    request,
+                    504,
+                    "application/json",
+                    br#"{"error":{"message":"bridge: upstream did not send response headers in time","type":"header_timeout"}}"#,
+                );
             }
         };
         let status = response.status().as_u16();
@@ -821,6 +1006,23 @@ fn relay(
                 }
             }
         }
+        // OpenRouter answers a burst with HTTP 429 instead of the structured `server_is_overloaded`
+        // SSE event ChatGPT emits. When the user has switched the OpenRouter「模型异常提醒」off,
+        // treat it as a transient hiccup and re-send the same request instead of answering with the
+        // refusal — the turn then either completes or fails on its own merits, without a
+        // `请求太频繁` toast in between. A short exponential backoff keeps a real rate limit from
+        // being hammered; after `MAX_429_REPLAYS` the refusal is passed through so a genuinely
+        // blocked key still ends with a reason instead of hanging.
+        if status == 429 && overload_429_mute() && replays_429 < MAX_429_REPLAYS {
+            let delay = REPLAY_GAP * u32::pow(2, replays_429.min(5));
+            replays_429 += 1;
+            log::warn!(
+                "bridge: upstream answered 429, silent replay {replays_429}/{MAX_429_REPLAYS} in {}ms",
+                delay.as_millis()
+            );
+            std::thread::sleep(delay);
+            continue;
+        }
         log::warn!("bridge: upstream answered {status}: {}", text.chars().take(300).collect::<String>());
         return respond(request, status, "application/json", &body);
     };
@@ -832,7 +1034,7 @@ fn relay(
         .unwrap_or("text/event-stream")
         .to_string();
     // Stream: hand the reader to tiny_http; it writes bytes as the upstream produces them.
-    let headers = vec![
+    let response_headers = vec![
         tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()).unwrap(),
         tiny_http::Header::from_bytes(&b"Cache-Control"[..], &b"no-cache"[..]).unwrap(),
         tiny_http::Header::from_bytes(&b"Connection"[..], &b"keep-alive"[..]).unwrap(),
@@ -846,22 +1048,104 @@ fn relay(
     let (tx, rx) = std::sync::mpsc::sync_channel::<StreamChunk>(64);
     let client_gone = Arc::new(AtomicBool::new(false));
     let upstream_stop = Arc::clone(&client_gone);
+    // The relay owns the immediate replay loop. Give the reader thread owned copies of everything
+    // it needs to re-send the request, without moving the borrows the observers below still use.
+    let replay_client = client.clone();
+    let replay_url = url.to_string();
+    let replay_authorization = authorization.map(str::to_string);
+    let replay_headers: Vec<(String, String)> = headers
+        .iter()
+        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+        .collect();
+    let replay_payload = payload.clone();
+    // Two independent mute switches, both read per request so a settings change applies without
+    // restarting the engine. The overload mute only arms on the native ChatGPT route; the 429
+    // mute is deliberately restricted to OpenRouter, whose documented 429 / `error.code:10000`
+    // contract the setting names. Other provider errors pass through untouched.
+    let replay_mute = watch_stall && overload_mute();
+    let replay_429 = watch_openrouter_errors && overload_429_mute();
     std::thread::spawn(move || {
         let mut upstream = response;
         let mut chunk = [0u8; 8192];
+        // Hold the first SSE event until it is complete. Only then can a capacity refusal be
+        // replayed before the engine sees it. Once any byte has gone downstream, replay is no
+        // longer safe — two response streams would be spliced together — so later events pass
+        // through untouched.
+        //
+        // When a mute switch is on, the matching first event is swallowed and the same request is
+        // re-sent on a fresh connection, with no ceiling: the only backstop is the 60-minute
+        // whole-request timeout. When muted, the event is passed through untouched and the engine
+        // (and the UI) see the refusal exactly as before.
+        let mut head: Vec<u8> = Vec::new();
+        let mut sent_any = false;
         loop {
             if upstream_stop.load(Ordering::Relaxed) {
                 break;
             }
             match upstream.read(&mut chunk) {
                 Ok(0) => {
+                    if !head.is_empty() && tx.send(StreamChunk::Data(std::mem::take(&mut head))).is_err() {
+                        break;
+                    }
                     let _ = tx.send(StreamChunk::End);
                     break;
                 }
                 Ok(count) => {
-                    if tx.send(StreamChunk::Data(chunk[..count].to_vec())).is_err() {
+                    if !sent_any && (replay_mute || replay_429) {
+                        head.extend_from_slice(&chunk[..count]);
+                        let complete =
+                            head.windows(2).any(|pair| pair == b"\n\n") || head.len() >= FIRST_EVENT_CAP;
+                        if !complete {
+                            continue;
+                        }
+                        let end = head.windows(2).position(|pair| pair == b"\n\n");
+                        let first_event = match end {
+                            Some(index) => &head[..index + 2],
+                            None => &head[..],
+                        };
+                        // Two markers, two switches. A line that is neither is forwarded as usual.
+                        let mut replayed = false;
+                        if replay_mute && overload_error_line(first_event).is_some() {
+                            replayed = true;
+                            log::warn!("bridge: muted overload, immediate replay");
+                        } else if replay_429 && openrouter_error_line(first_event).is_some() {
+                            replayed = true;
+                            log::warn!("bridge: muted openrouter error, immediate replay");
+                        }
+                        if replayed {
+                            // No request id in the log: every replay is logged with its own line and
+                            // the id was only ever a debug correlation aid.
+                            std::thread::sleep(REPLAY_GAP);
+                            match replay_upstream(
+                                &replay_client,
+                                &replay_url,
+                                replay_authorization.as_deref(),
+                                &replay_headers,
+                                &replay_payload,
+                            ) {
+                                Ok(next) => {
+                                    upstream = next;
+                                    head.clear();
+                                    continue;
+                                }
+                                Err(error) => {
+                                    log::warn!("bridge: muted replay failed: {error}");
+                                    let _ =
+                                        tx.send(StreamChunk::Failed(format!("bridge replay: {error}")));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    let data = if head.is_empty() {
+                        chunk[..count].to_vec()
+                    } else {
+                        std::mem::take(&mut head)
+                    };
+                    if tx.send(StreamChunk::Data(data)).is_err() {
                         break;
                     }
+                    sent_any = true;
                 }
                 Err(error) => {
                     log::warn!("bridge: upstream stream read failed: {error}");
@@ -874,23 +1158,27 @@ fn relay(
     let acked = Arc::new(AtomicBool::new(false));
     let closed = Arc::new(AtomicBool::new(false));
     let (watch_overload, watch_no_ack_enabled) = stall_observers(watch_stall);
+    // One short increasing id per upstream request; both stall observers attach it so the UI can
+    // dedup `model:stalled` events instead of counting them a second time.
+    let request_id = next_request_id();
     // Start the no-ack clock with the request, not with the UI: only the bridge knows whether a turn
     // is waiting on the upstream or on this machine's own tool execution. Gateway routes are not
     // watched — a vendor that never answers is that vendor's business, not a ChatGPT capacity
     // report, and an unmatched event would be attached to some other model's turn.
     if watch_no_ack_enabled {
-        watch_no_ack(model, acked.clone(), closed.clone());
+        watch_no_ack(model, acked.clone(), closed.clone(), request_id.clone());
     }
     let watched = OverloadWatch {
         inner: StreamReader::new(rx, STREAM_IDLE_TIMEOUT, STREAM_HARD_TIMEOUT, client_gone),
         model: model.to_string(),
+        request_id,
         tail: Vec::new(),
         fired: false,
         enabled: watch_overload,
         acked,
         closed,
     };
-    let response = tiny_http::Response::new(tiny_http::StatusCode(status), headers, watched, None, None);
+    let response = tiny_http::Response::new(tiny_http::StatusCode(status), response_headers, watched, None, None);
     request.respond(response).map_err(|error| format!("respond: {error}"))
 }
 
@@ -1074,6 +1362,7 @@ mod tests {
         OverloadWatch {
             inner: std::io::Cursor::new(stream),
             model: "gpt-6.1-sol".to_string(),
+            request_id: "r-test".to_string(),
             tail: Vec::new(),
             fired: false,
             enabled,
@@ -1198,6 +1487,33 @@ mod tests {
     }
 
     #[test]
+    fn openrouter_error_10000_is_a_structured_line_not_a_bare_number() {
+        // OpenRouter injects `{"error":{"code":10000,…}}` into the SSE stream when it rate-limits.
+        let numeric = br#"data: {"error":{"code":10000,"message":"rate limited"}}"#;
+        assert!(openrouter_error_line(numeric).is_some());
+        // The code also arrives as a string on some endpoints.
+        let stringy = br#"data: {"error":{"code":"10000","message":"rate limited"}}"#;
+        assert!(openrouter_error_line(stringy).is_some());
+        // A model quoting the number in normal output is not an error event.
+        let quoted = br#"data: {"type":"response.output_text.delta","delta":"error code 10000 means rate limited"}"#;
+        assert!(openrouter_error_line(quoted).is_none());
+        // Other error codes are not ours.
+        let other = br#"data: {"error":{"code":10001,"message":"something else"}}"#;
+        assert!(openrouter_error_line(other).is_none());
+    }
+
+    #[test]
+    fn the_429_mute_switch_defaults_to_false_and_round_trips() {
+        // Both mute switches start off: today's behaviour is unchanged until the user opts in.
+        let previous = overload_429_mute();
+        set_overload_429_mute(false);
+        assert!(!overload_429_mute());
+        set_overload_429_mute(true);
+        assert!(overload_429_mute());
+        set_overload_429_mute(previous);
+    }
+
+    #[test]
     fn a_model_quoting_the_phrase_is_not_an_overload() {
         // The reader asked about the error code; a gateway model answered with the phrase in normal
         // output while its tokens were being billed. No error event, so no capacity notice.
@@ -1300,5 +1616,303 @@ mod tests {
         assert_eq!(parsed["input"][0]["id"], "msg_1", "other items are untouched");
         assert!(parsed["input"][1].get("id").is_none());
         assert!(drop_item_id(body, 9).is_none(), "an out-of-range index is not a repair");
+    }
+
+    #[test]
+    fn overload_mute_defaults_to_false_and_round_trips() {
+        // A plain bool has no clamp to prove; the point is the global switch is off by default
+        // (today's behaviour: an overload reaches the user as a notice) and survives a toggle.
+        let previous = overload_mute();
+        set_overload_mute(false);
+        assert_eq!(overload_mute(), false, "default keeps today's notice behaviour");
+        set_overload_mute(true);
+        assert_eq!(overload_mute(), true, "a muted switch is read back immediately");
+        set_overload_mute(false);
+        assert_eq!(overload_mute(), false, "the switch clears cleanly");
+        set_overload_mute(previous);
+    }
+
+    #[test]
+    fn stall_payload_carries_attempt_request_id_and_original_fields() {
+        let payload = stall_payload("gpt-6.1-sol", REASON_OVERLOADED, Some(316), 3, "r42");
+        assert_eq!(payload["model"], "gpt-6.1-sol");
+        assert_eq!(payload["reason"], REASON_OVERLOADED);
+        assert_eq!(payload["retryAfter"], 316);
+        assert_eq!(payload["attempt"], 3);
+        assert_eq!(payload["requestId"], "r42");
+        // A no-ack stall is not an overload event: attempt 0, requestId still present.
+        let no_ack = stall_payload("gpt-6.1-sol", REASON_NO_ACK, None, 0, "r43");
+        assert_eq!(no_ack["attempt"], 0);
+        assert!(no_ack["requestId"].is_string());
+    }
+
+    #[test]
+    fn request_ids_increase_and_attempts_count_real_events_only() {
+        let a = next_request_id();
+        let b = next_request_id();
+        assert_ne!(a, b, "each upstream request gets a fresh dedup key");
+        // `next_overload_attempt` is called only from OverloadWatch on a real, deduped event.
+        // Use a tolerant comparison: another test may fire a real event in parallel.
+        let first = next_overload_attempt();
+        let second = next_overload_attempt();
+        assert!(second > first, "attempts increase with each real event");
+    }
+
+    #[test]
+    fn header_timeout_frees_the_worker_on_a_silent_upstream() {
+        // An upstream that accepts the connection but never writes response headers.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            // Hold the accepted socket open, never send headers, until the test releases it.
+            let _ = stop_rx.recv();
+        });
+        // A short client timeout lets the detached `.send()` thread terminate quickly after we
+        // release the listener, so the test cannot hang.
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(2))
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let builder = client.post(format!("http://{addr}/")).body(Vec::<u8>::new());
+        let start = Instant::now();
+        // Production uses HEADER_TIMEOUT (60s); a short wait keeps this test fast.
+        let outcome = send_with_header_timeout(builder, Duration::from_millis(200));
+        let elapsed = start.elapsed();
+        assert!(matches!(outcome, HeaderWait::Timeout), "a silent upstream must time out");
+        assert!(elapsed < Duration::from_secs(2), "worker must be freed by the header timeout, not the 5s client timeout: {elapsed:?}");
+        // Release the silent listener; the detached `.send()` then errors out and exits.
+        let _ = stop_tx.send(());
+        let _ = holder.join();
+    }
+
+    #[test]
+    fn only_an_overload_is_swallowed_by_the_replay_buffer() {
+        use std::io::Write;
+        use std::net::{TcpListener, TcpStream};
+        use std::sync::atomic::AtomicUsize;
+
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_in_thread = Arc::clone(&hits);
+        let upstream_thread = std::thread::spawn(move || {
+            // A healthy first event, deliberately split so the relay has to buffer it.
+            const FIRST: &str = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n";
+            const REST: &str = "\n";
+            let (mut stream, _) = upstream.accept().unwrap();
+            let mut scratch = [0u8; 1024];
+            let _ = stream.read(&mut scratch);
+            hits_in_thread.fetch_add(1, Ordering::Relaxed);
+            let body = format!("{FIRST}{REST}");
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                FIRST
+            )
+            .unwrap();
+            stream.flush().unwrap();
+            std::thread::sleep(Duration::from_millis(80));
+            stream.write_all(REST.as_bytes()).unwrap();
+            stream.flush().unwrap();
+        });
+
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let bridge_addr = server.server_addr().to_ip().unwrap();
+        let client_thread = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(bridge_addr).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            stream
+                .write_all(b"POST /alwith/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}")
+                .unwrap();
+            let mut body = Vec::new();
+            let mut scratch = [0u8; 4096];
+            loop {
+                match stream.read(&mut scratch) {
+                    Ok(0) => break,
+                    Ok(count) => body.extend_from_slice(&scratch[..count]),
+                    Err(_) => break,
+                }
+            }
+            String::from_utf8_lossy(&body).to_string()
+        });
+
+        let request = server.recv().unwrap();
+        // Mute is a global switch, so arm it for this test and restore it afterwards. Without it
+        // the relay passes the healthy first event straight through and there is nothing to prove.
+        let previous = overload_mute();
+        set_overload_mute(true);
+        let result = relay(
+            request,
+            "gpt-6.1-sol",
+            &format!("http://{upstream_addr}/responses"),
+            None,
+            &[],
+            b"{}".to_vec(),
+            true,
+            false,
+        );
+        set_overload_mute(previous);
+        let body = client_thread.join().unwrap();
+        let _ = upstream_thread.join();
+
+        assert!(result.is_ok(), "relay failed: {result:?}");
+        assert_eq!(hits.load(Ordering::Relaxed), 1, "a non-overload event must never be replayed");
+        assert!(
+            body.contains("response.output_text.delta"),
+            "the buffered event must reach the engine intact: {body}"
+        );
+        assert!(body.contains("hello"), "the complete first event must be forwarded: {body}");
+    }
+
+    #[test]
+    fn overloaded_requests_are_replayed_immediately_without_honouring_retry_after() {
+        use std::io::Write;
+        use std::net::{TcpListener, TcpStream};
+        use std::sync::atomic::AtomicUsize;
+
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_in_thread = Arc::clone(&hits);
+        let upstream_thread = std::thread::spawn(move || {
+            const CAPACITY: &str = "data: {\"type\":\"error\",\"error\":{\"code\":\"server_is_overloaded\",\"headers\":{\"retry-after\":\"300\"}}}\n\n";
+            const SUCCESS: &str = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n";
+            for _ in 0..3 {
+                let (mut stream, _) = upstream.accept().unwrap();
+                let mut scratch = [0u8; 1024];
+                let _ = stream.read(&mut scratch);
+                let hit = hits_in_thread.fetch_add(1, Ordering::Relaxed) + 1;
+                let body = if hit < 3 { CAPACITY } else { SUCCESS };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+            }
+        });
+
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let bridge_addr = server.server_addr().to_ip().unwrap();
+        let client_thread = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(bridge_addr).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            stream
+                .write_all(b"POST /alwith/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}")
+                .unwrap();
+            let mut body = Vec::new();
+            let mut scratch = [0u8; 4096];
+            loop {
+                match stream.read(&mut scratch) {
+                    Ok(0) => break,
+                    Ok(count) => body.extend_from_slice(&scratch[..count]),
+                    Err(_) => break,
+                }
+            }
+            String::from_utf8_lossy(&body).to_string()
+        });
+
+        let request = server.recv().unwrap();
+        let start = Instant::now();
+        let previous = overload_mute();
+        set_overload_mute(true);
+        let result = relay(
+            request,
+            "gpt-6.1-sol",
+            &format!("http://{upstream_addr}/responses"),
+            None,
+            &[],
+            b"{}".to_vec(),
+            true,
+            false,
+        );
+        set_overload_mute(previous);
+        let elapsed = start.elapsed();
+        let body = client_thread.join().unwrap();
+        let _ = upstream_thread.join();
+
+        assert!(result.is_ok(), "relay failed: {result:?}");
+        assert_eq!(hits.load(Ordering::Relaxed), 3, "one request plus two immediate replays");
+        assert!(!body.contains("server_is_overloaded"), "the engine must never see the refusal: {body}");
+        assert!(body.contains("response.completed"), "the successful replay must reach the engine: {body}");
+        assert!(elapsed < Duration::from_secs(5), "retry-after must be ignored: {elapsed:?}");
+    }
+
+    #[test]
+    fn an_openrouter_sse_10000_error_is_replayed_only_when_the_switch_is_off() {
+        use std::io::Write;
+        use std::net::{TcpListener, TcpStream};
+        use std::sync::atomic::AtomicUsize;
+
+        // The first answer is the injected 10000 error; the replay returns a healthy stream.
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_in_thread = Arc::clone(&hits);
+        let upstream_thread = std::thread::spawn(move || {
+            const REFUSAL: &str = "data: {\"error\":{\"code\":10000,\"message\":\"rate limited\"}}\n\n";
+            const SUCCESS: &str = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n";
+            for _ in 0..2 {
+                let (mut stream, _) = upstream.accept().unwrap();
+                let mut scratch = [0u8; 1024];
+                let _ = stream.read(&mut scratch);
+                let hit = hits_in_thread.fetch_add(1, Ordering::Relaxed) + 1;
+                let body = if hit < 2 { REFUSAL } else { SUCCESS };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+            }
+        });
+
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let bridge_addr = server.server_addr().to_ip().unwrap();
+        let client_thread = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(bridge_addr).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            stream
+                .write_all(b"POST /alwith/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}")
+                .unwrap();
+            let mut body = Vec::new();
+            let mut scratch = [0u8; 4096];
+            loop {
+                match stream.read(&mut scratch) {
+                    Ok(0) => break,
+                    Ok(count) => body.extend_from_slice(&scratch[..count]),
+                    Err(_) => break,
+                }
+            }
+            String::from_utf8_lossy(&body).to_string()
+        });
+
+        let request = server.recv().unwrap();
+        let previous = overload_429_mute();
+        set_overload_429_mute(true);
+        let result = relay(
+            request,
+            "openrouter/vendor-model",
+            &format!("http://{upstream_addr}/responses"),
+            None,
+            &[],
+            b"{}".to_vec(),
+            // Gateway route: the native overload watch is off, but this test explicitly arms the
+            // OpenRouter 429/10000 contract.
+            false,
+            true,
+        );
+        set_overload_429_mute(previous);
+        let body = client_thread.join().unwrap();
+        let _ = upstream_thread.join();
+
+        assert!(result.is_ok(), "relay failed: {result:?}");
+        assert_eq!(hits.load(Ordering::Relaxed), 2, "one request plus one silent replay");
+        assert!(!body.contains("\"code\":10000"), "the engine must never see the injected error: {body}");
+        assert!(body.contains("response.completed"), "the replay must reach the engine: {body}");
     }
 }

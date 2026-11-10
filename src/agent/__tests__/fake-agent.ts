@@ -26,8 +26,9 @@ export type FakeAgent = {
   }
   /** Rejects a prompt with the returned error (e.g. a retired model) when set. */
   promptError: { current: ((text: string) => Error | null) | null }
-  /** Makes `session/prompt` never acknowledge, simulating a hung agent turn. */
-  promptHang: { current: ((text: string) => boolean) | null }
+  /** Lets the prompt resolve on acceptance but withholds the terminal `idle`, simulating a turn
+   * that was accepted and then stays silent (e.g. a long tool call). A cancel still ends it. */
+  promptHoldIdle: { current: ((text: string) => boolean) | null }
   /** Session ids the client asked to cancel (proves a hung turn is aborted). */
   cancels: string[]
   fullListRequests: unknown[]
@@ -154,7 +155,7 @@ export function createFakeAgent(): FakeAgent {
   const sessionCommands: FakeAgent["sessionCommands"] = { current: undefined }
   const configResponse: FakeAgent["configResponse"] = { current: null }
   const promptError: FakeAgent["promptError"] = { current: null }
-  const promptHang: FakeAgent["promptHang"] = { current: null }
+  const promptHoldIdle: FakeAgent["promptHoldIdle"] = { current: null }
   const cancels: string[] = []
   const listSessions: FakeAgent["listSessions"] = { current: null }
   const configChanges: string[] = []
@@ -421,6 +422,7 @@ export function createFakeAgent(): FakeAgent {
     const text = params.prompt.map((block) => (block.type === "text" ? block.text : "")).join("")
     prompts.push(text)
     events.push({ type: "prompt", sessionId: id, text })
+    const holdIdle = promptHoldIdle.current?.(text) ?? false
     const failure = promptError.current?.(text)
     if (failure) throw failure
     const sequence = (promptSequence.get(id) ?? 0) + 1
@@ -431,9 +433,8 @@ export function createFakeAgent(): FakeAgent {
     active.set(id, controller)
     const emit = (update: acp.SessionUpdate) => client.notify("session/update", { sessionId: id, update })
     await emit({ sessionUpdate: "state_update", state: "running" })
-    // A hung agent turn: the acknowledgement never arrives, so the client's `prompt` stays pending
-    // forever — the exact condition the UI deadlock guard must recover from.
-    if (promptHang.current?.(text)) await new Promise<void>(() => {})
+    // `session/prompt` resolves on acceptance. A silent turn then withholds the terminal `idle`
+    // until a cancel, so the client's live-turn guards are what must keep the session busy.
     void (async () => {
       try {
         await emit({
@@ -509,6 +510,12 @@ export function createFakeAgent(): FakeAgent {
               content: { type: "text", text: `reply:${id}` }
             })
         }
+        if (holdIdle && !controller.signal.aborted) {
+          // The prompt was accepted but no completion is coming on its own; only a cancel ends it.
+          await new Promise<void>((resolve) => {
+            controller.signal.addEventListener("abort", () => resolve(), { once: true })
+          })
+        }
       } catch {
         // A prompt cancelled by the test rejects here; the finally block still reports idle.
       } finally {
@@ -561,7 +568,7 @@ export function createFakeAgent(): FakeAgent {
     sessionCommands,
     configResponse,
     promptError,
-    promptHang,
+    promptHoldIdle,
     cancels,
     listSessions,
     fullListRequests,
