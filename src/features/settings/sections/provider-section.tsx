@@ -951,8 +951,19 @@ export function ProviderRow({
   // exactly as they were for day-to-day editing.
   const [modelFilter, setModelFilter] = useState("")
   const [freeOnly, setFreeOnly] = useState(false)
-  const [retryCount, setRetryCount] = useState(overloadRetryCount)
-  useSyncExternalStore(subscribeOverloadRetryCount, overloadRetryCount, overloadRetryCount)
+  // The field is staged: typing must not rewrite the retry budget for every other chat mid-keystroke.
+  const appliedRetryCount = useSyncExternalStore(
+    subscribeOverloadRetryCount,
+    overloadRetryCount,
+    overloadRetryCount
+  )
+  const [retryCount, setRetryCount] = useState(String(appliedRetryCount))
+  useEffect(() => {
+    setRetryCount(String(appliedRetryCount))
+  }, [appliedRetryCount])
+  const parsedRetryCount = Math.round(Number(retryCount))
+  const retryCountDirty =
+    retryCount.trim() !== "" && Number.isFinite(parsedRetryCount) && parsedRetryCount !== appliedRetryCount
   const [freeWatch, setFreeWatch] = useBooleanSetting(FREE_MODEL_WATCH_SETTING)
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedKeys, setSelectedKeys] = useState<ReadonlySet<string>>(() => new Set())
@@ -1616,26 +1627,64 @@ export function ProviderRow({
                 </Field>
               </CollapsibleContent>
             </Collapsible>
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
-              <div className="min-w-0">
-                <p className="text-sm font-medium">{t("defaultModel.overloadRetryCount")}</p>
-                <p className="text-xs text-muted-foreground">{t("defaultModel.overloadRetryDescription")}</p>
+            <div className="flex flex-col gap-2 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">{t("defaultModel.overloadRetryCount")}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {t("defaultModel.overloadRetryDescription")}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    step={1}
+                    min={MIN_OVERLOAD_RETRY_COUNT}
+                    max={MAX_OVERLOAD_RETRY_COUNT}
+                    value={retryCount}
+                    className="w-20"
+                    onChange={(event) => setRetryCount(event.target.value)}
+                    onBlur={() => {
+                      // Clamp on the way out so an out-of-range value never sits in the box looking saved.
+                      const parsed = Math.round(Number(retryCount))
+                      setRetryCount(
+                        Number.isFinite(parsed)
+                          ? String(
+                              Math.min(
+                                MAX_OVERLOAD_RETRY_COUNT,
+                                Math.max(MIN_OVERLOAD_RETRY_COUNT, parsed)
+                              )
+                            )
+                          : String(appliedRetryCount)
+                      )
+                    }}
+                    aria-label={t("defaultModel.overloadRetryCount")}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={!retryCountDirty}
+                    onClick={() => {
+                      const parsed = Math.min(
+                        MAX_OVERLOAD_RETRY_COUNT,
+                        Math.max(MIN_OVERLOAD_RETRY_COUNT, Math.round(Number(retryCount)))
+                      )
+                      setRetryCount(String(parsed))
+                      setOverloadRetryCount(parsed)
+                    }}
+                  >
+                    {t("defaultModel.overloadRetryApply")}
+                  </Button>
+                </div>
               </div>
-              <Input
-                type="number"
-                min={MIN_OVERLOAD_RETRY_COUNT}
-                max={MAX_OVERLOAD_RETRY_COUNT}
-                value={retryCount}
-                className="w-20"
-                onChange={(event) => {
-                  const value = Number(event.target.value)
-                  if (!Number.isNaN(value)) {
-                    setRetryCount(value)
-                    setOverloadRetryCount(value)
-                  }
-                }}
-                aria-label={t("defaultModel.overloadRetryCount")}
-              />
+              <p className="text-[11px] leading-4 text-muted-foreground/80">
+                {t("defaultModel.overloadRetryRange", {
+                  min: MIN_OVERLOAD_RETRY_COUNT,
+                  max: MAX_OVERLOAD_RETRY_COUNT
+                })}
+              </p>
             </div>
           </section>
         </>

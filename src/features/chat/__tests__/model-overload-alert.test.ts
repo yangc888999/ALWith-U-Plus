@@ -2,6 +2,7 @@ import type { Session } from "@alwith/api"
 import { beforeEach, expect, test, vi } from "vitest"
 
 import { initI18n } from "@/lib/i18n"
+import { DEFAULT_OVERLOAD_RETRY_COUNT } from "@/lib/overload-retry-settings"
 
 const host = vi.hoisted(() => ({
   listeners: [] as ((event: { payload: { model: string; reason?: string; retryAfter: number | null } }) => void)[],
@@ -83,7 +84,8 @@ function emit(model: string, retryAfter: number | null = 324, reason: string = "
 }
 
 function emitOverload(model: string, retryAfter: number | null = 324) {
-  for (let attempt = 0; attempt < 5; attempt++) emit(model, retryAfter)
+  // The notice appears only after the automatic-retry budget is exhausted.
+  for (let attempt = 0; attempt <= DEFAULT_OVERLOAD_RETRY_COUNT; attempt++) emit(model, retryAfter)
 }
 
 /** A tool still running locally: the upstream request is over, so a stall must not be claimed. */
@@ -130,6 +132,15 @@ test("an overload event publishes a notice for the running session, not a floati
   expect(notice?.modelName).toBe("6.1 Sol")
   expect(notice?.minutes).toBe(5)
   expect(host.warning).not.toHaveBeenCalled()
+})
+
+test("automatic retries stay silent until the configured count is exceeded", async () => {
+  host.sessions["chat-1"] = session("gpt-6.1-sol")
+  const mod = await subscribe()
+  for (let attempt = 0; attempt < DEFAULT_OVERLOAD_RETRY_COUNT; attempt++) emit("gpt-6.1-sol")
+  expect(mod.overloadNotice()).toBeNull()
+  emit("gpt-6.1-sol")
+  expect(mod.overloadNotice()?.sessionId).toBe("chat-1")
 })
 
 test("repeated retries of the same turn do not republish the notice", async () => {

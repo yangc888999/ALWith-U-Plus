@@ -151,11 +151,16 @@ export async function startModelOverloadAlerts(): Promise<() => void> {
     const now = Date.now()
     const shownKey = turnKey(session, model)
     if (shownKey === null) return
-    const attempt = (overloadAttempts.get(shownKey) ?? 0) + 1
-    overloadAttempts.set(shownKey, attempt)
-    if (reason === "overloaded" && attempt < overloadRetryCount()) {
-      void info(`[stall] automatic retry session=${session.id} model=${model} attempt=${attempt}`)
-      return
+    // Count only overload retries: the configured budget means "stay silent for N automatic
+    // retries". The (N+1)th stall is the first one the reader is told about. A `no_ack` event is
+    // not a retry and must be reported immediately.
+    if (reason === "overloaded") {
+      const attempt = (overloadAttempts.get(shownKey) ?? 0) + 1
+      overloadAttempts.set(shownKey, attempt)
+      if (attempt <= overloadRetryCount()) {
+        void info(`[stall] automatic retry session=${session.id} model=${model} attempt=${attempt}`)
+        return
+      }
     }
     if (now - (lastShown.get(shownKey) ?? 0) < 60_000) return
     // Tokens are still being billed and the store is still applying updates: output is flowing, so

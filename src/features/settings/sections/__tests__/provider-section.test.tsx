@@ -21,6 +21,8 @@ const provider = ALL_PROVIDERS.find((item) => item.id === "qwen")
 if (!provider) throw new Error("Qwen provider fixture missing")
 const openrouter = ALL_PROVIDERS.find((item) => item.id === "openrouter")
 if (!openrouter) throw new Error("OpenRouter provider fixture missing")
+const openai = ALL_PROVIDERS.find((item) => item.id === "openai")
+if (!openai) throw new Error("OpenAI provider fixture missing")
 function snapshot(revision: number, region = "intl"): ProviderSnapshot {
   return {
     revision,
@@ -906,6 +908,31 @@ test("a connection save retries once when a model toggle moved the revision", as
   await expect(retryOnRevisionConflict(attempt, 7, refresh)).resolves.toEqual({ revision: 8 })
   expect(attempt.mock.calls).toEqual([[7], [8]])
   expect(refresh).toHaveBeenCalledTimes(1)
+})
+
+test("the overload retry count is staged until Apply, then takes effect", () => {
+  const saveConnection = vi.fn(() => Promise.try(() => snapshot(1)))
+  const view = render(
+    <ProviderRow
+      provider={openai}
+      native
+      saved={null}
+      revision={1}
+      busy={false}
+      models={[]}
+      onSave={saveConnection}
+      onSaveModels={saveModels}
+    />
+  )
+
+  const input = view.getByLabelText("Automatic overload retries") as HTMLInputElement
+  expect(input.value).toBe("5")
+  fireEvent.change(input, { target: { value: "9" } })
+  // Typing must not rewrite the budget every other chat reads mid-keystroke.
+  expect(localStorage.getItem("chat.overload-retry-count")).toBeNull()
+
+  fireEvent.click(view.getByRole("button", { name: "Apply" }))
+  expect(localStorage.getItem("chat.overload-retry-count")).toBe("9")
 })
 
 test("a conflict that leaves the revision unchanged still surfaces", async () => {

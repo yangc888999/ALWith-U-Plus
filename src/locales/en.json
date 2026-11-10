@@ -1328,7 +1328,9 @@
     "divisionSaved": "Division defaults saved",
     "divisionScopeNote": "Only chats that start a new split pick this up; a chat that already has one keeps its own pair and is never overwritten.",
     "overloadRetryCount": "Automatic overload retries",
-    "overloadRetryDescription": "Default 5; GPT overload events are counted independently per session and model."
+    "overloadRetryDescription": "Default 5; retries within the limit stay silent and are counted independently per session and model.",
+    "overloadRetryApply": "Apply",
+    "overloadRetryRange": "Range {{min}}–{{max}}; one turn stays silent until its retries are exhausted, then the overload notice appears."
   },
   "updater": {
     "installing": "Installing update… The app will restart automatically.",
@@ -2302,6 +2304,8 @@
     "newDesc": "Runs inside one monitor conversation named after the task; every result and summary accumulates there.",
     "sectionBasic": "Basics",
     "sectionSchedule": "Schedule",
+    "sectionExecution": "Run",
+    "sectionDelivery": "Delivery",
     "sectionAdvanced": "Advanced",
     "sectionAdvancedHint": "Only controls how results are delivered — it does not change how the task runs.",
     "modelDefaultWith": "Follow default ({{value}})",

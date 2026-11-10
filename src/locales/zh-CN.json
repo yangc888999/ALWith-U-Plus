@@ -1328,7 +1328,9 @@
     "divisionSaved": "分工默认已保存",
     "divisionScopeNote": "只影响新开启分工的会话；已经开着分工的会话保留自己那一对，不会被这里覆盖。",
     "overloadRetryCount": "过载自动重试次数",
-    "overloadRetryDescription": "默认 5 次；仅 GPT 过载事件计数，各会话和模型相互独立。"
+    "overloadRetryDescription": "默认 5 次；次数内的自动重试保持静默，各会话和模型独立计数。",
+    "overloadRetryApply": "应用",
+    "overloadRetryRange": "范围 {{min}}–{{max}} 次；单轮聊天的次数耗尽前不显示过载提醒，耗尽后才提醒。"
   },
   "updater": {
     "installing": "正在安装更新…完成后将自动重启。",
@@ -2302,6 +2304,8 @@
     "newDesc": "到点后在同名监控会话里运行，每次的结果和总结都累积在这一条监控下。",
     "sectionBasic": "基本信息",
     "sectionSchedule": "调度设置",
+    "sectionExecution": "执行设置",
+    "sectionDelivery": "结果推送",
     "sectionAdvanced": "高级设置",
     "sectionAdvancedHint": "只决定结果怎么送出去，不影响任务本身怎么跑。",
     "modelDefaultWith": "跟随默认（{{value}}）",

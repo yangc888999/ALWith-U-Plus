@@ -60,41 +60,55 @@ export const DEFAULT_TASK_DRAFT: TaskDraft = {
   enabled: true
 }
 
-/** 裸 select：整块只有一个外框，控件本身不再画边框和底色。 */
-const bareFieldClass = "w-full cursor-pointer appearance-none bg-transparent text-sm text-foreground outline-none disabled:cursor-not-allowed disabled:text-muted-foreground"
-/** 裸 input：同上，去掉 shadcn Input 默认的边框 / 高度 / 阴影。 */
-const bareInputClass =
-  "h-6 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0 disabled:cursor-not-allowed"
+/** 原生 select：和 Input 同一套高度 / 边框，让每个控件在深色底上都能被认出来。 */
+const selectClass =
+  "h-9 w-full min-w-0 cursor-pointer rounded-md border border-input bg-background px-2.5 text-sm text-foreground shadow-xs outline-none transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30"
 
-/**
- * 一格调度设置：迷你 label + 裸控件，整块共用一个边框。
- *
- * 参考图里「重复 / 时间 / 有效期」是三个并排的浅色格子，而不是三张各自带标题、内层再套一个
- * 输入框的卡片 —— 后者的边框会叠成两层，看着比内容还重（2026-11-08）。
- */
-function CompactField({
+/** 一个字段 = 标签 + 控件 + 可选说明。标签在上方，窄屏时三者仍然对齐。 */
+function ControlField({
   label,
   htmlFor,
+  hint,
   className,
   children
 }: {
   label: string
   htmlFor: string
+  hint?: string
   className?: string
   children: ReactNode
 }) {
   return (
-    <div
-      className={cn(
-        "flex min-w-0 flex-col gap-1 px-3.5 py-2.5 transition-colors focus-within:bg-muted/15",
-        className
-      )}
-    >
-      <label htmlFor={htmlFor} className="text-[10px] font-medium leading-4 text-muted-foreground">
+    <div className={cn("flex min-w-0 flex-col gap-1.5", className)}>
+      <label htmlFor={htmlFor} className="text-xs font-medium text-foreground/80">
         {label}
       </label>
       {children}
+      {hint !== undefined && <p className="text-[11px] leading-4 text-muted-foreground">{hint}</p>}
     </div>
+  )
+}
+
+/** 一组字段的标题：把弹窗读成「任务 → 调度 → 执行 → 推送」四段，而不是一长串控件。 */
+function FormSection({
+  title,
+  description,
+  children
+}: {
+  title: string
+  description?: string
+  children: ReactNode
+}) {
+  return (
+    <section className="space-y-3">
+      <div className="space-y-0.5">
+        <h3 className="text-sm font-medium text-foreground">{title}</h3>
+        {description !== undefined && (
+          <p className="text-xs leading-5 text-muted-foreground">{description}</p>
+        )}
+      </div>
+      {children}
+    </section>
   )
 }
 
@@ -312,371 +326,374 @@ export function NewTaskDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[92vh] min-h-0 flex-col overflow-hidden border-border/70 bg-background/95 p-0 shadow-2xl sm:max-w-3xl">
-        <DialogHeader className="shrink-0 border-b border-border/60 px-6 pb-4 pt-6">
-          <DialogTitle>{t(task === null ? "automation.newTitle" : "automation.editTitle")}</DialogTitle>
+      <DialogContent className="flex max-h-[90vh] min-h-0 flex-col overflow-hidden border-border/70 bg-background p-0 shadow-2xl sm:max-w-2xl">
+        <DialogHeader className="shrink-0 border-b border-border/60 px-4 pb-4 pt-5 sm:px-6 sm:pt-6">
+          <DialogTitle className="text-base">
+            {t(task === null ? "automation.newTitle" : "automation.editTitle")}
+          </DialogTitle>
           <DialogDescription className="text-xs leading-5">{t("automation.newDesc")}</DialogDescription>
         </DialogHeader>
 
         <form
           id="automation-task-form"
-          className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-5"
+          className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-5 sm:px-6"
           onSubmit={(event) => {
             event.preventDefault()
             submit()
           }}
         >
-          {/* 名称：一行输入，不再套一层分组卡片（参照 WorkBuddy 的扁平弹窗）。 */}
-          <Input
-            id="automation-name"
-            aria-label={t("automation.fieldName")}
-            value={form.name}
-            onChange={(event) => patch({ name: event.target.value })}
-            placeholder={t("automation.fieldNamePlaceholder")}
-            autoFocus
-            className="h-11 rounded-lg border-border/60 bg-muted/20 px-3.5 text-sm shadow-none transition-colors focus-visible:bg-background"
-          />
+          <FormSection title={t("automation.sectionBasic")}>
+            <ControlField label={t("automation.fieldName")} htmlFor="automation-name">
+              <Input
+                id="automation-name"
+                aria-label={t("automation.fieldName")}
+                value={form.name}
+                onChange={(event) => patch({ name: event.target.value })}
+                placeholder={t("automation.fieldNamePlaceholder")}
+                autoFocus
+              />
+            </ControlField>
 
-          {/* 提示词：一个大输入区，工作空间 / 完全访问做成它底部的两个小胶囊。 */}
-          <div className="flex flex-col overflow-hidden rounded-xl border border-border/60 bg-muted/10 transition-colors focus-within:border-ring/60 focus-within:bg-muted/15">
-            <Textarea
-              id="automation-prompt"
-              aria-label={t("automation.fieldPrompt")}
-              className="min-h-[128px] resize-none border-0 bg-transparent px-3.5 py-3 text-sm shadow-none focus-visible:ring-0"
-              value={form.prompt}
-              onChange={(event) => patch({ prompt: event.target.value })}
-              placeholder={t("automation.fieldPromptPlaceholder")}
-            />
-            <div className="flex flex-wrap items-center gap-1 border-t border-border/50 px-2 py-1.5">
-              <label className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-muted">
-                <FolderOpenIcon className="size-3.5 shrink-0" aria-hidden="true" />
-                <select
-                  aria-label={t("automation.fieldWorkspace")}
-                  className="cursor-pointer appearance-none bg-transparent text-xs text-foreground outline-none"
-                  value={workspaceCustom ? "custom" : "default"}
-                  onChange={(event) => {
-                    const custom = event.target.value === "custom"
-                    setWorkspaceCustom(custom)
-                    if (!custom) patch({ cwd: "" })
-                  }}
-                >
-                  <option value="default">{t("automation.workspaceDefault")}</option>
-                  <option value="custom">{t("automation.workspaceCustom")}</option>
-                </select>
-              </label>
-              {workspaceCustom && (
-                <button
-                  type="button"
-                  onClick={() => void pickWorkspace()}
-                  title={form.cwd || t("automation.workspacePick")}
-                  aria-label={t("automation.workspacePick")}
-                  className="inline-flex h-7 max-w-[260px] items-center gap-1.5 rounded-md px-2 text-xs transition-colors hover:bg-muted"
-                >
-                  <span
+            <ControlField label={t("automation.fieldPrompt")} htmlFor="automation-prompt">
+              <div className="overflow-hidden rounded-lg border border-input bg-background shadow-xs transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
+                <Textarea
+                  id="automation-prompt"
+                  aria-label={t("automation.fieldPrompt")}
+                  className="min-h-[112px] resize-y border-0 bg-transparent px-3 py-2.5 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
+                  value={form.prompt}
+                  onChange={(event) => patch({ prompt: event.target.value })}
+                  placeholder={t("automation.fieldPromptPlaceholder")}
+                />
+                <div className="flex flex-wrap items-center gap-1 border-t border-border/60 bg-muted/30 px-2 py-1.5">
+                  <label className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-muted">
+                    <FolderOpenIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                    <select
+                      aria-label={t("automation.fieldWorkspace")}
+                      className="cursor-pointer appearance-none bg-transparent text-xs text-foreground outline-none"
+                      value={workspaceCustom ? "custom" : "default"}
+                      onChange={(event) => {
+                        const custom = event.target.value === "custom"
+                        setWorkspaceCustom(custom)
+                        if (!custom) patch({ cwd: "" })
+                      }}
+                    >
+                      <option value="default">{t("automation.workspaceDefault")}</option>
+                      <option value="custom">{t("automation.workspaceCustom")}</option>
+                    </select>
+                  </label>
+                  {workspaceCustom && (
+                    <button
+                      type="button"
+                      onClick={() => void pickWorkspace()}
+                      title={form.cwd || t("automation.workspacePick")}
+                      aria-label={t("automation.workspacePick")}
+                      className="inline-flex h-7 max-w-[260px] items-center gap-1.5 rounded-md px-2 text-xs transition-colors hover:bg-muted"
+                    >
+                      <span
+                        className={cn(
+                          "truncate font-mono text-[11px]",
+                          form.cwd === "" ? "text-muted-foreground" : "text-foreground"
+                        )}
+                      >
+                        {form.cwd || t("automation.workspacePick")}
+                      </span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    aria-pressed={form.fullAccess}
+                    onClick={() => patch({ fullAccess: !form.fullAccess })}
+                    title={t(form.fullAccess ? "automation.fullAccessOn" : "automation.fullAccessOff")}
                     className={cn(
-                      "truncate font-mono text-[11px]",
-                      form.cwd === "" ? "text-muted-foreground" : "text-foreground"
+                      "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs transition-colors hover:bg-muted",
+                      form.fullAccess ? "text-foreground" : "text-muted-foreground"
                     )}
                   >
-                    {form.cwd || t("automation.workspacePick")}
-                  </span>
-                </button>
-              )}
-              <button
-                type="button"
-                aria-pressed={form.fullAccess}
-                onClick={() => patch({ fullAccess: !form.fullAccess })}
-                title={t(form.fullAccess ? "automation.fullAccessOn" : "automation.fullAccessOff")}
-                className={cn(
-                  "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs transition-colors hover:bg-muted",
-                  form.fullAccess ? "text-foreground" : "text-muted-foreground"
-                )}
-              >
-                <ShieldCheckIcon className="size-3.5 shrink-0" aria-hidden="true" />
-                {t("automation.fieldFullAccess")}
-              </button>
-              {!workspaceCustom && defaultCwd !== "" && (
-                <span
-                  className="ms-auto max-w-[45%] truncate px-1 text-[10px] text-muted-foreground/70"
-                  title={defaultCwd}
-                >
-                  {t("automation.workspaceDefaultPath", { path: defaultCwd })}
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* 调度：重复 / 时间 / 有效期共用一个容器，内部用细分隔线分成三格。 */}
-          <div className="grid grid-cols-1 overflow-hidden rounded-xl border border-border/60 bg-muted/10 [&>*+*]:border-t [&>*+*]:border-border/50 sm:grid-cols-3 sm:[&>*+*]:border-l sm:[&>*+*]:border-t-0">
-            <CompactField label={t("automation.fieldRepeat")} htmlFor="automation-repeat">
-              <select
-                id="automation-repeat"
-                className={bareFieldClass}
-                value={form.repeat}
-                onChange={(event) => {
-                  const value = event.target.value
-                  if (isRepeatRule(value)) patch({ repeat: value as RepeatRule })
-                }}
-              >
-                {REPEAT_RULES.map((rule) => (
-                  <option key={rule} value={rule}>
-                    {t(`automation.repeat.${rule}`)}
-                  </option>
-                ))}
-              </select>
-            </CompactField>
-            <CompactField
-              label={t(form.repeat === "interval" ? "automation.fieldInterval" : "automation.fieldTime")}
-              htmlFor="automation-time"
-            >
-              {form.repeat === "interval" ? (
-                <Input
-                  id="automation-time"
-                  type="number"
-                  min={1}
-                  value={form.intervalMinutes}
-                  onChange={(event) => patch({ intervalMinutes: Math.max(1, Number(event.target.value) || 1) })}
-                  className={bareInputClass}
-                />
-              ) : (
-                <Input
-                  id="automation-time"
-                  type="time"
-                  value={form.time}
-                  onChange={(event) => patch({ time: event.target.value })}
-                  className={bareInputClass}
-                />
-              )}
-            </CompactField>
-            <CompactField label={t("automation.fieldValidity")} htmlFor="automation-validity">
-              <select
-                id="automation-validity"
-                className={bareFieldClass}
-                value={validityMode}
-                onChange={(event) => {
-                  const mode = event.target.value as "forever" | "until"
-                  setValidityMode(mode)
-                  if (mode === "forever") patch({ validUntil: null })
-                  else if (form.validUntil === null) {
-                    // 默认给一个「今天」的 ISO 日期，用户可直接改。
-                    const now = new Date()
-                    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`
-                    patch({ validUntil: today })
-                  }
-                }}
-              >
-                <option value="forever">{t("automation.validityForever")}</option>
-                <option value="until">{t("automation.validityUntil")}</option>
-              </select>
-              {validityMode === "until" && (
-                <Input
-                  className="mt-1 h-7 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0"
-                  type="date"
-                  value={form.validUntil ?? ""}
-                  onChange={(event) => patch({ validUntil: event.target.value || null })}
-                  aria-label={t("automation.validityUntil")}
-                />
-              )}
-            </CompactField>
-          </div>
-
-          {/* 运行模型：模型独占一行（名字长），Effort / 加速并排，共用一个容器。 */}
-          <div className="grid grid-cols-1 overflow-hidden rounded-xl border border-border/60 bg-muted/10 sm:grid-cols-2">
-            <CompactField className="sm:col-span-2" label={t("automation.fieldModel")} htmlFor="automation-model">
-              <select
-                id="automation-model"
-                className={bareFieldClass}
-                value={form.model}
-                onChange={(event) => {
-                  const model = event.target.value
-                  // 换模型必须清掉上一档 effort：档位是模型私有的，留着旧值要么被引擎拒绝，
-                  // 要么被 landModelSwitch 静默改回默认，界面上却显示旧的。
-                  patch({ model, effort: "", fastMode: false })
-                }}
-              >
-                <option value="">{t("automation.modelDefaultWith", { value: summaryModel })}</option>
-                {modelGroups.map((group) => (
-                  <optgroup key={group.id} label={group.name}>
-                    {group.entries.map((entry) => (
-                      <option key={entry.id} value={entry.id}>
-                        {entry.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-                {modelMissing && <option value={form.model}>{form.model}</option>}
-              </select>
-              <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground/80">
-                {t("automation.modelHint")}
-              </p>
-            </CompactField>
-            <CompactField
-              className="border-t border-border/50 sm:border-r"
-              label={t("automation.fieldEffort")}
-              htmlFor="automation-effort"
-            >
-              <select
-                id="automation-effort"
-                className={bareFieldClass}
-                value={form.effort}
-                disabled={effortDisabled}
-                onChange={(event) => patch({ effort: event.target.value })}
-              >
-                <option value="">{t("automation.effortDefaultWith", { value: summaryEffort })}</option>
-                {effortOptions.map((effort) => (
-                  <option key={effort} value={effort}>
-                    {effort}
-                  </option>
-                ))}
-              </select>
-              {effortDisabled && (
-                <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground/80">
-                  {t("automation.effortPickModelFirst")}
-                </p>
-              )}
-            </CompactField>
-            <CompactField
-              className="border-t border-border/50"
-              label={t("automation.fieldFast")}
-              htmlFor="automation-fast"
-            >
-              <select
-                id="automation-fast"
-                className={bareFieldClass}
-                value={form.fastMode ? "on" : "off"}
-                disabled={!canFast}
-                onChange={(event) => patch({ fastMode: event.target.value === "on" })}
-              >
-                <option value="off">
-                  {canFast ? t("automation.fastDefaultOff") : t("automation.fastUnsupported")}
-                </option>
-                {canFast && <option value="on">{t("automation.fastOn")}</option>}
-              </select>
-            </CompactField>
-          </div>
-
-          {/* 推送结果到飞书：常驻可见，新建任务默认打开（收件人 = 授权人本人）。单层边框，无内套。 */}
-          <div className="flex flex-col gap-3 rounded-xl border border-border/60 bg-muted/10 px-4 py-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <span className="text-sm font-medium text-foreground">{t("automation.fieldLark")}</span>
-                <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
-                  {t("automation.larkOffHint")}
-                </p>
-              </div>
-              <Switch
-                id="automation-lark-push"
-                checked={form.larkNotify}
-                // 没装 CLI 只锁「开」这个方向：老任务本来就开着推送，必须留一条关掉的路。
-                disabled={cliAvailable === false && !form.larkNotify}
-                onCheckedChange={(checked) => patch({ larkNotify: checked })}
-                aria-label={t("automation.fieldLark")}
-              />
-            </div>
-            {/* 没装 CLI：这条链路根本走不通。给一句实话 + 一个直接跳到组件安装页的入口，
-                而不是让人对着一个永远发不出去的开关猜（2026-11-08）。 */}
-            {cliAvailable === false && (
-              <div className="flex flex-wrap items-center gap-2 rounded-lg bg-amber-500/10 px-2.5 py-2">
-                <p className="min-w-0 flex-1 text-[11px] leading-4 text-amber-600">
-                  {t("automation.larkCliMissing")}
-                </p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-6 shrink-0 bg-background px-2 text-[11px]"
-                  onClick={() => void openSettingsWindow("extensions").catch(() => undefined)}
-                >
-                  {t("automation.larkCliInstall")}
-                </Button>
-              </div>
-            )}
-            {form.larkNotify && (
-              <div className="flex flex-col gap-2.5 border-t border-border/50 pt-2.5">
-                {/* 读不到本人不是错误：机器人身份发群聊根本不需要本人登录。所以只在
-                    「检查完了 + 没本人 + 一个收件人都没加」时给一句低调提示，不用黄色告警；
-                    装好了 CLI 只是没登录时，顺手给个去组件页登录的入口。 */}
-                {authChecked && selfTarget === null && form.larkTargets.length === 0 && (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="min-w-0 flex-1 text-[11px] leading-4 text-muted-foreground">
-                      {t("automation.larkAuthMissing")}
-                    </p>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-6 shrink-0 px-2 text-[11px]"
-                      onClick={() => void openSettingsWindow("extensions").catch(() => undefined)}
+                    <ShieldCheckIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                    {t("automation.fieldFullAccess")}
+                  </button>
+                  {!workspaceCustom && defaultCwd !== "" && (
+                    <span
+                      className="ms-auto max-w-[45%] truncate px-1 text-[10px] text-muted-foreground/70"
+                      title={defaultCwd}
                     >
-                      {t("automation.larkOpenComponent")}
-                    </Button>
-                  </div>
+                      {t("automation.workspaceDefaultPath", { path: defaultCwd })}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </ControlField>
+          </FormSection>
+
+          <FormSection title={t("automation.sectionSchedule")}>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <ControlField label={t("automation.fieldRepeat")} htmlFor="automation-repeat">
+                <select
+                  id="automation-repeat"
+                  className={selectClass}
+                  value={form.repeat}
+                  onChange={(event) => {
+                    const value = event.target.value
+                    if (isRepeatRule(value)) patch({ repeat: value as RepeatRule })
+                  }}
+                >
+                  {REPEAT_RULES.map((rule) => (
+                    <option key={rule} value={rule}>
+                      {t(`automation.repeat.${rule}`)}
+                    </option>
+                  ))}
+                </select>
+              </ControlField>
+              <ControlField
+                label={t(form.repeat === "interval" ? "automation.fieldInterval" : "automation.fieldTime")}
+                htmlFor="automation-time"
+              >
+                {form.repeat === "interval" ? (
+                  <Input
+                    id="automation-time"
+                    type="number"
+                    min={1}
+                    value={form.intervalMinutes}
+                    onChange={(event) =>
+                      patch({ intervalMinutes: Math.max(1, Number(event.target.value) || 1) })
+                    }
+                  />
+                ) : (
+                  <Input
+                    id="automation-time"
+                    type="time"
+                    value={form.time}
+                    onChange={(event) => patch({ time: event.target.value })}
+                  />
                 )}
-                <CompactField label={t("automation.fieldLarkIdentity")} htmlFor="automation-lark-identity">
-                  <select
-                    id="automation-lark-identity"
-                    className={bareFieldClass}
-                    value={form.larkIdentity}
-                    onChange={(event) => patch({ larkIdentity: event.target.value })}
-                  >
-                    <option value="bot">{t("automation.larkIdentityBot")}</option>
-                    <option value="user">{t("automation.larkIdentityUser")}</option>
-                  </select>
-                  <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground/80">
-                    {t("automation.larkIdentityHint")}
+              </ControlField>
+              <ControlField label={t("automation.fieldValidity")} htmlFor="automation-validity">
+                <select
+                  id="automation-validity"
+                  className={selectClass}
+                  value={validityMode}
+                  onChange={(event) => {
+                    const mode = event.target.value as "forever" | "until"
+                    setValidityMode(mode)
+                    if (mode === "forever") patch({ validUntil: null })
+                    else if (form.validUntil === null) {
+                      // 默认给一个「今天」的 ISO 日期，用户可直接改。
+                      const now = new Date()
+                      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`
+                      patch({ validUntil: today })
+                    }
+                  }}
+                >
+                  <option value="forever">{t("automation.validityForever")}</option>
+                  <option value="until">{t("automation.validityUntil")}</option>
+                </select>
+                {validityMode === "until" && (
+                  <Input
+                    type="date"
+                    value={form.validUntil ?? ""}
+                    onChange={(event) => patch({ validUntil: event.target.value || null })}
+                    aria-label={t("automation.validityUntil")}
+                  />
+                )}
+              </ControlField>
+            </div>
+          </FormSection>
+
+          <FormSection title={t("automation.sectionExecution")}>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <ControlField
+                className="sm:col-span-2"
+                label={t("automation.fieldModel")}
+                htmlFor="automation-model"
+                hint={t("automation.modelHint")}
+              >
+                <select
+                  id="automation-model"
+                  className={selectClass}
+                  value={form.model}
+                  onChange={(event) => {
+                    const model = event.target.value
+                    // 换模型必须清掉上一档 effort：档位是模型私有的，留着旧值要么被引擎拒绝，
+                    // 要么被 landModelSwitch 静默改回默认，界面上却显示旧的。
+                    patch({ model, effort: "", fastMode: false })
+                  }}
+                >
+                  <option value="">{t("automation.modelDefaultWith", { value: summaryModel })}</option>
+                  {modelGroups.map((group) => (
+                    <optgroup key={group.id} label={group.name}>
+                      {group.entries.map((entry) => (
+                        <option key={entry.id} value={entry.id}>
+                          {entry.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                  {modelMissing && <option value={form.model}>{form.model}</option>}
+                </select>
+              </ControlField>
+              <ControlField
+                label={t("automation.fieldEffort")}
+                htmlFor="automation-effort"
+                hint={effortDisabled ? t("automation.effortPickModelFirst") : undefined}
+              >
+                <select
+                  id="automation-effort"
+                  className={selectClass}
+                  value={form.effort}
+                  disabled={effortDisabled}
+                  onChange={(event) => patch({ effort: event.target.value })}
+                >
+                  <option value="">{t("automation.effortDefaultWith", { value: summaryEffort })}</option>
+                  {effortOptions.map((effort) => (
+                    <option key={effort} value={effort}>
+                      {effort}
+                    </option>
+                  ))}
+                </select>
+              </ControlField>
+              <ControlField label={t("automation.fieldFast")} htmlFor="automation-fast">
+                <select
+                  id="automation-fast"
+                  className={selectClass}
+                  value={form.fastMode ? "on" : "off"}
+                  disabled={!canFast}
+                  onChange={(event) => patch({ fastMode: event.target.value === "on" })}
+                >
+                  <option value="off">
+                    {canFast ? t("automation.fastDefaultOff") : t("automation.fastUnsupported")}
+                  </option>
+                  {canFast && <option value="on">{t("automation.fastOn")}</option>}
+                </select>
+              </ControlField>
+            </div>
+          </FormSection>
+
+          <FormSection
+            title={t("automation.sectionDelivery")}
+            description={t("automation.sectionAdvancedHint")}
+          >
+            <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <span className="text-sm font-medium text-foreground">{t("automation.fieldLark")}</span>
+                  <p className="mt-0.5 text-xs leading-4 text-muted-foreground">
+                    {t("automation.larkOffHint")}
                   </p>
-                </CompactField>
-                {selfTarget !== null && (
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-xs font-medium text-foreground">
-                        {t("automation.larkSelfTarget", { name: selfTarget.name })}
-                      </div>
-                      <div className="truncate font-mono text-[10px] text-muted-foreground">
-                        {selfTarget.id}
-                      </div>
-                    </div>
-                    {/* 默认收件人已经在列表里了就不再摆一个灰掉的按钮。 */}
-                    {!form.larkTargets.some((entry) => entry.id === selfTarget.id) && (
+                </div>
+                <Switch
+                  id="automation-lark-push"
+                  checked={form.larkNotify}
+                  // 没装 CLI 只锁「开」这个方向：老任务本来就开着推送，必须留一条关掉的路。
+                  disabled={cliAvailable === false && !form.larkNotify}
+                  onCheckedChange={(checked) => patch({ larkNotify: checked })}
+                  aria-label={t("automation.fieldLark")}
+                />
+              </div>
+              {/* 没装 CLI：这条链路根本走不通。给一句实话 + 一个直接跳到组件安装页的入口，
+                  而不是让人对着一个永远发不出去的开关猜（2026-11-08）。 */}
+              {cliAvailable === false && (
+                <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md bg-amber-500/10 px-3 py-2">
+                  <p className="min-w-0 flex-1 text-[11px] leading-4 text-amber-600">
+                    {t("automation.larkCliMissing")}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-6 shrink-0 bg-background px-2 text-[11px]"
+                    onClick={() => void openSettingsWindow("extensions").catch(() => undefined)}
+                  >
+                    {t("automation.larkCliInstall")}
+                  </Button>
+                </div>
+              )}
+              {form.larkNotify && (
+                <div className="mt-3 space-y-3 border-t border-border/50 pt-3">
+                  {/* 读不到本人不是错误：机器人身份发群聊根本不需要本人登录。所以只在
+                      「检查完了 + 没本人 + 一个收件人都没加」时给一句低调提示，不用黄色告警；
+                      装好了 CLI 只是没登录时，顺手给个去组件页登录的入口。 */}
+                  {authChecked && selfTarget === null && form.larkTargets.length === 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="min-w-0 flex-1 text-[11px] leading-4 text-muted-foreground">
+                        {t("automation.larkAuthMissing")}
+                      </p>
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
                         className="h-6 shrink-0 px-2 text-[11px]"
-                        onClick={() =>
-                          patch({
-                            larkTargets: [
-                              selfTarget,
-                              ...form.larkTargets.filter((entry) => entry.id !== selfTarget.id)
-                            ]
-                          })
-                        }
+                        onClick={() => void openSettingsWindow("extensions").catch(() => undefined)}
                       >
-                        {t("automation.larkAddSelf")}
+                        {t("automation.larkOpenComponent")}
                       </Button>
-                    )}
+                    </div>
+                  )}
+                  <ControlField
+                    label={t("automation.fieldLarkIdentity")}
+                    htmlFor="automation-lark-identity"
+                    hint={t("automation.larkIdentityHint")}
+                  >
+                    <select
+                      id="automation-lark-identity"
+                      className={selectClass}
+                      value={form.larkIdentity}
+                      onChange={(event) => patch({ larkIdentity: event.target.value })}
+                    >
+                      <option value="bot">{t("automation.larkIdentityBot")}</option>
+                      <option value="user">{t("automation.larkIdentityUser")}</option>
+                    </select>
+                  </ControlField>
+                  {selfTarget !== null && (
+                    <div className="flex items-center justify-between gap-2 rounded-md border border-border/50 bg-background/60 px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-medium text-foreground">
+                          {t("automation.larkSelfTarget", { name: selfTarget.name })}
+                        </div>
+                        <div className="truncate font-mono text-[10px] text-muted-foreground">
+                          {selfTarget.id}
+                        </div>
+                      </div>
+                      {/* 默认收件人已经在列表里了就不再摆一个灰掉的按钮。 */}
+                      {!form.larkTargets.some((entry) => entry.id === selfTarget.id) && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-6 shrink-0 px-2 text-[11px]"
+                          onClick={() =>
+                            patch({
+                              larkTargets: [
+                                selfTarget,
+                                ...form.larkTargets.filter((entry) => entry.id !== selfTarget.id)
+                              ]
+                            })
+                          }
+                        >
+                          {t("automation.larkAddSelf")}
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-xs font-medium text-foreground/80">
+                      {t("automation.fieldLarkTargets")}
+                    </span>
+                    <LarkTargetPicker
+                      targets={form.larkTargets}
+                      onChange={(next) => patch({ larkTargets: next })}
+                      disabled={!open}
+                    />
+                    <p className="text-[11px] leading-4 text-muted-foreground">
+                      {form.larkTargets.length === 0 ? t("automation.larkNoTarget") : t("automation.larkHint")}
+                    </p>
                   </div>
-                )}
-                <div className="flex flex-col gap-1">
-                  <span className="text-[10px] font-medium leading-4 text-muted-foreground">
-                    {t("automation.fieldLarkTargets")}
-                  </span>
-                  <LarkTargetPicker
-                    targets={form.larkTargets}
-                    onChange={(next) => patch({ larkTargets: next })}
-                    disabled={!open}
-                  />
-                  <p className="text-[10px] leading-4 text-muted-foreground/80">
-                    {form.larkTargets.length === 0 ? t("automation.larkNoTarget") : t("automation.larkHint")}
-                  </p>
                 </div>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          </FormSection>
 
-          {/* 右下：取消 / 确定 */}
         </form>
-        <DialogFooter className="shrink-0 gap-2 border-t border-border/60 bg-muted/10 px-6 py-4">
+        <DialogFooter className="shrink-0 gap-2 border-t border-border/60 bg-muted/10 px-4 py-3 sm:px-6 sm:py-4">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             {t("actions.cancel")}
           </Button>
