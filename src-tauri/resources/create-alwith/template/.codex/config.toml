@@ -1,3 +1,0 @@
-[mcp_servers.tauri-hasgard]
-command = "tauri-hasgard"
-args = ["mcp"]
