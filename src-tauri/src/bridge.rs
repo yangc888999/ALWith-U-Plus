@@ -282,6 +282,69 @@ fn strip_web_search_tools(parsed: &mut Value) -> usize {
     dropped
 }
 
+/// Qwen's plan endpoint rejects any tool schema that carries JSON Schema `$defs`/`$ref`
+/// (`InternalError.Algo … Invalid request parameters`, a fast 400 the UI shows as「连接中断」).
+/// Codex attaches such schemas through plugins/MCP (e.g. the `chatgpt_space` namespace), so the
+/// router expands them into their equivalent inline form before forwarding — a lossless rewrite
+/// verified against the live endpoint: the same request answers 200 once inlined. Only the qwen
+/// gateway needs this; OpenAI-family routes accept `$defs` and stay untouched.
+fn inline_tool_schema_refs(parsed: &mut Value) -> usize {
+    let Some(tools) = parsed.get_mut("tools").and_then(Value::as_array_mut) else { return 0 };
+    let mut expanded = 0usize;
+    for tool in tools.iter_mut() {
+        expanded += inline_refs_in_tool(tool);
+    }
+    expanded
+}
+
+fn inline_refs_in_tool(tool: &mut Value) -> usize {
+    let kind = tool.get("type").and_then(Value::as_str).unwrap_or_default();
+    if kind == "namespace" {
+        let Some(children) = tool.get_mut("tools").and_then(Value::as_array_mut) else { return 0 };
+        return children.iter_mut().map(inline_refs_in_tool).sum();
+    }
+    let Some(parameters) = tool.get_mut("parameters") else { return 0 };
+    inline_schema_refs(parameters)
+}
+
+/// Replaces every local `{"$ref":"#/$defs/<Name>"}` with a deep copy of its definition and drops
+/// the `$defs` block. Returns the number of references expanded; schemas without `$defs`/`$ref`
+/// are left byte-for-byte alone. Unresolvable or cyclic references are kept as-is rather than
+/// looping forever — the upstream refusal then still surfaces with its real message.
+fn inline_schema_refs(schema: &mut Value) -> usize {
+    let Some(defs) = schema.get("$defs").and_then(Value::as_object).cloned() else {
+        return expand_refs(schema, &serde_json::Map::new(), 0);
+    };
+    if let Some(object) = schema.as_object_mut() {
+        object.remove("$defs");
+    }
+    expand_refs(schema, &defs, 0)
+}
+
+fn expand_refs(node: &mut Value, defs: &serde_json::Map<String, Value>, depth: usize) -> usize {
+    const MAX_DEPTH: usize = 64;
+    if depth > MAX_DEPTH {
+        return 0;
+    }
+    match node {
+        Value::Object(object) => {
+            if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+                if let Some(name) = reference.strip_prefix("#/$defs/") {
+                    if let Some(definition) = defs.get(name) {
+                        let mut replacement = definition.clone();
+                        let expanded = 1 + expand_refs(&mut replacement, defs, depth + 1);
+                        *node = replacement;
+                        return expanded;
+                    }
+                }
+            }
+            object.values_mut().map(|child| expand_refs(child, defs, depth + 1)).sum()
+        }
+        Value::Array(items) => items.iter_mut().map(|child| expand_refs(child, defs, depth + 1)).sum(),
+        _ => 0,
+    }
+}
+
 /// POST /responses: sanitize the body, then stream the upstream answer straight back.
 fn upstream_endpoint(base_url: &str, path: &str) -> String {
     format!("{}/{}", base_url.trim_end_matches('/'), path.trim_start_matches('/'))
@@ -355,6 +418,12 @@ fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
     let dropped = strip_web_search_tools(&mut parsed);
     if dropped > 0 {
         log::info!("bridge: dropped {dropped} web_search tool declaration(s) the gateway cannot run");
+    }
+    if gateway == "qwen" {
+        let expanded = inline_tool_schema_refs(&mut parsed);
+        if expanded > 0 {
+            log::info!("bridge: inlined {expanded} tool schema $ref(s) the qwen endpoint cannot parse");
+        }
     }
     let Ok(payload) = serde_json::to_vec(&parsed) else {
         return respond(request, 500, "application/json", br#"{"error":{"message":"router: encode failed"}}"#);
@@ -1296,6 +1365,73 @@ mod tests {
         let mut body: Value = serde_json::from_slice(br#"{"model":"m","input":[]}"#).unwrap();
         assert_eq!(strip_web_search_tools(&mut body), 0);
         assert!(body.get("tools").is_none());
+    }
+
+    #[test]
+    fn qwen_tool_schema_refs_are_inlined_for_top_level_functions() {
+        // The live refusal: any `$defs`/`$ref` in a tool schema answers 400 on the plan endpoint.
+        let mut body: Value = serde_json::from_slice(
+            br##"{"model":"qwen/qwen4-max-preview","tools":[
+                {"type":"function","name":"find_pages","parameters":{
+                    "type":"object",
+                    "properties":{"query":{"$ref":"#/$defs/Query"}},
+                    "$defs":{"Query":{"type":"object","properties":{"text":{"type":"string"}}}}
+                }}
+            ]}"##,
+        )
+        .unwrap();
+        assert_eq!(inline_tool_schema_refs(&mut body), 1);
+        let parameters = &body["tools"][0]["parameters"];
+        assert!(parameters.get("$defs").is_none(), "the definitions block is gone");
+        assert_eq!(parameters["properties"]["query"]["type"], "object");
+        assert_eq!(parameters["properties"]["query"]["properties"]["text"]["type"], "string");
+        assert!(!body.to_string().contains("$ref"), "no reference survives");
+    }
+
+    #[test]
+    fn qwen_namespace_subtools_are_inlined_recursively() {
+        // chatgpt_space arrives as a namespace whose subtools carry the offending schemas.
+        let mut body: Value = serde_json::from_slice(
+            br##"{"model":"qwen/qwen4-max-preview","tools":[
+                {"type":"namespace","name":"mcp__codex_apps__chatgpt_space","tools":[
+                    {"type":"function","name":"_find_pages","parameters":{
+                        "type":"object",
+                        "properties":{"a":{"$ref":"#/$defs/A"}},
+                        "$defs":{"A":{"type":"object","properties":{"b":{"$ref":"#/$defs/B"}}},
+                                  "B":{"type":"string"}}
+                    }},
+                    {"type":"function","name":"_create_space","parameters":{"type":"object"}}
+                ]}
+            ]}"##,
+        )
+        .unwrap();
+        assert_eq!(inline_tool_schema_refs(&mut body), 2, "nested references expand transitively");
+        let subtool = &body["tools"][0]["tools"][0]["parameters"];
+        assert_eq!(subtool["properties"]["a"]["properties"]["b"]["type"], "string");
+        assert!(!body.to_string().contains("$defs"));
+        assert!(!body.to_string().contains("$ref"));
+        assert_eq!(body["tools"][0]["tools"][1]["name"], "_create_space", "clean subtools stay intact");
+    }
+
+    #[test]
+    fn schemas_without_refs_are_untouched_and_unresolvable_refs_do_not_loop() {
+        let original = br#"{"tools":[{"type":"function","name":"shell","parameters":{"type":"object","properties":{"cmd":{"type":"string"}}}}]}"#;
+        let mut body: Value = serde_json::from_slice(original).unwrap();
+        assert_eq!(inline_tool_schema_refs(&mut body), 0);
+        assert_eq!(serde_json::to_vec(&body).unwrap(), original.to_vec(), "no rewrite without $defs/$ref");
+        // A dangling reference is kept (the upstream error still surfaces) instead of hanging.
+        let mut dangling: Value = serde_json::from_slice(
+            br##"{"tools":[{"type":"function","name":"x","parameters":{"$ref":"#/$defs/Missing","$defs":{}}}]}"##,
+        )
+        .unwrap();
+        assert_eq!(inline_tool_schema_refs(&mut dangling), 0);
+        assert_eq!(dangling["tools"][0]["parameters"]["$ref"], "#/$defs/Missing");
+        // A cyclic definition terminates at the depth guard rather than recursing forever.
+        let mut cyclic: Value = serde_json::from_slice(
+            br##"{"tools":[{"type":"function","name":"x","parameters":{"$ref":"#/$defs/Loop","$defs":{"Loop":{"$ref":"#/$defs/Loop"}}}}]}"##,
+        )
+        .unwrap();
+        let _ = inline_tool_schema_refs(&mut cyclic);
     }
 
     #[test]

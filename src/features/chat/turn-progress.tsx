@@ -19,9 +19,10 @@
 // stopwatch is how a healthy four-minute reasoning step gets thrown away.
 
 import type { Session } from "@alwith/api"
-import { AlertTriangleIcon, CircleHelpIcon, Loader2Icon } from "lucide-react"
+import { AlertTriangleIcon, CircleHelpIcon, Loader2Icon, SquareIcon } from "lucide-react"
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react"
 import { useTranslation } from "react-i18next"
+import { toast } from "sonner"
 import { subscribeGroupSpeaker } from "@/lib/group-runtime"
 
 import { selectedModelId } from "@/agent/native-models"
@@ -435,6 +436,27 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
           </span>
         )}
         <span className="shrink-0 tabular-nums text-muted-foreground/70">{clock(now - turn.start)}</span>
+        {/* Stop lives HERE, not in the toolbar. The package renders its stop button between the
+            model picker and send; the picker refuses to shrink (its name sets the width), so in a
+            narrow window it pushed stop under the send button and out of reach — the one control
+            a running turn must always offer. This row is full-width and its text truncates, so a
+            shrink-0 button at its end stays reachable at every window size. The toolbar copy is
+            hidden by index.css; this is the only stop control on screen. */}
+        <button
+          type="button"
+          data-turn-stop=""
+          aria-label={t("chat.turnProgress.stop")}
+          title={t("chat.turnProgress.stop")}
+          className="flex h-6 shrink-0 items-center gap-1 rounded-full border border-destructive/40 px-2 text-[11px] font-medium text-destructive transition-colors hover:bg-destructive/10"
+          onClick={() => {
+            void client.cancel(session.id).catch((error: unknown) => {
+              toast.error(error instanceof Error ? error.message : String(error))
+            })
+          }}
+        >
+          <SquareIcon className="size-2.5 fill-current" aria-hidden="true" />
+          {t("chat.turnProgress.stop")}
+        </button>
         {quiet && (
           <button
             type="button"

@@ -132,12 +132,13 @@ export const PROVIDERS = ALL_PROVIDERS.filter((provider) => !provider.retired)
  *
  * Keep this on a first-party, app-bundled provider: the previous default pointed at a
  * third-party relay (`gateway:hakimi:claude-opus-5-5`), which a fresh machine usually has no
- * key for — so a brand-new chat could start on a model that cannot be served. DeepSeek ships
- * its own catalog in `resources/deepseek/models.json` and `deepseek-flash` is that catalog's
- * first model. `resolveSessionModel` still falls back to `models[0]` when it is not configured.
+ * key for — so a brand-new chat could start on a model that cannot be served. The company no
+ * longer offers DeepSeek (its credential is closed by default), so the fallback moved to the
+ * bundled Qwen catalog: `resources/qwen/models.json` lists `qwen4-max-preview` first.
+ * `resolveSessionModel` still falls back to `models[0]` when it is not configured.
  */
-export const DEFAULT_PROVIDER_ID = "deepseek"
-export const DEFAULT_MODEL_ID = "deepseek-flash"
+export const DEFAULT_PROVIDER_ID = "qwen"
+export const DEFAULT_MODEL_ID = "qwen4-max-preview"
 
 const REASONING_LEVELS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent"])
 

@@ -82,6 +82,10 @@ struct Saved {
     /// `alwith`, so the two never contend for the same config table.
     #[serde(default)]
     managed: Option<managed::Cache>,
+    /// One-shot migration marker: the company stopped offering DeepSeek, so its credential is
+    /// closed by default once. Recorded after the flip so a later deliberate re-enable sticks.
+    #[serde(default)]
+    deepseek_default_closed: bool,
 }
 #[derive(Clone, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -215,11 +219,16 @@ impl Providers {
     pub fn load(app: &AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
         let directory = app.path().app_data_dir()?;
         let path = directory.join("runtime-providers.json");
-        let saved = match std::fs::read(&path) {
+        let mut saved: Saved = match std::fs::read(&path) {
             Ok(bytes) => serde_json::from_slice(&bytes)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Saved::default(),
             Err(error) => return Err(error.into()),
         };
+        if close_deepseek_by_default(&mut saved) {
+            if let Err(error) = persist(&path, &saved) {
+                log::warn!("Provider store: could not persist the DeepSeek default close: {error}");
+            }
+        }
         Ok(Self {
             path,
             catalog_dir: directory.join("provider-catalogs"),
@@ -317,6 +326,21 @@ pub fn bundled_model_catalogs(resources: &std::path::Path) -> Result<Vec<std::pa
 fn catalog() -> Vec<Value> {
     serde_json::from_str(include_str!("../../src/lib/provider-catalog.json")).expect("bundled provider catalog")
 }
+
+/// The company no longer offers DeepSeek: close its credential once so its models leave every
+/// picker and the engine catalog. The key (if any) stays on disk. The one-shot marker is persisted
+/// even when there is nothing to flip, so a reader who deliberately re-enables DeepSeek later keeps
+/// that choice across restarts instead of being closed again on every launch.
+fn close_deepseek_by_default(saved: &mut Saved) -> bool {
+    if saved.deepseek_default_closed {
+        return false;
+    }
+    saved.deepseek_default_closed = true;
+    if let Some(credential) = saved.credentials.get_mut("deepseek") {
+        credential.disabled = true;
+    }
+    true
+}
 fn definition(id: &str) -> Result<Value, String> {
     catalog().into_iter().find(|v| v["id"] == id).ok_or("Unknown provider".into())
 }
@@ -386,7 +410,13 @@ fn update(saved: &Saved, id: String, input: Option<Input>, expected_revision: u6
             Some(_) => None,
             None => credentials.get(&id).and_then(|current| current.base_url.clone()),
         };
-        credentials.insert(id, Credential { api_key, region, base_url, disabled: input.disabled.unwrap_or(false) });
+        // A first DeepSeek connection defaults to closed (the company stopped offering it); an
+        // explicit disabled flag — including a deliberate re-enable — always wins.
+        let default_disabled = id == "deepseek" && !credentials.contains_key("deepseek");
+        credentials.insert(
+            id,
+            Credential { api_key, region, base_url, disabled: input.disabled.unwrap_or(default_disabled) },
+        );
     } else {
         credentials.remove(&id);
     }
@@ -398,6 +428,7 @@ fn update(saved: &Saved, id: String, input: Option<Input>, expected_revision: u6
         // Rebuilding `Saved` must carry the account cache forward: saving any unrelated provider
         // must never sign the reader out of their ALwith account.
         managed: saved.managed.clone(),
+        deepseek_default_closed: saved.deepseek_default_closed,
     })
 }
 
@@ -586,6 +617,7 @@ fn update_custom(saved: &Saved, input: CustomInput, expected_revision: u64) -> R
         custom_providers,
         built_in_model_overrides: saved.built_in_model_overrides.clone(),
         managed: saved.managed.clone(),
+        deepseek_default_closed: saved.deepseek_default_closed,
     })
 }
 
@@ -603,6 +635,7 @@ fn remove_custom(saved: &Saved, id: &str, expected_revision: u64) -> Result<Save
         custom_providers,
         built_in_model_overrides: saved.built_in_model_overrides.clone(),
         managed: saved.managed.clone(),
+        deepseek_default_closed: saved.deepseek_default_closed,
     })
 }
 
@@ -645,6 +678,7 @@ fn update_built_in_models(
         custom_providers: saved.custom_providers.clone(),
         built_in_model_overrides: overrides,
         managed: saved.managed.clone(),
+        deepseek_default_closed: saved.deepseek_default_closed,
     })
 }
 
@@ -2329,6 +2363,100 @@ mod tests {
                 marker_at + 1
             );
         }
+    }
+
+    fn deepseek_credential(disabled: bool) -> Credential {
+        Credential { api_key: "sk-test".into(), region: None, base_url: None, disabled }
+    }
+
+    #[test]
+    fn deepseek_default_close_flips_an_open_credential_once() {
+        let mut saved = Saved {
+            credentials: BTreeMap::from([("deepseek".to_string(), deepseek_credential(false))]),
+            ..Saved::default()
+        };
+        // First load: the credential is closed and the marker is set so the flip persists.
+        assert!(close_deepseek_by_default(&mut saved));
+        assert!(saved.deepseek_default_closed);
+        assert!(saved.credentials["deepseek"].disabled);
+        // The key survives the close — re-enabling must not ask for it again.
+        assert_eq!(saved.credentials["deepseek"].api_key, "sk-test");
+        // Second load: the marker is already set, so nothing is touched again.
+        assert!(!close_deepseek_by_default(&mut saved));
+        assert!(saved.credentials["deepseek"].disabled);
+    }
+
+    #[test]
+    fn deepseek_default_close_keeps_a_deliberate_reenable_across_restarts() {
+        let mut saved = Saved {
+            credentials: BTreeMap::from([("deepseek".to_string(), deepseek_credential(false))]),
+            ..Saved::default()
+        };
+        close_deepseek_by_default(&mut saved);
+        // The reader re-enables DeepSeek on purpose after the one-shot close.
+        saved.credentials.get_mut("deepseek").unwrap().disabled = false;
+        // A later launch must NOT close it again: the marker is already persisted.
+        assert!(!close_deepseek_by_default(&mut saved));
+        assert!(!saved.credentials["deepseek"].disabled);
+    }
+
+    #[test]
+    fn deepseek_default_close_persists_the_marker_even_with_no_credential() {
+        // Nothing to flip, but the marker still has to be recorded — otherwise a reader who adds
+        // and enables DeepSeek later would be closed again on the next launch.
+        let mut saved = Saved::default();
+        assert!(close_deepseek_by_default(&mut saved));
+        assert!(saved.deepseek_default_closed);
+        assert!(!close_deepseek_by_default(&mut saved));
+    }
+
+    #[test]
+    fn deepseek_default_close_leaves_other_providers_alone() {
+        let mut saved = Saved {
+            credentials: BTreeMap::from([
+                ("deepseek".to_string(), deepseek_credential(false)),
+                ("qwen".to_string(), deepseek_credential(false)),
+            ]),
+            ..Saved::default()
+        };
+        close_deepseek_by_default(&mut saved);
+        assert!(saved.credentials["deepseek"].disabled);
+        assert!(!saved.credentials["qwen"].disabled);
+    }
+
+    #[test]
+    fn first_deepseek_save_defaults_to_closed_but_an_explicit_flag_wins() {
+        let saved = Saved::default();
+        // No prior credential: a first save lands closed (the company stopped offering it).
+        let closed = update(
+            &saved,
+            "deepseek".into(),
+            Some(Input { api_key: Some("sk-test".into()), region: None, base_url: None, disabled: None }),
+            saved.revision,
+        )
+        .unwrap();
+        assert!(closed.credentials["deepseek"].disabled);
+        // An explicit re-enable on that same first save is a deliberate choice and must win.
+        let enabled = update(
+            &saved,
+            "deepseek".into(),
+            Some(Input { api_key: Some("sk-test".into()), region: None, base_url: None, disabled: Some(false) }),
+            saved.revision,
+        )
+        .unwrap();
+        assert!(!enabled.credentials["deepseek"].disabled);
+        // Once a credential exists, a later save without a flag keeps whatever state it had —
+        // the default-close only applies to the very first connection.
+        let mut existing = saved.clone();
+        existing.credentials.insert("deepseek".to_string(), deepseek_credential(false));
+        let kept = update(
+            &existing,
+            "deepseek".into(),
+            Some(Input { api_key: Some("sk-test".into()), region: None, base_url: None, disabled: None }),
+            existing.revision,
+        )
+        .unwrap();
+        assert!(!kept.credentials["deepseek"].disabled);
     }
 
     #[test]

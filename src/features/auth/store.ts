@@ -23,12 +23,12 @@ import { bumpAuthGeneration, createAuthTransport, readAuthGeneration } from "./h
 import { assertActiveLogin } from "./login-response"
 import { createEnterpriseEventHandler } from "./enterprise-events"
 import { createAccountTransition, createManagedProviders } from "./managed-providers"
+import { createProviderRefreshClient, serveProviderRefresh } from "./provider-refresh-bridge"
 
 export const API_BASE_URL = import.meta.env.DEV ? "https://api-dev.alwith.ai/service" : "https://api.alwith.ai/service"
 const STATE_EVENT = "alwith-auth-state"
 const LOGOUT_EVENT = "alwith-auth-logout-request"
 const LOGIN_EVENT = "alwith-auth-login-request"
-const PROVIDERS_REFRESH_EVENT = "alwith-providers-refresh-request"
 const isMain = () => getCurrentWindow().label === "main"
 // 同一个 `appDataDir/<name>.json`,原 tauri-plugin-store 写下的登录态原样读回;每次 set 即原子落盘。
 const store = openStore(authStoreName(API_BASE_URL))
@@ -131,8 +131,16 @@ function refreshAccountProviders(): void {
     console.warn("[auth] managed provider refresh failed:", message)
   })
 }
+/**
+ * Wait for main to finish rebinding the account before the caller reads `enterpriseStatus()`.
+ * A fire-and-forget `emitTo` returned before `enterpriseBind` ran, so the settings page saw a
+ * native status without a `generation` and the login button failed without opening the browser.
+ * The bridge also carries main's error back, so a network/token failure is reported as such.
+ */
+let requestProviderRefresh: (() => Promise<void>) | undefined
 export function requestAccountProviderRefresh(): Promise<void> {
-  return emitTo("main", PROVIDERS_REFRESH_EVENT)
+  requestProviderRefresh ??= createProviderRefreshClient(getCurrentWindow().label)
+  return requestProviderRefresh()
 }
 export const platformApiRequest = transport.request
 export const authClient = createAuthClient({
@@ -229,7 +237,7 @@ export async function initPlatformAuth(): Promise<void> {
     if (event.payload.action === "login" || event.payload.action === "logout") void transport.invalidate()
     for (const listener of stateListeners) listener(event.payload)
   })
-  if (isMain()) await listen(PROVIDERS_REFRESH_EVENT, refreshAccountProviders)
+  if (isMain()) await serveProviderRefresh(loadAccountProviders)
   if (isMain())
     await listen<{ generation?: number }>(LOGOUT_EVENT, (event) => {
       const generation = event.payload?.generation

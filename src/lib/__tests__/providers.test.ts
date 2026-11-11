@@ -47,7 +47,7 @@ test("displayModelLabel keeps the fallback when the user never renamed the model
   expect(displayModelLabel("gpt-6-astra")).toBeNull()
 })
 
-test("every built-in provider is offered, and a new chat starts on the bundled DeepSeek-Flash", () => {
+test("every built-in provider is offered, and a new chat starts on the bundled Qwen 4 Max Preview", () => {
   expect(PROVIDERS.map((provider) => provider.id)).toEqual([
     "openai",
     "deepseek",
@@ -60,22 +60,41 @@ test("every built-in provider is offered, and a new chat starts on the bundled D
     "hakimi"
   ])
   // The default must be a first-party catalog entry, not a third-party relay that a fresh
-  // install has no key for. Fetch by id: Hakimi used to be both last and the default target.
-  expect(DEFAULT_PROVIDER_ID).toBe("deepseek")
-  expect(DEFAULT_MODEL_ID).toBe("deepseek-flash")
-  const deepseek = PROVIDERS.find((provider) => provider.id === DEFAULT_PROVIDER_ID)
-  expect(deepseek?.baseUrl).toBe("https://api.deepseek.com/")
-  expect(deepseek?.models.map((model) => model.id)).toEqual(["deepseek-flash"])
+  // install has no key for. The company stopped offering DeepSeek (closed by default), so the
+  // bundled Qwen catalog carries the fallback now.
+  expect(DEFAULT_PROVIDER_ID).toBe("qwen")
+  expect(DEFAULT_MODEL_ID).toBe("qwen4-max-preview")
+  const qwen = PROVIDERS.find((provider) => provider.id === DEFAULT_PROVIDER_ID)
+  expect(qwen?.models[0]?.id).toBe("qwen4-max-preview")
   const snapshot: ProviderSnapshot = {
     revision: 1,
     appliedRevision: 1,
     status: "applied",
     error: null,
-    providers: { deepseek: { configured: true, disabled: false, region: null, base_url: null } },
+    providers: { qwen: { configured: true, disabled: false, region: "plan", base_url: null } },
     customProviders: [],
     builtInModels: {}, managedProviders: []
   }
   expect(resolveSessionModel(null, snapshot)).toBe(gatewayModelId(DEFAULT_PROVIDER_ID, DEFAULT_MODEL_ID))
+})
+
+test("a closed DeepSeek never becomes the fallback for a new chat", () => {
+  const snapshot: ProviderSnapshot = {
+    revision: 1,
+    appliedRevision: 1,
+    status: "applied",
+    error: null,
+    providers: {
+      deepseek: { configured: false, disabled: true, region: null, base_url: null },
+      qwen: { configured: true, disabled: false, region: "plan", base_url: null }
+    },
+    customProviders: [],
+    builtInModels: {}, managedProviders: []
+  }
+  expect(resolveSessionModel(null, snapshot)).toBe(gatewayModelId("qwen", "qwen4-max-preview"))
+  expect(resolveSessionModel("gateway:deepseek:deepseek-flash", snapshot)).toBe(
+    gatewayModelId("qwen", "qwen4-max-preview")
+  )
 })
 
 test("Desktop defaults prefer configured providers and leave native defaults to the engine", () => {
@@ -281,7 +300,7 @@ test("a configured default replaces the built-in fallback only while it still re
     status: "applied",
     error: null,
     providers: {
-      deepseek: { configured: true, disabled: false, region: null, base_url: null },
+      qwen: { configured: true, disabled: false, region: "plan", base_url: null },
       hakimi: { configured: true, disabled: false, region: null, base_url: null }
     },
     customProviders: [],

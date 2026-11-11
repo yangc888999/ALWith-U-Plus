@@ -25,7 +25,7 @@ import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
-import { drafts, setComposerDraft } from "@alwith/module-chat/conversation"
+import { drafts, importDraft } from "@alwith/module-chat/conversation"
 
 import { copyText } from "./chat-context-menu"
 
@@ -53,19 +53,56 @@ export function composeQuoteText(current: string, text: string): string {
 }
 
 /**
- * Prepends the quote to whatever the composer already holds.
+ * Prepends the quote to whatever the composer already holds — as many times as the reader likes.
  *
- * Returns false when the session's composer is not mounted (module-chat rejects a draft write
- * for a closed session): the caller then tells the user instead of letting an unhandled
- * rejection escape.
+ * `setComposerDraft` is the wrong tool here: it refuses a session whose composer is not mounted
+ * ("open the session first") AND one that already holds a draft ("send or clear it first"). Both
+ * refusals are exactly what quoting must not do — a quote is additive, and the preview can quote
+ * into a conversation that has not been opened yet. So this writes through the two doors the
+ * package leaves open:
+ *
+ * - Composer mounted: drive the real textarea through React's controlled-input path (native value
+ *   setter + `input` event). The package's `onChange` runs `textInput.setInput`, which bumps the
+ *   revision and syncs the draft map — the same path typing takes, so attachments, mentions and
+ *   the model pick all survive, and a second quote simply merges into the first.
+ * - Composer not mounted: seed the draft map with `importDraft` (no guards). The composer reads
+ *   that map when it mounts, so the quote is waiting in the input the first time the session opens.
+ *
+ * Returns false only when there is genuinely nowhere to write (no textarea and no draft slot).
  */
 export function appendQuote(sessionId: string, text: string): boolean {
-  try {
-    setComposerDraft(sessionId, composeQuoteText(drafts.get(sessionId)?.text ?? "", text))
-    return true
-  } catch {
-    return false
+  const merged = composeQuoteText(drafts.get(sessionId)?.text ?? "", text)
+  const field = document.querySelector<HTMLTextAreaElement>("[data-composer] textarea")
+  if (field !== null) {
+    // React tracks the value it last rendered; assigning through the native setter and firing
+    // `input` is what makes the controlled onChange see the change instead of ignoring it.
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set
+    if (setter !== undefined) {
+      setter.call(field, merged)
+      field.dispatchEvent(new Event("input", { bubbles: true }))
+      // The package's onChange runs synchronously inside the dispatch and syncs the draft map.
+      // If it did not take (a composer that is not accepting input right now), the map still has
+      // to carry the quote — otherwise the next read would merge against stale text and lose it.
+      if (drafts.get(sessionId)?.text !== merged) seedDraft(sessionId, merged)
+      return true
+    }
   }
+  // No live textarea (session not open, or the composer is still preparing): park the merged text
+  // in the draft map. The composer reads that map when it mounts, so the quote is waiting in the
+  // input the first time the session opens.
+  seedDraft(sessionId, merged)
+  return true
+}
+
+/** Writes the merged text into the draft map, keeping attachments/mentions/model intact. */
+function seedDraft(sessionId: string, text: string): void {
+  const existing = drafts.get(sessionId)
+  importDraft(sessionId, {
+    text,
+    attachments: existing?.attachments ?? [],
+    mentions: existing?.mentions ?? [],
+    modelId: existing?.modelId ?? null
+  })
 }
 
 /** Focuses the composer input after a quote lands, so typing can continue immediately. */

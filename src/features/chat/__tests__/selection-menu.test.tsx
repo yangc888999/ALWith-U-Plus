@@ -1,13 +1,17 @@
+import { drafts, importDraft } from "@alwith/module-chat/conversation"
 import { act, cleanup, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, test, vi } from "vitest"
 
 import { initI18n } from "@/lib/i18n"
 
-import { SelectionMenu, composeQuoteText, quoteForComposer } from "../selection-menu"
+import { SelectionMenu, appendQuote, composeQuoteText, quoteForComposer } from "../selection-menu"
 
 await initI18n("en")
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  for (const id of [...drafts.keys()]) importDraft(id, null)
+})
 
 describe("selection menu quote", () => {
   test("prefixes every selected line, including blank ones", () => {
@@ -24,6 +28,65 @@ describe("selection menu quote", () => {
 
   test("an empty draft becomes just the quote", () => {
     expect(composeQuoteText("   ", "引用内容")).toBe("> 引用内容\n\n")
+  })
+})
+
+describe("appendQuote", () => {
+  test("seeds the draft map when the session's composer is not open yet", () => {
+    expect(appendQuote("closed-session", "第一段引用")).toBe(true)
+    expect(drafts.get("closed-session")?.text).toBe("> 第一段引用\n\n")
+  })
+
+  test("a second quote into a closed session merges instead of being refused", () => {
+    appendQuote("closed-session", "第一段")
+    expect(appendQuote("closed-session", "第二段")).toBe(true)
+    expect(drafts.get("closed-session")?.text).toBe("> 第二段\n\n> 第一段\n\n")
+  })
+
+  test("keeps attachments, mentions and the model pick when seeding a closed session", () => {
+    importDraft("closed-session", {
+      text: "已有草稿",
+      attachments: [],
+      mentions: ["/tmp/a.ts"],
+      modelId: "qwen/qwen4-max-preview"
+    })
+    appendQuote("closed-session", "引用")
+    const draft = drafts.get("closed-session")
+    expect(draft?.text).toBe("> 引用\n\n已有草稿")
+    expect(draft?.mentions).toEqual(["/tmp/a.ts"])
+    expect(draft?.modelId).toBe("qwen/qwen4-max-preview")
+  })
+
+  test("writes through a mounted composer's controlled textarea, repeatedly", () => {
+    // A controlled textarea whose onChange mirrors what the package does: setInput → draft map.
+    const onChange = vi.fn((event: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const value = event.currentTarget.value
+      importDraft("open-session", { text: value, attachments: [], mentions: [], modelId: null })
+    })
+    render(
+      <div data-composer>
+        <textarea defaultValue="" onChange={onChange} />
+      </div>
+    )
+    expect(appendQuote("open-session", "第一次")).toBe(true)
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(drafts.get("open-session")?.text).toBe("> 第一次\n\n")
+    // The second quote must merge with what the first one left, not be refused.
+    expect(appendQuote("open-session", "第二次")).toBe(true)
+    expect(onChange).toHaveBeenCalledTimes(2)
+    expect(drafts.get("open-session")?.text).toBe("> 第二次\n\n> 第一次\n\n")
+  })
+
+  test("falls back to the draft map when the mounted textarea does not take the write", () => {
+    // A textarea with no onChange (composer not accepting input): the dispatch lands nowhere,
+    // so the quote must still survive in the draft map instead of being silently dropped.
+    render(
+      <div data-composer>
+        <textarea defaultValue="" />
+      </div>
+    )
+    expect(appendQuote("open-session", "引用")).toBe(true)
+    expect(drafts.get("open-session")?.text).toBe("> 引用\n\n")
   })
 })
 

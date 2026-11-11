@@ -1310,3 +1310,17 @@ body::after {
 [data-composer-mode="chat"] .chat-composer-toolbar > div > div:first-child > button:first-child {
   display: none;
 }
+
+/* 停止按钮已移到上方状态行（TurnProgressBar）右端：包内联在工具栏里的那份夹在模型选择器和
+   发送键之间，而模型选择器按名字定宽、拒绝收缩，窄窗口会把停止键挤到发送键底下按不到。
+   状态行整行宽、文字可截断，shrink-0 的停止键在任何窗宽都够得着。这里隐藏包内联的那份，
+   避免两个停止键。
+
+   定位只能用 `border-border`：包里的 Button 基类自带 `border border-transparent`，所以
+   `button.rounded-full.border` 会命中工具栏里**每一个**圆形按钮（模型选择器、发送键、附件、命令…），
+   曾把整条工具栏隐藏掉，表现为「对话框没有模型选择器」。只有停止键额外传了 `border-border`，
+   tailwind-merge 会用它覆盖基类的 `border-transparent`，因此这是唯一稳定的区分点，也不依赖
+   语言文案；上游改层级时这条会失效而不是隐藏错东西。 */
+.chat-composer-toolbar button.border-border {
+  display: none;
+}

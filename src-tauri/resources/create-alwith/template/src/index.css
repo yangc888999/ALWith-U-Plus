@@ -1,0 +1,15 @@
+@import "@alwith/module-auth/pets/styles.css";
+@source "../node_modules/@alwith/module-auth/dist";
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/inter";
+@import "@alwith/module-chat/styles.css";
+@import "@alwith/module-chat/markdown.css";
+@import "@alwith/module-chat/session-list.css";
+@import "@nyssance/atlas/styles.css";
+@import "@alwith/module-desktop-shell/styles.css";
+@import "@alwith/module-desktop-shell/theme.css";
+@import "@alwith/module-desktop-shell/tailwind.css";
+@source "../node_modules/@alwith/module-chat/dist";
+@source "../node_modules/@nyssance/shadcn/dist/vega";

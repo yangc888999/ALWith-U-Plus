@@ -91,10 +91,35 @@ test("an idle session shows no progress strip", () => {
   expect(view.container.querySelector("[data-turn-progress]")).toBeNull()
 })
 
-test("a turn that just started offers no stop or switch button", () => {
+test("a turn that just started offers stop but no model switch", () => {
+  // Stop moved from the toolbar (where the model picker crowded it out of reach in narrow
+  // windows) to this full-width row, so it is present from the first moment a turn runs.
   const view = render(<TurnProgressBar session={session({ id: "turn-fresh" })} />)
-  expect(view.queryByRole("button", { name: "停止" })).toBeNull()
+  expect(view.getByRole("button", { name: "停止" })).toBeTruthy()
   expect(view.queryByRole("button", { name: "切换默认模型" })).toBeNull()
+})
+
+test("the stop button cancels the running turn", async () => {
+  const { client } = await import("@/lib/client")
+  const cancel = vi.spyOn(client, "cancel").mockResolvedValue(undefined)
+  try {
+    const view = render(<TurnProgressBar session={session({ id: "turn-stop" })} />)
+    fireEvent.click(view.getByRole("button", { name: "停止" }))
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(cancel).toHaveBeenCalledWith("turn-stop")
+  } finally {
+    cancel.mockRestore()
+  }
+})
+
+test("the stop button stays reachable while the turn is quiet", () => {
+  // The whole point of the move: even a long, silent turn keeps stop on screen. The row's text
+  // truncates; the shrink-0 stop button never does.
+  const view = render(<TurnProgressBar session={session({ id: "turn-stop-quiet", clock: Date.now() - 190_000 })} />)
+  act(() => {})
+  const stop = view.container.querySelector("[data-turn-stop]")
+  expect(stop).not.toBeNull()
+  expect(stop?.className).toContain("shrink-0")
 })
 
 test("a running turn shows one short connecting line and the elapsed clock", () => {
