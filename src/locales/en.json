@@ -757,7 +757,7 @@
     "customizationRepo": "ALwith U",
     "customizationOutro": "project. The main changes:",
     "customizationItems": [
-      "v0.3.6.2",
+      "v0.3.8",
       "Company sign-in with company models (the enterprise catalog now refreshes across windows)",
       "Fixed the subscription channel's Qwen 4 Max Preview error",
       "Fixed Qwen gateway 400s on tool definitions that use JSON Schema references",

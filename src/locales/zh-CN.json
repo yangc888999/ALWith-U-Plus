@@ -757,7 +757,7 @@
     "customizationRepo": "ALwith U",
     "customizationOutro": "定制，主要调整内容如下：",
     "customizationItems": [
-      "v0.3.6.2",
+      "v0.3.8",
       "接入公司认证，支持选择公司模型（企业模型目录跨窗口即时刷新）",
       "修复订阅通道接入 Qwen 4 Max Preview 异常的 BUG",
       "修复 Qwen 网关对带 JSON Schema 引用的工具定义返回 400 的问题",
