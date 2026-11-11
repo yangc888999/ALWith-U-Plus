@@ -1,4 +1,4 @@
-import { gatewayModelId, type ProviderSnapshot } from "@alwith/module-chat/settings"
+import { gatewayModelId, type ProviderSnapshot } from "@/lib/providers"
 import { expect, test } from "vitest"
 
 import { enterpriseCatalog, isEnterpriseModel, projectEnterpriseProviders } from "../enterprise-providers"
@@ -15,7 +15,9 @@ const snapshot = (): ProviderSnapshot => ({
   status: "applied",
   error: null,
   providers: {},
-  customProviders: [{ ...provider, id: "custom_personal" }]
+  customProviders: [{ ...provider, id: "custom_personal" }],
+  managedProviders: [],
+  builtInModels: {}
 })
 
 test("native enterprise metadata is exposed as account models alongside personal providers", () => {
