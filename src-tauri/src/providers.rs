@@ -229,6 +229,16 @@ impl Providers {
                 log::warn!("Provider store: could not persist the DeepSeek default close: {error}");
             }
         }
+        // The gate is process memory, so a cached account has to be put back here: without it
+        // `check_selection` treats every signed-in model as unavailable after a restart, and the
+        // chat refuses to send with "The selected ALwith account model is unavailable".
+        let managed_active = saved.managed.is_some();
+        let managed = managed::State::default();
+        if let Some(cache) = saved.managed.as_ref() {
+            let mut gate = managed.gate.lock().unwrap();
+            gate.account = Some(cache.account.clone());
+            gate.models = managed::model_ids(cache.provider.as_ref());
+        }
         Ok(Self {
             path,
             catalog_dir: directory.join("provider-catalogs"),
@@ -238,9 +248,9 @@ impl Providers {
                 applied_revision: None,
                 error: None,
                 resource_dir: app.path().resource_dir()?,
-                managed_active: false,
+                managed_active,
             }),
-            managed: managed::State::default(),
+            managed,
         })
     }
     pub async fn reset(&self) {

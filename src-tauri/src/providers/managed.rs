@@ -61,7 +61,7 @@ impl Gate {
         Ok(())
     }
 }
-fn model_ids(provider: Option<&CustomProvider>) -> BTreeSet<String> {
+pub(super) fn model_ids(provider: Option<&CustomProvider>) -> BTreeSet<String> {
     provider
         .into_iter()
         .flat_map(|provider| provider.models.iter())
