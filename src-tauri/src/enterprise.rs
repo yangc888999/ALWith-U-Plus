@@ -192,6 +192,14 @@ pub async fn enterprise_refresh(
             generation: native_generation,
             token: access_token.clone(),
         });
+        // gate 是进程内状态：账号绑定时必须同时告诉它，否则 check() 认为「未登录」，
+        // 任何企业模型都会被拒为 unavailable。
+        {
+            let mut gate = state.gate.lock().unwrap();
+            let bound = gate.bind(account.user_uuid.clone())?;
+            // 模型集合在拿到目录后才有，这里先把账号记下来。
+            let _ = bound;
+        }
         native_generation
     };
     let result = async {
@@ -211,7 +219,21 @@ pub async fn enterprise_refresh(
         }
         let catalog = response.json::<Value>().await.map_err(|_| error("Invalid ALwith provider response"))?;
         check()?;
-        let Some(provider) = catalog::parse(catalog).map_err(error)? else { return Ok(None) };
+        let Some(provider) = catalog::parse(catalog).map_err(error)? else {
+            // 目录为空 = 账号当前没有任何可用模型：把集合清空，不要留上一次的。
+            let mut gate = state.gate.lock().unwrap();
+            let generation = gate.committed_generation();
+            let _ = gate.commit(generation, BTreeSet::new());
+            return Ok(None);
+        };
+        {
+            // 目录到手：把这次下发的模型 id 集合交给 gate，发送前才认得出它们。
+            let models: BTreeSet<String> =
+                provider.models.iter().map(|model| catalog::model_id(&provider.provider_id, &model.api_id)).collect();
+            let mut gate = state.gate.lock().unwrap();
+            let generation = gate.bound_generation();
+            gate.commit(generation, models).map_err(error)?;
+        }
         let status = host.ensure(native_generation).await?;
         if status["automatic_renewal"] != true {
             return Ok(None);

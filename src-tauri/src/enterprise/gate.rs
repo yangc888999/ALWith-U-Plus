@@ -42,6 +42,18 @@ impl Gate {
         self.models = models;
         Ok(())
     }
+    /// 当前绑定对应的 generation；未绑定时为 0。
+    pub fn bound_generation(&self) -> u64 {
+        if self.account.is_none() {
+            0
+        } else {
+            self.generation
+        }
+    }
+    /// `commit` 要求传入的 generation 与当前一致；未绑定时返回 0 让它显式失败。
+    pub fn committed_generation(&self) -> u64 {
+        self.bound_generation()
+    }
     pub fn check(&self, requested: Option<&str>, session: Option<&str>) -> Result<(), String> {
         if requested.is_some_and(|model| self.account.is_none() || !self.models.contains(model)) {
             return Err("The selected ALwith account model is unavailable. Select another model before sending.".into());
