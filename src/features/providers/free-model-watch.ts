@@ -65,9 +65,8 @@ export function newFreeModels(known: readonly string[], current: readonly string
   return current.filter((id) => !seen.has(id))
 }
 
-function readCache(store: Store): Cache | null {
+function parseCache(raw: string | null, rawKnown: string | null): Cache | null {
   try {
-    const raw = store.getItem(CACHE_KEY)
     if (raw !== null) {
       const cache = JSON.parse(raw) as Cache
       if (Array.isArray(cache.rows) && cache.rows.every((row) => row && typeof row.id === "string") &&
@@ -77,10 +76,40 @@ function readCache(store: Store): Cache | null {
     }
   } catch { /* Fall back to migrating the old baseline. */ }
   try {
-    const known: unknown = JSON.parse(store.getItem(KNOWN_KEY) ?? "null")
+    const known: unknown = JSON.parse(rawKnown ?? "null")
     if (strings(known)) return { ...emptyCache(), seen: known }
   } catch { /* A corrupt baseline must stay silent. */ }
   return null
+}
+
+/**
+ * The parsed cache, kept in step with the stored strings.
+ *
+ * These getters feed `useSyncExternalStore`, which compares snapshots by identity: re-parsing on
+ * every call handed React a fresh object and fresh arrays on every render, so the provider pane
+ * never settled ("The result of getSnapshot should be cached to avoid an infinite loop", then a
+ * Maximum-update-depth crash). Parsing only when the stored strings actually changed keeps the
+ * references stable while still seeing the other window's writes.
+ */
+const memo = new WeakMap<Store, { signature: string; cache: Cache | null }>()
+
+function stored(store: Store, key: string): string | null {
+  try {
+    return store.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function readCache(store: Store): Cache | null {
+  const raw = stored(store, CACHE_KEY)
+  const rawKnown = stored(store, KNOWN_KEY)
+  const signature = `${raw ?? "\u0000"}\u0001${rawKnown ?? "\u0000"}`
+  const hit = memo.get(store)
+  if (hit !== undefined && hit.signature === signature) return hit.cache
+  const cache = parseCache(raw, rawKnown)
+  memo.set(store, { signature, cache })
+  return cache
 }
 
 function publish(): void {
@@ -92,18 +121,22 @@ function writeCache(cache: Cache, store: Store): void {
   publish()
 }
 
+/** Shared empty snapshots: `?? []` would hand React a new array on every read and loop. */
+const NO_MODELS: readonly CachedFreeModel[] = Object.freeze([])
+const NO_IDS: readonly string[] = Object.freeze([])
+
 /** Metadata from the last successful public catalog fetch; safe to render without a key. */
-export function getCachedFreeModels(storage: Store = localStorage): CachedFreeModel[] {
-  return readCache(storage)?.rows ?? []
+export function getCachedFreeModels(storage: Store = localStorage): readonly CachedFreeModel[] {
+  return readCache(storage)?.rows ?? NO_MODELS
 }
 
-export function getPendingNewFreeModelIds(storage: Store = localStorage): string[] {
-  return readCache(storage)?.pending ?? []
+export function getPendingNewFreeModelIds(storage: Store = localStorage): readonly string[] {
+  return readCache(storage)?.pending ?? NO_IDS
 }
 
 /** IDs retain their marker until the catalog no longer lists them. */
-export function getNewFreeModelIds(storage: Store = localStorage): string[] {
-  return readCache(storage)?.newIds ?? []
+export function getNewFreeModelIds(storage: Store = localStorage): readonly string[] {
+  return readCache(storage)?.newIds ?? NO_IDS
 }
 
 /** Call with the ids actually displayed, never merely on navigation or toast click. */

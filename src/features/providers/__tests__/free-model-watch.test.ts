@@ -50,6 +50,29 @@ test("only ids absent from the previous check are new", () => {
   expect(newFreeModels([], ["a:free"])).toEqual(["a:free"])
 })
 
+test("snapshots keep their identity between reads, so React's store subscription cannot loop", async () => {
+  const store = memoryStorage()
+  // No cache yet: the empty snapshots must still be the same objects on every read.
+  expect(getCachedFreeModels(store)).toBe(getCachedFreeModels(store))
+  expect(getPendingNewFreeModelIds(store)).toBe(getPendingNewFreeModelIds(store))
+
+  await checkFreeModels({ fetcher: () => Promise.resolve(catalog("a:free", "b:free")), storage: store })
+  const rows = getCachedFreeModels(store)
+  expect(rows.map((row) => row.id)).toEqual(["a:free", "b:free"])
+  // Unchanged storage must hand back the very same parsed array, not an equal copy.
+  expect(getCachedFreeModels(store)).toBe(rows)
+  expect(getPendingNewFreeModelIds(store)).toBe(getPendingNewFreeModelIds(store))
+
+  // A write is what replaces the snapshot.
+  await checkFreeModels({
+    fetcher: () => Promise.resolve(catalog("a:free", "b:free", "c:free")),
+    now: () => new Date(2099, 0, 2),
+    storage: store
+  })
+  expect(getCachedFreeModels(store)).not.toBe(rows)
+  expect(getPendingNewFreeModelIds(store)).toEqual(["c:free"])
+})
+
 test("the first check establishes a silent baseline, later checks report only additions", async () => {
   const store = memoryStorage()
   const onNew = vi.fn()
