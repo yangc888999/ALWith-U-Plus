@@ -9,7 +9,7 @@
 //! from the outgoing request body and forwards everything else — status codes, headers and the
 //! SSE byte stream — unchanged.
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -38,6 +38,7 @@ struct RouterRoute {
     bearer_token: String,
     /// Some gateways reject the `reasoning.content` that OpenAI-family rollouts carry.
     sanitize: bool,
+    protocol: crate::providers::Protocol,
 }
 
 fn router_routes() -> &'static RwLock<HashMap<String, RouterRoute>> {
@@ -48,12 +49,31 @@ fn router_routes() -> &'static RwLock<HashMap<String, RouterRoute>> {
 /// Teaches the router where one gateway actually lives. Keyed by the gateway id that prefixes
 /// routed model names, so two vendors may offer the same model id without colliding.
 pub(crate) fn register_router_route(gateway_id: &str, base_url: &str, bearer_token: &str, sanitize: bool) {
+    register_protocol_route(gateway_id, base_url, bearer_token, sanitize, crate::providers::Protocol::Responses);
+}
+
+pub(crate) fn register_protocol_route(gateway_id: &str, base_url: &str, bearer_token: &str, sanitize: bool, protocol: crate::providers::Protocol) {
+    let protocol = if gateway_id == "openrouter" { protocol } else { crate::providers::Protocol::Responses };
     if let Ok(mut map) = router_routes().write() {
         map.insert(
             gateway_id.to_string(),
-            RouterRoute { base_url: base_url.to_string(), bearer_token: bearer_token.to_string(), sanitize },
+            RouterRoute { base_url: base_url.to_string(), bearer_token: bearer_token.to_string(), sanitize, protocol },
         );
     }
+}
+
+/// Revoke a shared-provider route, not the separate legacy provider map.
+/// Enterprise callers serialize publication and revocation with their gate lock.
+pub(crate) fn unregister_router_route(gateway_id: &str) {
+    if let Ok(mut map) = router_routes().write() {
+        map.remove(gateway_id);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn router_route_matches(gateway_id: &str, base_url: &str, bearer_token: &str) -> bool {
+    router_routes().read().unwrap().get(gateway_id)
+        .is_some_and(|route| route.base_url == base_url && route.bearer_token == bearer_token && !route.sanitize)
 }
 
 /// The base URL Codex should use for the shared provider: `<loopback>/<ROUTER_ID>`.
@@ -368,6 +388,7 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
                 body,
                 false,
                 false,
+                false,
             )
         }
     };
@@ -384,7 +405,347 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
         sanitize(&payload),
         false,
         false,
+        false,
     )
+}
+
+/// Converts the Responses request Codex emits into OpenRouter's Chat Completions request.
+/// The local wire stays Responses; only the selected OpenRouter upstream uses this translation.
+fn responses_to_chat(parsed: &Value) -> Value {
+    let mut chat = serde_json::Map::new();
+    for key in ["model", "temperature", "top_p", "max_output_tokens", "stream", "parallel_tool_calls"] {
+        if let Some(value) = parsed.get(key) {
+            chat.insert(if key == "max_output_tokens" { "max_tokens" } else { key }.to_string(), value.clone());
+        }
+    }
+    let mut messages = Vec::new();
+    if let Some(instructions) = parsed.get("instructions").and_then(Value::as_str) {
+        messages.push(json!({"role":"system", "content":instructions}));
+    }
+    for item in parsed.get("input").and_then(Value::as_array).into_iter().flatten() {
+        match item.get("type").and_then(Value::as_str).unwrap_or("message") {
+            "message" => {
+                let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
+                let content = item.get("content").cloned().unwrap_or(Value::String(String::new()));
+                let content = if let Some(parts) = content.as_array() {
+                    Value::Array(parts.iter().filter_map(|part| {
+                        let text = part.get("text").and_then(Value::as_str)?;
+                        Some(json!({"type":"text", "text":text}))
+                    }).collect())
+                } else { content };
+                messages.push(json!({"role":role, "content":content}));
+            }
+            "function_call" => messages.push(json!({
+                "role":"assistant", "tool_calls":[{"id":item.get("call_id").and_then(Value::as_str).unwrap_or("call"),
+                "type":"function", "function":{"name":item.get("name").and_then(Value::as_str).unwrap_or(""),
+                "arguments":item.get("arguments").and_then(Value::as_str).unwrap_or("{}")}}]
+            })),
+            "function_call_output" => messages.push(json!({"role":"tool",
+                "tool_call_id":item.get("call_id").and_then(Value::as_str).unwrap_or("call"),
+                "content":item.get("output").and_then(Value::as_str).unwrap_or("")})),
+            _ => {}
+        }
+    }
+    chat.insert("messages".to_string(), Value::Array(messages));
+    if let Some(tools) = parsed.get("tools").and_then(Value::as_array) {
+        let tools: Vec<Value> = tools.iter().filter_map(|tool| {
+            if tool.get("type").and_then(Value::as_str) != Some("function") { return None; }
+            Some(json!({"type":"function", "function":{"name":tool.get("name"),
+                "description":tool.get("description"), "parameters":tool.get("parameters")}}))
+        }).collect();
+        if !tools.is_empty() { chat.insert("tools".to_string(), Value::Array(tools)); }
+    }
+    Value::Object(chat)
+}
+
+/// One assistant turn item, in the shape the Responses API returns. Text and each tool call become
+/// separate output items, exactly as the native Responses backend emits them.
+fn chat_output_items(message: &Value) -> Vec<Value> {
+    let mut output = Vec::new();
+    if let Some(text) = message.get("content").and_then(Value::as_str).filter(|text| !text.is_empty()) {
+        output.push(json!({"id":format!("msg_{}", CHAT_ITEM_SEQ.fetch_add(1, Ordering::Relaxed)), "type":"message", "role":"assistant",
+            "status":"completed", "content":[{"type":"output_text", "text":text, "annotations":[]}]}));
+    }
+    for call in message.get("tool_calls").and_then(Value::as_array).into_iter().flatten() {
+        let function = call.get("function").cloned().unwrap_or(Value::Null);
+        output.push(json!({"id":format!("fc_{}", CHAT_ITEM_SEQ.fetch_add(1, Ordering::Relaxed)), "type":"function_call", "status":"completed",
+            "call_id":call.get("id").and_then(Value::as_str).unwrap_or("call"),
+            "name":function.get("name").and_then(Value::as_str).unwrap_or(""),
+            "arguments":function.get("arguments").and_then(Value::as_str).unwrap_or("{}")}));
+    }
+    output
+}
+
+/// Maps Chat Completions token counts onto the Responses `usage` names.
+fn chat_usage(usage: &Value) -> Value {
+    if !usage.is_object() {
+        return Value::Null;
+    }
+    json!({
+        "input_tokens": usage.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(0),
+        "output_tokens": usage.get("completion_tokens").and_then(Value::as_u64).unwrap_or(0),
+        "total_tokens": usage.get("total_tokens").and_then(Value::as_u64).unwrap_or(0),
+    })
+}
+
+fn chat_response_shell(id: &str, status: &str) -> Value {
+    json!({"id":id, "object":"response", "status":status, "error":Value::Null, "output":[],
+        "model":Value::Null, "usage":Value::Null})
+}
+
+/// Converts a complete (non-streaming) Chat Completions answer into the Responses object Codex
+/// consumes. `finish_reason` decides the terminal status so a length-capped turn is not reported
+/// as a completed one.
+fn chat_to_responses(value: &Value) -> Value {
+    let id = value.get("id").and_then(Value::as_str).unwrap_or("chatcmpl");
+    let choice = value
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .cloned()
+        .unwrap_or(Value::Null);
+    let status = match choice.get("finish_reason").and_then(Value::as_str) {
+        Some("length") => "incomplete",
+        Some("content_filter") => "failed",
+        _ => "completed",
+    };
+    let mut response = chat_response_shell(id, status);
+    response["output"] = Value::Array(chat_output_items(&choice.get("message").cloned().unwrap_or(Value::Null)));
+    response["usage"] = chat_usage(&value.get("usage").cloned().unwrap_or(Value::Null));
+    if status == "incomplete" {
+        response["incomplete_details"] = json!({"reason":"max_output_tokens"});
+    }
+    response
+}
+
+/// A monotonically increasing suffix for synthesized item ids. Codex keys replayed history on these,
+/// so they must not collide across turns within one process.
+static CHAT_ITEM_SEQ: AtomicU32 = AtomicU32::new(0);
+
+/// Stateful Chat Completions SSE → Responses SSE translation.
+///
+/// Codex reads a strict event sequence: `response.created`, then per item
+/// `output_item.added` → deltas → `*.done` → `output_item.done`, then `response.completed`. Emitting
+/// only deltas leaves the engine waiting for items it never sees, so every item is opened and closed
+/// here. Chunk boundaries are arbitrary: a frame split across two reads is buffered until its
+/// terminating blank line arrives.
+struct ChatResponsesStream {
+    id: String,
+    buffer: Vec<u8>,
+    sequence: u64,
+    started: bool,
+    /// Open message item: (output index, item id, accumulated text).
+    text: Option<(usize, String, String)>,
+    /// Open tool calls keyed by the Chat Completions `index`: (output index, item id, call id, name, arguments).
+    calls: HashMap<usize, (usize, String, String, String, String)>,
+    next_index: usize,
+    usage: Value,
+    finish_reason: Option<String>,
+    done: bool,
+}
+
+impl ChatResponsesStream {
+    fn new() -> Self {
+        Self {
+            id: format!("resp_{}", CHAT_ITEM_SEQ.fetch_add(1, Ordering::Relaxed)),
+            buffer: Vec::new(),
+            sequence: 0,
+            started: false,
+            text: None,
+            calls: HashMap::new(),
+            next_index: 0,
+            usage: Value::Null,
+            finish_reason: None,
+            done: false,
+        }
+    }
+
+    fn event(&mut self, kind: &str, mut body: Value) -> Vec<u8> {
+        body["type"] = json!(kind);
+        body["sequence_number"] = json!(self.sequence);
+        self.sequence += 1;
+        format!("event: {kind}\ndata: {}\n\n", body).into_bytes()
+    }
+
+    fn take_index(&mut self) -> usize {
+        let index = self.next_index;
+        self.next_index += 1;
+        index
+    }
+
+    /// Closes the open message item, if any. Called before a tool call opens and at end of stream so
+    /// items never interleave.
+    fn close_text(&mut self, out: &mut Vec<u8>) {
+        let Some((index, item_id, text)) = self.text.take() else { return };
+        let content = json!([{"type":"output_text", "text":text, "annotations":[]}]);
+        out.extend(self.event(
+            "response.output_text.done",
+            json!({"item_id":item_id, "output_index":index, "content_index":0, "text":text}),
+        ));
+        out.extend(self.event(
+            "response.content_part.done",
+            json!({"item_id":item_id, "output_index":index, "content_index":0,
+                "part":{"type":"output_text", "text":text, "annotations":[]}}),
+        ));
+        out.extend(self.event(
+            "response.output_item.done",
+            json!({"output_index":index, "item":{"id":item_id, "type":"message", "role":"assistant",
+                "status":"completed", "content":content}}),
+        ));
+    }
+
+    fn close_calls(&mut self, out: &mut Vec<u8>) {
+        let mut open: Vec<(usize, (usize, String, String, String, String))> = self.calls.drain().collect();
+        open.sort_by_key(|(chat_index, _)| *chat_index);
+        for (_, (index, item_id, call_id, name, arguments)) in open {
+            out.extend(self.event(
+                "response.function_call_arguments.done",
+                json!({"item_id":item_id, "output_index":index, "arguments":arguments}),
+            ));
+            out.extend(self.event(
+                "response.output_item.done",
+                json!({"output_index":index, "item":{"id":item_id, "type":"function_call",
+                    "status":"completed", "call_id":call_id, "name":name, "arguments":arguments}}),
+            ));
+        }
+    }
+
+    fn complete(&mut self, out: &mut Vec<u8>) {
+        if self.done {
+            return;
+        }
+        self.done = true;
+        self.close_text(out);
+        self.close_calls(out);
+        let status = match self.finish_reason.as_deref() {
+            Some("length") => "incomplete",
+            Some("content_filter") => "failed",
+            _ => "completed",
+        };
+        let mut response = chat_response_shell(&self.id, status);
+        response["usage"] = self.usage.clone();
+        if status == "incomplete" {
+            response["incomplete_details"] = json!({"reason":"max_output_tokens"});
+        }
+        out.extend(self.event("response.completed", json!({"response":response})));
+    }
+
+    fn chunk(&mut self, value: &Value, out: &mut Vec<u8>) {
+        if !self.started {
+            self.started = true;
+            if let Some(id) = value.get("id").and_then(Value::as_str) {
+                self.id = id.to_string();
+            }
+            out.extend(self.event(
+                "response.created",
+                json!({"response":chat_response_shell(&self.id, "in_progress")}),
+            ));
+        }
+        if let Some(usage) = value.get("usage").filter(|usage| usage.is_object()) {
+            self.usage = chat_usage(usage);
+        }
+        let Some(choice) = value.get("choices").and_then(Value::as_array).and_then(|choices| choices.first()) else {
+            return;
+        };
+        if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
+            self.finish_reason = Some(reason.to_string());
+        }
+        let delta = choice.get("delta").cloned().unwrap_or(Value::Null);
+        if let Some(text) = delta.get("content").and_then(Value::as_str).filter(|text| !text.is_empty()) {
+            if self.text.is_none() {
+                let index = self.take_index();
+                let item_id = format!("msg_{}", CHAT_ITEM_SEQ.fetch_add(1, Ordering::Relaxed));
+                out.extend(self.event(
+                    "response.output_item.added",
+                    json!({"output_index":index, "item":{"id":item_id, "type":"message",
+                        "role":"assistant", "status":"in_progress", "content":[]}}),
+                ));
+                out.extend(self.event(
+                    "response.content_part.added",
+                    json!({"item_id":item_id, "output_index":index, "content_index":0,
+                        "part":{"type":"output_text", "text":"", "annotations":[]}}),
+                ));
+                self.text = Some((index, item_id, String::new()));
+            }
+            if let Some((index, item_id, accumulated)) = self.text.as_mut() {
+                accumulated.push_str(text);
+                let (index, item_id) = (*index, item_id.clone());
+                out.extend(self.event(
+                    "response.output_text.delta",
+                    json!({"item_id":item_id, "output_index":index, "content_index":0, "delta":text}),
+                ));
+            }
+        }
+        for call in delta.get("tool_calls").and_then(Value::as_array).into_iter().flatten() {
+            let chat_index = call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let function = call.get("function").cloned().unwrap_or(Value::Null);
+            if !self.calls.contains_key(&chat_index) {
+                // A tool call ends any open text item: the two must not share an output index.
+                self.close_text(out);
+                let index = self.take_index();
+                let item_id = format!("fc_{}", CHAT_ITEM_SEQ.fetch_add(1, Ordering::Relaxed));
+                let call_id = call.get("id").and_then(Value::as_str).unwrap_or("call").to_string();
+                let name = function.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+                out.extend(self.event(
+                    "response.output_item.added",
+                    json!({"output_index":index, "item":{"id":item_id, "type":"function_call",
+                        "status":"in_progress", "call_id":call_id, "name":name, "arguments":""}}),
+                ));
+                self.calls.insert(chat_index, (index, item_id, call_id, name, String::new()));
+            }
+            let Some((index, item_id, call_id, name, arguments)) = self.calls.get_mut(&chat_index) else { continue };
+            if let Some(id) = call.get("id").and_then(Value::as_str) {
+                *call_id = id.to_string();
+            }
+            if let Some(part) = function.get("name").and_then(Value::as_str) {
+                name.push_str(part);
+            }
+            if let Some(part) = function.get("arguments").and_then(Value::as_str).filter(|part| !part.is_empty()) {
+                arguments.push_str(part);
+                let (index, item_id) = (*index, item_id.clone());
+                out.extend(self.event(
+                    "response.function_call_arguments.delta",
+                    json!({"item_id":item_id, "output_index":index, "delta":part}),
+                ));
+            }
+        }
+    }
+
+    /// Feeds raw upstream bytes; returns the Responses SSE bytes ready to write downstream.
+    fn translate(&mut self, bytes: &[u8]) -> Vec<u8> {
+        self.buffer.extend_from_slice(bytes);
+        let mut out = Vec::new();
+        while let Some(end) = self.buffer.windows(2).position(|pair| pair == b"\n\n") {
+            let frame = self.buffer.drain(..end + 2).collect::<Vec<_>>();
+            let text = String::from_utf8_lossy(&frame);
+            let Some(data) = text.lines().find_map(|line| line.trim().strip_prefix("data:")) else { continue };
+            let data = data.trim();
+            if data == "[DONE]" {
+                self.complete(&mut out);
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<Value>(data) else { continue };
+            // An in-band error frame must reach Codex as an error, not as an empty completed turn.
+            if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
+                out.extend(self.event("response.failed", json!({"response":{
+                    "id":self.id, "object":"response", "status":"failed",
+                    "error":{"code":error.get("code").cloned().unwrap_or(json!("upstream_error")),
+                        "message":error.get("message").cloned().unwrap_or(json!("upstream error"))}}})));
+                self.done = true;
+                continue;
+            }
+            self.chunk(&value, &mut out);
+        }
+        out
+    }
+
+    /// Upstream closed without `[DONE]`. Close whatever is open so the turn terminates instead of
+    /// leaving Codex waiting on an item that never finishes.
+    fn finish(&mut self) -> Vec<u8> {
+        let mut out = Vec::new();
+        self.complete(&mut out);
+        out
+    }
 }
 
 /// POST /<router>/responses: pick the vendor from the model name, then forward as that vendor.
@@ -425,7 +786,9 @@ fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
             log::info!("bridge: inlined {expanded} tool schema $ref(s) the qwen endpoint cannot parse");
         }
     }
-    let Ok(payload) = serde_json::to_vec(&parsed) else {
+    let chat_protocol = route.protocol == crate::providers::Protocol::ChatCompletions;
+    let upstream_payload = if chat_protocol { responses_to_chat(&parsed) } else { parsed };
+    let Ok(payload) = serde_json::to_vec(&upstream_payload) else {
         return respond(request, 500, "application/json", br#"{"error":{"message":"router: encode failed"}}"#);
     };
     let payload = if route.sanitize { sanitize(&payload) } else { payload };
@@ -433,7 +796,7 @@ fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
     relay(
         request,
         &selection,
-        &upstream_endpoint(&route.base_url, "responses"),
+        &upstream_endpoint(&route.base_url, if chat_protocol { "chat/completions" } else { "responses" }),
         Some(&authorization),
         &[],
         payload,
@@ -444,6 +807,7 @@ fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
         // Only OpenRouter documents this 429 / error.code=10000 pair. Other gateway 429s must
         // retain their own error handling and are never swallowed by this preference.
         gateway == "openrouter",
+        chat_protocol,
     )
 }
 
@@ -497,6 +861,7 @@ fn forward_chatgpt(request: tiny_http::Request, parsed: &Value) -> Result<(), St
         // The only route whose backend speaks `server_is_overloaded`. Read the mute switch per
         // request so a settings change applies without restarting the engine.
         true,
+        false,
         false,
     )
 }
@@ -984,6 +1349,7 @@ fn relay(
     payload: Vec<u8>,
     watch_stall: bool,
     watch_openrouter_errors: bool,
+    chat_protocol: bool,
 ) -> Result<(), String> {
     let client = reqwest::blocking::Client::builder()
         // A route that silently swallows packets would otherwise hold the connect until the OS
@@ -1102,6 +1468,18 @@ fn relay(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("text/event-stream")
         .to_string();
+    // A Chat Completions upstream answers in its own dialect — either one JSON object or
+    // `chat.completion.chunk` SSE frames. Codex only reads Responses, so the selected OpenRouter
+    // route is translated on the way back, not merely pointed at a different path.
+    if chat_protocol && !content_type.contains("text/event-stream") {
+        let body = response.bytes().map_err(|error| format!("upstream body: {error}"))?;
+        let translated = match serde_json::from_slice::<Value>(&body) {
+            Ok(value) => serde_json::to_vec(&chat_to_responses(&value)).unwrap_or_else(|_| body.to_vec()),
+            Err(_) => body.to_vec(),
+        };
+        return respond(request, status, "application/json", &translated);
+    }
+    let content_type = if chat_protocol { "text/event-stream".to_string() } else { content_type };
     // Stream: hand the reader to tiny_http; it writes bytes as the upstream produces them.
     let response_headers = vec![
         tiny_http::Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes()).unwrap(),
@@ -1147,14 +1525,37 @@ fn relay(
         // (and the UI) see the refusal exactly as before.
         let mut head: Vec<u8> = Vec::new();
         let mut sent_any = false;
+        // Only the OpenRouter Chat Completions route needs dialect translation; every other route
+        // keeps forwarding the upstream bytes untouched.
+        let mut translator = if chat_protocol { Some(ChatResponsesStream::new()) } else { None };
+        // `data` is what the mute/replay inspection sees; `outgoing` is what actually goes downstream.
+        let emit = |tx: &std::sync::mpsc::SyncSender<StreamChunk>,
+                        translator: &mut Option<ChatResponsesStream>,
+                        data: Vec<u8>|
+         -> bool {
+            let Some(translator) = translator.as_mut() else {
+                return tx.send(StreamChunk::Data(data)).is_ok();
+            };
+            let translated = translator.translate(&data);
+            if translated.is_empty() {
+                return true;
+            }
+            tx.send(StreamChunk::Data(translated)).is_ok()
+        };
         loop {
             if upstream_stop.load(Ordering::Relaxed) {
                 break;
             }
             match upstream.read(&mut chunk) {
                 Ok(0) => {
-                    if !head.is_empty() && tx.send(StreamChunk::Data(std::mem::take(&mut head))).is_err() {
+                    if !head.is_empty() && !emit(&tx, &mut translator, std::mem::take(&mut head)) {
                         break;
+                    }
+                    if let Some(translator) = translator.as_mut() {
+                        let tail = translator.finish();
+                        if !tail.is_empty() && tx.send(StreamChunk::Data(tail)).is_err() {
+                            break;
+                        }
                     }
                     let _ = tx.send(StreamChunk::End);
                     break;
@@ -1211,7 +1612,7 @@ fn relay(
                     } else {
                         std::mem::take(&mut head)
                     };
-                    if tx.send(StreamChunk::Data(data)).is_err() {
+                    if !emit(&tx, &mut translator, data) {
                         break;
                     }
                     sent_any = true;
@@ -1333,6 +1734,51 @@ fn sanitize(body: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn enterprise_router_forwards_to_native_relay_and_revokes_shared_not_legacy_route() {
+        use super::*;
+        // Same logical ID encoding used by enterprise catalog/model selection.
+        let gateway = "custom-637573746f6d5f616c776974685f656e74657270726973655f687474705f74657374";
+        let upstream = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let upstream_addr = upstream.server_addr().to_ip().unwrap();
+        register_route(gateway, "http://legacy.invalid");
+        register_router_route(gateway, &format!("http://{upstream_addr}/v1"), "native-relay-secret", false);
+        let relay = std::thread::spawn(move || {
+            let mut request = upstream.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+            assert_eq!(request.url(), "/v1/responses");
+            assert!(request.headers().iter().any(|header| header.field.equiv("Authorization") && header.value.as_str() == "Bearer native-relay-secret"));
+            let mut body = String::new();
+            request.as_reader().read_to_string(&mut body).unwrap();
+            let body: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(body["model"], "issued/model");
+            assert_eq!(body["input"][0]["content"][0]["text"], "kept");
+            request.respond(tiny_http::Response::from_string("relay-ok").with_status_code(202)).unwrap();
+        });
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let address = server.server_addr().to_ip().unwrap();
+        let client = std::thread::spawn(move || {
+            reqwest::blocking::Client::new().post(format!("http://{address}/alwith/responses"))
+                .bearer_auth("alwith-router")
+                .json(&serde_json::json!({"model":format!("{gateway}/issued/model"),"input":[{"type":"reasoning","content":[{"text":"kept"}]}]}))
+                .send().unwrap()
+        });
+        handle(server.recv_timeout(Duration::from_secs(5)).unwrap().unwrap()).unwrap();
+        let response = client.join().unwrap();
+        assert_eq!(response.status().as_u16(), 202);
+        assert_eq!(response.text().unwrap(), "relay-ok");
+        relay.join().unwrap();
+        unregister_router_route(gateway);
+        assert!(!router_routes().read().unwrap().contains_key(gateway));
+        assert!(routes().read().unwrap().contains_key(gateway));
+        let rejected = std::thread::spawn(move || {
+            reqwest::blocking::Client::new().post(format!("http://{address}/alwith/responses"))
+                .json(&serde_json::json!({"model":format!("{gateway}/issued/model")}))
+                .send().unwrap().status().as_u16()
+        });
+        handle(server.recv_timeout(Duration::from_secs(5)).unwrap().unwrap()).unwrap();
+        assert_eq!(rejected.join().unwrap(), 404, "legacy registration must not bypass shared-route revocation");
+        unregister_route(gateway);
+    }
     use super::*;
 
     #[test]
@@ -1438,6 +1884,221 @@ mod tests {
     fn endpoint_join_trims_both_sides() {
         assert_eq!(upstream_endpoint("https://api.example.com", "responses"), "https://api.example.com/responses");
         assert_eq!(upstream_endpoint("https://api.example.com///", "/responses"), "https://api.example.com/responses");
+    }
+
+    /// Collects the `event:` names a translation emitted, in order.
+    fn event_names(bytes: &[u8]) -> Vec<String> {
+        String::from_utf8_lossy(bytes)
+            .lines()
+            .filter_map(|line| line.strip_prefix("event: ").map(str::to_string))
+            .collect()
+    }
+
+    fn event_payloads(bytes: &[u8]) -> Vec<Value> {
+        String::from_utf8_lossy(bytes)
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+            .collect()
+    }
+
+    #[test]
+    fn responses_request_becomes_a_chat_request_with_history_and_tools() {
+        let request = json!({
+            "model": "vendor/model:free",
+            "instructions": "be brief",
+            "max_output_tokens": 256,
+            "stream": true,
+            "input": [
+                {"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
+                {"type":"reasoning","id":"r1","summary":[],"encrypted_content":"enc"},
+                {"type":"function_call","call_id":"c1","name":"shell","arguments":"{\"cmd\":\"ls\"}"},
+                {"type":"function_call_output","call_id":"c1","output":"file.txt"}
+            ],
+            "tools": [{"type":"function","name":"shell","description":"run","parameters":{"type":"object"}},
+                      {"type":"web_search"}]
+        });
+        let chat = responses_to_chat(&request);
+        assert_eq!(chat["model"], "vendor/model:free");
+        assert_eq!(chat["max_tokens"], 256, "the token cap is renamed, not dropped");
+        assert!(chat.get("max_output_tokens").is_none());
+        assert!(chat.get("instructions").is_none(), "instructions become a system message");
+        let messages = chat["messages"].as_array().unwrap();
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[0]["content"], "be brief");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"][0]["text"], "hi");
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "c1");
+        assert_eq!(messages[2]["tool_calls"][0]["function"]["name"], "shell");
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "c1");
+        assert_eq!(messages[3]["content"], "file.txt");
+        assert_eq!(messages.len(), 4, "reasoning items have no chat equivalent and are skipped");
+        let tools = chat["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1, "only function tools survive");
+        assert_eq!(tools[0]["function"]["name"], "shell");
+        assert_eq!(tools[0]["function"]["parameters"]["type"], "object");
+    }
+
+    #[test]
+    fn a_chat_answer_becomes_responses_output_items_and_usage() {
+        let answer = json!({
+            "id": "chatcmpl-7",
+            "choices": [{"finish_reason":"tool_calls","message":{"content":"looking",
+                "tool_calls":[{"id":"call_9","type":"function","function":{"name":"shell","arguments":"{}"}}]}}],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 5, "total_tokens": 16}
+        });
+        let response = chat_to_responses(&answer);
+        assert_eq!(response["object"], "response");
+        assert_eq!(response["id"], "chatcmpl-7");
+        assert_eq!(response["status"], "completed");
+        let output = response["output"].as_array().unwrap();
+        assert_eq!(output[0]["type"], "message");
+        assert_eq!(output[0]["content"][0]["type"], "output_text");
+        assert_eq!(output[0]["content"][0]["text"], "looking");
+        assert_eq!(output[1]["type"], "function_call");
+        assert_eq!(output[1]["call_id"], "call_9");
+        assert_eq!(output[1]["name"], "shell");
+        assert_eq!(response["usage"]["input_tokens"], 11);
+        assert_eq!(response["usage"]["output_tokens"], 5);
+    }
+
+    #[test]
+    fn a_length_capped_chat_answer_is_not_reported_as_completed() {
+        let answer = json!({"id":"c","choices":[{"finish_reason":"length","message":{"content":"half"}}]});
+        let response = chat_to_responses(&answer);
+        assert_eq!(response["status"], "incomplete");
+        assert_eq!(response["incomplete_details"]["reason"], "max_output_tokens");
+    }
+
+    #[test]
+    fn a_chat_stream_emits_the_full_responses_item_lifecycle() {
+        let mut stream = ChatResponsesStream::new();
+        let mut out = stream.translate(
+            br#"data: {"id":"chatcmpl-1","choices":[{"delta":{"role":"assistant","content":"Hel"}}]}
+
+data: {"choices":[{"delta":{"content":"lo"},"finish_reason":null}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}
+
+data: [DONE]
+
+"#,
+        );
+        out.extend(stream.finish());
+        assert_eq!(
+            event_names(&out),
+            vec![
+                "response.created",
+                "response.output_item.added",
+                "response.content_part.added",
+                "response.output_text.delta",
+                "response.output_text.delta",
+                "response.output_text.done",
+                "response.content_part.done",
+                "response.output_item.done",
+                "response.completed",
+            ]
+        );
+        let payloads = event_payloads(&out);
+        let text: String = payloads
+            .iter()
+            .filter(|value| value["type"] == "response.output_text.delta")
+            .map(|value| value["delta"].as_str().unwrap())
+            .collect();
+        assert_eq!(text, "Hello");
+        let done = payloads.iter().find(|value| value["type"] == "response.output_text.done").unwrap();
+        assert_eq!(done["text"], "Hello", "the done event carries the accumulated text");
+        let completed = payloads.last().unwrap();
+        assert_eq!(completed["response"]["status"], "completed");
+        assert_eq!(completed["response"]["usage"]["input_tokens"], 3);
+        // Every event is numbered so the engine can detect a gap.
+        let numbers: Vec<u64> = payloads.iter().map(|value| value["sequence_number"].as_u64().unwrap()).collect();
+        assert_eq!(numbers, (0..numbers.len() as u64).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_frame_split_across_reads_is_buffered_until_it_is_complete() {
+        let mut stream = ChatResponsesStream::new();
+        let frame = "data: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\"split\"}}]}\n\n";
+        // Cut mid-JSON: the first read must produce nothing rather than a parse failure.
+        let first = stream.translate(&frame.as_bytes()[..24]);
+        assert!(first.is_empty(), "a partial frame must not emit a half event");
+        let mut out = stream.translate(&frame.as_bytes()[24..]);
+        out.extend(stream.finish());
+        let payloads = event_payloads(&out);
+        let text: String = payloads
+            .iter()
+            .filter(|value| value["type"] == "response.output_text.delta")
+            .map(|value| value["delta"].as_str().unwrap())
+            .collect();
+        assert_eq!(text, "split");
+        assert_eq!(payloads.last().unwrap()["type"], "response.completed");
+    }
+
+    #[test]
+    fn streamed_tool_arguments_are_reassembled_and_the_text_item_is_closed_first() {
+        let mut stream = ChatResponsesStream::new();
+        let mut out = stream.translate(
+            br#"data: {"id":"c","choices":[{"delta":{"content":"ok"}}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"shell","arguments":"{\"cm"}}]}}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"d\":\"ls\"}"}}]}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+"#,
+        );
+        out.extend(stream.finish());
+        let names = event_names(&out);
+        let text_done = names.iter().position(|name| name == "response.output_item.done").unwrap();
+        let call_added = names.iter().position(|name| name == "response.output_item.added" ).unwrap();
+        assert!(text_done > call_added, "the message item closes before the call item opens");
+        let payloads = event_payloads(&out);
+        let arguments: String = payloads
+            .iter()
+            .filter(|value| value["type"] == "response.function_call_arguments.delta")
+            .map(|value| value["delta"].as_str().unwrap())
+            .collect();
+        assert_eq!(arguments, "{\"cmd\":\"ls\"}");
+        let call_done = payloads
+            .iter()
+            .filter(|value| value["type"] == "response.output_item.done")
+            .last()
+            .unwrap();
+        assert_eq!(call_done["item"]["type"], "function_call");
+        assert_eq!(call_done["item"]["call_id"], "call_1");
+        assert_eq!(call_done["item"]["arguments"], "{\"cmd\":\"ls\"}");
+        // Distinct output indices: two items must never share one.
+        let indices: Vec<u64> = payloads
+            .iter()
+            .filter(|value| value["type"] == "response.output_item.added")
+            .map(|value| value["output_index"].as_u64().unwrap())
+            .collect();
+        assert_eq!(indices, vec![0, 1]);
+    }
+
+    #[test]
+    fn an_upstream_that_never_sends_done_still_terminates_the_turn() {
+        let mut stream = ChatResponsesStream::new();
+        let mut out = stream.translate(b"data: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n");
+        out.extend(stream.finish());
+        assert_eq!(event_names(&out).last().unwrap(), "response.completed");
+        // A second finish must not emit a duplicate terminal event.
+        assert!(stream.finish().is_empty());
+    }
+
+    #[test]
+    fn an_in_band_chat_error_is_forwarded_as_a_failure_not_an_empty_answer() {
+        let mut stream = ChatResponsesStream::new();
+        let out = stream.translate(b"data: {\"error\":{\"code\":10000,\"message\":\"rate limited\"}}\n\n");
+        let payloads = event_payloads(&out);
+        assert_eq!(payloads.last().unwrap()["type"], "response.failed");
+        assert_eq!(payloads.last().unwrap()["response"]["error"]["message"], "rate limited");
+        assert!(stream.finish().is_empty(), "a failed turn is not also completed");
     }
 
     #[test]
@@ -1890,6 +2551,7 @@ mod tests {
             b"{}".to_vec(),
             true,
             false,
+            false,
         );
         set_overload_mute(previous);
         let body = client_thread.join().unwrap();
@@ -1964,6 +2626,7 @@ mod tests {
             &[],
             b"{}".to_vec(),
             true,
+            false,
             false,
         );
         set_overload_mute(previous);
@@ -2041,6 +2704,7 @@ mod tests {
             // OpenRouter 429/10000 contract.
             false,
             true,
+            false,
         );
         set_overload_429_mute(previous);
         let body = client_thread.join().unwrap();

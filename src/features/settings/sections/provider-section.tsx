@@ -70,11 +70,19 @@ import {
 } from "@/lib/model-fast-mode"
 import { describeError } from "@/lib/error-text"
 import { openExternal } from "@/lib/open"
-import { FREE_MODEL_WATCH_SETTING } from "@/features/providers/free-model-watch"
 import {
-  overload429ReminderEnabled,
-  setOverload429ReminderEnabled,
-  subscribeOverload429ReminderEnabled
+  acknowledgeFreeModels,
+  FREE_MODEL_WATCH_SETTING,
+  getCachedFreeModels,
+  getNewFreeModelIds,
+  getPendingNewFreeModelIds,
+  isFreeModelId,
+  subscribeFreeModels
+} from "@/features/providers/free-model-watch"
+import {
+  overload429ReminderDisabled,
+  setOverload429ReminderDisabled,
+  subscribeOverload429ReminderDisabled
 } from "@/lib/overload-429-settings"
 import { useSettingsNativeModels } from "@/lib/settings-bridge"
 import { useBooleanSetting } from "@/lib/use-boolean-setting"
@@ -233,9 +241,16 @@ function providerIdForModel(model: string | null): string | null {
   return PROVIDERS.find((provider) => provider.native === true)?.id ?? null
 }
 
-export function ProviderSection() {
+export function ProviderSection({ initialProviderId }: { initialProviderId?: string } = {}) {
   const { t } = useTranslation()
   const snapshot = useProviders()
+  const cachedFreeModels = useSyncExternalStore(subscribeFreeModels, getCachedFreeModels, getCachedFreeModels)
+  const newFreeModelIds = useSyncExternalStore(subscribeFreeModels, getNewFreeModelIds, getNewFreeModelIds)
+  const pendingFreeModelIds = useSyncExternalStore(
+    subscribeFreeModels,
+    getPendingNewFreeModelIds,
+    getPendingNewFreeModelIds
+  )
   // OpenAI's model list starts from the engine's own catalog (bridge-published), not a bundled
   // resource: the deployed engine version decides which GPT models exist.
   const nativeModels = useSettingsNativeModels()
@@ -258,6 +273,10 @@ export function ProviderSection() {
       // Storage is best effort; the in-memory selection still works.
     }
   }, [])
+  useEffect(() => {
+    if (initialProviderId !== undefined && initialProviderId !== "") setActiveId(initialProviderId)
+  }, [initialProviderId, setActiveId])
+
   const [customDraftVersion, setCustomDraftVersion] = useState(0)
   const [testResults, setTestResults] = useState<Record<string, ProviderTestResult>>({})
 
@@ -484,7 +503,21 @@ export function ProviderSection() {
                   saved={keys[provider.id] ?? null}
                   revision={snapshot.revision}
                   busy={busy !== null}
-                  models={providerRowModels(snapshot, provider, nativeModels)}
+                  models={
+                    provider.id === "openrouter"
+                      ? mergeDiscoveredModels(
+                          providerRowModels(snapshot, provider, nativeModels),
+                          cachedFreeModels.map((model) => ({
+                            label: typeof model.name === "string" && model.name !== "" ? model.name : model.id,
+                            api_id: model.id,
+                            ...(typeof model.context_length === "number" && model.context_length > 0
+                              ? { contextWindow: model.context_length }
+                              : {}),
+                            enabled: false
+                          }))
+                        ).models
+                      : providerRowModels(snapshot, provider, nativeModels)
+                  }
                   retired={
                     provider.native === true
                       ? retiredNativeRows(nativeModelOverrides(), nativeModels?.models ?? [])
@@ -494,6 +527,11 @@ export function ProviderSection() {
                   onSaveModels={(revision, nextModels, reason) =>
                     saveBuiltIn(revision, provider, nextModels, reason)
                   }
+                  freeModelIds={provider.id === "openrouter" ? cachedFreeModels.map((model) => model.id) : []}
+                  newModelIds={provider.id === "openrouter" ? newFreeModelIds : []}
+                  pendingNewModelIds={provider.id === "openrouter" ? pendingFreeModelIds : []}
+                  active={activeId === provider.id}
+                  onDisplayedNewModels={(ids: readonly string[]) => acknowledgeFreeModels(ids)}
                   testResult={testResults[provider.id]}
                   onTest={() => test(provider.id)}
                 />
@@ -905,9 +943,14 @@ export function ProviderRow({
   revision,
   busy,
   models,
+  freeModelIds = [],
+  newModelIds = [],
+  pendingNewModelIds = [],
+  active = true,
   retired = [],
   onSave,
   onSaveModels,
+  onDisplayedNewModels,
   testResult,
   onTest,
   onDiscover = discoverProviderModels
@@ -920,11 +963,16 @@ export function ProviderRow({
   busy: boolean
   /** Effective catalog models for this built-in provider (bundled catalog merged with overrides). */
   models: CustomModel[]
-  /**
-   * Ids the provider no longer serves. They stay in the table — this list is what 保存模型 writes,
-   * so hiding a row here would delete it the next time the user saves — but they are marked 已下架
-   * and no picker offers them.
-   */
+  /** Public OpenRouter IDs confirmed free by the catalog. */
+  freeModelIds?: readonly string[]
+  /** Models added by a later public catalog check. */
+  newModelIds?: readonly string[]
+  /** Unacknowledged new-model notifications. */
+  pendingNewModelIds?: readonly string[]
+  /** This card's tab is currently visible. */
+  active?: boolean
+  /** A callback after the pending IDs have rendered in the visible table. */
+  onDisplayedNewModels?: (ids: readonly string[]) => void
   retired?: readonly string[]
   onSave: (revision: number, key: ProviderInput | null) => Promise<ProviderSnapshot | null>
   onSaveModels: (
@@ -945,6 +993,7 @@ export function ProviderRow({
   const [base, setBase] = useState({ saved, revision })
   const [region, setRegion] = useState(providerRegion(provider, saved?.region)?.id)
   const [baseUrl, setBaseUrl] = useState(saved?.base_url ?? "")
+  const [protocol, setProtocol] = useState<"responses" | "chatCompletions">(saved?.protocol ?? "responses")
   const [modelRows, setModelRows] = useState<ModelRow[]>(() => models.map(toModelRow))
   const [modelBase, setModelBase] = useState({ models, revision })
   const [modelsDirty, setModelsDirty] = useState(false)
@@ -962,10 +1011,10 @@ export function ProviderRow({
     overloadNoticeEnabled
   )
   const [freeWatch, setFreeWatch] = useBooleanSetting(FREE_MODEL_WATCH_SETTING)
-  const reminder429Value = useSyncExternalStore(
-    subscribeOverload429ReminderEnabled,
-    overload429ReminderEnabled,
-    overload429ReminderEnabled
+  const reminder429Disabled = useSyncExternalStore(
+    subscribeOverload429ReminderDisabled,
+    overload429ReminderDisabled,
+    overload429ReminderDisabled
   )
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedKeys, setSelectedKeys] = useState<ReadonlySet<string>>(() => new Set())
@@ -978,14 +1027,16 @@ export function ProviderRow({
   const keyUrl = providerKeyUrl(provider, region)
   const regionChanged = region !== providerRegion(provider, base.saved?.region)?.id
   const baseUrlChanged = baseUrl.trim() !== (base.saved?.base_url ?? "")
+  const protocolChanged = protocol !== (base.saved?.protocol ?? "responses")
   useEffect(() => {
-    if (revision > base.revision && keyTrimmed === "" && !regionChanged && !baseUrlChanged) {
+    if (revision > base.revision && keyTrimmed === "" && !regionChanged && !baseUrlChanged && !protocolChanged) {
       setBase({ saved, revision })
       setRegion(providerRegion(provider, saved?.region)?.id)
       setBaseUrl(saved?.base_url ?? "")
+      setProtocol(saved?.protocol ?? "responses")
     }
-  }, [revision, saved, provider, base.revision, keyTrimmed, regionChanged, baseUrlChanged])
-  const hasUnsaved = keyTrimmed !== "" || regionChanged || baseUrlChanged
+  }, [revision, saved, provider, base.revision, keyTrimmed, regionChanged, baseUrlChanged, protocolChanged])
+  const hasUnsaved = keyTrimmed !== "" || regionChanged || baseUrlChanged || protocolChanged
   const canSave = !busy && hasUnsaved
   const inputId = `${provider.id}-api-key`
 
@@ -1003,15 +1054,19 @@ export function ProviderRow({
   // `:free` is an OpenRouter tier. On other vendors the toggle can never match anything, so it
   // stays hidden instead of adding a dead control to every catalog.
   const showFreeFilter = provider.id === "openrouter"
+  const freeModelIdSet = useMemo(() => new Set(freeModelIds), [freeModelIds])
+  const newModelIdSet = useMemo(() => new Set(newModelIds), [newModelIds])
   const filteredRows = useMemo(() => {
     const query = modelFilter.trim().toLowerCase()
     return modelRows.filter((row) => {
       const id = row.api_id.toLowerCase()
-      if (showFreeFilter && freeOnly && !id.endsWith(":free")) return false
+      // The suffix is authoritative even before the public catalog has been fetched; the
+      // catalog-confirmed set additionally covers zero-priced models without a `:free` suffix.
+      if (showFreeFilter && freeOnly && !freeModelIdSet.has(row.api_id) && !isFreeModelId(row.api_id)) return false
       if (query === "") return true
       return row.label.toLowerCase().includes(query) || id.includes(query)
     })
-  }, [modelRows, modelFilter, freeOnly, showFreeFilter])
+  }, [modelRows, modelFilter, freeOnly, showFreeFilter, freeModelIdSet])
   // Reordering a filtered view would reorder hidden rows too, so the drag handle is inert while
   // a filter is active; the saved array is always what gets persisted.
   const filtering = modelFilter.trim() !== "" || (showFreeFilter && freeOnly)
@@ -1084,6 +1139,22 @@ export function ProviderRow({
     // set kept "Save models" lit after a successful save.
     setModelsDirty(false)
   }, [revision, models, modelBase.revision])
+
+  useEffect(() => {
+    if (provider.id !== "openrouter") return
+    setModelRows((rows) => {
+      const known = new Set(rows.map((row) => row.api_id))
+      const additions = models.filter((model) => !known.has(model.api_id))
+      return additions.length === 0 ? rows : [...rows, ...additions.map(toModelRow)]
+    })
+  }, [provider.id, models])
+
+  useEffect(() => {
+    if (!active || pendingNewModelIds.length === 0) return
+    const rendered = new Set(modelRows.map((row) => row.api_id))
+    const displayed = pendingNewModelIds.filter((id) => rendered.has(id))
+    if (displayed.length > 0) onDisplayedNewModels?.(displayed)
+  }, [active, modelRows, onDisplayedNewModels, pendingNewModelIds])
 
   const editRow = (key: string, patch: Partial<ModelRow>): void => {
     lastChange.current = "save"
@@ -1353,6 +1424,7 @@ export function ProviderRow({
     setApiKey((current) => (current === submittedKey ? "" : current))
     setRegion((current) => (current === submittedRegion ? providerRegion(provider, nextSaved?.region)?.id : current))
     setBaseUrl((current) => (current === baseUrl ? (nextSaved?.base_url ?? "") : current))
+    setProtocol((current) => (current === protocol ? (nextSaved?.protocol ?? "responses") : current))
   }
   /**
    * Closes a built-in provider: its models leave every picker, and nothing calls it again.
@@ -1404,6 +1476,7 @@ export function ProviderRow({
       ...(keyTrimmed === "" ? {} : { apiKey: keyTrimmed }),
       ...(region === undefined ? {} : { region }),
       ...(baseUrlChanged ? { baseUrl: normalizedBaseUrl } : {}),
+      ...(protocolChanged ? { protocol } : {}),
       // Editing a closed provider must not switch it back on behind the user's back: only a new
       // key re-opens it, everything else keeps the flag as it was.
       ...(base.saved?.disabled === true ? { disabled: keyTrimmed !== "" } : {})
@@ -1520,6 +1593,30 @@ export function ProviderRow({
                 </Field>
               </CollapsibleContent>
             </Collapsible>
+            {provider.id === "openrouter" && (
+              <Field className="gap-2">
+                <FieldLabel htmlFor={`${provider.id}-protocol`}>{t("provider.protocol")}</FieldLabel>
+                <Select
+                  value={protocol}
+                  items={[
+                    { label: t("provider.protocolResponses"), value: "responses" },
+                    { label: t("provider.protocolChatCompletions"), value: "chatCompletions" }
+                  ]}
+                  onValueChange={(value) => setProtocol(value === "chatCompletions" ? "chatCompletions" : "responses")}
+                >
+                  <SelectTrigger id={`${provider.id}-protocol`} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="responses">{t("provider.protocolResponses")}</SelectItem>
+                      <SelectItem value="chatCompletions">{t("provider.protocolChatCompletions")}</SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription className="text-xs">{t("provider.protocolDescription")}</FieldDescription>
+              </Field>
+            )}
             {baseUrlLooksLikeEndpoint(baseUrl) && (
               <p className="text-xs leading-relaxed text-amber-600 dark:text-amber-400" role="status">
                 {t("provider.baseUrlEndpointWarning")}
@@ -1656,7 +1753,7 @@ export function ProviderRow({
               <p className="text-sm font-medium">{t("provider.overload429Reminder")}</p>
               <p className="text-xs text-muted-foreground">{t("provider.overload429ReminderDesc")}</p>
             </div>
-            <Switch checked={reminder429Value} onCheckedChange={setOverload429ReminderEnabled} aria-label={t("provider.overload429Reminder")} />
+            <Switch checked={reminder429Disabled} onCheckedChange={setOverload429ReminderDisabled} aria-label={t("provider.overload429Reminder")} />
           </div>
         </div>
       )}
@@ -1949,6 +2046,11 @@ export function ProviderRow({
                       <span className="min-w-0 truncate text-sm leading-4">
                         {row.label.trim() || row.api_id.trim() || t("provider.modelNamePlaceholder")}
                       </span>
+                      {newModelIdSet.has(row.api_id) && (
+                        <span className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-1.5 text-[10px] leading-4 text-primary">
+                          {t("provider.newModel")}
+                        </span>
+                      )}
                       {retiredIds.has(row.api_id) && (
                         <span className="shrink-0 rounded-full border border-border bg-muted/40 px-1.5 text-[10px] leading-4 text-muted-foreground">
                           {t("provider.modelWithdrawn")}

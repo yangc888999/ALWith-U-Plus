@@ -180,6 +180,28 @@ pub(super) async fn cleanup(app: &AppHandle) -> Result<(), Value> {
         let client = client.clone();
         let mut mutation = tauri::async_runtime::spawn(async move {
             let _configuration = guard;
+            let state = app.state::<Enterprise>();
+            {
+                let gate = state.gate.lock().unwrap();
+                if gate.account.is_some()
+                    && !gate.models.is_empty()
+                    && state
+                        .connection
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .is_some_and(|connection| catalog::runtime_id(&connection.provider.id) == id)
+                {
+                    return Ok(());
+                }
+            }
+            if !app
+                .state::<crate::runtime::RuntimeState>()
+                .current()
+                .is_ok_and(|current| Arc::ptr_eq(&current, &client))
+            {
+                return Ok(());
+            }
             let live = client.agents().await.map_err(|_| error("Enterprise agent list unavailable"))?;
             if live.iter().any(|item| item["agentId"] == agent) {
                 client
@@ -267,14 +289,15 @@ fn check_request(gate: &gate::Gate, method: &str, body: &Value) -> Result<(), St
 /// Apply only U's enterprise relay. Other provider configuration remains entirely shared-chat owned.
 pub(crate) async fn apply(app: &AppHandle, client: &Arc<alwith_api::RuntimeClient>, agent: &str) -> Result<(), String> {
     let state = app.state::<Enterprise>();
-    let (generation, params) = {
+    let (generation, connection) = {
         let gate = state.gate.lock().unwrap();
         let connection = state.connection.lock().unwrap();
         let Some(connection) = connection.as_ref().filter(|_| gate.account.is_some() && !gate.models.is_empty()) else {
             return Ok(());
         };
-        (gate.generation, connection.params.clone())
+        (gate.generation, connection.clone())
     };
+    let params = connection.params.clone();
     if state.applied.lock().unwrap().get(agent) == Some(&params) {
         return Ok(());
     }
@@ -290,8 +313,17 @@ pub(crate) async fn apply(app: &AppHandle, client: &Arc<alwith_api::RuntimeClien
     let mut mutation = tauri::async_runtime::spawn(async move {
         let _configuration = guard;
         let state = app.state::<Enterprise>();
-        if state.gate.lock().unwrap().generation != generation {
-            return Err("ALwith account changed".into());
+        {
+            let gate = state.gate.lock().unwrap();
+            if gate.generation != generation
+                || gate.account.is_none()
+                || !state.connection.lock().unwrap().as_ref().is_some_and(|current| Arc::ptr_eq(current, &connection))
+            {
+                return Err("ALwith account changed".into());
+            }
+        }
+        if !app.state::<crate::runtime::RuntimeState>().current().is_ok_and(|current| Arc::ptr_eq(&current, &client)) {
+            return Err("Runtime changed during enterprise configuration".into());
         }
         state.configured.lock().unwrap().entry(agent.clone()).or_default().insert(id.clone());
         client
@@ -303,9 +335,7 @@ pub(crate) async fn apply(app: &AppHandle, client: &Arc<alwith_api::RuntimeClien
         if !same_runtime {
             return Err("Runtime changed during enterprise configuration".into());
         }
-        let current = state.gate.lock().unwrap().generation == generation
-            && state.connection.lock().unwrap().as_ref().is_some_and(|connection| connection.params == params);
-        if !current {
+        if !state.publish_connection(generation, &connection, &agent) {
             if client
                 .acp_request(
                     &agent,
@@ -324,7 +354,6 @@ pub(crate) async fn apply(app: &AppHandle, client: &Arc<alwith_api::RuntimeClien
             }
             return Err("ALwith account changed during enterprise configuration".into());
         }
-        state.applied.lock().unwrap().insert(agent, params);
         Ok(())
     });
     tokio::time::timeout(std::time::Duration::from_secs(10), &mut mutation)
@@ -374,6 +403,74 @@ pub(crate) fn uses_enterprise(app: &AppHandle, method: &str, params: Option<&Val
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn publication_requires_accepted_current_connection_and_revocation_cannot_resurrect_it() {
+        let state = Enterprise::default();
+        let generation = state.gate.lock().unwrap().bind("publication-test".into()).unwrap();
+        let provider = catalog::parse(json!([{"provider_id":"publication-test","auth_type":"enterprise_session","name":"Issued","base_url":"https://never-direct.invalid","models":[{"api_id":"issued/model","label":"Issued"}]}])).unwrap().unwrap();
+        let id = catalog::provider_id("publication-test", &provider.provider_id);
+        let connection = Arc::new(catalog::connection_params(
+            id.clone(),
+            provider,
+            alwith_enterprise_client::RelayConnection {
+                base_url: "http://127.0.0.1:8123/v1".into(),
+                api_key: "native-secret".into(),
+            },
+            "catalog.json".into(),
+            false,
+            "http://127.0.0.1:9999/alwith",
+        ));
+        let model = catalog::model_id(&id, "issued/model");
+        state.gate.lock().unwrap().commit(generation, BTreeSet::from([model.clone()])).unwrap();
+        assert!(!state.publish_connection(generation, &connection, "codex"));
+        *state.connection.lock().unwrap() = Some(connection.clone());
+        assert!(state.applied.lock().unwrap().is_empty());
+        assert!(state.publish_connection(generation, &connection, "codex"));
+        // Same params and gate generation, but a different refresh owns this connection.
+        let replacement = Arc::new(catalog::Connection {
+            provider: connection.provider.clone(),
+            params: connection.params.clone(),
+            relay: alwith_enterprise_client::RelayConnection {
+                base_url: "http://127.0.0.1:8124/v1".into(),
+                api_key: "replacement-secret".into(),
+            },
+        });
+        {
+            let _gate = state.gate.lock().unwrap();
+            state.revoke_connection();
+            *state.connection.lock().unwrap() = Some(replacement.clone());
+        }
+        assert!(!state.publish_connection(generation, &connection, "codex"));
+        assert!(state.publish_connection(generation, &replacement, "codex"));
+        assert!(!state.publish_connection(generation, &connection, "codex"));
+        assert!(crate::bridge::router_route_matches(
+            &catalog::runtime_id(&id),
+            &replacement.relay.base_url,
+            &replacement.relay.api_key
+        ));
+        // Empty/failed catalog refresh revokes synchronously without changing account epoch.
+        {
+            let mut gate = state.gate.lock().unwrap();
+            gate.commit(generation, BTreeSet::new()).unwrap();
+            state.revoke_connection();
+        }
+        assert!(!crate::bridge::router_route_matches(
+            &catalog::runtime_id(&id),
+            &replacement.relay.base_url,
+            &replacement.relay.api_key
+        ));
+        assert!(!state.publish_connection(generation, &replacement, "codex"));
+        state.invalidate().unwrap();
+        assert!(!state.publish_connection(generation, &replacement, "codex"));
+        assert!(state.applied.lock().unwrap().is_empty());
+        assert!(state.gate.lock().unwrap().check(Some(&model), None).is_err());
+        assert!(state.gate.lock().unwrap().commit(generation, BTreeSet::from([model.clone()])).is_err());
+        let next = state.gate.lock().unwrap().bind("different-account".into()).unwrap();
+        state.gate.lock().unwrap().commit(next, BTreeSet::from([model])).unwrap();
+        *state.connection.lock().unwrap() = Some(replacement.clone());
+        assert!(!state.publish_connection(generation, &replacement, "codex"));
+        state.invalidate().unwrap();
+    }
     #[test]
     fn prompt_metadata_and_raw_execution_cannot_reauthorize_a_revoked_route() {
         let mut gate = gate::Gate::default();

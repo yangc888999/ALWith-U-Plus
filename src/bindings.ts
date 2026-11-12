@@ -636,6 +636,7 @@ export const commands = {
   providersSave: (args: {
     providerId: string
     input: {
+      protocol?: Protocol | null
       apiKey?: string | null
       region?: string | null
       baseUrl?: string | null
@@ -1475,6 +1476,7 @@ export type ImportedImage = {
 export type Input = Input_Serialize | Input_Deserialize
 
 export type Input_Deserialize = {
+  protocol?: Protocol | null
   apiKey?: string | null
   region?: string | null
   baseUrl?: string | null
@@ -1483,6 +1485,7 @@ export type Input_Deserialize = {
 }
 
 export type Input_Serialize = {
+  protocol: Protocol | null
   apiKey: string | null
   region: string | null
   baseUrl: string | null
@@ -1657,6 +1660,7 @@ export type LarkUserProfile_Serialize = {
 export type Metadata = Metadata_Serialize | Metadata_Deserialize
 
 export type Metadata_Deserialize = {
+  protocol: Protocol
   configured: boolean
   /**  Closed by the user, but its key is still stored — the switch is off, the credential is not. */
   disabled: boolean
@@ -1665,6 +1669,7 @@ export type Metadata_Deserialize = {
 }
 
 export type Metadata_Serialize = {
+  protocol: Protocol
   configured: boolean
   /**  Closed by the user, but its key is still stored — the switch is off, the credential is not. */
   disabled: boolean
@@ -1795,6 +1800,9 @@ export type Profiles = {
 }
 
 export type ProjectTree = null
+
+/**  Upstream wire protocol. Codex always talks Responses to the local router. */
+export type Protocol = "responses" | "chatCompletions"
 
 export type Provider = "vui" | "doubao"
 

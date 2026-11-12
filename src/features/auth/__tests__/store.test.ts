@@ -1,5 +1,5 @@
 import type { EventCallback } from "@tauri-apps/api/event"
-import { beforeEach, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
 const host = vi.hoisted(() => ({
   values: new Map<string, unknown>(),
@@ -13,7 +13,6 @@ const host = vi.hoisted(() => ({
   enterpriseRefresh: vi.fn(),
   enterpriseClear: vi.fn()
 }))
-vi.mock("@/lib/app-env", () => ({ appEnv: { apiBaseUrl: "https://api.example.test/service" } }))
 vi.mock("@/lib/store", () => ({
   openStore: () => ({
     get: async (key: string) => host.values.get(key),
@@ -25,18 +24,18 @@ vi.mock("@/lib/store", () => ({
     }
   })
 }))
-vi.mock("@alwith/module-auth/transport", () => ({
+vi.mock("../http", () => ({
   createAuthTransport: () => ({
     request: host.request,
     authenticated: async (action: (token: string) => Promise<void>) => action("test-access"),
     invalidate: async () => {}
-  })
+  }),
+  readAuthGeneration: () => 0,
+  bumpAuthGeneration: vi.fn()
 }))
-vi.mock("@alwith/module-auth/tauri", () => ({ createTauriAuthRefresh: () => vi.fn() }))
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }))
 vi.mock("@tauri-apps/plugin-http", () => ({ fetch: vi.fn() }))
 vi.mock("@tauri-apps/plugin-os", () => ({ arch: () => "aarch64", platform: () => "macos" }))
-vi.mock("@tauri-apps/api/webviewWindow", () => ({ getCurrentWebviewWindow: () => ({ label: "main" }) }))
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ label: "main" }) }))
 vi.mock("@tauri-apps/api/event", () => {
   const emit = async (name: string, payload: unknown) => {
     for (const handler of host.listeners.get(name) ?? []) handler({ event: name, id: 0, payload })
@@ -54,12 +53,11 @@ vi.mock("@tauri-apps/api/event", () => {
     }
   }
 })
-vi.mock("@alwith/module-chat/settings", async (original) => ({
-  ...(await original<object>()),
-  createManagedProvidersPort: () => ({ bind: host.bind, refresh: host.refresh, clear: host.clear })
-}))
 vi.mock("@/bindings", () => ({
   commands: {
+    providersAccountBind: host.bind,
+    providersRefreshManaged: host.refresh,
+    providersClearManaged: host.clear,
     enterpriseBind: host.enterpriseBind,
     enterpriseRefresh: host.enterpriseRefresh,
     enterpriseClear: host.enterpriseClear
@@ -74,6 +72,7 @@ const profile = { uuid: cached.user_uuid, nickname: cached.nickname, login_email
 beforeEach(() => {
   vi.resetModules()
   vi.clearAllMocks()
+  vi.stubEnv("DEV", false)
   host.values.clear()
   host.listeners.clear()
   host.values.set("access_token", "test-access")
@@ -88,8 +87,14 @@ beforeEach(() => {
   host.enterpriseClear.mockResolvedValue(undefined)
 })
 
+afterEach(() => {
+  vi.unstubAllEnvs()
+  vi.restoreAllMocks()
+})
+
 async function restore() {
   const auth = await import("../store")
+  expect(auth.API_BASE_URL).toBe("https://api.alwith.ai/service")
   await auth.initPlatformAuth()
   await vi.waitFor(() => expect(auth.usePlatformAuth.getState().isLoading).toBe(false))
   expect(auth.usePlatformAuth.getState().user?.user_uuid).toBe(cached.user_uuid)
@@ -102,13 +107,12 @@ test("model refresh retries profile validation after cached login survives a sta
   expect(host.bind).not.toHaveBeenCalled()
   await expect(auth.requestAccountProviderRefresh()).resolves.toBeUndefined()
   expect(host.request).toHaveBeenCalledTimes(2)
-  expect(host.bind).toHaveBeenCalledWith({
-    apiBaseUrl: "https://api.example.test/service",
-    userUuid: cached.user_uuid
-  })
-  expect(host.refresh).toHaveBeenCalledWith(1, "test-access")
+  const account = { apiBaseUrl: auth.API_BASE_URL, userUuid: cached.user_uuid }
+  expect(host.bind).toHaveBeenCalledWith({ account })
+  expect(host.enterpriseBind).toHaveBeenCalledWith({ account })
+  expect(host.refresh).toHaveBeenCalledWith({ generation: 1, accessToken: "test-access" })
   expect(host.enterpriseRefresh).toHaveBeenCalledWith({
-    account: { apiBaseUrl: "https://api.example.test/service", userUuid: cached.user_uuid },
+    account,
     generation: 8,
     accessToken: "test-access"
   })
@@ -121,6 +125,9 @@ test("a failed validation reports its actual error and a later refresh retries i
   const auth = await restore()
   await expect(auth.requestAccountProviderRefresh()).rejects.toThrow("profile unavailable")
   expect(host.bind).not.toHaveBeenCalled()
+  expect(host.enterpriseBind).not.toHaveBeenCalled()
+  expect(host.refresh).not.toHaveBeenCalled()
+  expect(host.enterpriseRefresh).not.toHaveBeenCalled()
   await expect(auth.requestAccountProviderRefresh()).resolves.toBeUndefined()
   expect(host.request).toHaveBeenCalledTimes(3)
   expect(host.refresh).toHaveBeenCalledOnce()
@@ -134,6 +141,24 @@ test("a successfully restored profile does not need another validation before mo
   expect(host.refresh).toHaveBeenCalledTimes(2)
 })
 
+test("background provider refresh warns without a toast while explicit refresh still rejects", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+  host.refresh
+    .mockRejectedValueOnce(new Error("provider unavailable"))
+    .mockRejectedValueOnce(new Error("provider unavailable"))
+  const auth = await restore()
+  await vi.waitFor(() =>
+    expect(warn).toHaveBeenCalledWith("[auth] managed provider refresh failed:", "provider unavailable")
+  )
+  expect(host.errors).not.toHaveBeenCalled()
+  await expect(auth.requestAccountProviderRefresh()).rejects.toThrow("provider unavailable")
+  expect(warn).toHaveBeenCalledOnce()
+  expect(host.errors).not.toHaveBeenCalled()
+  await expect(auth.requestAccountProviderRefresh()).resolves.toBeUndefined()
+  expect(host.request).toHaveBeenCalledTimes(1)
+  expect(host.refresh).toHaveBeenCalledTimes(3)
+})
+
 test("validation cannot bind a profile belonging to a different cached account", async () => {
   host.request
     .mockRejectedValueOnce(new Error("startup offline"))
@@ -141,6 +166,9 @@ test("validation cannot bind a profile belonging to a different cached account",
   const auth = await restore()
   await expect(auth.requestAccountProviderRefresh()).rejects.toThrow("account changed")
   expect(host.bind).not.toHaveBeenCalled()
+  expect(host.enterpriseBind).not.toHaveBeenCalled()
+  expect(host.refresh).not.toHaveBeenCalled()
+  expect(host.enterpriseRefresh).not.toHaveBeenCalled()
   expect(auth.usePlatformAuth.getState().user?.user_uuid).toBe(cached.user_uuid)
   await auth.requestAccountProviderRefresh()
   expect(host.bind).toHaveBeenCalledOnce()

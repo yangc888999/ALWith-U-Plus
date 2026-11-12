@@ -31,18 +31,35 @@ function snapshot(revision: number, region = "intl"): ProviderSnapshot {
     error: null,
     customProviders: [],
     builtInModels: {}, managedProviders: [],
-    providers: { qwen: { configured: true, disabled: false, region, base_url: null } }
+    providers: { qwen: { configured: true, disabled: false, region, base_url: null, protocol: "responses" } }
   }
 }
 
 const saveModels = vi.fn(() => Promise.try(() => []))
+
+test("the disable error alerts switch enables silent retries when checked", async () => {
+  const { setOverload429ReminderDisabled } = await import("@/lib/overload-429-settings")
+  setOverload429ReminderDisabled(false)
+  const view = render(
+    <ProviderRow provider={openrouter} saved={null} revision={1} busy={false}
+      models={[]} onSave={vi.fn()} onSaveModels={saveModels} />
+  )
+  const toggle = view.getByRole("switch", { name: "Disable model error alerts" })
+  expect(toggle).not.toBeChecked()
+  await act(() => Promise.try(() => fireEvent.click(toggle)))
+  expect(toggle).toBeChecked()
+  expect(localStorage.getItem("chat.overload-429-reminder-enabled")).toBe("false")
+  await act(() => Promise.try(() => fireEvent.click(toggle)))
+  expect(toggle).not.toBeChecked()
+  expect(localStorage.getItem("chat.overload-429-reminder-enabled")).toBe("true")
+})
 
 test("an untouched row follows loaded regions and submits the revision it displayed", async () => {
   const save = vi.fn(() => Promise.try(() => snapshot(3)))
   const view = render(
     <ProviderRow
       provider={provider}
-      saved={{ configured: true, disabled: false, region: "cn", base_url: null }}
+      saved={{ configured: true, disabled: false, region: "cn", base_url: null, protocol: "responses" }}
       revision={1}
       busy={false}
       models={[]}
@@ -53,7 +70,7 @@ test("an untouched row follows loaded regions and submits the revision it displa
   view.rerender(
     <ProviderRow
       provider={provider}
-      saved={{ configured: true, disabled: false, region: "intl", base_url: null }}
+      saved={{ configured: true, disabled: false, region: "intl", base_url: null, protocol: "responses" }}
       revision={2}
       busy={false}
       models={[]}
@@ -95,7 +112,7 @@ test("a dirty row keeps its loaded revision across another window's save and ret
   const view = render(
     <ProviderRow
       provider={provider}
-      saved={{ configured: true, disabled: false, region: "cn", base_url: null }}
+      saved={{ configured: true, disabled: false, region: "cn", base_url: null, protocol: "responses" }}
       revision={1}
       busy={false}
       models={[]}
@@ -113,7 +130,7 @@ test("a dirty row keeps its loaded revision across another window's save and ret
   view.rerender(
     <ProviderRow
       provider={provider}
-      saved={{ configured: true, disabled: false, region: "intl", base_url: null }}
+      saved={{ configured: true, disabled: false, region: "intl", base_url: null, protocol: "responses" }}
       revision={2}
       busy={false}
       models={[]}
@@ -186,7 +203,7 @@ test("a successful save advances the base without erasing text typed while it wa
   view.rerender(
     <ProviderRow
       provider={provider}
-      saved={{ configured: true, disabled: false, region: "cn", base_url: null }}
+      saved={{ configured: true, disabled: false, region: "cn", base_url: null, protocol: "responses" }}
       revision={2}
       busy={false}
       models={[]}
@@ -212,7 +229,7 @@ test("a built-in provider saves a page-configured API base URL", async () => {
   const view = render(
     <ProviderRow
       provider={provider}
-      saved={{ configured: true, disabled: false, region: "intl", base_url: null }}
+      saved={{ configured: true, disabled: false, region: "intl", base_url: null, protocol: "responses" }}
       revision={1}
       busy={false}
       models={[]}
@@ -256,7 +273,7 @@ test("provider tabs show configuration state and switch the single active panel"
       <>
         <ProviderTabs
           activeId={active}
-          keys={{ hakimi: { configured: true, disabled: false, region: null, base_url: null } }}
+          keys={{ hakimi: { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" } }}
           customProviders={[custom]}
           onSelect={setActive}
           onAdd={() => setActive("new")}
@@ -514,7 +531,7 @@ test("built-in models render as editable rows and save the edited catalog", asyn
   const view = render(
     <ProviderRow
       provider={provider}
-      saved={{ configured: true, disabled: false, region: "intl", base_url: null }}
+      saved={{ configured: true, disabled: false, region: "intl", base_url: null, protocol: "responses" }}
       revision={1}
       busy={false}
       models={catalogModels}
@@ -556,7 +573,7 @@ test("duplicate model ids are rejected before anything is saved", async () => {
   const view = render(
     <ProviderRow
       provider={provider}
-      saved={{ configured: true, disabled: false, region: "intl", base_url: null }}
+      saved={{ configured: true, disabled: false, region: "intl", base_url: null, protocol: "responses" }}
       revision={1}
       busy={false}
       models={catalogModels}
@@ -588,7 +605,7 @@ test("a model can be added and removed from the table", async () => {
   const view = render(
     <ProviderRow
       provider={provider}
-      saved={{ configured: true, disabled: false, region: "intl", base_url: null }}
+      saved={{ configured: true, disabled: false, region: "intl", base_url: null, protocol: "responses" }}
       revision={1}
       busy={false}
       models={catalogModels}
@@ -792,7 +809,7 @@ test("the model table filters :free rows and bulk-deletes only the visible selec
   const view = render(
     <ProviderRow
       provider={openrouter}
-      saved={{ configured: true, disabled: false, region: "intl", base_url: null }}
+      saved={{ configured: true, disabled: false, region: "intl", base_url: null, protocol: "responses" }}
       revision={1}
       busy={false}
       models={models}
@@ -844,7 +861,7 @@ test("the free-model toggle only appears on OpenRouter", () => {
   const view = render(
     <ProviderRow
       provider={provider}
-      saved={{ configured: true, disabled: false, region: "intl", base_url: null }}
+      saved={{ configured: true, disabled: false, region: "intl", base_url: null, protocol: "responses" }}
       revision={1}
       busy={false}
       models={[]}
@@ -866,7 +883,7 @@ test("inverted delete keeps the selected models and drops every other row", asyn
   const view = render(
     <ProviderRow
       provider={openrouter}
-      saved={{ configured: true, disabled: false, region: "intl", base_url: null }}
+      saved={{ configured: true, disabled: false, region: "intl", base_url: null, protocol: "responses" }}
       revision={1}
       busy={false}
       models={models}
@@ -941,4 +958,42 @@ test("a conflict that leaves the revision unchanged still surfaces", async () =>
     /another window/
   )
   expect(attempt).toHaveBeenCalledTimes(1)
+})
+
+test("the protocol selector only appears on OpenRouter and defaults to Responses", () => {
+  const other = render(
+    <ProviderRow provider={provider} saved={{ configured: true, disabled: false, region: "intl", base_url: null, protocol: "responses" }}
+      revision={1} busy={false} models={[]} onSave={vi.fn()} onSaveModels={saveModels} />
+  )
+  expect(other.queryByLabelText("Upstream protocol")).toBeNull()
+  other.unmount()
+  const view = render(
+    <ProviderRow provider={openrouter} saved={{ configured: true, disabled: false, region: null, base_url: null, protocol: "responses" }}
+      revision={1} busy={false} models={[]} onSave={vi.fn()} onSaveModels={saveModels} />
+  )
+  expect(view.getByLabelText("Upstream protocol")).toHaveTextContent("Responses API (default)")
+})
+
+test("choosing Chat Completions marks the row dirty and submits the protocol on save", async () => {
+  const saved = { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" as const }
+  const save = vi.fn(() => Promise.try(() => ({
+    ...snapshot(2),
+    providers: { openrouter: { ...saved, protocol: "chatCompletions" as const } }
+  })))
+  const view = render(
+    <ProviderRow provider={openrouter} saved={saved} revision={1} busy={false}
+      models={[]} onSave={save} onSaveModels={saveModels} />
+  )
+  const trigger = view.getByLabelText("Upstream protocol")
+  fireEvent.click(trigger)
+  await act(() => Promise.try(() => {
+    const option = view.getByRole("option", { name: "Chat Completions" })
+    fireEvent.pointerDown(option, { pointerType: "mouse" })
+    fireEvent.click(option)
+  }))
+  expect(trigger).toHaveTextContent("Chat Completions")
+  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Save connection" }))))
+  expect(save.mock.calls[0]).toEqual([1, { protocol: "chatCompletions" }])
+  // The accepted value comes back from the snapshot; the row is clean again.
+  expect(view.getByLabelText("Upstream protocol")).toHaveTextContent("Chat Completions")
 })

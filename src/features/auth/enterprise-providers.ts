@@ -9,7 +9,7 @@ export function isEnterpriseModel(model: string | null | undefined): boolean {
   return !!model && (model.startsWith(`gateway:${MODEL_PREFIX}`) || model.startsWith("gateway:finture-enterprise:"))
 }
 
-/** Enterprise metadata joins the shared model picker; relay credentials stay in native memory. */
+/** Replace any previous enterprise projection; relay credentials stay in native memory. */
 export function projectEnterpriseProviders(
   snapshot: ProviderSnapshot,
   provider: CustomProvider | null
@@ -17,7 +17,10 @@ export function projectEnterpriseProviders(
   return {
     ...snapshot,
     customProviders: snapshot.customProviders.filter((provider) => !provider.id.startsWith(ENTERPRISE_PROVIDER_PREFIX)),
-    managedProviders: [...(snapshot.managedProviders ?? []), ...(provider === null ? [] : [provider])]
+    managedProviders: [
+      ...(snapshot.managedProviders ?? []).filter((entry) => !entry.id.startsWith(ENTERPRISE_PROVIDER_PREFIX)),
+      ...(provider === null ? [] : [provider])
+    ]
   }
 }
 

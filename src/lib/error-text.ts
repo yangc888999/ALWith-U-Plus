@@ -394,9 +394,9 @@ const RULES: Rule[] = [
     key: "error.contextLimit"
   },
   {
-    // A 404 from the vendor is not a model failure: the *endpoint* does not exist. The usual cause
-    // is a Chat Completions base URL (`/paas/v4`, `/chat/completions`) used with the Responses wire
-    // API this app always speaks. Name the remedy instead of dumping the vendor's raw JSON.
+    // A 404 means the vendor has no such route. That is either an unknown model id or a base URL
+    // that does not serve the selected protocol — not proof of a protocol mismatch, which is what
+    // the earlier copy claimed for every 404. Name both possibilities instead of the vendor's JSON.
     match: /unexpected status 404\b/i,
     key: "error.providerEndpointNotFound"
   },

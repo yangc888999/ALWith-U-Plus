@@ -1,6 +1,13 @@
-import { expect, test, vi } from "vitest"
+import { afterEach, expect, test, vi } from "vitest"
+
+afterEach(() => vi.restoreAllMocks())
 
 import {
+  acknowledgeFreeModels,
+  getCachedFreeModels,
+  getPendingNewFreeModelIds,
+  startFreeModelWatch,
+  subscribeFreeModels,
   checkFreeModels,
   formatNewFreeModels,
   isFreeModelId,
@@ -50,10 +57,11 @@ test("the first check establishes a silent baseline, later checks report only ad
   expect(first).toEqual([])
   expect(onNew).not.toHaveBeenCalled()
   // The baseline is persisted, not just held in a closure.
-  expect(JSON.parse(store.data.get("alwith:free-model-watch/known") ?? "[]")).toEqual(["a:free", "b:free"])
+  expect(getCachedFreeModels(store).map((row) => row.id)).toEqual(["a:free", "b:free"])
 
   const second = await checkFreeModels({
     fetcher: () => Promise.resolve(catalog("a:free", "b:free", "c:free")),
+    now: () => new Date(2099, 0, 2),
     onNew,
     storage: store
   })
@@ -75,6 +83,65 @@ test("a failed fetch leaves the previous baseline untouched", async () => {
     checkFreeModels({ fetcher: () => Promise.resolve("not json"), storage: store })
   ).rejects.toThrow()
   expect(store.data.get("alwith:free-model-watch/known")).toBe(JSON.stringify(["a:free"]))
+})
+
+test("explicit valid zero prices qualify, but absent and coercible prices do not", () => {
+  const data = [
+    { id: "zero", name: "Zero", pricing: { prompt: "0.00", completion: 0 } },
+    ...[undefined, null, "", false, "no", -1, "-0", "1"].map((price, index) => ({
+      id: `invalid-${index}`, pricing: { prompt: price, completion: "0" }
+    })),
+    { id: "partial", pricing: { prompt: "0" } },
+    { id: "extra-cost", pricing: { prompt: "0", completion: "0", request: "1" } }
+  ]
+  expect(parseFreeModelIds(JSON.stringify({ data }))).toEqual(["zero"])
+})
+
+test("same date and concurrent checks deduplicate; failures can retry", async () => {
+  const storage = memoryStorage()
+  const now = () => new Date(2026, 10, 12)
+  const fetcher = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(catalog("a:free"))
+  await expect(checkFreeModels({ storage, now, fetcher })).rejects.toThrow("offline")
+  await Promise.all([checkFreeModels({ storage, now, fetcher }), checkFreeModels({ storage, now, fetcher })])
+  await checkFreeModels({ storage, now, fetcher })
+  expect(fetcher).toHaveBeenCalledTimes(2)
+})
+
+test("migrates known history, preserves metadata and pending until displayed, and never reflags reappearances", async () => {
+  const storage = memoryStorage({ "alwith:free-model-watch/known": JSON.stringify(["a:free"]) })
+  const onNew = vi.fn()
+  const update = (day: number, ids: string[]) => checkFreeModels({
+    storage, onNew, now: () => new Date(2026, 10, day),
+    fetcher: async () => JSON.stringify({ data: ids.map((id) => ({ id, name: id, context_length: 8192 })) })
+  })
+  expect(await update(12, ["a:free", "b:free"])).toEqual(["b:free"])
+  expect(getCachedFreeModels(storage)[1]).toMatchObject({ name: "b:free", context_length: 8192 })
+  const listener = vi.fn()
+  const stop = subscribeFreeModels(listener)
+  acknowledgeFreeModels(["a:free"], storage)
+  expect(getPendingNewFreeModelIds(storage)).toEqual(["b:free"])
+  acknowledgeFreeModels(["b:free"], storage)
+  expect(getPendingNewFreeModelIds(storage)).toEqual([])
+  expect(listener).toHaveBeenCalledOnce()
+  await update(13, ["a:free"])
+  expect(await update(14, ["a:free", "b:free"])).toEqual([])
+  stop()
+})
+
+test("startup fetch is independent of notification preference and scheduler has no timer", async () => {
+  localStorage.clear()
+  const { commands } = await import("@/bindings")
+  const fetcher = vi.spyOn(commands, "fetchText").mockResolvedValue(catalog("a:free"))
+  const timer = vi.spyOn(globalThis, "setTimeout")
+  const stop = startFreeModelWatch()
+  await vi.waitFor(() => expect(getCachedFreeModels()).toHaveLength(1))
+  const timerCalls = timer.mock.calls.length
+  window.dispatchEvent(new Event("focus"))
+  await Promise.resolve()
+  expect(fetcher).toHaveBeenCalledOnce()
+  expect(timer.mock.calls.length).toBe(timerCalls)
+  stop()
+  localStorage.clear()
 })
 
 test("notification bodies preview three ids and summarize the rest", () => {

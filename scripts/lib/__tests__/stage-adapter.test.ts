@@ -5,6 +5,7 @@ import { dirname, join } from "node:path"
 
 import providers from "../../../src/lib/provider-catalog.json"
 import { codexSidecars } from "../toolchain"
+import { patchAdapter } from "../adapter-patch"
 
 const HOST_TRIPLES: Partial<Record<`${NodeJS.Platform}-${string}`, string>> = {
   "darwin-arm64": "aarch64-apple-darwin",
@@ -25,7 +26,7 @@ test("the staged toolchain runs with explicit resources outside the executable d
   })
   expect(stage.exitCode, stage.stderr.toString()).toBe(0)
   expect(readFileSync(join(import.meta.dir, "../../../src-tauri/resources/adapter/codex-acp-v2.mjs"))).toEqual(
-    readFileSync(join(import.meta.dir, "../../../node_modules/@nyssance/codex-acp-v2/dist/index.js"))
+    Buffer.from(patchAdapter(readFileSync(join(import.meta.dir, "../../../node_modules/@nyssance/codex-acp-v2/dist/index.js"), "utf8")))
   )
 
   const suffix = process.platform === "win32" ? ".exe" : ""

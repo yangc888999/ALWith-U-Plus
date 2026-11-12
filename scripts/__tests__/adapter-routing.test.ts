@@ -35,6 +35,7 @@ function makeRouting(configuredProvider: string | null = null) {
 function registerGateway(routing: any, id = "ds-gw") {
   routing.gateways.set(id, {
     id,
+    runtimeId: id,
     baseUrl: "https://vip.aipro.love/v1",
     headers: {},
     name: "DeepSeek",

@@ -18,7 +18,7 @@ const snapshot: ProviderSnapshot = {
   appliedRevision: 1,
   status: "applied",
   error: null,
-  providers: { hakimi: { configured: true, disabled: false, region: null, base_url: null } },
+  providers: { hakimi: { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" } },
   customProviders: [
     {
       id: "custom_private",

@@ -38,7 +38,7 @@ import { ExtensionsSection } from "@/features/extensions/extensions-section"
 import { useExtensions } from "@/features/extensions/use-extensions"
 import { MobileSection } from "@/features/mobile/mobile-section"
 import { EditorSettingsSection } from "@/features/workspace/editor-settings-dialog"
-import { SETTINGS_CHANGE_TAB, SETTINGS_RESET_SCROLL, type SettingsSection } from "@/lib/window-manager"
+import { SETTINGS_CHANGE_TAB, SETTINGS_RESET_SCROLL, type SettingsNavigation, type SettingsSection } from "@/lib/window-manager"
 
 import { AboutSection } from "./sections/about-section"
 import { GroupSection } from "./sections/group-section"
@@ -107,6 +107,11 @@ export function SettingsPage() {
     return normalizeSection(tab) ?? "general"
   })
 
+  const [providerTarget, setProviderTarget] = useState(() => ({
+    id: new URLSearchParams(window.location.search).get("provider") ?? undefined,
+    revision: 0
+  }))
+
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const scrollToTop = useCallback(() => {
     viewportRef.current?.scrollTo({ top: 0 })
@@ -125,11 +130,16 @@ export function SettingsPage() {
   }, [scrollToTop])
 
   useEffect(() => {
-    const stop = listen<string>(SETTINGS_CHANGE_TAB, (event) => {
-      const next = normalizeSection(event.payload)
+    const stop = listen<string | SettingsNavigation>(SETTINGS_CHANGE_TAB, (event) => {
+      const payload = event.payload
+      const next = normalizeSection(typeof payload === "string" ? payload : payload.section)
       if (next !== null) {
         setSection(next)
         setExtensionSection(null)
+        setProviderTarget((previous) => ({
+          id: typeof payload === "string" ? undefined : payload.providerId,
+          revision: previous.revision + 1
+        }))
       }
     })
     return () => void stop.then((fn) => fn())
@@ -178,7 +188,7 @@ export function SettingsPage() {
           case "voice":
             return <VoiceSection />
           case "provider":
-            return <ProviderSection />
+            return <ProviderSection key={providerTarget.revision} initialProviderId={providerTarget.id} />
           case "usage":
             return <UsageSection />
           case "about":

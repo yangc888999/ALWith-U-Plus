@@ -104,14 +104,19 @@ pub(super) struct PublicProvider {
 pub(super) struct Connection {
     pub provider: PublicProvider,
     pub params: Value,
+    // Relay credentials remain native and are never sent to shared provider storage.
+    pub relay: alwith_enterprise_client::RelayConnection,
 }
 
 pub(super) async fn connection(
     // Only the release build resolves the resource dir through the app handle; a debug build reads
     // the manifest's resources directly, so the parameter is unused there.
     #[cfg_attr(debug_assertions, allow(unused_variables))] app: &tauri::AppHandle,
-    account: &str, provider: IssuedProvider, relay: alwith_enterprise_client::RelayConnection,
-    host: &alwith_enterprise_client::EnterpriseClient, generation: u64,
+    account: &str,
+    provider: IssuedProvider,
+    relay: alwith_enterprise_client::RelayConnection,
+    host: &alwith_enterprise_client::EnterpriseClient,
+    generation: u64,
 ) -> Result<Connection, String> {
     let id = provider_id(account, &provider.provider_id);
     // The native owner builds the runtime catalog from a bundled source, exactly as the upstream
@@ -143,12 +148,13 @@ pub(super) async fn connection(
         })
         .collect();
     let catalog = host.model_catalog(generation, &source, &models).await.map_err(|reason| reason.to_string())?;
-    Ok(connection_params(id, provider, relay, catalog.path, catalog.has_known_model))
+    let router = crate::bridge::router_base_url().ok_or("Shared ALwith router unavailable")?;
+    Ok(connection_params(id, provider, relay, catalog.path, catalog.has_known_model, &router))
 }
 
-fn connection_params(
+pub(super) fn connection_params(
     id: String, provider: IssuedProvider, relay: alwith_enterprise_client::RelayConnection, path: std::path::PathBuf,
-    known: bool,
+    known: bool, router: &str,
 ) -> Connection {
     let models: Vec<_> = provider.models.iter().map(|model| serde_json::json!({"id":model.api_id,"label":model.label,"description":model.description,"contextWindow":model.context_window})).collect();
     let mut config = if known {
@@ -157,13 +163,14 @@ fn connection_params(
         serde_json::json!({"features":{"code_mode":false,"code_mode_only":false}})
     };
     config["model_catalog_json"] = serde_json::json!(path);
-    let params = serde_json::json!({"providerId":"openai","apiType":"openai","baseUrl":relay.base_url,"_meta":{
-        "codex":{"id":runtime_id(&id),"name":provider.name,"mode":"catalog","bearerToken":relay.api_key,"config":config},
+    let params = serde_json::json!({"providerId":"openai","apiType":"openai","baseUrl":router,"_meta":{
+        "codex":{"id":runtime_id(&id),"runtimeId":crate::bridge::ROUTER_ID,"name":provider.name,"mode":"catalog","bearerToken":"alwith-router","config":config},
         "alwith":{"models":models}
     }});
     Connection {
         provider: PublicProvider { id, name: provider.name, base_url: provider.base_url, models: provider.models },
         params,
+        relay,
     }
 }
 
@@ -172,7 +179,7 @@ mod connection_tests {
     use super::*;
     use serde_json::json;
     #[test]
-    fn relay_credentials_are_only_in_the_native_runtime_request() {
+    fn relay_credentials_stay_native_while_catalog_uses_shared_runtime() {
         let provider = parse(json!([{"provider_id":"from-api","auth_type":"enterprise_session","name":"Issued","base_url":"https://issued.test","models":[{"api_id":"issued/model","label":"Issued","context_window":120000}]}])).unwrap().unwrap();
         let id = provider_id("account", &provider.provider_id);
         let connection = connection_params(
@@ -184,12 +191,18 @@ mod connection_tests {
             },
             "test-catalog.json".into(),
             false,
+            "http://127.0.0.1:9999/alwith",
         );
         let public = serde_json::to_value(&connection.provider).unwrap();
         assert_eq!(public["baseUrl"], "https://issued.test");
         assert_eq!(public["models"][0]["contextWindow"], 120000);
         assert!(!public.to_string().contains("memory-only-secret"));
-        assert_eq!(connection.params["_meta"]["codex"]["bearerToken"], "memory-only-secret");
+        assert_eq!(connection.params["baseUrl"], "http://127.0.0.1:9999/alwith");
+        assert_eq!(connection.params["_meta"]["codex"]["runtimeId"], "alwith");
+        assert_eq!(connection.params["_meta"]["codex"]["bearerToken"], "alwith-router");
+        assert!(!connection.params.to_string().contains("memory-only-secret"));
+        assert!(!connection.params.to_string().contains("8123"));
+        assert_eq!(connection.relay.api_key, "memory-only-secret");
         assert_eq!(connection.params["_meta"]["codex"]["id"], runtime_id(&id));
         assert_eq!(connection.params["_meta"]["alwith"]["models"][0]["id"], "issued/model");
     }

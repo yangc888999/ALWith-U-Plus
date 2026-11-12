@@ -1,11 +1,7 @@
 import { invoke } from "@tauri-apps/api/core"
 
-// The setting is the switch on the OpenRouter card labelled 「模型异常提醒」. **On by default**:
-// an upstream HTTP 429 reaches the engine and the UI as `error.providerRateLimited`
-// (「请求太频繁」). **Off**: the bridge treats a 429 as a transient hiccup, re-sends the same
-// request once instead of answering with the refusal, and stays silent about it — the turn then
-// either completes or fails on its own merits. The quiet behaviour is the one the user switches
-// *off*, which is what the label says: the reminder is what gets switched off.
+// Persist the original reminder polarity so saved preferences keep their behavior when
+// the UI exposes the inverse switch, 「禁用模型异常提醒」.
 const STORAGE_KEY = "chat.overload-429-reminder-enabled"
 const DEFAULT_ENABLED = true
 
@@ -33,18 +29,18 @@ function syncOverload429Mute(mute: boolean): void {
 let current = read()
 syncOverload429Mute(!current)
 
-export function overload429ReminderEnabled(): boolean {
-  return current
+export function overload429ReminderDisabled(): boolean {
+  return !current
 }
 
-export function setOverload429ReminderEnabled(enabled: boolean): void {
-  current = enabled
+export function setOverload429ReminderDisabled(disabled: boolean): void {
+  current = !disabled
   localStorage.setItem(STORAGE_KEY, String(current))
   for (const listener of listeners) listener()
   syncOverload429Mute(!current)
 }
 
-export function subscribeOverload429ReminderEnabled(listener: () => void): () => void {
+export function subscribeOverload429ReminderDisabled(listener: () => void): () => void {
   listeners.add(listener)
   return () => listeners.delete(listener)
 }
@@ -58,6 +54,7 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
     const next = read()
     if (next === current) return
     current = next
+    syncOverload429Mute(!current)
     for (const listener of listeners) listener()
   })
 }

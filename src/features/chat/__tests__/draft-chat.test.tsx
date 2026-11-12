@@ -1516,7 +1516,7 @@ test.each(["gateway", "native"] as const)(
         onSendingChange={() => {}}
         onAuthRequired={configure}
         onNewChat={() => {}}
-        providerSnapshot={{ ...providers, providers: { deepseek: { configured: true, region: null, base_url: null, disabled: false } } }}
+        providerSnapshot={{ ...providers, providers: { deepseek: { configured: true, region: null, base_url: null, disabled: false, protocol: "responses" } } }}
       />
     )
     try {

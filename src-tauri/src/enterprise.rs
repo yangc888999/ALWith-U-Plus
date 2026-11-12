@@ -32,7 +32,7 @@ pub struct Enterprise {
     refresh: AsyncMutex<()>,
     transition: AsyncMutex<()>,
     realtime: Mutex<BTreeSet<String>>,
-    connection: Mutex<Option<catalog::Connection>>,
+    connection: Mutex<Option<Arc<catalog::Connection>>>,
     ready_agents: Mutex<BTreeSet<String>>,
     configured: Mutex<BTreeMap<String, BTreeSet<String>>>,
     applied: Mutex<BTreeMap<String, Value>>,
@@ -109,15 +109,47 @@ impl Enterprise {
         Ok(self.host.get().expect("prepared enterprise client").clone())
     }
     pub async fn close(&self) -> Result<(), String> {
+        self.invalidate().map_err(|reason| reason.to_string())?;
         self.closing.store(true, Ordering::Release);
         if let Some(host) = self.host.get() {
             host.close().await.map_err(|reason| reason.to_string())?;
         }
         Ok(())
     }
+    // Call while holding the gate: publication uses the same lock, including the bridge write.
+    fn revoke_connection(&self) {
+        if let Some(connection) = self.connection.lock().unwrap().take() {
+            crate::bridge::unregister_router_route(&catalog::runtime_id(&connection.provider.id));
+        }
+        self.applied.lock().unwrap().clear();
+    }
+    // Gate and bridge publication are one synchronous operation. Connection identity also
+    // distinguishes refreshes within the same account generation (and identical catalogs).
+    fn publish_connection(&self, generation: u64, connection: &Arc<catalog::Connection>, agent: &str) -> bool {
+        let gate = self.gate.lock().unwrap();
+        if gate.generation != generation
+            || gate.account.is_none()
+            || gate.models.is_empty()
+            || !self.connection.lock().unwrap().as_ref().is_some_and(|current| Arc::ptr_eq(current, connection))
+        {
+            return false;
+        }
+        crate::bridge::register_router_route(
+            &catalog::runtime_id(&connection.provider.id),
+            &connection.relay.base_url,
+            &connection.relay.api_key,
+            false,
+        );
+        self.applied.lock().unwrap().insert(agent.into(), connection.params.clone());
+        true
+    }
+    fn invalidate(&self) -> Result<(), Value> {
+        let mut gate = self.gate.lock().unwrap();
+        self.revoke_connection();
+        gate.invalidate().map_err(error)
+    }
     async fn clear(&self, app: &AppHandle, explicit: bool) -> Result<(), Value> {
-        self.gate.lock().unwrap().invalidate().map_err(error)?;
-        *self.connection.lock().unwrap() = None;
+        self.invalidate()?;
         let notification = self.changed(app);
         // Invalidation precedes waits: late refreshes cannot restore this account's routes.
         let mut binding = self.binding.lock().await;
@@ -144,8 +176,15 @@ pub async fn enterprise_bind(window: tauri::WebviewWindow, account: Account) -> 
         return Err(error("Invalid ALwith account"));
     }
     let state = window.state::<Enterprise>();
-    let _transition = state.transition.lock().await;
     let identity = format!("{}:{}", account.api_base_url, account.user_uuid);
+    {
+        let mut gate = state.gate.lock().unwrap();
+        if gate.account.as_ref() != Some(&identity) {
+            state.revoke_connection();
+            gate.invalidate().map_err(error)?;
+        }
+    }
+    let _transition = state.transition.lock().await;
     let changed = state.gate.lock().unwrap().account.as_ref() != Some(&identity);
     if changed {
         state.clear(window.app_handle(), false).await?;
@@ -162,8 +201,22 @@ pub async fn enterprise_refresh(
     main_window(&window)?;
     let app = window.app_handle();
     let state = app.state::<Enterprise>();
-    let _refresh = state.refresh.lock().await;
     let identity = format!("{}:{}", account.api_base_url, account.user_uuid);
+    if access_token.trim().is_empty() {
+        {
+            let mut gate = state.gate.lock().unwrap();
+            if gate.generation != generation || gate.account.as_ref() != Some(&identity) {
+                return Err(error("ALwith account changed"));
+            }
+            state.revoke_connection();
+            // Retire pending refreshes as well as the live route before any async wait.
+            gate.invalidate().map_err(error)?;
+        }
+        let _transition = state.transition.lock().await;
+        state.clear(app, false).await?;
+        return Err(error("Missing ALwith access token"));
+    }
+    let _refresh = state.refresh.lock().await;
     let check = || {
         let gate = state.gate.lock().unwrap();
         if gate.generation != generation || gate.account.as_ref() != Some(&identity) {
@@ -173,36 +226,25 @@ pub async fn enterprise_refresh(
         }
     };
     check()?;
-    if access_token.trim().is_empty() {
-        return Err(error("Missing ALwith access token"));
-    }
-    let host = state.host(app).await?;
-    let native_generation = {
-        let mut binding = state.binding.lock().await;
-        check()?;
-        let native_generation =
-            host.prepare(account.api_base_url.clone(), account.user_uuid.clone(), access_token.clone()).await?;
-        if let Err(reason) = check() {
-            host.suspend(native_generation).await?;
-            return Err(reason);
-        }
-        *binding = Some(Binding {
-            account: account.clone(),
-            epoch: generation,
-            generation: native_generation,
-            token: access_token.clone(),
-        });
-        // gate 是进程内状态：账号绑定时必须同时告诉它，否则 check() 认为「未登录」，
-        // 任何企业模型都会被拒为 unavailable。
-        {
-            let mut gate = state.gate.lock().unwrap();
-            let bound = gate.bind(account.user_uuid.clone())?;
-            // 模型集合在拿到目录后才有，这里先把账号记下来。
-            let _ = bound;
-        }
-        native_generation
-    };
     let result = async {
+        let host = state.host(app).await?;
+        let native_generation = {
+            let mut binding = state.binding.lock().await;
+            check()?;
+            let native_generation =
+                host.prepare(account.api_base_url.clone(), account.user_uuid.clone(), access_token.clone()).await?;
+            if let Err(reason) = check() {
+                host.suspend(native_generation).await?;
+                return Err(reason);
+            }
+            *binding = Some(Binding {
+                account: account.clone(),
+                epoch: generation,
+                generation: native_generation,
+                token: access_token.clone(),
+            });
+            native_generation
+        };
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(20))
             .redirect(reqwest::redirect::Policy::none())
@@ -219,30 +261,16 @@ pub async fn enterprise_refresh(
         }
         let catalog = response.json::<Value>().await.map_err(|_| error("Invalid ALwith provider response"))?;
         check()?;
-        let Some(provider) = catalog::parse(catalog).map_err(error)? else {
-            // 目录为空 = 账号当前没有任何可用模型：把集合清空，不要留上一次的。
-            let mut gate = state.gate.lock().unwrap();
-            let generation = gate.committed_generation();
-            let _ = gate.commit(generation, BTreeSet::new());
-            return Ok(None);
-        };
-        {
-            // 目录到手：把这次下发的模型 id 集合交给 gate，发送前才认得出它们。
-            let models: BTreeSet<String> =
-                provider.models.iter().map(|model| catalog::model_id(&provider.provider_id, &model.api_id)).collect();
-            let mut gate = state.gate.lock().unwrap();
-            let generation = gate.bound_generation();
-            gate.commit(generation, models).map_err(error)?;
-        }
+        let Some(provider) = catalog::parse(catalog).map_err(error)? else { return Ok(None) };
         let status = host.ensure(native_generation).await?;
         if status["automatic_renewal"] != true {
             return Ok(None);
         }
         let gateway = provider.base_url.clone();
         let relay = host.relay(native_generation, gateway, Protocol::Responses).await?;
-        Ok::<_, Value>(Some(
+        Ok::<_, Value>(Some(Arc::new(
             catalog::connection(app, &identity, provider, relay, host, native_generation).await.map_err(error)?,
-        ))
+        )))
     }
     .await;
     check()?;
@@ -262,11 +290,8 @@ pub async fn enterprise_refresh(
     {
         let mut gate = state.gate.lock().unwrap();
         gate.commit(generation, models).map_err(error)?;
-        *state.connection.lock().unwrap() =
-            result.as_ref().ok().and_then(|connection| connection.as_ref()).map(|connection| catalog::Connection {
-                provider: connection.provider.clone(),
-                params: connection.params.clone(),
-            });
+        state.revoke_connection();
+        *state.connection.lock().unwrap() = result.as_ref().ok().and_then(|connection| connection.as_ref()).cloned();
     }
     let notification = state.changed(app);
     runtime::cleanup(app).await?;
@@ -292,7 +317,7 @@ pub async fn enterprise_catalog(window: tauri::WebviewWindow) -> Value {
 pub async fn enterprise_clear(window: tauri::WebviewWindow) -> Result<(), Value> {
     main_window(&window)?;
     let state = window.state::<Enterprise>();
-    state.gate.lock().unwrap().invalidate().map_err(error)?;
+    state.invalidate()?;
     if let Err(reason) = state.changed(window.app_handle()) {
         log::error!("Enterprise revocation notification failed: {reason}");
     }

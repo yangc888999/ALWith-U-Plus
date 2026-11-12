@@ -28,7 +28,7 @@ test("displayModelLabel resolves a renamed gateway model from the saved override
     appliedRevision: 9999,
     status: "applied",
     error: null,
-    providers: { deepseek: { configured: true, disabled: false, region: null, base_url: null } },
+    providers: { deepseek: { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" } },
     customProviders: [],
     builtInModels: { deepseek: [{ api_id: "deepseek-flash", label: "闪电速答" }] },
     managedProviders: []
@@ -71,7 +71,7 @@ test("every built-in provider is offered, and a new chat starts on the bundled Q
     appliedRevision: 1,
     status: "applied",
     error: null,
-    providers: { qwen: { configured: true, disabled: false, region: "plan", base_url: null } },
+    providers: { qwen: { configured: true, disabled: false, region: "plan", base_url: null, protocol: "responses" } },
     customProviders: [],
     builtInModels: {}, managedProviders: []
   }
@@ -85,8 +85,8 @@ test("a closed DeepSeek never becomes the fallback for a new chat", () => {
     status: "applied",
     error: null,
     providers: {
-      deepseek: { configured: false, disabled: true, region: null, base_url: null },
-      qwen: { configured: true, disabled: false, region: "plan", base_url: null }
+      deepseek: { configured: false, disabled: true, region: null, base_url: null, protocol: "responses" },
+      qwen: { configured: true, disabled: false, region: "plan", base_url: null, protocol: "responses" }
     },
     customProviders: [],
     builtInModels: {}, managedProviders: []
@@ -196,7 +196,7 @@ test("a configured built-in surfaces in the model picker", () => {
     appliedRevision: 1,
     status: "applied",
     error: null,
-    providers: { deepseek: { configured: true, disabled: false, region: null, base_url: null } },
+    providers: { deepseek: { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" } },
     customProviders: [],
     builtInModels: {}, managedProviders: []
   }
@@ -300,8 +300,8 @@ test("a configured default replaces the built-in fallback only while it still re
     status: "applied",
     error: null,
     providers: {
-      qwen: { configured: true, disabled: false, region: "plan", base_url: null },
-      hakimi: { configured: true, disabled: false, region: null, base_url: null }
+      qwen: { configured: true, disabled: false, region: "plan", base_url: null, protocol: "responses" },
+      hakimi: { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" }
     },
     customProviders: [],
     builtInModels: {}, managedProviders: []
@@ -450,7 +450,7 @@ test.each(["gateway:litellm:old", "gateway:finture-enterprise:old"])(
       builtInModels: {}, managedProviders: []
     }
     expect(resolveSessionModel(model, snapshot, "draft")).toBeNull()
-    snapshot.providers.deepseek = { configured: true, disabled: false, region: null, base_url: null }
+    snapshot.providers.deepseek = { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" }
     expect(resolveSessionModel(model, snapshot, "draft")).toBe(
       gatewayModelId("deepseek", PROVIDERS.find((provider) => provider.id === "deepseek")!.models[0]!.id)
     )

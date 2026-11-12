@@ -18,10 +18,21 @@ use tauri3_specta::Event;
 // only `super::*` and std — so it ports as-is.
 pub mod managed;
 
+/// Upstream wire protocol. Codex always talks Responses to the local router.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum Protocol {
+    #[default]
+    Responses,
+    ChatCompletions,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct Credential {
     api_key: String,
+    #[serde(default)]
+    protocol: Protocol,
     region: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     base_url: Option<String>,
@@ -107,6 +118,7 @@ pub struct Snapshot {
 }
 #[derive(Clone, Serialize, specta::Type)]
 pub struct Metadata {
+    protocol: Protocol,
     configured: bool,
     /// Closed by the user, but its key is still stored — the switch is off, the credential is not.
     disabled: bool,
@@ -141,6 +153,8 @@ pub struct Providers {
 #[derive(Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Input {
+    #[serde(default)]
+    protocol: Option<Protocol>,
     #[serde(default)]
     api_key: Option<String>,
     #[serde(default)]
@@ -273,6 +287,7 @@ impl Inner {
                     (
                         id.clone(),
                         Metadata {
+                            protocol: key.protocol,
                             configured: !key.disabled,
                             disabled: key.disabled,
                             region: key.region.clone(),
@@ -423,9 +438,13 @@ fn update(saved: &Saved, id: String, input: Option<Input>, expected_revision: u6
         // A first DeepSeek connection defaults to closed (the company stopped offering it); an
         // explicit disabled flag — including a deliberate re-enable — always wins.
         let default_disabled = id == "deepseek" && !credentials.contains_key("deepseek");
+        let protocol = input.protocol.or_else(|| credentials.get(&id).map(|key| key.protocol)).unwrap_or_default();
+        if id != "openrouter" && protocol != Protocol::Responses {
+            return Err("Protocol selection is supported only for OpenRouter".into());
+        }
         credentials.insert(
             id,
-            Credential { api_key, region, base_url, disabled: input.disabled.unwrap_or(default_disabled) },
+            Credential { api_key, protocol, region, base_url, disabled: input.disabled.unwrap_or(default_disabled) },
         );
     } else {
         credentials.remove(&id);
@@ -1066,7 +1085,11 @@ async fn reconcile_target(
             }
             // Every gateway is reachable through the one shared provider; the bridge decides where
             // a turn actually goes from the `<gateway>/<model>` name Codex sends.
-            crate::bridge::register_router_route(&runtime_id, &upstream_base, &upstream_token, is_sanitized);
+            let protocol = match selected {
+                AppliedProvider::BuiltIn(key, _) if id == "openrouter" => key.protocol,
+                _ => Protocol::Responses,
+            };
+            crate::bridge::register_protocol_route(&runtime_id, &upstream_base, &upstream_token, is_sanitized, protocol);
             // codex resolves a thread's provider from config.toml when resuming, so a runtime
             // registration alone leaves it "not found". Record a managed block as well.
             // codex 0.164 dropped wire_api = "chat"; the config block only exists so
@@ -2376,7 +2399,7 @@ mod tests {
     }
 
     fn deepseek_credential(disabled: bool) -> Credential {
-        Credential { api_key: "sk-test".into(), region: None, base_url: None, disabled }
+        Credential { protocol: Protocol::Responses, api_key: "sk-test".into(), region: None, base_url: None, disabled }
     }
 
     #[test]
@@ -2441,7 +2464,7 @@ mod tests {
         let closed = update(
             &saved,
             "deepseek".into(),
-            Some(Input { api_key: Some("sk-test".into()), region: None, base_url: None, disabled: None }),
+            Some(Input { protocol: None, api_key: Some("sk-test".into()), region: None, base_url: None, disabled: None }),
             saved.revision,
         )
         .unwrap();
@@ -2450,7 +2473,7 @@ mod tests {
         let enabled = update(
             &saved,
             "deepseek".into(),
-            Some(Input { api_key: Some("sk-test".into()), region: None, base_url: None, disabled: Some(false) }),
+            Some(Input { protocol: None, api_key: Some("sk-test".into()), region: None, base_url: None, disabled: Some(false) }),
             saved.revision,
         )
         .unwrap();
@@ -2462,7 +2485,7 @@ mod tests {
         let kept = update(
             &existing,
             "deepseek".into(),
-            Some(Input { api_key: Some("sk-test".into()), region: None, base_url: None, disabled: None }),
+            Some(Input { protocol: None, api_key: Some("sk-test".into()), region: None, base_url: None, disabled: None }),
             existing.revision,
         )
         .unwrap();
@@ -2625,12 +2648,12 @@ mod tests {
         let saved = update(
             &Saved::default(),
             "qwen".into(),
-            Some(Input { api_key: Some("private-test-secret".into()), region: Some("intl".into()), base_url: None, disabled: None }),
+            Some(Input { protocol: None, api_key: Some("private-test-secret".into()), region: Some("intl".into()), base_url: None, disabled: None }),
             0,
         )
         .unwrap();
         let saved =
-            update(&saved, "qwen".into(), Some(Input { api_key: None, region: Some("cn".into()), base_url: None, disabled: None }), 1)
+            update(&saved, "qwen".into(), Some(Input { protocol: None, api_key: None, region: Some("cn".into()), base_url: None, disabled: None }), 1)
                 .unwrap();
         assert_eq!(saved.credentials["qwen"].api_key, "private-test-secret");
         assert_eq!(saved.credentials["qwen"].region.as_deref(), Some("cn"));
@@ -2645,7 +2668,7 @@ mod tests {
         let saved = update(
             &Saved::default(),
             "deepseek".into(),
-            Some(Input { api_key: Some("kept-secret".into()), region: None, base_url: None, disabled: None }),
+            Some(Input { protocol: None, api_key: Some("kept-secret".into()), region: None, base_url: None, disabled: None }),
             0,
         )
         .unwrap();
@@ -2653,7 +2676,7 @@ mod tests {
         let closed = update(
             &saved,
             "deepseek".into(),
-            Some(Input { api_key: None, region: None, base_url: None, disabled: Some(true) }),
+            Some(Input { protocol: None, api_key: None, region: None, base_url: None, disabled: Some(true) }),
             1,
         )
         .unwrap();
@@ -2676,7 +2699,7 @@ mod tests {
         let reopened = update(
             &inner.saved,
             "deepseek".into(),
-            Some(Input { api_key: None, region: None, base_url: None, disabled: Some(false) }),
+            Some(Input { protocol: None, api_key: None, region: None, base_url: None, disabled: Some(false) }),
             2,
         )
         .unwrap();
@@ -2692,7 +2715,7 @@ mod tests {
             update(
                 &saved,
                 "qwen".into(),
-                Some(Input { api_key: Some("test".into()), region: Some("invalid".into()), base_url: None, disabled: None }),
+                Some(Input { protocol: None, api_key: Some("test".into()), region: Some("invalid".into()), base_url: None, disabled: None }),
                 0
             )
             .is_err()
@@ -2706,7 +2729,7 @@ mod tests {
         let saved = update(
             &Saved::default(),
             "deepseek".into(),
-            Some(Input { api_key: Some("test".into()), region: None, base_url: None, disabled: None }),
+            Some(Input { protocol: None, api_key: Some("test".into()), region: None, base_url: None, disabled: None }),
             0,
         )
         .unwrap();
@@ -2737,7 +2760,7 @@ mod tests {
         let saved = update(
             &Saved::default(),
             "deepseek".into(),
-            Some(Input {
+            Some(Input { protocol: None,
                 api_key: Some("private-test-secret".into()),
                 region: None,
                 base_url: Some("https://gateway.example.test/v1/".into()),
@@ -2899,7 +2922,7 @@ mod tests {
         let saved = update(
             &Saved::default(),
             "qwen".into(),
-            Some(Input { api_key: Some("private-test-secret".into()), region: Some("cn".into()), base_url: None, disabled: None }),
+            Some(Input { protocol: None, api_key: Some("private-test-secret".into()), region: Some("cn".into()), base_url: None, disabled: None }),
             0,
         )
         .unwrap();

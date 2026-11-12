@@ -73,7 +73,10 @@ function themeBackgroundRGB(): [number, number, number] {
  * On macOS it is attached as a child of the main window, so it floats over it and never
  * becomes its own Stage Manager stage.
  */
-export async function openSettingsWindow(section?: SettingsSection): Promise<void> {
+export type SettingsTarget = { providerId?: string }
+export type SettingsNavigation = { section: SettingsSection; providerId?: string }
+
+export async function openSettingsWindow(section?: SettingsSection, target: SettingsTarget = {}): Promise<void> {
   const existing = await WebviewWindow.getByLabel("settings")
   if (existing) {
     // Attach re-parents a window that was detached; a hidden window still needs show and focus.
@@ -103,7 +106,8 @@ export async function openSettingsWindow(section?: SettingsSection): Promise<voi
     }
     if (shown) {
       try {
-        if (section !== undefined) await emitTo("settings", SETTINGS_CHANGE_TAB, section)
+        if (section !== undefined) await emitTo("settings", SETTINGS_CHANGE_TAB,
+          target.providerId ? { section, providerId: target.providerId } : section)
         await emitTo("settings", SETTINGS_RESET_SCROLL, null)
       } catch {
         // The window is already visible; a missed tab switch or scroll reset is harmless.
@@ -113,7 +117,7 @@ export async function openSettingsWindow(section?: SettingsSection): Promise<voi
   }
   const attachToMain = isMac()
   const win = new WebviewWindow("settings", {
-    url: `/settings.html?tab=${section ?? "general"}`,
+    url: `/settings.html?tab=${section ?? "general"}${target.providerId ? `&provider=${encodeURIComponent(target.providerId)}` : ""}`,
     title: i18n.t("settings.title"),
     width: SETTINGS_DEFAULT_WIDTH,
     height: SETTINGS_DEFAULT_HEIGHT,

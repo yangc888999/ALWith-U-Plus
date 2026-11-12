@@ -19,7 +19,7 @@ test("draft falls back to the first configured model when the built-in default i
       snapshot={{
         revision: 1,
         appliedRevision: 1,
-        providers: { hakimi: { configured: true, disabled: false, region: null, base_url: null } },
+        providers: { hakimi: { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" } },
         customProviders: [],
         builtInModels: {}, managedProviders: [],
         status: "applied",
@@ -54,7 +54,7 @@ test("draft falls back to the first configured model when the built-in default i
       snapshot={{
         revision: 1,
         appliedRevision: 1,
-        providers: { hakimi: { configured: true, disabled: false, region: null, base_url: null } },
+        providers: { hakimi: { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" } },
         customProviders: [],
         builtInModels: {}, managedProviders: [],
         status: "applied",
@@ -75,7 +75,7 @@ test("a new draft starts on the bundled DeepSeek-Flash when DeepSeek is configur
       snapshot={{
         revision: 1,
         appliedRevision: 1,
-        providers: { deepseek: { configured: true, disabled: false, region: null, base_url: null } },
+        providers: { deepseek: { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" } },
         customProviders: [],
         builtInModels: {}, managedProviders: [],
         status: "applied",
@@ -125,7 +125,7 @@ test("draft shows the model 设置 → 默认会话模型 picked, with its saved
       snapshot={{
         revision: 1,
         appliedRevision: 1,
-        providers: { hakimi: { configured: true, disabled: false, region: null, base_url: null } },
+        providers: { hakimi: { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" } },
         customProviders: [],
         builtInModels: {}, managedProviders: [],
         status: "applied",

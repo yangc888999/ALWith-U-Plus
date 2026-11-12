@@ -4,6 +4,7 @@
 // Only providers that speak the OpenAI Responses API natively are listed (Codex dropped chat
 // completions); Kimi, MiniMax and Zhipu are reached through OpenRouter.
 
+import { listen } from "@tauri-apps/api/event"
 import { SparklesIcon } from "lucide-react"
 import type { ComponentType, SVGProps } from "react"
 
@@ -214,11 +215,13 @@ export function providerGroups(
         id: provider.id,
         name: provider.name,
         models: overridden
-          ? overridden.map((model) => ({
-              id: model.api_id,
-              label: model.label,
-              ...(model.description == null ? {} : { description: model.description })
-            }))
+          ? overridden
+              .filter((model) => model.enabled !== false)
+              .map((model) => ({
+                id: model.api_id,
+                label: model.label,
+                ...(model.description == null ? {} : { description: model.description })
+              }))
           : provider.models
       }
     }),
@@ -244,6 +247,11 @@ export function providerGroups(
     }))
   ]
 }
+/** Picker-only policy: keep the legacy account provider resolvable, but never offer it twice. */
+export function pickerProviderGroups(snapshot: ProviderSnapshot): ReturnType<typeof providerGroups> {
+  return providerGroups(snapshot).filter((provider) => provider.id !== "litellm")
+}
+
 export function gatewayModelId(providerId: string, modelId: string): string {
   // Keep persisted IDs stable; the adapter accepts only [a-z0-9-]+. Match providers.rs.
   const runtimeId = providerId.startsWith("custom_")
@@ -313,15 +321,92 @@ async function withEnterpriseCatalog(snapshot: ProviderSnapshot): Promise<Provid
   return projectEnterpriseProviders(snapshot, enterpriseCatalog(await commands.enterpriseCatalog()))
 }
 
-export function loadProviders(): Promise<ProviderSnapshot> {
-  return commands.providersRead().then(async (snapshot) => {
+// All reads and notifications share ordering, including across multiple mounted hooks.
+let projectionRequest = 0
+let subscriptionGeneration = 0
+let latestRawSnapshot: ProviderSnapshot | null = null
+let latestProjection: Promise<ProviderSnapshot> | null = null
+const snapshotListeners = new Set<(snapshot: ProviderSnapshot) => void>()
+
+function refreshProviderSnapshot(raw?: ProviderSnapshot | Promise<ProviderSnapshot>): Promise<ProviderSnapshot> {
+  let request = ++projectionRequest
+  const generation = subscriptionGeneration
+  // The first await runs before either this operation or acceptedSnapshot can reference it.
+  let operation!: Promise<ProviderSnapshot>
+  operation = (async () => {
+    let snapshot = await (raw ?? commands.providersRead())
+    if (generation !== subscriptionGeneration) throw new Error("Provider snapshot subscription ended")
+    const revision = Math.max(latestRawSnapshot?.revision ?? -1, cachedSnapshot?.revision ?? -1)
+    if (request !== projectionRequest && snapshot.revision <= revision) return acceptedSnapshot()
+    if (snapshot.revision < revision) snapshot = latestRawSnapshot ?? cachedSnapshot!
+    // An older read may discover a newer native revision. Project it afresh, never reuse an
+    // enterprise response obtained before a subsequent login/logout notification.
+    if (request !== projectionRequest) {
+      request = ++projectionRequest
+      latestProjection = operation
+    }
+    latestRawSnapshot = snapshot
     const projected = await withEnterpriseCatalog(snapshot)
+    if (generation !== subscriptionGeneration) throw new Error("Provider snapshot subscription ended")
+    if (request !== projectionRequest) return acceptedSnapshot()
     setProviderSnapshot(projected)
     return projected
-  })
+  })()
+  function acceptedSnapshot(): ProviderSnapshot | Promise<ProviderSnapshot> {
+    if (latestProjection && latestProjection !== operation) return latestProjection
+    if (cachedSnapshot) return cachedSnapshot
+    throw new Error("Provider snapshot was superseded")
+  }
+  latestProjection = operation
+  return operation
+}
+
+export function loadProviders(): Promise<ProviderSnapshot> {
+  return refreshProviderSnapshot()
+}
+
+/** Subscribe before reading; every consumer receives the same accepted, projected snapshot. */
+export async function listenProviderSnapshots(
+  listener: (snapshot: ProviderSnapshot) => void,
+  onError: (error: unknown) => void
+): Promise<() => void> {
+  let active = true
+  snapshotListeners.add(listener)
+  if (cachedSnapshot) listener(cachedSnapshot)
+  const refresh = (snapshot?: ProviderSnapshot) => {
+    if (!active) return
+    void refreshProviderSnapshot(snapshot).catch((error: unknown) => {
+      if (active) onError(error)
+    })
+  }
+  const removeListener = () => {
+    active = false
+    snapshotListeners.delete(listener)
+    if (snapshotListeners.size === 0) {
+      projectionRequest++
+      subscriptionGeneration++
+      latestProjection = null
+    }
+  }
+  let stopEnterprise: (() => void) | null = null
+  let stopProviders: (() => void) | null = null
+  try {
+    stopEnterprise = await listen("enterprise:models-changed", () => refresh()).catch(() => null)
+    stopProviders = await events["providers:changed"].listen((event) => refresh(event.payload))
+    refresh()
+    return () => {
+      removeListener()
+      stopEnterprise?.()
+      stopProviders?.()
+    }
+  } catch (error) {
+    removeListener()
+    stopEnterprise?.()
+    throw error
+  }
 }
 function applyProviders(): Promise<ProviderSnapshot> {
-  return commands.providersApply().then(withEnterpriseCatalog)
+  return refreshProviderSnapshot(commands.providersApply())
 }
 
 /**
@@ -338,6 +423,8 @@ let cachedSnapshot: ProviderSnapshot | null = null
 export function setProviderSnapshot(snapshot: ProviderSnapshot): void {
   if (cachedSnapshot !== null && cachedSnapshot.revision > snapshot.revision) return
   cachedSnapshot = snapshot
+  rememberNativeOverrides(snapshot.builtInModels?.["openai"] ?? null)
+  for (const listener of snapshotListeners) listener(snapshot)
 }
 
 /** Synchronous, read-only view of the last applied provider catalog. */
@@ -369,13 +456,13 @@ export function saveProviderKey(
   providerId: string,
   input: ProviderInput | null
 ): Promise<ProviderSnapshot> {
-  return commands.providersSave({ providerId, input, expectedRevision: revision }).then(withEnterpriseCatalog)
+  return refreshProviderSnapshot(commands.providersSave({ providerId, input, expectedRevision: revision }))
 }
 export function saveCustomProvider(revision: number, input: CustomProviderInput): Promise<ProviderSnapshot> {
-  return commands.providersSaveCustom({ input, expectedRevision: revision }).then(withEnterpriseCatalog)
+  return refreshProviderSnapshot(commands.providersSaveCustom({ input, expectedRevision: revision }))
 }
 export function removeCustomProvider(revision: number, providerId: string): Promise<ProviderSnapshot> {
-  return commands.providersRemoveCustom({ providerId, expectedRevision: revision }).then(withEnterpriseCatalog)
+  return refreshProviderSnapshot(commands.providersRemoveCustom({ providerId, expectedRevision: revision }))
 }
 export function testProvider(providerId: string): Promise<ProviderTestResult> {
   return commands.providersTest({ providerId })
@@ -654,7 +741,7 @@ export function saveBuiltInModels(
     if (model.enabled != null) entry.enabled = model.enabled
     return entry
   })
-  return commands.providersSaveBuiltInModels({ providerId, models: serialized, expectedRevision: revision }).then(withEnterpriseCatalog)
+  return refreshProviderSnapshot(commands.providersSaveBuiltInModels({ providerId, models: serialized, expectedRevision: revision }))
 }
 
 export const PROVIDERS_CHANGED = events["providers:changed"].name

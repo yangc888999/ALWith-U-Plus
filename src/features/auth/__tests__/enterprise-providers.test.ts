@@ -30,6 +30,19 @@ test("native enterprise metadata is exposed as account models alongside personal
   expect(isEnterpriseModel("gateway:finture-enterprise:issued%2Fmodel")).toBe(true)
 })
 
+test("enterprise projection is idempotent and replaces only enterprise-managed entries", () => {
+  const saved = snapshot()
+  const unrelated = { ...provider, id: "custom_managed_other" }
+  const previous = { ...provider, id: "custom_alwith_enterprise_previous" }
+  saved.managedProviders = [unrelated, previous]
+  saved.customProviders.push(previous)
+  const projected = projectEnterpriseProviders(saved, provider)
+  expect(projected.managedProviders).toEqual([unrelated, provider])
+  expect(projectEnterpriseProviders(projected, provider)).toEqual(projected)
+  expect(projectEnterpriseProviders(projected, null).managedProviders).toEqual([unrelated])
+  expect(saved.managedProviders).toEqual([unrelated, previous])
+})
+
 test("the webview catalog carries API-issued metadata and rejects credentials", () => {
   expect(enterpriseCatalog(provider)).toEqual(provider)
   expect(enterpriseCatalog(null)).toBeNull()
@@ -39,6 +52,7 @@ test("the webview catalog carries API-issued metadata and rejects credentials", 
 test("cached enterprise providers are hidden when native has no authorized catalog", () => {
   const saved = snapshot()
   saved.customProviders.push(provider)
+  saved.managedProviders = [provider]
   expect(projectEnterpriseProviders(saved, null).customProviders.map((p) => p.id)).toEqual(["custom_personal"])
   expect(projectEnterpriseProviders(saved, null).managedProviders).toEqual([])
 })

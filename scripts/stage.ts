@@ -30,6 +30,7 @@ import { stageRuntime } from "@alwith/runtime/stage"
 import { $ } from "bun"
 
 import manifest from "../package.json"
+import { patchAdapter } from "./lib/adapter-patch"
 import { stageComputer } from "./lib/computer-artifact"
 import { runtimeBuildArtifact, runtimeSource, stageTarget } from "./lib/runtime-artifact"
 import { assertVersion, BUN_PACKAGES, CODEX_WINDOWS_HELPERS, codexSidecars, toolchainVersions } from "./lib/toolchain"
@@ -184,8 +185,8 @@ const adapterEntry = join(root, "node_modules/@nyssance/codex-acp-v2/dist/index.
 const adapterDirectory = join(root, "src-tauri/resources/adapter")
 mkdirSync(adapterDirectory, { recursive: true })
 const adapterDestination = join(adapterDirectory, "codex-acp-v2.mjs")
-// Preserve the published adapter byte-for-byte. U's cache bootstrap is a separate resource.
-copyFileSync(adapterEntry, adapterDestination)
+// Apply pinned, regression-tested fixes every stage; generated resources are not the source of truth.
+await Bun.write(adapterDestination, patchAdapter(readFileSync(adapterEntry, "utf8")))
 const bootstrapBuild = await Bun.build({
   entrypoints: [join(root, "scripts/codex-bootstrap.ts")],
   target: "bun",

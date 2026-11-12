@@ -114,6 +114,21 @@ test("reopening hidden macOS settings always shows and focuses the existing wind
   expect(host.create).not.toHaveBeenCalled()
 })
 
+test("OpenRouter target is encoded in new settings windows", async () => {
+  await openSettingsWindow("provider", { providerId: "openrouter" })
+  expect(host.create).toHaveBeenCalledWith("settings", expect.objectContaining({
+    url: "/settings.html?tab=provider&provider=openrouter"
+  }))
+})
+
+test("OpenRouter target reaches existing settings windows", async () => {
+  host.existing = true
+  await openSettingsWindow("provider", { providerId: "openrouter" })
+  expect(host.emit).toHaveBeenCalledWith("settings", "settings-change-tab", {
+    section: "provider", providerId: "openrouter"
+  })
+})
+
 test("a stale hidden settings window is recreated instead of silently staying closed", async () => {
   host.existing = true
   host.show.mockRejectedValueOnce(new Error("window not found"))

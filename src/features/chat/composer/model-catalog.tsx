@@ -103,12 +103,37 @@ function trimNativeGroup(group: ModelGroup): ModelGroup {
 function withSnapshotModels(groups: ModelGroup[]): ModelGroup[] {
   const snapshot = getProviderSnapshot()
   if (snapshot === null) return groups
-  const next = groups.map((group) => ({ ...group, models: [...group.models] }))
+  const next = groups.map((group) => ({ ...group, models: group.models.map((model) => ({ ...model })) }))
   for (const provider of providerGroups(snapshot)) {
-    let target = next.find((group) => group.id === provider.id)
+    // The snapshot keeps the public ID; session catalogs use the gateway's encoded runtime ID.
+    // Derive that alias through the routing helper without rewriting either persisted identity.
+    const runtimeId = decodeURIComponent(gatewayModelId(provider.id, "").split(":")[1])
+    const matches = next.filter((group) => group.id === provider.id || group.id === runtimeId)
+    let target = matches[0]
     if (target === undefined) {
       target = { id: provider.id, name: provider.name, models: [] }
       next.push(target)
+    } else {
+      // Keep the first session group's ID and row metadata, including when both aliases exist.
+      const byId = new Map<string, ModelOption>()
+      for (const group of matches) {
+        for (const model of group.models) {
+          const existing = byId.get(model.api_id)
+          byId.set(model.api_id, existing === undefined ? model : { ...model, ...existing })
+        }
+        if (group !== target) next.splice(next.indexOf(group), 1)
+      }
+      target.models = [...byId.values()]
+    }
+    // OpenRouter only: the snapshot list is the user's explicit enabled shortlist, so a session row
+    // the snapshot no longer offers is a disabled/removed model and must leave the picker. Other
+    // providers (enterprise included) can publish partial snapshots mid-refresh; pruning against
+    // those would wipe a healthy group, so their session-only rows are kept.
+    if (provider.id === "openrouter") {
+      const offered = new Set(provider.models.map((model) => gatewayModelId(provider.id, model.id)));
+      target.models = target.models.filter(
+        (model) => !model.api_id.startsWith(`gateway:${encodeURIComponent(runtimeId)}:`) || offered.has(model.api_id)
+      );
     }
     for (const model of provider.models) {
       const apiId = gatewayModelId(provider.id, model.id)
@@ -127,7 +152,15 @@ function withSnapshotModels(groups: ModelGroup[]): ModelGroup[] {
 
 /** Put the subscription provider first while preserving provider and model order. */
 export function presentModelCatalog(groups: ModelGroup[]): ModelGroup[] {
-  const trimmed = withSnapshotModels(groups).map(trimNativeGroup);
+  // Filter identity, not presentation: old sessions can retain LiteLLM rows in other groups,
+  // and snapshot augmentation must not add the retired account entry back afterwards.
+  const trimmed = withSnapshotModels(groups)
+    .filter((group) => group.id !== "litellm")
+    .map((group) => ({
+      ...group,
+      models: group.models.filter((model) => !model.api_id.startsWith("gateway:litellm:")),
+    }))
+    .map(trimNativeGroup);
   const ordered = [
     ...trimmed.filter((group) => group.id === NATIVE_MODEL_GROUP.id),
     ...trimmed.filter((group) => group.id !== NATIVE_MODEL_GROUP.id),
