@@ -162,6 +162,28 @@ pub(super) async fn connection(
 /// reader sees a short "compacting" step instead of a dead turn near the end of the window.
 const COMPACT_AT: f64 = 0.7;
 
+/// Injects `auto_compact_token_limit = window * ratio` into every catalog model that declares a
+/// positive `context_window`. Pure and idempotent: a model already holding the exact limit is left
+/// untouched, so repeated passes never rewrite an unchanged file.
+///
+/// Shared with the account-managed (company) catalog tuner, which re-applies the same 70% rule to
+/// the engine-owned `model-catalogs/alwith/models.json` (the company DeepSeek V4.1 Flash path).
+pub(crate) fn inject_auto_compact(catalog: &mut Value, ratio: f64) -> usize {
+    let Some(models) = catalog.get_mut("models").and_then(Value::as_array_mut) else { return 0 };
+    let mut count = 0;
+    for model in models.iter_mut() {
+        let Some(window) = model.get("context_window").and_then(Value::as_u64).filter(|window| *window > 0) else {
+            continue;
+        };
+        let limit = (window as f64 * ratio) as u64;
+        if model.get("auto_compact_token_limit").and_then(Value::as_u64) != Some(limit) {
+            model["auto_compact_token_limit"] = serde_json::json!(limit);
+            count += 1;
+        }
+    }
+    count
+}
+
 /// Adds `auto_compact_token_limit` to every catalog entry that declares a window.
 ///
 /// The catalog is built by the native owner, but the shape is the engine's own (`models[]` with
@@ -170,18 +192,21 @@ const COMPACT_AT: f64 = 0.7;
 /// unknown model would compact far too often instead of too late.
 fn tune_compaction(catalog: &Value) -> Option<Value> {
     let mut tuned = catalog.clone();
-    let mut tuned_count = 0usize;
-    for model in tuned.get_mut("models")?.as_array_mut()? {
-        let Some(window) = model.get("context_window").and_then(Value::as_u64).filter(|window| *window > 0) else {
-            continue;
-        };
-        let limit = (window as f64 * COMPACT_AT) as u64;
-        model["auto_compact_token_limit"] = serde_json::json!(limit);
-        let slug = model.get("slug").and_then(Value::as_str).unwrap_or("?");
-        log::info!("enterprise: {slug} compacts at {limit} of {window} tokens");
-        tuned_count += 1;
+    if inject_auto_compact(&mut tuned, COMPACT_AT) == 0 {
+        return None;
     }
-    (tuned_count > 0).then_some(tuned)
+    if let Some(models) = tuned.get("models").and_then(Value::as_array) {
+        for model in models {
+            if let (Some(window), Some(limit)) = (
+                model.get("context_window").and_then(Value::as_u64),
+                model.get("auto_compact_token_limit").and_then(Value::as_u64),
+            ) {
+                let slug = model.get("slug").and_then(Value::as_str).unwrap_or("?");
+                log::info!("enterprise: {slug} compacts at {limit} of {window} tokens");
+            }
+        }
+    }
+    Some(tuned)
 }
 
 /// Writes the tuned copy under the app cache and returns its path, so the native catalog stays
@@ -255,6 +280,26 @@ mod connection_tests {
         assert_eq!(connection.relay.api_key, "memory-only-secret");
         assert_eq!(connection.params["_meta"]["codex"]["id"], runtime_id(&id));
         assert_eq!(connection.params["_meta"]["alwith"]["models"][0]["id"], "issued/model");
+    }
+
+    #[test]
+    fn inject_auto_compact_sets_the_window_fraction_and_is_idempotent() {
+        let mut catalog = json!({"models":[
+            {"slug":"big","context_window":1000000},
+            {"slug":"small","context_window":200000},
+            {"slug":"unknown"}
+        ]});
+        assert_eq!(inject_auto_compact(&mut catalog, 0.7), 2);
+        assert_eq!(catalog["models"][0]["auto_compact_token_limit"], 700000);
+        assert_eq!(catalog["models"][1]["auto_compact_token_limit"], 140000);
+        assert!(catalog["models"][2].get("auto_compact_token_limit").is_none());
+        // A second pass on an already-tuned catalog changes nothing.
+        assert_eq!(inject_auto_compact(&mut catalog, 0.7), 0);
+        // A different ratio re-tunes.
+        assert_eq!(inject_auto_compact(&mut catalog, 0.8), 2);
+        assert_eq!(catalog["models"][0]["auto_compact_token_limit"], 800000);
+        // Catalogs without a `models` array are left alone.
+        assert_eq!(inject_auto_compact(&mut json!({"data":[]}), 0.7), 0);
     }
 
     #[test]

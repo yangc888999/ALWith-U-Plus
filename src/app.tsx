@@ -60,6 +60,7 @@ import { WorkspaceHeaderContext } from "@/features/workspace/context"
 import { createChatDirectory, isTemporaryChatDir } from "@/lib/quick-chat"
 import { FileWorkspace } from "@/features/workspace/file-workspace"
 import { useFourColumnsDefault } from "@/features/workspace/four-columns-preference"
+import { usePreviewVisiblePreference } from "@/features/workspace/preview-visible-preference"
 import { closeOnlineBiWindow } from "@/features/workspace/online-bi"
 import { usePreviewExtension } from "@/features/workspace/preview-extension"
 import { logBackgroundError, reportBackgroundError } from "@/lib/background-errors"
@@ -466,8 +467,10 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   const currentDirectory = session?.cwd ?? lastDirectory
   const isTemporaryChat = isTemporaryChatDir(currentDirectory)
   // Projects open four columns wide unless 设置 → 主题和外观 → 界面布局 says otherwise. A temporary
-  // chat is two columns regardless: it has no project behind it to preview.
+  // chat is two columns regardless: it has no project behind it to preview. With four columns off,
+  // the preview still opens by default only when its own visibility toggle is on.
   const fourColumnsDefault = useFourColumnsDefault()
+  const [previewVisible] = usePreviewVisiblePreference()
 
   const [draftCollection, setDraftCollection] = useState<{
     id: string
@@ -1351,8 +1354,9 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                   chatRevealRequest={chatRevealRequest}
                   columnsRequest={columnsRequest}
                   busy={session != null && session.state !== "idle"}
-                  // Projects open with all four columns; temporary chats stay two-column.
-                  defaultOpen={!isTemporaryChat && fourColumnsDefault}
+                  // Projects open with the preview when four columns is on, or when its own
+                  // visibility toggle is on; temporary chats stay two-column.
+                  defaultOpen={!isTemporaryChat && (fourColumnsDefault || previewVisible)}
                 >
                   <DriveDeleteConfirmation />
                   <div className="flex min-h-0 flex-1 flex-col">{main}</div>

@@ -125,6 +125,7 @@ import { useProviders } from "@/lib/use-providers"
 import { cn } from "@/lib/utils"
 
 import { CodexProviderSection } from "./codex-provider-section"
+import { CompanyReasoningRow } from "./company-reasoning-row"
 import { ModelSection } from "./model-section"
 import { SettingsCard } from "./shared"
 
@@ -566,6 +567,8 @@ export function ProviderSection({ initialProviderId }: { initialProviderId?: str
             </div>
           </>
           )}
+          {/* 公司模型默认思考级别：从上面的独立卡片搬到这里，与它作用的模型放在一起。 */}
+          <CompanyReasoningRow />
         </SettingsCard>
       </div>
     </div>

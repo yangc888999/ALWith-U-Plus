@@ -566,6 +566,15 @@
     "treeVisibleDesc": "When off, chat and preview take the whole workspace and projects no longer list their files on open. The folder button at the start of the preview toolbar brings the column back.",
     "fourColumnsDefault": "Open project chats in four columns",
     "fourColumnsDefaultDesc": "When on, a project chat opens with the preview column already showing. When off it starts three columns wide, and the preview appears the first time you open a file.",
+    "sidebarAutoCollapse": "Auto-collapse sidebar",
+    "sidebarAutoCollapseDesc": "When on, the sidebar starts collapsed and expands automatically when the cursor reaches the left edge.",
+    "previewVisible": "Show preview",
+    "previewVisibleDesc": "When off, a project no longer opens with the preview open; the toolbar button can still bring it back.",
+    "chatColumnLocked": "Chat (always shown)",
+    "chatColumnLockedDesc": "The chat column cannot be closed; there is always a conversation area.",
+    "layoutTogglesLockedHint": "With four columns on, all columns show by default and the options below cannot be changed individually.",
+    "layoutCustomHint": "Four columns is off; you can set each column's visibility separately.",
+    "alwaysOn": "Always on",
     "layoutDesc": "Chat and preview belong to the same share set and always add up to 100%.",
     "layoutRatioDesc": "Scales with the window width as a percentage of the open window.",
     "drive": "Drive",
@@ -1293,6 +1302,18 @@
     "divisionScopeNote": "Only chats that start a new split pick this up; a chat that already has one keeps its own pair and is never overwritten.",
     "overloadMute": "Mute model overload notices",
     "overloadMuteDescription": "When on, the bridge swallows `server_is_overloaded`, re-sends the same request immediately without waiting for the backend retry-after, and keeps going with no ceiling until a real response arrives. When off, the refusal is shown as usual. Changes take effect immediately, no engine restart needed."
+  },
+  "companyModel": {
+    "title": "Company model (Finture)",
+    "description": "Default reasoning depth for the company-hosted DeepSeek V4.1 Flash. Applies to new chats immediately, no restart needed.",
+    "scope": "Scope · company model",
+    "reasoningLabel": "Default reasoning level",
+    "levels": {
+      "low": "Low",
+      "high": "High",
+      "max": "Max (deepest)"
+    },
+    "note": "This level is written into the engine model catalog as the model's own default; you can still change it per chat. Defaults to Max."
   },
   "updater": {
     "installing": "Installing update… The app will restart automatically.",

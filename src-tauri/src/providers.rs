@@ -7,7 +7,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     io::Write,
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
+    sync::{Arc, LazyLock, Mutex, OnceLock},
     time::Instant,
 };
 use tauri::{AppHandle, Manager, State};
@@ -17,6 +17,34 @@ use tauri3_specta::Event;
 // seven commits after this checkout's baseline `a587d228`. It has no private-crate dependency —
 // only `super::*` and std — so it ports as-is.
 pub mod managed;
+
+/// Default reasoning level for the account-managed (company) model.
+///
+/// The company DeepSeek V4.1 Flash exposes `low` / `high` / `max`; the user wants it to think at
+/// `max` by default and to be able to change that from 大模型. The value is mirrored into the shared
+/// engine catalog (`model-catalogs/alwith/models.json`) by `tune_managed_catalog`, and into the
+/// managed provider snapshot by `parse_catalog`, so both the engine's actual thinking and the
+/// picker's default agree. Persisted to `company-model.json` so it survives restarts; the frontend
+/// pushes its choice here on startup.
+const COMPANY_REASONING_LEVELS: &[&str] = &["low", "high", "max"];
+static COMPANY_MODEL_REASONING: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(Some("max".to_string())));
+
+/// The configured default reasoning level for the company model, or `Some("max")` when unset.
+pub(crate) fn company_reasoning_level() -> Option<String> {
+    COMPANY_MODEL_REASONING.lock().unwrap().clone()
+}
+
+/// Restores the persisted company-model reasoning level (no-op when the file is absent or invalid).
+fn load_company_model_reasoning(directory: &Path) {
+    let path = directory.join("company-model.json");
+    let Ok(bytes) = std::fs::read(&path) else { return };
+    let Ok(value) = serde_json::from_slice::<Value>(&bytes) else { return };
+    if let Some(level) = value.get("reasoningLevel").and_then(|level| level.as_str()) {
+        if COMPANY_REASONING_LEVELS.contains(&level) {
+            *COMPANY_MODEL_REASONING.lock().unwrap() = Some(level.to_string());
+        }
+    }
+}
 
 /// Upstream wire protocol. Codex always talks Responses to the local router.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, specta::Type)]
@@ -243,6 +271,8 @@ impl Providers {
                 log::warn!("Provider store: could not persist the DeepSeek default close: {error}");
             }
         }
+        // Restore the company model's configured reasoning level before any catalog tuning runs.
+        load_company_model_reasoning(&directory);
         // The gate is process memory, so a cached account has to be put back here: without it
         // `check_selection` treats every signed-in model as unavailable after a restart, and the
         // chat refuses to send with "The selected ALwith account model is unavailable".
@@ -1775,6 +1805,135 @@ fn write_custom_catalog(directory: &Path, provider: &CustomProvider, compact_ear
     Ok(path)
 }
 
+/// Sets `default_reasoning_level` on every model in the shared company catalog whose
+/// `supported_reasoning_levels` includes `level`. Idempotent: only writes when the value differs,
+/// so re-running on every tune tick is free.
+fn inject_default_reasoning(catalog: &mut Value, level: Option<&str>) -> usize {
+    let Some(level) = level else { return 0 };
+    let Some(models) = catalog.get_mut("models").and_then(|models| models.as_array_mut()) else {
+        return 0;
+    };
+    let mut changed = 0;
+    for model in models {
+        let supported = model
+            .get("supported_reasoning_levels")
+            .and_then(Value::as_array)
+            .map(|levels| levels.iter().any(|entry| entry.get("effort").and_then(Value::as_str) == Some(level)))
+            .unwrap_or(false);
+        if !supported {
+            continue;
+        }
+        match model.get("default_reasoning_level").and_then(Value::as_str) {
+            Some(current) if current == level => {}
+            _ => {
+                model["default_reasoning_level"] = json!(level);
+                changed += 1;
+            }
+        }
+    }
+    changed
+}
+
+/// Injects `auto_compact_token_limit` and `default_reasoning_level` into the shared ALwith model
+/// catalog that the account-managed (company) provider points at, in place.
+///
+/// The account-managed `litellm` provider's `model_catalog_json` is the engine-owned
+/// `model-catalogs/alwith/models.json`, which the Codex plugin regenerates from a bundled template
+/// at startup. That template leaves `auto_compact_token_limit` unset (so the engine compacts at its
+/// own 95% default — the late-window silence "上游长时间没有输出" the enterprise relay already avoids
+/// by compacting at 70%) and pins `default_reasoning_level` to `high` (the user wants `max`, and
+/// wants it configurable). We mirror both fixes here: `inject_auto_compact` sets
+/// `auto_compact_token_limit = window * 0.7`, and `inject_default_reasoning` sets the model's
+/// default thinking level from the configured company-model reasoning level.
+///
+/// The plugin rewrites this file on every Codex launch, so the caller re-runs this after startup
+/// (see `start_managed_catalog_tuner`). Returns whether the file existed and was (re)tuned.
+fn tune_managed_catalog(app: &AppHandle) -> bool {
+    use tauri::Manager;
+    let Ok(directory) = app.path().app_data_dir() else { return false };
+    let path = directory.join("model-catalogs").join("alwith").join("models.json");
+    let Ok(bytes) = std::fs::read(&path) else { return false };
+    let Ok(mut catalog) = serde_json::from_slice::<Value>(&bytes) else { return false };
+    let compacted = crate::enterprise::catalog::inject_auto_compact(&mut catalog, 0.7);
+    let reasoned = inject_default_reasoning(&mut catalog, company_reasoning_level().as_deref());
+    if compacted == 0 && reasoned == 0 {
+        return false;
+    }
+    if let Ok(next) = serde_json::to_vec_pretty(&catalog) {
+        if next != bytes {
+            if let Err(error) = std::fs::write(&path, &next) {
+                log::warn!("managed: could not tune shared catalog: {error}");
+            }
+        }
+    }
+    true
+}
+
+/// Sets the company model's default reasoning level and propagates it everywhere it matters.
+///
+/// The level is stored in process memory, persisted to `company-model.json`, mirrored into the
+/// shared engine catalog (so new chats on the company model actually think at that level), and
+/// written into the live managed-provider snapshot (so the 大模型 picker shows the new default
+/// immediately). Invalid levels (anything but `low` / `high` / `max`) are rejected; `None` keeps
+/// the default `max`.
+#[tauri3_specta::command]
+pub async fn set_company_model_reasoning(app: AppHandle, level: Option<String>) -> Result<(), String> {
+    let normalized = match level {
+        None => "max".to_string(),
+        Some(ref candidate) if COMPANY_REASONING_LEVELS.contains(&candidate.as_str()) => candidate.clone(),
+        Some(other) => return Err(format!("Unsupported reasoning level: {other}")),
+    };
+    *COMPANY_MODEL_REASONING.lock().unwrap() = Some(normalized.clone());
+    if let Ok(directory) = app.path().app_data_dir() {
+        let path = directory.join("company-model.json");
+        if let Ok(bytes) = serde_json::to_vec_pretty(&json!({ "reasoningLevel": normalized })) {
+            let _ = std::fs::write(&path, bytes);
+        }
+    }
+    // Engine thinking changes without waiting for the next 15s tune tick.
+    tune_managed_catalog(&app);
+    // Reflect the new default in the picker right away.
+    {
+        let state = app.state::<Providers>();
+        let mut inner = state.inner.lock().await;
+        if let Some(cache) = inner.saved.managed.as_mut() {
+            if let Some(provider) = cache.provider.as_mut() {
+                for model in &mut provider.models {
+                    model.reasoning_levels = Some(COMPANY_REASONING_LEVELS.iter().map(|level| level.to_string()).collect());
+                    model.default_reasoning_level = Some(normalized.clone());
+                }
+            }
+        }
+        let _ = inner.snapshot().emit(&app);
+    }
+    Ok(())
+}
+
+/// Keeps the account-managed (company) model catalog tuned across Codex restarts.
+///
+/// The Codex plugin rewrites `model-catalogs/alwith/models.json` from its bundled template on each
+/// launch, which strips the `auto_compact_token_limit` and `default_reasoning_level` we inject.
+/// This loop re-tunes shortly after startup (when the plugin first writes the file) and then
+/// periodically, so the company DeepSeek V4.1 Flash always compacts early and thinks at the
+/// configured level rather than going silent or dropping to `high` near the end of the window.
+pub fn start_managed_catalog_tuner(app: &AppHandle) {
+    if cfg!(test) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // Fast passes for the first ~8s to catch the plugin's startup write, then a calm cadence.
+        for _ in 0..8 {
+            tune_managed_catalog(&app);
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            tune_managed_catalog(&app);
+        }
+    });
+}
+
 /// Merge user overrides onto a built-in provider's bundled catalog and write it next to the custom
 /// catalogs. Returns the absolute path for `model_catalog_json`, so the adapter threads the
 /// overridden Effort levels, context window, display name and slug instead of the bundled ones.
@@ -2936,6 +3095,44 @@ mod tests {
         // remedy for the company relay, not a new global default.
         let plain = custom_catalog(&provider, false).unwrap();
         assert!(plain["models"][0].get("auto_compact_token_limit").is_none());
+    }
+
+    #[test]
+    fn inject_default_reasoning_only_touches_supported_levels_and_is_idempotent() {
+        let mut catalog = json!({
+            "models": [
+                {
+                    "slug": "deepseek-V4.1-flash",
+                    "supported_reasoning_levels": [
+                        {"effort": "low"}, {"effort": "high"}, {"effort": "max"}
+                    ],
+                    "default_reasoning_level": "high"
+                },
+                {
+                    // A model that does not advertise `max` must be left alone.
+                    "slug": "other",
+                    "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}],
+                    "default_reasoning_level": "high"
+                }
+            ]
+        });
+        // First pass writes Max on the company model only.
+        let written = inject_default_reasoning(&mut catalog, Some("max"));
+        assert_eq!(written, 1, "only the company model should change");
+        assert_eq!(catalog["models"][0]["default_reasoning_level"], "max");
+        assert_eq!(catalog["models"][1]["default_reasoning_level"], "high", "unsupported model untouched");
+        // Re-running with the same level is a no-op (idempotent).
+        let again = inject_default_reasoning(&mut catalog, Some("max"));
+        assert_eq!(again, 0, "already at Max: nothing to write");
+        // A different level lands on every model that supports it (the "other" model advertises
+        // `low`, so lowering to `low` changes it too — the function is catalog-wide, not just the
+        // company model).
+        let lowered = inject_default_reasoning(&mut catalog, Some("low"));
+        assert_eq!(lowered, 2);
+        assert_eq!(catalog["models"][0]["default_reasoning_level"], "low");
+        assert_eq!(catalog["models"][1]["default_reasoning_level"], "low");
+        // None is a no-op.
+        assert_eq!(inject_default_reasoning(&mut catalog, None), 0);
     }
 
     #[tokio::test]

@@ -10,7 +10,7 @@ import { SettingRow } from "./shared"
  * It writes the same preference as the folder button in the tree header, which is why closing it
  * there also turns this switch off.
  */
-export function TreeVisibleRow({ compact = false }: { compact?: boolean }) {
+export function TreeVisibleRow({ compact = false, disabled = false }: { compact?: boolean; disabled?: boolean }) {
   const { t } = useTranslation()
   const [visible, setVisible] = useTreeVisiblePreference()
   return (
@@ -18,6 +18,7 @@ export function TreeVisibleRow({ compact = false }: { compact?: boolean }) {
       <Switch
         aria-label={t("settings.treeVisible")}
         checked={visible}
+        disabled={disabled}
         onCheckedChange={setVisible}
       />
     </SettingRow>

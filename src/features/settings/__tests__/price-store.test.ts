@@ -45,12 +45,28 @@ describe("peak windows", () => {
 
 describe("built-in snapshot", () => {
   test("merges peak/off-peak rows and keeps native currencies", () => {
-    expect(new Set(DEFAULT_PRICES.map((price) => price.vendor)).size).toBe(9)
+    expect(new Set(DEFAULT_PRICES.map((price) => price.vendor)).size).toBe(10)
     const v4 = DEFAULT_PRICES.find((price) => price.model === "deepseek-v4-pro")!
     expect(v4.currency).toBe("CNY")
     expect(v4.offPeak).not.toBeNull()
     expect(DEFAULT_PRICES.filter((price) => price.model === "MiniMax-M3")).toHaveLength(1)
     expect(DEFAULT_PRICES.find((price) => price.model === "gpt-6.1-sol")!.currency).toBe("USD")
+  })
+
+  test("the OpenRouter group carries real routed prices, not zero placeholders", () => {
+    const group = DEFAULT_PRICES.filter((price) => price.vendor === "OpenRouter")
+    expect(group).toHaveLength(6)
+    for (const price of group) {
+      expect(price.model).toContain("/")
+      expect(price.currency).toBe("USD")
+      // A zero quote would be counted as an unpriced model by costOf, silently dropping spend.
+      expect(price.input).toBeGreaterThan(0)
+      expect(price.output).toBeGreaterThan(0)
+      expect(price.note).not.toBe("")
+    }
+    // The 更新 button must be able to refresh all six rows from the official catalog.
+    expect(DEFAULT_VENDOR_SOURCES.OpenRouter.openrouter).toContain(",")
+    expect(DEFAULT_VENDOR_SOURCES.OpenRouter.url).toContain("openrouter.ai")
   })
 })
 
@@ -70,6 +86,14 @@ describe("costOf", () => {
 
   test("unpriced models return null instead of zero", () => {
     expect(costOf(bucket("2026-11-03", 5, "some-local-model", 1_000_000), DEFAULT_PRICES, 7.2, 8)).toBeNull()
+  })
+
+  test("an all-zero placeholder row is unpriced, not a zero-cost model", () => {
+    // A freshly added row or the OpenRouter group must not inflate the matched-model count.
+    const placeholder = { ...gpt, model: "moonshotai/kimi-k3", input: 0, cached: 0, output: 0, offPeak: null }
+    expect(costOf(bucket("2026-11-03", 5, "kimi-k3", 1_000_000), [placeholder], 7.2, 8)).toBeNull()
+    // Filling any one price makes it a real (cheap) model again. The bucket only carries input.
+    expect(costOf(bucket("2026-11-03", 5, "kimi-k3", 1_000_000), [{ ...placeholder, input: 1 }], 7.2, 8)).toBeGreaterThan(0)
   })
 
   test("a configured vendor/model also matches the bare name", () => {
@@ -181,5 +205,20 @@ describe("parseOpenRouterPrices", () => {
   test("a prefix with no models throws", () => {
     const json = JSON.stringify({ data: [{ id: "openai/gpt-6.1-sol", pricing: { prompt: "1", completion: "2" } }] })
     expect(() => parseOpenRouterPrices(json, "anthropic")).toThrow(/no anthropic models/)
+  })
+
+  test("a comma-separated prefix list keeps full ids and covers several vendors", () => {
+    const json = JSON.stringify({
+      data: [
+        { id: "moonshotai/kimi-k3", pricing: { prompt: "0.000002", completion: "0.00001" } },
+        { id: "x-ai/grok-4.6", pricing: { prompt: "0.000001", completion: "0.000005" } },
+        { id: "x-ai/grok-4.6:free", pricing: { prompt: "0", completion: "0" } },
+        { id: "openai/gpt-6.1-sol", pricing: { prompt: "0.000002", completion: "0.00001" } }
+      ]
+    })
+    expect(parseOpenRouterPrices(json, "moonshotai, x-ai")).toEqual([
+      { model: "moonshotai/kimi-k3", input: 2, output: 10 },
+      { model: "x-ai/grok-4.6", input: 1, output: 5 }
+    ])
   })
 })

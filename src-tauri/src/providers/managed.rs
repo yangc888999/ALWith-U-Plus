@@ -123,6 +123,10 @@ pub(super) fn parse_catalog(body: &str) -> Result<Option<CustomProvider>, String
         return Ok(None);
     }
     let mut ids = BTreeSet::new();
+    // The account-issued catalog names no reasoning levels; the company model publishes
+    // `low` / `high` / `max` (see `resources/alwith/models.json`). Surface that ladder so the
+    // picker can offer it, and pin the configured default (the 大模型 page lets the user change it).
+    let level = super::company_reasoning_level();
     let models = provider
         .models
         .into_iter()
@@ -139,11 +143,8 @@ pub(super) fn parse_catalog(body: &str) -> Result<Option<CustomProvider>, String
                 label: model.label,
                 context_window: model.context_window,
                 description: model.description,
-                // The baseline at `a587d228` has no per-model reasoning fields. `None` means
-                // "use the conventional levels for this model family", which is what this commit
-                // assumed everywhere else; `enabled: None` means offered in the picker.
-                reasoning_levels: None,
-                default_reasoning_level: None,
+                reasoning_levels: Some(vec!["low".into(), "high".into(), "max".into()]),
+                default_reasoning_level: level.clone(),
                 enabled: None,
             })
         })
@@ -156,7 +157,9 @@ pub(super) fn parse_catalog(body: &str) -> Result<Option<CustomProvider>, String
     }
     Ok(Some(CustomProvider {
         id: ID.into(),
-        name: provider.name,
+        // The server-supplied name is "LiteLLM"; the product brand for the account-managed models
+        // is Finture, so present that everywhere instead of the internal gateway label.
+        name: "Finture".into(),
         base_url: responses_base_url(&provider.base_url)?,
         models,
         api_key: provider.api_key,

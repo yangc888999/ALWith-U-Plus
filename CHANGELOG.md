@@ -3,148 +3,125 @@
 ## 0.3.8
 
 * 接入公司认证，支持选择公司模型（企业模型目录跨窗口即时刷新）；
-* 修复订阅通道接入 Qwen 4 Max Preview 异常的 BUG；
-* 修复 Qwen 网关对带 JSON Schema 引用的工具定义返回 400 的问题；
-* 「添加到对话」支持多次追加，首次打开会话也能直接输入；
-* 微调停止会话按钮位置，提升小窗口体验；
-* 新增 DeepSeek 默认关闭的一次性迁移。
+* 修复订阅通道接入 Qwen 4 Max Preview 异常；
+* 修复 Qwen 网关对带 JSON Schema 引用的工具定义返回 400；
+* 「添加到对话」支持多次追加，首开会话也能直接输入；
+* 微调停止会话按钮位置，优化小窗体验；
+* 新增 DeepSeek 默认关闭的一次性迁移；
+* 用量页新增 OpenRouter 厂商价格分组，支持一键更新；未填价模型不再被算作零成本；
+* 用量分析选「今日」默认按模型分组、Token 指标、饼图展示，饼图补齐下方居中图例；
+* 外观页四分栏改为主开关：开启时四栏锁定，关闭后可分别设置侧栏自动收起、预览栏、文件栏，预览图随开关联动；
+* 深色主题统一主题色强度，低彩度主题不再几乎无色，修复整窗氛围叠色变量未生效；
+* 修复账号托管模型长会话压缩过晚导致的连接中断；
+* 公司模型默认 Max 思考并可在大模型页配置，厂商名统一为 Finture；
+* 修复外观页分栏开关写入被拒、预览比例不随开关联动的问题；
+* 修复聊天输入框模型图标水平、垂直未居中；
+* 模型价格页补齐 OpenRouter 六条官方实时报价，替换原先的全零占位；
+* 公司模型默认思考级别并入「供应商与可用模型」，不再单独占一张卡片；
+* 内置 Codex CLI 升级至 0.167.2。
 
 ## 0.3.7
 
 * 接入公司认证，支持选择公司模型；
-* 修复订阅通道接入 Qwen 4 Max Preview 异常的 BUG；
+* 修复订阅通道接入 Qwen 4 Max Preview 异常。
 
 ## 0.3.6
 
-* 修复「防止旧版本覆盖本地文件」开关保存失败的问题；
-* 云盘防护的还原改为走同步事务，不再被当作外部改动而生成冲突副本；
-* 云盘防护跳过冲突副本，扫描按修改时间增量比对，降低对同步的磁盘占用；
+* 修复「防止旧版本覆盖本地文件」开关保存失败；
+* 云盘防护还原改走同步事务，不再生成冲突副本；
+* 云盘防护跳过冲突副本，按修改时间增量扫描，降低磁盘占用。
 
 ## 0.3.5
 
 * 新增 GPT 模型过载提醒开关；
-* OpenRouter 新增模型异常提醒开关，支持对 HTTP 429 和 error.code=10000 静默重试；
-* OpenRouter 免费模型约每小时检查一次，新免费模型上线时通过 Toast 提醒；
+* OpenRouter 新增模型异常提醒开关（HTTP 429 / error.code=10000 静默重试）；
+* OpenRouter 免费模型约每小时检查，新模型上线 Toast 提醒；
 * 「套餐用量」新增 ChatGPT 完整用量入口；
-* 云盘新增防止旧版本覆盖本地文件开关；
+* 云盘新增「防止旧版本覆盖本地文件」开关；
 * 「群聊」改名为「拉会」；
-* 登录新增口令登录；
+* 登录新增口令登录。
 
 ## 0.3.4
 
-* 修复 Base URL 双斜杠和网络异常提示问题；
-* 模型过载时不再按后端 retry-after 等待，改为立即重发同一请求，默认 5 次、可在「大模型」设置中调整并即时生效；重发期间保持静默，次数耗尽后才提示；
-* 重新设计新建定时任务对话框，按基本信息、调度、执行与结果推送分区，支持窄窗口自适应；
-* Codex CLI 随应用包同步更新。
+* 修复 Base URL 双斜杠与网络异常提示；
+* 模型过载不再按 retry-after 等待，改为立即静默重发（默认 5 次，可在「大模型」设置调整并即时生效）；
+* 重设计时任务对话框，按基本信息 / 调度 / 执行 / 推送分区，自适应窄窗；
+* Codex CLI 随包同步更新。
 
 ## 0.3.3
 
 * 升级 Tauri 运行时与 CLI 至 v3.0.0-alpha.6；
-* 固定 ACP、codex-acp-v2 与 @alwith/api 版本，避免第三方模型路由漂移。
+* 固定 ACP、codex-acp-v2 与 @alwith/api 版本，避免模型路由漂移。
 
 ## 0.3.2
 
-* 内置 Codex CLI 升级到 v0.167.0 版本。
+* 内置 Codex CLI 升级至 v0.167.0。
 
 ## 0.3.1
 
-* 修复 Qwen 设置里点「保存连接」报错的问题；
-* 自动下载更新改用本项目的 GitHub 更新源，不再连接上游服务。
+* 修复 Qwen「保存连接」报错；
+* 自动更新改用本项目 GitHub 源，不再连接上游。
 
 ## 0.3.0
 
-* 修复 GPT 不同模型、其他厂商模型误报「模型过载」的问题；
-* 修复 DeepSeek、其他第三方站点误报「模型中断」的问题；
+* 修复 GPT / 第三方厂商误报「模型过载」「模型中断」；
 * Qwen 新增 Plan 计划 API 地址；
-* 修复智谱模型 API 接入异常的问题。
+* 修复智谱模型 API 接入异常。
 
 ## 0.2.29
 
-* 新增定时任务和飞书通知。
-* 集成飞书 CLI，支持安装、更新、登录和授权。
-* 新增免登录模式。
-* 适配 BI device key 和新版请求头。
-* 加快用量页和应用冷启动。
-* 优化模型状态提醒和云盘告警语音。
+* 新增定时任务与飞书通知；
+* 集成飞书 CLI（安装 / 更新 / 登录 / 授权）；
+* 新增免登录模式；
+* 适配 BI device key 与新版请求头；
+* 加快用量页与冷启动；
+* 优化模型状态提醒与云盘告警语音；
+* 区分聊天与项目功能；
 * 修复冷启动 provider 配置异常。
-* 区分聊天与项目功能。
 
 ## 0.2.28
 
-* 新增自定义任务功能，支持配置循环触发的功能；
-* 优化模型调用状态指示及修复 Effort 一处异常 bug；
-* 修复 Command+Q 可能异常黑屏的 BUG；
-* 设置 - 用量 新增词云、偏好时段统计等功能；
-* 调整仅聊天窗口展示宽度；
-* 自适应显示器和双屏显示优化；
-* 聊天窗口优化：1）支持调整高度；2）优化功能布局；
-* 模型处理期间显示实时进度：当前模型、effort、正在做的事、已等待时长；60 秒无新内容给出提示，不再只是「正在思考」；
-* 放宽等待上限：空闲判定 90 秒 → 20 分钟，单轮硬上限 10 分钟 → 60 分钟，长任务不再被误判为卡死；
-* 上游过载（`server_is_overloaded` / `retry-after` 约 5 分钟）时弹出提醒，可一键停止等待并切换模型；
-* 修复「没输出就劝换模型」的误判：执行工具（取数、构建等）或等待确认期间不再出现「切换默认模型」，也不会被标成「重连中」；只有上游明确过载、或请求已被接受但 2 分钟一个字节都没返回时，才建议换模型；
-* 进度条不再用秒表推断上游，也不再提供「换模型」：静默 90 秒中性显示「本步已 X」（原为「已有 X 没有新内容」）并给一个「催一下」，往当前回合补一句「继续」，和你在输入框里催它走同一条路径；换模型统一收到底部模型选择器，状态行不再改默认模型、也不再取消本轮，上游过载时只报事实并把处置指向选择器；不再描琥珀色边框、不再判「重连中」；「为什么等这么久」改为悬停提示，不再弹浮层压住正文；
-* 修复从网关模型（如千问）切到 6.1 Sol / Terra 时报错：历史里跨厂商的 item id 会按类型自动修正，旧会话切换模型后可直接续聊；
-* 修复「上下文窗口」设置不生效：设置页的数值现在写入 Codex 的 `model_context_window`，原生 ChatGPT 会话也能用上，Codex 会按账号上限自动裁剪；
-* 修复原生模型网关连接失败时请求悬空的问题：立即返回明确错误并自动重试一次；
-* 定时任务（自动化运行）产生的对话从「项目」移到独立的「自动化运行」分组；
+* 新增自定义循环任务（自动化运行）；
+* 优化模型状态指示，修复 Effort 一处异常；
+* 修复 Command+Q 黑屏 BUG；
+* 用量页新增词云、偏好时段统计；
+* 聊天窗口支持高度调整与窄窗自适应；
+* 模型处理中显示实时进度（模型 / Effort / 正在做的事 / 已等待时长），60 秒无新内容给提示；
+* 放宽等待上限：空闲 90 秒 → 20 分钟，单轮 10 分钟 → 60 分钟；
+* 上游过载（约 5 分钟）弹提醒，可一键停等并切模型；
+* 修正「没输出就劝换模型」误判：仅在明确过载或 2 分钟零字节时建议换模型；
+* 进度行不再描琥珀色边框、不再判「重连中」，换模型收到底部选择器；
+* 修复千问切 6.1 Sol / Terra 报错：跨厂商历史 item id 自动修正，旧会话可续聊；
+* 修复「上下文窗口」设置不生效（现写入 Codex model_context_window，原生 ChatGPT 也可用）；
+* 修复原生模型网关连接失败请求悬空：立即返回错误并自动重试一次；
+* 自动化运行对话由「项目」移至独立「自动化运行」分组。
 
 ## 0.2.27
 
-* 新增群聊功能，支持自定义角色和技能；
-* 对话框布局优化：1）支持高度可调，更简洁；2）聊天文字支持直接插入图片和可预览；
-* 修复模型下轮切换功能，减少切换失败概率；
+* 新增群聊（自定义角色与技能）；
+* 对话框支持高度可调、图片直插与预览；
+* 修复下轮模型切换，降低失败率。
 
 ## 0.2.26
 
-* 优化历史会话加载响应速度；
-* 优化历史/新建会话模型加载速度；
-* 内置模型/自定义API模型的上下文、Effort、加速的调用优化，支持调整模型顺序及删除保护；
-* 软件主窗口自适应显示器分辨率；
-* 内嵌「在线 BI」，直接APP内看报表；
-* 自定义模型 JSON 模板新增「上下文窗口（contextWindow）」字段，可与 Effort、默认 Effort 一并配置。
-* 新增模型用量统计，支持自定义模型及对应价格；
+* 优化历史 / 新建会话加载速度；
+* 内置 / 自定义模型在上下文、Effort、加速上调用优化，支持调序与删除保护；
+* 主窗口自适应分辨率；
+* 内嵌「在线 BI」看报表；
+* 自定义模型 JSON 模板新增 contextWindow 字段（与 Effort / 默认 Effort 一并配置）；
+* 新增模型用量统计（自定义模型及价格）。
 
-## 0.1.0 (unreleased)
+## 0.1.0
 
-Rebuilt from the browser MVP into a Tauri 2 desktop app.
-
-* The agent process is owned by the ALwith Runtime (`alwith-runtime` sidecar, closed) and
-  reached through the open `@alwith/api` client: a webview reload re-attaches to
-  the running agent, gets its pending permissions back and replays the handshake from
-  the Runtime's cache; the Runtime's `done` state and global `markRead` drive the sidebar
-
-* Tauri shell with `alwith-runtime`, `codex`, `codex-code-mode-host` and a compiled
-  `codex-acp-v2` bundled as sidecars; `alwith-runtime` is pinned in `runtime.json` and
-  downloaded from its release with checksum verification when built without the Runtime source
-
-* CI (typecheck, tests, lint, web build) and a six-target release workflow
-
-* One ACP v2 client for every session, backed by an immutable session reducer and
-  a zustand store
-
-* Threads listed from Codex's own store, grouped by project; archive, restore,
-  delete and fork
-
-* Codex desktop chat look: markdown, reasoning, command cards with terminal output,
-  diffs, edited-files card, plans, compaction markers, turn errors
-
-* Reduced from ALwith Desktop: the input area (image paste/drop, slash completion,
-  model/effort/mode selects), form-elicitation dialog, diff modal, image lightbox,
-  find in thread, sidebar search, virtualized turn list, native menu, single instance,
-  error boundary, GitHub-Releases auto-updater with minisign verification
-
-* alwith-runtime crash recovery: the port is reset and Reconnect starts a fresh process
-
-* Model providers (DeepSeek, OpenRouter, Qwen, xAI): an API key per provider in Settings
-  puts its models into every chat's model picker under its own group; each chat picks its
-  own model and nothing global changes
-
-* Composer with image attachments, slash commands, per-session model, reasoning
-  effort, permission mode and collaboration mode
-
-* Inline approvals and MCP form or URL elicitations
-
-* ChatGPT, device-code and API-key login through Codex
-
-* Context usage meter, desktop notifications, command palette, settings, themes,
-  English and Simplified Chinese
+* 初版重构：由浏览器 MVP 重写为 Tauri 2 桌面端（unreleased 预览）；
+* 代理进程由 ALwith Runtime 接管，webview 刷新可重连并回放握手；
+* 内置 alwith-runtime / codex / codex-code-mode-host / codex-acp-v2 作为 sidecar，runtime 随包下载并校验；
+* CI 含 typecheck / tests / lint / web build 与六目标发布流程；
+* 每会话一个 ACP v2 客户端，配合不可变 reducer 与 zustand store；
+* 会话自 Codex 存储列出并按项目分组，支持归档 / 恢复 / 删除 / 分支；
+* 桌面聊天外观：markdown、推理、命令卡片、diff、已编辑文件、计划、压缩标记、回合错误；
+* 模型厂商（DeepSeek / OpenRouter / Qwen / xAI）各配 API Key，模型进各自分组，互不影响；
+* 输入框支持图片、斜杠命令、会话级模型 / Effort / 权限 / 协作模式；
+* 行内审批与 MCP 表单 / URL 询问；
+* ChatGPT、设备码、API Key 三种登录；
+* 上下文用量计、桌面通知、命令面板、设置、主题、中英双语。

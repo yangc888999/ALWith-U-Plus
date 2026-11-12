@@ -308,9 +308,11 @@ export function UsageSection() {
   const [today, setToday] = useState(() => new Date())
   const [range, setRange] = useState<Range>("30d")
   const [metric, setMetric] = useState<Metric>("tokens")
-  const [grain, setGrain] = useState<Grain | "total">("day")
-  const [chart, setChart] = useState<ChartKind>("line")
-  const [groupBy, setGroupBy] = useState<GroupBy>("all")
+  // 「今日」看的是一天之内的构成，不是趋势：按模型分组、用 Token 衡量、饼图看占比最直观。
+  // 这也是分析区的默认视图（饼图没有时间轴，所以粒度固定为总计）。
+  const [grain, setGrain] = useState<Grain | "total">("total")
+  const [chart, setChart] = useState<ChartKind>("pie")
+  const [groupBy, setGroupBy] = useState<GroupBy>("model")
   const [top, setTop] = useState(8)
   // Which months the activity grid shows, and where it ends. Three is the default because one month
   // hides the trend and twelve shrinks every cell to a dot.
@@ -332,6 +334,20 @@ export function UsageSection() {
   const [detailModel, setDetailModel] = useState("")
   // Each page holds 100 rows, but only 20 paint at first; scrolling the table loads the rest.
   const [visibleRows, setVisibleRows] = useState(20)
+
+  // Selecting 「今日」 restores the analysis defaults above. It fires only on the transition into
+  // 1d, so a manual choice made afterwards survives, and the overview's own 30d default is left
+  // alone (every card on this page shares `range`).
+  const previousRange = useRef(range)
+  useEffect(() => {
+    if (range === "1d" && previousRange.current !== "1d") {
+      setGroupBy("model")
+      setMetric("tokens")
+      setChart("pie")
+      setGrain("total")
+    }
+    previousRange.current = range
+  }, [range])
 
   // The ledger stores raw model ids. The model settings page owns the display names the user typed
   // for custom providers and for the built-in GPT rows, so the legend shows those instead of long
@@ -1170,21 +1186,22 @@ export function UsageSection() {
             </div>
 
             {chart !== "pie" && timeSeries && (
-              <>
-                <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
-                  <span>{analysisView.stacked.buckets[0]?.label}</span>
-                  <span>{analysisView.stacked.buckets.at(-1)?.label}</span>
-                </div>
-                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 pb-3 text-[10px] text-muted-foreground">
-                  {analysisView.stacked.groups.map((group, index) => (
-                    <span key={group.key} className="flex items-center gap-1">
-                      <span className="size-[7px] rounded-[2px]" style={{ backgroundColor: seriesColor(index) }} />
-                      <span className="max-w-[9rem] truncate" title={group.key.startsWith("__") ? undefined : group.key}>{group.label}</span>
-                    </span>
-                  ))}
-                </div>
-              </>
+              <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+                <span>{analysisView.stacked.buckets[0]?.label}</span>
+                <span>{analysisView.stacked.buckets.at(-1)?.label}</span>
+              </div>
             )}
+            {/* One shared legend for every chart kind, including the pie: all entries sit below the
+                chart and are centred. The pie used to have none, so its slices were unreadable
+                without hovering each one. */}
+            <div data-usage-legend className="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 pb-3 text-[10px] text-muted-foreground">
+              {analysisView.stacked.groups.map((group, index) => (
+                <span key={group.key} className="flex items-center gap-1">
+                  <span className="size-[7px] rounded-[2px]" style={{ backgroundColor: seriesColor(index) }} />
+                  <span className="max-w-[9rem] truncate" title={group.key.startsWith("__") ? undefined : group.key}>{group.label}</span>
+                </span>
+              ))}
+            </div>
           </SettingsCard>
           <SettingsCard
             title={t("usageReport.wordCloud")}

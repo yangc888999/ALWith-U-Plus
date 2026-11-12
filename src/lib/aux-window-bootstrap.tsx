@@ -22,6 +22,8 @@ import { installToastErrorLocalization } from "@/lib/toast-error"
 import { startPreferenceSync } from "@/lib/preference-sync"
 import { loadPreferences, type Preferences } from "@/lib/preferences"
 import { bootstrapSettings } from "@/lib/settings-store"
+import { companyModelConfig } from "@/lib/company-model-config"
+import { commands } from "@/bindings"
 import { hydrateZoom } from "@/lib/zoom"
 import { startZoomViewport } from "@/lib/zoom-viewport"
 import "../index.css"
@@ -40,6 +42,11 @@ export function bootstrapAuxWindow(opts: {
   const Component = opts.component
   async function bootstrap() {
     await bootstrapSettings()
+    // Mirror the persisted company-model reasoning level into the backend so the engine catalog
+    // uses it (the 大模型 page default is Max, which the backend also defaults to on first run).
+    void commands
+      .setCompanyModelReasoning({ level: companyModelConfig().reasoningLevel })
+      .catch((failure: unknown) => console.error("[aux] company-model config push failed", failure))
     await attachConsole()
     window.addEventListener("unhandledrejection", (event) => {
       const error: unknown = event.reason

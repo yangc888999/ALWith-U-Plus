@@ -979,8 +979,13 @@ body,
   width: 1.25rem;
   height: 1.25rem;
   flex: none;
+  /* The composer trigger is itself a flex row with two text lines; an unqualified
+     `.alwith-model-pill > span` rule below also matches this icon box (it is a direct child
+     span) and used to override these two declarations with column/flex-start, pushing the
+     glyph to the top-left. Keep the centering explicit and immune to that rule. */
   align-items: center;
   justify-content: center;
+  flex-direction: row;
   border: 1px solid color-mix(in oklab, var(--foreground) 9%, transparent);
   border-radius: calc(var(--radius) * 0.7);
   background: color-mix(in oklab, var(--background) 82%, var(--muted));
@@ -1019,7 +1024,7 @@ body,
   background: rgb(255 255 255 / 0.06);
 }
 .dark [data-model-menu-list] [role="menuitemradio"][aria-checked="true"] {
-  background-color: color-mix(in oklab, var(--settings-accent) 16%, var(--background));
+  background-color: color-mix(in oklab, var(--settings-accent) var(--accent-surface), var(--background));
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.16);
 }
 
@@ -1042,14 +1047,14 @@ body,
   color: var(--settings-accent-ink);
 }
 .dark .chat-mode-badge {
-  border-color: color-mix(in oklab, var(--settings-accent) 34%, transparent);
-  background: color-mix(in oklab, var(--settings-accent) 14%, var(--background));
+  border-color: color-mix(in oklab, var(--settings-accent) var(--accent-edge), transparent);
+  background: color-mix(in oklab, var(--settings-accent) var(--accent-surface), var(--background));
   color: var(--settings-accent-ink);
   box-shadow: inset 0 1px rgb(255 255 255 / 0.035);
 }
 .dark .chat-mode-badge:hover {
-  border-color: color-mix(in oklab, var(--settings-accent) 50%, transparent);
-  background: color-mix(in oklab, var(--settings-accent) 20%, var(--background));
+  border-color: color-mix(in oklab, var(--settings-accent) var(--accent-strong), transparent);
+  background: color-mix(in oklab, var(--settings-accent) var(--accent-surface-hover), var(--background));
   color: var(--settings-accent-ink);
 }
 
@@ -1066,10 +1071,24 @@ body,
   --settings-accent-soft: color-mix(in oklab, var(--settings-accent) 12%, var(--card));
 }
 
+/* ── 深色主题色强度标尺 ────────────────────────────────────────────────────────
+   感知强度 ≈ 彩度 × 混入比例。7 个主题深色 accent 的彩度从 0.02(亚麻灰) 到 0.18(YUP红)
+   差 9 倍，但过去每个消费点各写死一个百分比，于是彩色主题看得见、低彩度主题等于没主题。
+   现在把深色下所有主题色叠加收成这一组语义变量：消费点只引用语义，不再各自写数字；
+   低彩度主题只需覆盖这一组（配合略提彩度）即可把感知强度补齐，全窗表现一致。
+   浅色不参与——浅色的 --settings-accent 本身彩度够、且背景是白，不需要补偿。 */
 .dark {
   --settings-accent: oklch(0.74 0.18 30);
   --settings-accent-ink: oklch(0.85 0.15 30);
-  --settings-accent-soft: color-mix(in oklab, var(--settings-accent) 16%, var(--card));
+  --settings-accent-soft: color-mix(in oklab, var(--settings-accent) var(--accent-surface), var(--card));
+
+  --accent-wash: 3%;         /* 整窗常驻底色 */
+  --accent-wash-top: 8%;     /* 顶部光带 */
+  --accent-surface: 16%;     /* 徽标 / 选中项 / 卡片底色 */
+  --accent-surface-hover: 20%;
+  --accent-edge: 34%;        /* 描边 */
+  --accent-strong: 50%;      /* hover 描边 / 焦点环 */
+  --accent-active: 14%;      /* 侧栏选中项 */
 }
 
 :root[data-accent="lemon-green"] {
@@ -1094,9 +1113,19 @@ body,
   --settings-accent: oklch(0.71 0.03 85);
   --settings-accent-ink: oklch(0.45 0.025 85);
 }
+/* 亚麻灰：彩度只有 0.02，是唯一「几乎无色」的主题。先把色相从纯中立灰拉回暖亚麻
+   (0.045)，再把整组混入比例上调，两者相乘后感知强度才接近其它主题，而不失灰调。 */
 .dark[data-accent="linen-gray"] {
-  --settings-accent: oklch(0.78 0.02 88);
-  --settings-accent-ink: oklch(0.85 0.015 90);
+  --settings-accent: oklch(0.78 0.045 85);
+  --settings-accent-ink: oklch(0.86 0.035 85);
+
+  --accent-wash: 5%;
+  --accent-wash-top: 12%;
+  --accent-surface: 24%;
+  --accent-surface-hover: 30%;
+  --accent-edge: 50%;
+  --accent-strong: 66%;
+  --accent-active: 22%;
 }
 
 :root[data-accent="warm-brown"] {
@@ -1124,6 +1153,25 @@ body,
 .dark[data-accent="emerald"] {
   --settings-accent: oklch(0.76 0.13 170);
   --settings-accent-ink: oklch(0.85 0.11 170);
+}
+
+/* ── 布局预览条四段配色 ────────────────────────────────────────────────────────
+   浅色沿用「主题色混入背景」(26/46/68/100%)，本身辨识度够；深色必须拆开处理：
+   深色背景 #181818 比预览条所在的 bg-muted (oklch .269) 还暗，旧公式把第一段
+   (26%) 混到 ≈ .27，直接糊在轨道色上消失；低彩度主题四段更是近灰一片。
+   改法：深色四段用「主题色朝黑按固定比例衰减」——明度阶梯永远高于轨道、
+   且保留色相，7 个主题都拉得开。变量引用 --settings-accent，自动跟随主题。 */
+:root {
+  --layout-seg-navigation: color-mix(in oklab, var(--settings-accent) 26%, var(--background));
+  --layout-seg-chat: color-mix(in oklab, var(--settings-accent) 46%, var(--background));
+  --layout-seg-preview: color-mix(in oklab, var(--settings-accent) 68%, var(--background));
+  --layout-seg-tree: var(--settings-accent);
+}
+.dark {
+  --layout-seg-navigation: color-mix(in oklab, var(--settings-accent) 55%, #000);
+  --layout-seg-chat: color-mix(in oklab, var(--settings-accent) 70%, #000);
+  --layout-seg-preview: color-mix(in oklab, var(--settings-accent) 85%, #000);
+  --layout-seg-tree: var(--settings-accent);
 }
 
 /* Welcome hero focal chip: same design language as .settings-icon-chip (soft accent tint,
@@ -1212,18 +1260,27 @@ body,
   background: color-mix(in oklab, var(--settings-accent) 10%, transparent);
 }
 /* One line for the name, dots underneath it. The trigger takes the width the name needs and never
-   wraps: truncating it turned "4.1-Flash" into "Flash" with no way to read the rest. */
-.alwith-model-pill > span {
+   wraps: truncating it turned "4.1-Flash" into "Flash" with no way to read the rest.
+   Scope to the label container only: the icon box is also a direct child span and must stay
+   horizontally + vertically centred. */
+.alwith-model-pill > span:not(.model-picker-icon) {
+  display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
   max-width: none;
 }
-.alwith-model-pill > span > span:first-child {
+.alwith-model-pill > span:not(.model-picker-icon) > span:first-child {
   display: block;
   max-width: none;
   overflow: visible;
   white-space: nowrap;
+}
+/* The icon box sits first in the trigger's flex row and must align with the label's centre. */
+.alwith-model-pill > .model-picker-icon {
+  align-self: center;
+  flex: none;
+  margin: 0;
 }
 
 /* Same "only the first one shows" trick as the project label, for the 群聊 section heading. */
@@ -1241,9 +1298,11 @@ body,
   --wash-top: 6%;
   --overlay-z: 60;
 }
+/* 深色只需覆盖强度，不再重写一整块 background-image。此前这两个变量定义了却
+   从没被 body::after 引用（里面是硬编码 3%/8%），改变量完全不生效——现在收成单一真源。 */
 .dark {
-  --wash-base: 3%;
-  --wash-top: 8%;
+  --wash-base: var(--accent-wash);
+  --wash-top: var(--accent-wash-top);
 }
 
 body::after {
@@ -1255,26 +1314,13 @@ body::after {
   background-image:
     linear-gradient(
       to bottom,
-      color-mix(in oklab, var(--settings-accent) 6%, transparent) 0,
+      color-mix(in oklab, var(--settings-accent) var(--wash-top), transparent) 0,
       transparent 420px
     ),
     linear-gradient(
       to bottom,
-      color-mix(in oklab, var(--settings-accent) 2.2%, transparent) 0,
-      color-mix(in oklab, var(--settings-accent) 2.2%, transparent) 100%
-    );
-}
-.dark body::after {
-  background-image:
-    linear-gradient(
-      to bottom,
-      color-mix(in oklab, var(--settings-accent) 8%, transparent) 0,
-      transparent 420px
-    ),
-    linear-gradient(
-      to bottom,
-      color-mix(in oklab, var(--settings-accent) 3%, transparent) 0,
-      color-mix(in oklab, var(--settings-accent) 3%, transparent) 100%
+      color-mix(in oklab, var(--settings-accent) var(--wash-base), transparent) 0,
+      color-mix(in oklab, var(--settings-accent) var(--wash-base), transparent) 100%
     );
 }
 
@@ -1287,6 +1333,13 @@ body::after {
   color: color-mix(in oklab, var(--settings-accent-ink) 70%, var(--sidebar-foreground));
 }
 
+/* 深色选中项再提一档：底色走 --accent-active，并加左侧主题色边线，
+   让当前主题色在深色一眼可辨（浅色沿用上面的 8%，不动）。 */
+.dark [data-slot="sidebar-menu-button"][data-active] {
+  background: color-mix(in oklab, var(--settings-accent) var(--accent-active), var(--sidebar));
+  box-shadow: inset 2px 0 0 0 var(--settings-accent);
+}
+
 /* 快进模式的闪电：行内，排在模型名之后、箭头之前。 */
 .alwith-model-pill > svg[fill="currentColor"] {
   position: static;
@@ -1296,7 +1349,7 @@ body::after {
   margin-inline-start: 1px;
   flex: none;
 }
-.alwith-model-pill > span {
+.alwith-model-pill > span:not(.model-picker-icon) {
   order: 2;
 }
 .alwith-model-pill > svg:last-child {

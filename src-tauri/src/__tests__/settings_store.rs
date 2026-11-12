@@ -111,6 +111,36 @@ fn workspace_column_visibility_is_a_persisted_boolean() {
     assert_eq!(restarted.values["workspace.treeVisible"], false);
     assert!(s.update(changes(json!({"workspace.treeVisible": "no"})), None).is_err());
 }
+
+#[test]
+fn appearance_column_switches_are_registered_and_projected() {
+    // The Appearance pane writes these two keys. When they were missing from the registry the
+    // client rejected the write ("这个设置项未被识别") and, because partition_settings dropped
+    // them, the live layout preview never received a new value and stayed on its defaults.
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = SettingsStore::load(dir.path().into()).unwrap();
+    s.update(
+        changes(json!({
+            "workspace.previewVisible": false,
+            "workspace.sidebarAutoCollapse": true
+        })),
+        None,
+    )
+    .unwrap();
+    assert_eq!(s.values["workspace.previewVisible"], false);
+    assert_eq!(s.values["workspace.sidebarAutoCollapse"], true);
+    let (known, private) = partition_settings(s.values.clone());
+    assert_eq!(known["workspace.previewVisible"], false);
+    assert_eq!(known["workspace.sidebarAutoCollapse"], true);
+    assert!(!private.contains_key("workspace.previewVisible"));
+    assert!(!private.contains_key("workspace.sidebarAutoCollapse"));
+    // Both survive a restart, and neither accepts a non-boolean value.
+    let restarted = SettingsStore::load(dir.path().into()).unwrap();
+    assert_eq!(restarted.values["workspace.previewVisible"], false);
+    assert_eq!(restarted.values["workspace.sidebarAutoCollapse"], true);
+    assert!(s.update(changes(json!({"workspace.previewVisible": "off"})), None).is_err());
+    assert!(s.update(changes(json!({"workspace.sidebarAutoCollapse": 1})), None).is_err());
+}
 #[test]
 fn local_profile_overrides_are_accepted_within_their_bounds() {
     let dir = tempfile::tempdir().unwrap();

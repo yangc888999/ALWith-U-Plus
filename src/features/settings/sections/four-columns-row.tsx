@@ -11,7 +11,7 @@ import { SettingRow } from "./shared"
  * It sits with the column shares because it decides the same thing one level earlier: the shares
  * say how wide each column is, this says whether the fourth one is there when the chat opens.
  */
-export function FourColumnsRow({ compact = false }: { compact?: boolean }) {
+export function FourColumnsRow({ compact = false, disabled = false }: { compact?: boolean; disabled?: boolean }) {
   const { t } = useTranslation()
   const enabled = useFourColumnsDefault()
   return (
@@ -19,6 +19,7 @@ export function FourColumnsRow({ compact = false }: { compact?: boolean }) {
       <Switch
         aria-label={t("settings.fourColumnsDefault")}
         checked={enabled}
+        disabled={disabled}
         onCheckedChange={(next) => void setFourColumnsDefault(next)}
       />
     </SettingRow>

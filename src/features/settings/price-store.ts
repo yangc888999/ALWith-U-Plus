@@ -54,8 +54,11 @@ export type VendorSource = {
   regex: string
   /** Currency the extracted numbers are quoted in. */
   currency: Currency
-  /** When set, the response is parsed as OpenRouter's `/api/v1/models` JSON and filtered to this
-   *  vendor prefix (e.g. `anthropic`). The reliable path for pages that are JS-only or blocked. */
+  /** When set, the response is parsed as OpenRouter's `/api/v1/models` JSON and filtered to these
+   *  vendor prefixes (e.g. `anthropic`). A single prefix keeps the bare model id (the reliable
+   *  path for pages that are JS-only or blocked); a comma-separated list is the aggregator's own
+   *  group and keeps the full `vendor/model` id so identically named models from different
+   *  sources stay distinct. */
   openrouter?: string
 }
 
@@ -139,12 +142,14 @@ const DEEPSEEK_PEAK = "09:00-12:00,14:00-18:00"
 const DEEPSEEK_NOTE = "工作日北京时间 09:00–12:00、14:00–18:00 为高峰；其余时段（含周末及法定节假日）按闲时价"
 const OPENAI_NOTE = "Standard · 短上下文；长上下文另有定价"
 const XAI_NOTE = "短上下文 <200K；≥200K 时输入/缓存/输出同步上调"
+const OPENROUTER_NOTE = "OpenRouter 路由价（USD/百万 token，2026-11-13 官方目录快照）；点「更新」拉取当前价"
 
 /**
  * Official standard API rates as of 2026-11-03, cross-checked against each vendor's pricing
  * page. The set follows the static `AI_Model_API_Pricing_2026-11-03.html` reference
- * (8 vendors / 25 model ids) and adds Xiaomi MiMo because it is a provider configured in this
- * app. Variants that share a model id collapse into one row: DeepSeek peak/off-peak becomes
+ * (8 vendors / 25 model ids), adds Xiaomi MiMo because it is a provider configured in this app,
+ * and adds an OpenRouter group as a placeholder for aggregator-routed models. Variants that share
+ * a model id collapse into one row: DeepSeek peak/off-peak becomes
  * `offPeak`, and length-tiered models keep their base tier with the higher tier in `note`.
  */
 export const DEFAULT_PRICES: ModelPrice[] = [
@@ -212,7 +217,18 @@ export const DEFAULT_PRICES: ModelPrice[] = [
   }),
   entry("小米 MiMo", "mimo-v2.6-pro-ultraspeed", 4.35, 0.036, 8.7, {
     note: "海外美元价；国内人民币价未公布"
-  })
+  }),
+
+  // OpenRouter — 聚合网关。保留 `厂商/模型` 全 id，与 provider-catalog.json 里配置的路由一致。
+  // 数值为 2026-11-13 从官方 /api/v1/models 拉到的实时 USD/百万 token 报价（prompt /
+  // input_cache_read / completion），不是占位；点「更新」可随时刷新。OpenRouter 同一模型常有多家
+  // 路由、价格浮动，所以这一组只代表默认路由，别当成厂商官方标准价。
+  entry("OpenRouter", "moonshotai/kimi-k3", 0.192, 0.182, 16, { note: OPENROUTER_NOTE }),
+  entry("OpenRouter", "minimax/minimax-m3", 0.3, 0.06, 1.2, { note: OPENROUTER_NOTE }),
+  entry("OpenRouter", "z-ai/glm-5.3", 0.0699, 0.0689, 1.4, { note: OPENROUTER_NOTE }),
+  entry("OpenRouter", "deepseek/deepseek-v4-pro", 0.892272, 0.074356, 1.784544, { note: OPENROUTER_NOTE }),
+  entry("OpenRouter", "qwen/qwen3.8-max-0902", 2, 0.25, 6, { note: OPENROUTER_NOTE }),
+  entry("OpenRouter", "x-ai/grok-4.6", 2, 0.5, 6, { note: OPENROUTER_NOTE })
 ]
 
 export const DEFAULT_USD_TO_CNY = 7.2
@@ -323,11 +339,16 @@ export function parseVendorPrices(text: string, regex: string): ParsedModelPrice
 }
 
 /**
- * Parse OpenRouter's `/api/v1/models` JSON, filtered to one vendor prefix (e.g. `anthropic`).
+ * Parse OpenRouter's `/api/v1/models` JSON, filtered to one or more vendor prefixes.
  *
  * The reliable source for vendors whose own pages are JS-only, RSC, or unreachable from this
- * machine. OpenRouter quotes USD per token, so each number is scaled to per-1M; the bare model id
- * (after the prefix) is kept, and variant ids (`:batch`, `:free`, …) are skipped.
+ * machine. OpenRouter quotes USD per token, so each number is scaled to per-1M; variant ids
+ * (`:batch`, `:free`, …) are skipped.
+ *
+ * A single prefix (e.g. `anthropic`) keeps the bare model id — that is how the Claude / xAI
+ * groups match their curated rows. A comma-separated list is the aggregator's own group: the
+ * full `vendor/model` id is kept, because OpenRouter routes the same bare model from several
+ * vendors and the group exists precisely to tell those apart.
  */
 export function parseOpenRouterPrices(text: string, prefix: string): ParsedModelPrice[] {
   let parsed: unknown
@@ -338,6 +359,9 @@ export function parseOpenRouterPrices(text: string, prefix: string): ParsedModel
   }
   const data = (parsed as { data?: unknown }).data
   if (!Array.isArray(data)) throw new Error("OpenRouter response has no models")
+  const prefixes = prefix.split(",").map((part) => part.trim()).filter((part) => part !== "")
+  if (prefixes.length === 0) throw new Error("no OpenRouter prefix configured")
+  const keepFullId = prefixes.length > 1
   const rows: ParsedModelPrice[] = []
   const seen = new Set<string>()
   const perMillion = (value: unknown): number | undefined => {
@@ -349,10 +373,13 @@ export function parseOpenRouterPrices(text: string, prefix: string): ParsedModel
   for (const entry of data) {
     if (typeof entry !== "object" || entry === null) continue
     const model = entry as { id?: unknown; pricing?: Record<string, unknown> }
-    if (typeof model.id !== "string" || !model.id.startsWith(`${prefix}/`)) continue
-    const bare = model.id.slice(prefix.length + 1)
-    if (bare === "" || bare.includes(":")) continue
-    const key = bare.toLowerCase()
+    const id = model.id
+    if (typeof id !== "string") continue
+    const hit = prefixes.find((candidate) => id.startsWith(`${candidate}/`))
+    if (hit === undefined) continue
+    const name = keepFullId ? id : id.slice(hit.length + 1)
+    if (name === "" || name.includes(":")) continue
+    const key = name.toLowerCase()
     if (seen.has(key)) continue
     const pricing = model.pricing ?? {}
     const input = perMillion(pricing.prompt)
@@ -361,7 +388,7 @@ export function parseOpenRouterPrices(text: string, prefix: string): ParsedModel
     if (input === undefined && output === undefined) continue
     seen.add(key)
     rows.push({
-      model: bare,
+      model: name,
       ...(input === undefined ? {} : { input }),
       ...(cached === undefined ? {} : { cached }),
       ...(output === undefined ? {} : { output })
@@ -451,7 +478,15 @@ export const DEFAULT_VENDOR_SOURCES: Record<string, VendorSource> = {
     "mimo-v2.6-pro",
     "mimo-v2.6-flash",
     "mimo-v2.6-pro-ultraspeed"
-  ])
+  ]),
+  // OpenRouter 自己就是一个厂商分组：多个前缀一起拉，解析器保留完整 id，正好刷新下面预置的
+  // 6 行（已有厂商只刷新已跟踪模型，不会把全平台几百个模型灌进表）。
+  OpenRouter: {
+    url: OPENROUTER_MODELS,
+    currency: "USD",
+    regex: "",
+    openrouter: "moonshotai,minimax,z-ai,deepseek,qwen,x-ai"
+  }
 }
 
 export const usePriceStore = create<PriceState>()(
@@ -564,6 +599,16 @@ export function costOf(
 ): number | null {
   const price = findPrice(prices, point.model)
   if (price === undefined) return null
+  // A row whose three prices are all zero is an unfilled placeholder (a freshly added row or the
+  // OpenRouter group), not a free model. Treating it as "priced" would report 0 spend and inflate
+  // the matched-model count, hiding the fact that cost is actually unknown.
+  const hasPrice =
+    price.input > 0 ||
+    price.cached > 0 ||
+    price.output > 0 ||
+    (price.offPeak !== null &&
+      (price.offPeak.input > 0 || price.offPeak.cached > 0 || price.offPeak.output > 0))
+  if (!hasPrice) return null
   const tier = price.offPeak !== null && !isPeak(point.date, point.hour, price, utcOffset) ? price.offPeak : price
   const amount =
     (point.input / 1_000_000) * tier.input +

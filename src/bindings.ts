@@ -677,6 +677,17 @@ export const commands = {
   providersRefreshManaged: (args: { generation: number; accessToken: string }): Promise<Snapshot_Serialize> =>
     __t3Invoke<Snapshot_Serialize>("providers_refresh_managed", args),
   providersClearManaged: (): Promise<null> => __t3Invoke<null>("providers_clear_managed"),
+  /**
+   *  Sets the company model's default reasoning level and propagates it everywhere it matters.
+   *
+   *  The level is stored in process memory, persisted to `company-model.json`, mirrored into the
+   *  shared engine catalog (so new chats on the company model actually think at that level), and
+   *  written into the live managed-provider snapshot (so the 大模型 picker shows the new default
+   *  immediately). Invalid levels (anything but `low` / `high` / `max`) are rejected; `None` keeps
+   *  the default `max`.
+   */
+  setCompanyModelReasoning: (args: { level: string | null }): Promise<null> =>
+    __t3Invoke<null>("set_company_model_reasoning", args),
   enterpriseBind: (args: { account: Account }): Promise<number> => __t3Invoke<number>("enterprise_bind", args),
   enterpriseRefresh: (args: { account: Account; generation: number; accessToken: string }): Promise<Value> =>
     __t3Invoke<Value>("enterprise_refresh", args),
@@ -881,6 +892,7 @@ export type CommandErrors = {
   providersAccountBind: string
   providersRefreshManaged: Value
   providersClearManaged: string
+  setCompanyModelReasoning: string
   enterpriseBind: Value
   enterpriseRefresh: Value
   enterpriseCatalog: never

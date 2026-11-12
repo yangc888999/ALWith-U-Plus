@@ -194,7 +194,7 @@ export function presentModelCatalog(groups: ModelGroup[]): ModelGroup[] {
               {native ? (
                 <img src={openaiLogo} alt="" className="dark:invert" />
               ) : account ? (
-                // Account-owned models (ALwith LiteLLM, Finture enterprise) carry the app mark:
+                // Account-owned models (Finture account-managed, Finture enterprise) carry the app mark:
                 // they have no vendor entry in PROVIDERS and are not the user's own keys.
                 <img src={alwithLogo} alt="" className="size-4" />
               ) : provider ? (

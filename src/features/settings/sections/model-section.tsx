@@ -462,6 +462,8 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
             rewrite the models of a live division behind the user's back. */}
         <SettingsNote>{t("defaultModel.divisionScopeNote")}</SettingsNote>
       </SettingsCard>
+      {/* 公司模型默认思考级别已并入「供应商与可用模型」卡片（company-reasoning-row.tsx），
+          不再单独占一张卡片。 */}
     </div>
   )
 }

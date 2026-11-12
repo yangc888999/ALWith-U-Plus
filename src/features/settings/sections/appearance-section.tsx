@@ -27,12 +27,16 @@ import {
   setNavigationSoundMode
 } from "@/features/chat/codex/navigation-sound-store"
 import {
+  type LayoutShare,
   saveLayoutShare,
   saveWorkspaceLayout,
   sharePercents,
   workspaceLayoutDefaults
 } from "@/features/workspace/layout-preferences"
 import { useWorkspaceLayout } from "@/features/workspace/use-workspace-layout"
+import { useFourColumnsDefault } from "@/features/workspace/four-columns-preference"
+import { useTreeVisiblePreference } from "@/features/workspace/tree-visible-preference"
+import { usePreviewVisiblePreference } from "@/features/workspace/preview-visible-preference"
 import { chatLayoutDefaults, saveChatLayout, useChatLayout } from "@/features/workspace/chat-layout"
 import {
   getConversationDetail,
@@ -48,6 +52,8 @@ import { ACCENT_PRESETS, useAccentStore } from "../accent-store"
 import { SettingRow, SettingsCard } from "./shared"
 import { FourColumnsRow } from "./four-columns-row"
 import { TreeVisibleRow } from "./tree-visible-row"
+import { PreviewVisibleRow } from "./preview-visible-row"
+import { SidebarAutoCollapseRow } from "./sidebar-auto-collapse-row"
 
 /**
  * One row of the layout share table: column name on the left, its width share on the right.
@@ -138,23 +144,29 @@ function ThemeSegmented({
   )
 }
 
-/** One coloured band of the layout-share bar. The same mix drives the legend chip below it, so the
- *  two always agree. Tinted from the chosen 主题色 instead of neutral greys. */
-function LayoutSegment({ pct, mix }: { pct: number; mix: string }) {
-  return (
-    <span
-      style={{ width: `${pct}%`, background: `color-mix(in oklab, var(--settings-accent) ${mix}, var(--background))` }}
-    />
-  )
+/** One coloured band of the layout-share bar. Colour comes from the --layout-seg-* tokens
+ *  (defined per light/dark in index.css), so the bar and its legend always agree and dark
+ *  mode keeps a fixed lightness ladder that stays clear of the muted track. */
+function LayoutSegment({
+  pct,
+  seg
+}: {
+  pct: number
+  seg: "navigation" | "chat" | "preview" | "tree"
+}) {
+  return <span style={{ width: `${pct}%`, background: `var(--layout-seg-${seg})` }} />
 }
 
-function LayoutLegend({ mix, label }: { mix: string; label: string }) {
+function LayoutLegend({
+  seg,
+  label
+}: {
+  seg: "navigation" | "chat" | "preview" | "tree"
+  label: string
+}) {
   return (
     <span className="inline-flex items-center gap-1.5 justify-self-start whitespace-nowrap pe-2 text-[11px] leading-4 text-muted-foreground">
-      <span
-        className="size-2.5 rounded-[3px]"
-        style={{ background: `color-mix(in oklab, var(--settings-accent) ${mix}, var(--background))` }}
-      />
+      <span className="size-2.5 rounded-[3px]" style={{ background: `var(--layout-seg-${seg})` }} />
       {label}
     </span>
   )
@@ -165,6 +177,29 @@ export function AppearanceSection() {
   const layout = useWorkspaceLayout()
   // Whole percentages that always add up to 100, so the four rows read as one budget.
   const percents = sharePercents(layout)
+  // Master "four columns" switch. On = every column is shown and the per-column visibility
+  // toggles below are locked; off = the user picks which columns appear.
+  const fourColumns = useFourColumnsDefault()
+  const [treeVisible] = useTreeVisiblePreference()
+  const [previewVisible] = usePreviewVisiblePreference()
+  // A column is on when four columns forces it, or its own visibility preference is on.
+  const previewShown = fourColumns || previewVisible
+  const treeShown = fourColumns || treeVisible
+  // The preview diagram only draws the columns that are actually on, and rescales them so the
+  // visible set still fills the bar — turning a column off visibly shrinks the preview.
+  const columnDefs: Array<{ key: LayoutShare; label: string; shown: boolean }> = [
+    { key: "navigation", label: t("settings.layoutNavigation"), shown: true },
+    { key: "chat", label: t("settings.layoutChat"), shown: true },
+    { key: "preview", label: t("settings.layoutPreview"), shown: previewShown },
+    { key: "tree", label: t("settings.layoutTree"), shown: treeShown }
+  ]
+  const shownColumns = columnDefs.filter((column) => column.shown)
+  const shownTotal = shownColumns.reduce((sum, column) => sum + percents[column.key], 0) || 1
+  const visibleSegments = shownColumns.map((column) => ({
+    key: column.key,
+    label: column.label,
+    pct: Math.round((percents[column.key] / shownTotal) * 100)
+  }))
   const chatLayout = useChatLayout()
   const chatPercents = {
     navigation: Math.round(chatLayout.navigationRatio * 100),
@@ -279,30 +314,55 @@ export function AppearanceSection() {
           </button>
         }
       >
-        <div className="px-4 pb-2">
+        {/* Master switch first: it decides whether the per-column toggles below are live. */}
+        <div className="border-b border-border/60">
+          <FourColumnsRow compact />
+        </div>
+
+        <div className="px-4 py-2">
+          <p className="text-[11.5px] leading-[18px] text-muted-foreground">
+            {fourColumns ? t("settings.layoutTogglesLockedHint") : t("settings.layoutCustomHint")}
+          </p>
+        </div>
+
+        {/* Per-column visibility — only editable once four columns is off. */}
+        <div className="border-t border-border/60">
+          <SidebarAutoCollapseRow compact disabled={fourColumns} />
+        </div>
+        <div className="border-t border-border/60">
+          <PreviewVisibleRow compact disabled={fourColumns} />
+        </div>
+        <div className="border-t border-border/60">
+          <TreeVisibleRow compact disabled={fourColumns} />
+        </div>
+        <div className="border-t border-border/60">
+          {/* The chat column can never be closed, so it is a locked row rather than a switch. */}
+          <SettingRow compact title={t("settings.chatColumnLocked")} desc={t("settings.chatColumnLockedDesc")}>
+            <span className="text-xs text-muted-foreground">{t("settings.alwaysOn")}</span>
+          </SettingRow>
+        </div>
+
+        {/* Live preview of the resulting layout — only the on columns are drawn, rescaled to fill. */}
+        <div className="px-4 pb-2 pt-3">
           <div className="flex h-2.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
-            <LayoutSegment pct={percents.navigation} mix="26%" />
-            <LayoutSegment pct={percents.chat} mix="46%" />
-            <LayoutSegment pct={percents.preview} mix="68%" />
-            <LayoutSegment pct={percents.tree} mix="100%" />
+            {visibleSegments.map((segment) => (
+              <LayoutSegment key={segment.key} pct={segment.pct} seg={segment.key} />
+            ))}
           </div>
-          {/* The legend repeats the bar's own proportions, so every chip sits under the band it
-              describes instead of flowing as one left-aligned row. */}
           <div
             className="mt-2 grid"
-            style={{
-              gridTemplateColumns: `${percents.navigation}fr ${percents.chat}fr ${percents.preview}fr ${percents.tree}fr`
-            }}
+            style={{ gridTemplateColumns: visibleSegments.map((segment) => `${segment.pct}fr`).join(" ") }}
           >
-            <LayoutLegend mix="26%" label={t("settings.layoutNavigation")} />
-            <LayoutLegend mix="46%" label={t("settings.layoutChat")} />
-            <LayoutLegend mix="68%" label={t("settings.layoutPreview")} />
-            <LayoutLegend mix="100%" label={t("settings.layoutTree")} />
+            {visibleSegments.map((segment) => (
+              <LayoutLegend key={segment.key} seg={segment.key} label={segment.label} />
+            ))}
           </div>
           <p className="mt-2 text-[11px] leading-4 text-muted-foreground">
             {t("settings.layoutShareCaption")}
           </p>
         </div>
+
+        {/* Width sliders for the columns that are actually on. */}
         <div className="border-t border-border/60">
           <LayoutShareRow
             name={t("settings.layoutNavigation")}
@@ -314,27 +374,25 @@ export function AppearanceSection() {
             value={percents.chat}
             onCommit={(value) => saveLayoutShare("chat", value)}
           />
-          <LayoutShareRow
-            name={t("settings.layoutPreview")}
-            value={percents.preview}
-            onCommit={(value) => saveLayoutShare("preview", value)}
-          />
+          {previewShown && (
+            <LayoutShareRow
+              name={t("settings.layoutPreview")}
+              value={percents.preview}
+              onCommit={(value) => saveLayoutShare("preview", value)}
+            />
+          )}
           {/* 文件栏放最后（用户要求），与预览栏相邻便于对照。 */}
-          <LayoutShareRow
-            name={t("settings.layoutTree")}
-            value={percents.tree}
-            onCommit={(value) => saveLayoutShare("tree", value)}
-          />
+          {treeShown && (
+            <LayoutShareRow
+              name={t("settings.layoutTree")}
+              value={percents.tree}
+              onCommit={(value) => saveLayoutShare("tree", value)}
+            />
+          )}
         </div>
         <p className="px-4 pt-1 pb-2 text-[11.5px] leading-[18px] text-muted-foreground">
           {t("settings.layoutShareNote")}
         </p>
-        <div className="border-t border-border/60">
-          <TreeVisibleRow compact />
-        </div>
-        <div className="border-t border-border/60">
-          <FourColumnsRow compact />
-        </div>
       </SettingsCard>
 
       <SettingsCard
@@ -352,15 +410,15 @@ export function AppearanceSection() {
       >
         <div className="px-4 pb-2">
           <div className="flex h-2.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
-            <LayoutSegment pct={chatPercents.navigation} mix="26%" />
-            <LayoutSegment pct={chatPercents.chat} mix="46%" />
+            <LayoutSegment pct={chatPercents.navigation} seg="navigation" />
+            <LayoutSegment pct={chatPercents.chat} seg="chat" />
           </div>
           <div
             className="mt-2 grid"
             style={{ gridTemplateColumns: `${chatPercents.navigation}fr ${chatPercents.chat}fr` }}
           >
-            <LayoutLegend mix="26%" label={t("settings.layoutNavigation")} />
-            <LayoutLegend mix="46%" label={t("settings.layoutChat")} />
+            <LayoutLegend seg="navigation" label={t("settings.layoutNavigation")} />
+            <LayoutLegend seg="chat" label={t("settings.layoutChat")} />
           </div>
         </div>
         <div className="border-t border-border/60">

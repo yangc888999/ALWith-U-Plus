@@ -119,10 +119,33 @@ test("the range control filters in place instead of re-reading the disk", async 
   await screen.findByText("usageReport.tokens")
   expect(screen.getByRole("combobox", { name: "usageReport.rangeLabel" })).toHaveTextContent("usageReport.range.30d")
   expect(screen.getByRole("combobox", { name: "usageReport.metric" })).toBeInTheDocument()
-  // "All" is the default grouping; the metric stays on Token.
-  expect(screen.getByRole("combobox", { name: "usageReport.group" })).toHaveTextContent("usageReport.groupAll")
+  // 模型 is the default grouping; the metric stays on Token and the chart on 饼图.
+  expect(screen.getByRole("combobox", { name: "usageReport.group" })).toHaveTextContent("usageReport.byModel")
   expect(screen.getByRole("combobox", { name: "usageReport.metric" })).toHaveTextContent("usageReport.metricTokens")
+  expect(screen.getByRole("button", { name: "usageReport.chartPie" })).toHaveAttribute("aria-pressed", "true")
   expect(native.report).toHaveBeenCalledOnce()
+})
+
+test("the pie carries a legend centred below the chart", async () => {
+  render(<UsageSection />)
+  await waitForStagedCards()
+  // The pie used to have no legend at all; it now shares the one below every chart.
+  const legend = document.querySelector("[data-usage-legend]")
+  expect(legend).not.toBeNull()
+  expect(legend?.className).toContain("justify-center")
+  expect(legend?.textContent).toContain("kimi-k2.6")
+})
+
+test("choosing 今日 restores the model / Token / pie defaults", async () => {
+  render(<UsageSection />)
+  await waitForStagedCards()
+  // Change the chart by hand, then pick 今日: the daily-composition default comes back.
+  fireEvent.click(screen.getByRole("button", { name: "usageReport.chartLine" }))
+  expect(screen.getByRole("button", { name: "usageReport.chartLine" })).toHaveAttribute("aria-pressed", "true")
+  fireEvent.click(screen.getByRole("button", { name: "usageReport.range.1d" }))
+  expect(screen.getByRole("button", { name: "usageReport.chartPie" })).toHaveAttribute("aria-pressed", "true")
+  expect(screen.getByRole("combobox", { name: "usageReport.group" })).toHaveTextContent("usageReport.byModel")
+  expect(screen.getByRole("combobox", { name: "usageReport.metric" })).toHaveTextContent("usageReport.metricTokens")
 })
 
 test("an empty ledger explains itself instead of showing zeros", async () => {

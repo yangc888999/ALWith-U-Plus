@@ -1,5 +1,5 @@
 //! U orchestrates enterprise authentication and the relay; shared chat owns provider storage and routing.
-mod catalog;
+pub(crate) mod catalog;
 mod gate;
 mod runtime;
 use alwith_enterprise_client::{EnterpriseClient, Protocol};

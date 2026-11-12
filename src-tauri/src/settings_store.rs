@@ -327,6 +327,12 @@ fn setting_validity(key: &str, value: &Value) -> Option<bool> {
         // is projected to every webview instead of being dropped by partition_settings).
         | "appearance.fourColumnsDefault"
         | "workspace.treeVisible"
+        // Column-visibility choices from the Appearance pane. Registered so a write is accepted
+        // and projected back to every webview: unregistered keys are rejected client-side with
+        // 「这个设置项未被识别」 and, because the value never reaches the projection, the live
+        // layout preview keeps reading the default and never follows the switches.
+        | "workspace.previewVisible"
+        | "workspace.sidebarAutoCollapse"
         | "memory.injectOnNewSession"
         | "chat.composerPredictions"
         | "drive.yupEnabled"

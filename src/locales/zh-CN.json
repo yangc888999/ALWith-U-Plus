@@ -566,6 +566,15 @@
     "treeVisibleDesc": "关掉后对话和预览占满整个工作区，项目打开时不再自动列出文件。预览标题栏左侧的目录按钮随时可以重新打开。",
     "fourColumnsDefault": "项目对话默认四分栏",
     "fourColumnsDefaultDesc": "打开项目对话时直接展开右侧预览区。关掉后先按三栏打开，打开文件时预览区再出现。",
+    "sidebarAutoCollapse": "侧边栏自动收起",
+    "sidebarAutoCollapseDesc": "开启后侧边栏默认收起，鼠标移到屏幕最左侧时自动展开。",
+    "previewVisible": "显示预览栏",
+    "previewVisibleDesc": "关闭后项目打开时不再自动展开预览区；仍可从预览标题栏的按钮重新打开。",
+    "chatColumnLocked": "对话栏（始终显示）",
+    "chatColumnLockedDesc": "对话栏无法关闭，保证始终有对话区域。",
+    "layoutTogglesLockedHint": "四分栏开启时四栏均默认显示，下方选项不可单独调整。",
+    "layoutCustomHint": "已关闭四分栏，可分别设置各栏的显示方式。",
+    "alwaysOn": "始终显示",
     "layoutDesc": "输入栏与演示栏同属一组比例，合计始终为 100%。",
     "layoutRatioDesc": "按窗口宽度比例自适应，随窗口大小缩放。",
     "drive": "云盘",
@@ -1293,6 +1302,18 @@
     "divisionScopeNote": "只影响新开启分工的会话；已经开着分工的会话保留自己那一对，不会被这里覆盖。",
     "overloadMute": "屏蔽模型过载提醒",
     "overloadMuteDescription": "打开后，上游报 server_is_overloaded 时桥接层直接吞掉这条拒绝、立即重发同一请求，不等待后端 retry-after，也没有次数上限，直到拿到真实响应或流结束；关闭时照常提示。改动即时生效，无需重启引擎。"
+  },
+  "companyModel": {
+    "title": "公司模型（Finture）",
+    "description": "公司托管的 DeepSeek V4.1 Flash 默认思考深度；改完对所有新对话立即生效，无需重启。",
+    "scope": "作用域 · 公司模型",
+    "reasoningLabel": "默认思考级别",
+    "levels": {
+      "low": "低",
+      "high": "高",
+      "max": "Max（最深）"
+    },
+    "note": "该级别会写入引擎模型目录，成为模型自身的默认思考深度；在单个对话里仍可随时改。默认 Max。"
   },
   "updater": {
     "installing": "正在安装更新…完成后将自动重启。",
