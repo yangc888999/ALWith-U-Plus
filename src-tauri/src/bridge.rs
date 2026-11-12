@@ -274,6 +274,28 @@ fn drop_item_id(body: &[u8], index: usize) -> Option<Vec<u8>> {
     serde_json::to_vec(&parsed).ok()
 }
 
+/// The same history with everything a switching vendor cannot own removed: reasoning items and
+/// item ids. Used once, only after a gateway refused the original payload.
+fn portable_history(body: &[u8]) -> Option<Vec<u8>> {
+    let mut parsed: Value = serde_json::from_slice(body).ok()?;
+    let input = parsed.get_mut("input")?.as_array_mut()?;
+    let before = input.len();
+    input.retain(|item| item.get("type").and_then(Value::as_str) != Some("reasoning"));
+    let mut removed = before - input.len();
+    for item in input.iter_mut() {
+        if let Some(object) = item.as_object_mut() {
+            if object.remove("id").is_some() {
+                removed += 1;
+            }
+        }
+    }
+    if removed == 0 {
+        return None;
+    }
+    log::info!("bridge: portable retry drops {removed} vendor-owned field(s) from the history");
+    serde_json::to_vec(&parsed).ok()
+}
+
 /// Drops `web_search` / `web_search_preview` declarations. Codex attaches one to the remote
 /// compaction request, and no third-party gateway can execute it — most answer 400
 /// `unsupported_parameter` with `param: tools`, which the user sees as「上下文压缩失败」. The
@@ -389,6 +411,7 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
                 false,
                 false,
                 false,
+                false,
             )
         }
     };
@@ -403,6 +426,7 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
         authorization,
         &[],
         sanitize(&payload),
+        false,
         false,
         false,
         false,
@@ -808,6 +832,8 @@ fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
         // retain their own error handling and are never swallowed by this preference.
         gateway == "openrouter",
         chat_protocol,
+        // A chat switched to another vendor replays ids and reasoning that vendor never issued.
+        true,
     )
 }
 
@@ -861,6 +887,7 @@ fn forward_chatgpt(request: tiny_http::Request, parsed: &Value) -> Result<(), St
         // The only route whose backend speaks `server_is_overloaded`. Read the mute switch per
         // request so a settings change applies without restarting the engine.
         true,
+        false,
         false,
         false,
     )
@@ -1350,6 +1377,7 @@ fn relay(
     watch_stall: bool,
     watch_openrouter_errors: bool,
     chat_protocol: bool,
+    portable_fallback: bool,
 ) -> Result<(), String> {
     let client = reqwest::blocking::Client::builder()
         // A route that silently swallows packets would otherwise hold the connect until the OS
@@ -1370,6 +1398,7 @@ fn relay(
     }
     let mut payload = payload;
     let mut attempted_recovery = false;
+    let mut attempted_portable = false;
     let mut attempted_connect = false;
     let mut replays_429 = 0u32;
     let response = loop {
@@ -1441,6 +1470,19 @@ fn relay(
                 }
             }
         }
+        // A thread written by another vendor replays ids and encrypted reasoning that only that
+        // vendor can interpret. Some gateways refuse the whole request without naming a field —
+        // the company relay answers `upstream request was rejected`, and the thread then looks
+        // unusable although its text is fine. One retry with a portable history decides it: if the
+        // refusal was about the history it goes through, otherwise the real error still surfaces.
+        if portable_fallback && !attempted_portable && matches!(status, 400 | 422) {
+            if let Some(stripped) = portable_history(&payload) {
+                attempted_portable = true;
+                payload = stripped;
+                log::warn!("bridge: retrying after {status} with a portable history");
+                continue;
+            }
+        }
         // OpenRouter answers a burst with HTTP 429 instead of the structured `server_is_overloaded`
         // SSE event ChatGPT emits. When the user has switched the OpenRouter「模型异常提醒」off,
         // treat it as a transient hiccup and re-send the same request instead of answering with the
@@ -1458,7 +1500,11 @@ fn relay(
             std::thread::sleep(delay);
             continue;
         }
-        log::warn!("bridge: upstream answered {status}: {}", text.chars().take(300).collect::<String>());
+        log::warn!(
+            "bridge: upstream answered {status} ({} bytes in): {}",
+            payload.len(),
+            text.chars().take(300).collect::<String>()
+        );
         return respond(request, status, "application/json", &body);
     };
     let status = response.status().as_u16();
@@ -2552,6 +2598,7 @@ data: [DONE]
             true,
             false,
             false,
+            false,
         );
         set_overload_mute(previous);
         let body = client_thread.join().unwrap();
@@ -2626,6 +2673,7 @@ data: [DONE]
             &[],
             b"{}".to_vec(),
             true,
+            false,
             false,
             false,
         );
@@ -2705,6 +2753,7 @@ data: [DONE]
             false,
             true,
             false,
+            false,
         );
         set_overload_429_mute(previous);
         let body = client_thread.join().unwrap();
@@ -2713,6 +2762,113 @@ data: [DONE]
         assert!(result.is_ok(), "relay failed: {result:?}");
         assert_eq!(hits.load(Ordering::Relaxed), 2, "one request plus one silent replay");
         assert!(!body.contains("\"code\":10000"), "the engine must never see the injected error: {body}");
+        assert!(body.contains("response.completed"), "the replay must reach the engine: {body}");
+    }
+
+    #[test]
+    fn portable_history_strips_foreign_reasoning_and_item_ids() {
+        let body = br#"{"model":"m","input":[
+            {"type":"message","role":"user","id":"msg_1","content":[{"type":"input_text","text":"hi"}]},
+            {"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"enc"},
+            {"type":"function_call","id":"fc_1","call_id":"c1","name":"shell","arguments":"{}"}
+        ]}"#;
+        let stripped: Value = serde_json::from_slice(&portable_history(body).unwrap()).unwrap();
+        let input = stripped["input"].as_array().unwrap();
+        assert_eq!(input.len(), 2, "reasoning items belong to the vendor that minted them");
+        assert!(input[0].get("id").is_none(), "message ids belong to the vendor too");
+        assert_eq!(input[1]["call_id"], "c1", "a tool call keeps the id its result references");
+        assert!(portable_history(br#"{"model":"m","input":[]}"#).is_none(), "nothing to strip, no retry");
+    }
+
+    #[test]
+    fn a_gateway_that_rejects_a_foreign_history_gets_one_portable_replay() {
+        use std::io::Write;
+        use std::net::{TcpListener, TcpStream};
+        use std::sync::atomic::AtomicUsize;
+
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let bodies = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let hits_in_thread = Arc::clone(&hits);
+        let bodies_in_thread = Arc::clone(&bodies);
+        let upstream_thread = std::thread::spawn(move || {
+            const REFUSAL: &str = r#"{"error":{"message":"upstream request was rejected"}}"#;
+            const SUCCESS: &str = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n";
+            for _ in 0..2 {
+                let (mut stream, _) = upstream.accept().unwrap();
+                let mut scratch = [0u8; 8192];
+                let count = stream.read(&mut scratch).unwrap_or(0);
+                bodies_in_thread
+                    .lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&scratch[..count]).to_string());
+                let hit = hits_in_thread.fetch_add(1, Ordering::Relaxed) + 1;
+                if hit == 1 {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        REFUSAL.len(),
+                        REFUSAL
+                    );
+                } else {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        SUCCESS.len(),
+                        SUCCESS
+                    );
+                }
+            }
+        });
+
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let bridge_addr = server.server_addr().to_ip().unwrap();
+        let client_thread = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(bridge_addr).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            stream
+                .write_all(b"POST /alwith/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}")
+                .unwrap();
+            let mut body = Vec::new();
+            let mut scratch = [0u8; 4096];
+            loop {
+                match stream.read(&mut scratch) {
+                    Ok(0) => break,
+                    Ok(count) => body.extend_from_slice(&scratch[..count]),
+                    Err(_) => break,
+                }
+            }
+            String::from_utf8_lossy(&body).to_string()
+        });
+
+        let request = server.recv().unwrap();
+        let payload = json!({"model":"custom-x/m","input":[
+            {"type":"message","role":"user","id":"msg_1","content":[{"type":"input_text","text":"hi"}]},
+            {"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"enc"}
+        ]});
+        let result = relay(
+            request,
+            "custom-x/m",
+            &format!("http://{upstream_addr}/responses"),
+            None,
+            &[],
+            serde_json::to_vec(&payload).unwrap(),
+            false,
+            false,
+            false,
+            true,
+        );
+        let body = client_thread.join().unwrap();
+        let _ = upstream_thread.join();
+        let sent = bodies.lock().unwrap().clone();
+
+        assert!(result.is_ok(), "relay failed: {result:?}");
+        assert_eq!(hits.load(Ordering::Relaxed), 2, "one refusal plus exactly one portable replay");
+        assert!(sent[0].contains("reasoning"), "the first attempt keeps the history it was given");
+        assert!(!sent[1].contains("reasoning"), "the replay drops foreign reasoning: {}", sent[1]);
+        assert!(!sent[1].contains("\"id\":\"msg_1\""), "the replay drops foreign ids: {}", sent[1]);
+        assert!(!body.contains("upstream request was rejected"), "the refusal must not reach the engine: {body}");
         assert!(body.contains("response.completed"), "the replay must reach the engine: {body}");
     }
 }
