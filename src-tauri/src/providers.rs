@@ -1027,7 +1027,16 @@ async fn reconcile_target(
                 AppliedProvider::Custom(provider) => {
                     // The per-thread catalog lets Codex resolve the model instead of falling back to
                     // tiny metadata, and exposes each model's real reasoning levels to the picker.
-                    let catalog = write_custom_catalog(catalog_dir, provider)?;
+                    // The account-managed company provider compacts earlier: its gateway sits one
+                    // hop further from the model, and a request that only trips compaction at 95%
+                    // of the window is the size that makes that relay go quiet.
+                    let compact_early = inner
+                        .saved
+                        .managed
+                        .as_ref()
+                        .and_then(|cache| cache.provider.as_ref())
+                        .is_some_and(|managed| managed.id == provider.id);
+                    let catalog = write_custom_catalog(catalog_dir, provider, compact_early)?;
                     (
                         Value::String(provider.name.clone()),
                         Value::String(provider.base_url.clone()),
@@ -1680,7 +1689,7 @@ fn effort_description(effort: &str) -> &'static str {
     }
 }
 
-fn custom_catalog(provider: &CustomProvider) -> Result<Value, String> {
+fn custom_catalog(provider: &CustomProvider, compact_early: bool) -> Result<Value, String> {
     let models = provider
         .models
         .iter()
@@ -1730,6 +1739,12 @@ fn custom_catalog(provider: &CustomProvider) -> Result<Value, String> {
             if let Some(window) = model.context_window {
                 object.insert("context_window".into(), json!(window));
                 object.insert("max_context_window".into(), json!(window));
+                if compact_early && window > 0 {
+                    // 70% leaves room for the turn that is already running when the threshold is
+                    // crossed; Codex's 95% default only fires once the next request is at the
+                    // ceiling, which is exactly where a company relay stops answering.
+                    object.insert("auto_compact_token_limit".into(), json!(window * 7 / 10));
+                }
             } else {
                 // Providers saved before contextWindow existed must not fall back to Codex's
                 // tiny unknown-model window: that triggers premature auto-compaction mid-turn.
@@ -1742,9 +1757,9 @@ fn custom_catalog(provider: &CustomProvider) -> Result<Value, String> {
     Ok(json!({ "models": models }))
 }
 
-fn write_custom_catalog(directory: &Path, provider: &CustomProvider) -> Result<PathBuf, String> {
+fn write_custom_catalog(directory: &Path, provider: &CustomProvider, compact_early: bool) -> Result<PathBuf, String> {
     use std::hash::{Hash, Hasher};
-    let catalog = custom_catalog(provider)?;
+    let catalog = custom_catalog(provider, compact_early)?;
     let bytes = serde_json::to_vec(&catalog).map_err(|error| error.to_string())?;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
@@ -2895,6 +2910,32 @@ mod tests {
         assert!(!result.ok);
         assert_eq!(result.code, "invalid_response");
         assert_eq!(result.status, Some(200));
+    }
+
+    #[test]
+    fn the_company_provider_compacts_before_the_window_is_full() {
+        let provider = CustomProvider {
+            id: "litellm".into(),
+            name: "LiteLLM".into(),
+            base_url: "https://ai-gateway.example/v1".into(),
+            api_key: "k".into(),
+            models: vec![CustomModel {
+                label: "DS 4.1 Flash".into(),
+                api_id: "deepseek-V4.1-flash".into(),
+                context_window: Some(1_000_000),
+                description: None,
+                reasoning_levels: None,
+                default_reasoning_level: None,
+                enabled: None,
+            }],
+        };
+        let early = custom_catalog(&provider, true).unwrap();
+        assert_eq!(early["models"][0]["auto_compact_token_limit"], 700_000);
+        assert_eq!(early["models"][0]["context_window"], 1_000_000, "the window itself is untouched");
+        // Every other custom provider keeps the engine's own threshold: compacting early is a
+        // remedy for the company relay, not a new global default.
+        let plain = custom_catalog(&provider, false).unwrap();
+        assert!(plain["models"][0].get("auto_compact_token_limit").is_none());
     }
 
     #[tokio::test]
