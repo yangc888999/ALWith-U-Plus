@@ -9,6 +9,10 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useUpdaterStore } from "@/features/updater/store"
 import { openExternal } from "@/lib/open"
+// Release history comes from the file the release process already maintains; the locale files only
+// ever carried the newest version, which is why older entries were missing from the dialog.
+import changelog from "../../../../CHANGELOG.md?raw"
+import { parseChangeLog } from "./changelog"
 // The bundled app icon itself — the same artwork Finder and the Dock show. Drawing our own mark
 // here drifted from it (flat gradient, blocky L), so the About page now renders the real asset.
 import appIcon from "../../../../src-tauri/icons/128x128@2x.png"
@@ -183,7 +187,7 @@ export function AboutSection() {
   )
 }
 
-/** The About page's "更新日志": a flat change list grouped by version markers (lines like "v0.2.28"). */
+/** The About page's "更新日志": the whole history, parsed from CHANGELOG.md. */
 function ChangeLogDialog({
   open,
   onOpenChange,
@@ -194,19 +198,7 @@ function ChangeLogDialog({
   version: string | null
 }) {
   const { t } = useTranslation()
-  const raw = t("settings.customizationItems", { returnObjects: true })
-  const list = Array.isArray(raw) ? (raw as string[]) : []
-  const groups: Array<{ version: string; items: string[] }> = []
-  let current: { version: string; items: string[] } | null = null
-  for (const line of list) {
-    const match = /^v\s*([\d.]+)\s*$/.exec(line.trim())
-    if (match) {
-      current = { version: match[1], items: [] }
-      groups.push(current)
-    } else if (current) {
-      current.items.push(line)
-    }
-  }
+  const groups = parseChangeLog(changelog)
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
