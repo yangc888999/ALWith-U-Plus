@@ -409,8 +409,27 @@ const RULES: Rule[] = [
   },
   {
     // The bridge ends a stream on the same 20-minute idle / 60-minute hard clocks as the UI and
-    // writes one structured error event before EOF. Name that cause instead of showing the generic
-    // "重试" a truncated socket used to produce.
+    // writes one structured error event before EOF. Every one of those endings used to share a
+    // single sentence, so a relay that hangs, a turn that ran an hour and a socket that died all
+    // read the same — and none of them told the reader which remedy applied. The reason travels in
+    // the message; name it.
+    match: /bridge_stream_timeout:\s*本次请求已达到 60 分钟总上限/,
+    key: "error.streamHardCap"
+  },
+  {
+    match: /bridge_stream_timeout:\s*上游超过 20 分钟没有输出/,
+    key: "error.streamIdleTimeout"
+  },
+  {
+    match: /bridge_stream_timeout:\s*上游连接被关闭/,
+    key: "error.streamClosed"
+  },
+  {
+    match: /bridge_stream_timeout:\s*上游读取失败[：:]\s*(.+)/,
+    key: "error.streamReadFailed",
+    values: (match) => ({ reason: match[1] })
+  },
+  {
     match: /bridge_stream_timeout/i,
     key: "error.streamTimedOut"
   },

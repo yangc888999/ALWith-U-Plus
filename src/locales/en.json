@@ -2146,7 +2146,11 @@
     "unknownSettingKey": "This setting is not recognised, so the change was not saved. Restart the app and try again.",
     "invalidSetting": "Setting {{key}} has an invalid value, so the change was not saved.",
     "quotaExceeded": "Your plan's quota is used up (account-level — switching GPT models will not help). Check your plan and billing details.",
-    "runtimeRequestFailed": "The conversation service rejected this request. Try again."
+    "runtimeRequestFailed": "The conversation service rejected this request. Try again.",
+    "streamHardCap": "This turn hit the 60-minute cap and the stream ended. Retry, or split the task into smaller steps.",
+    "streamIdleTimeout": "The upstream sent nothing for over 20 minutes, so this stream ended. Retry, or switch models.",
+    "streamClosed": "The upstream closed the connection before finishing. Retry, or switch models.",
+    "streamReadFailed": "Reading the upstream response failed: {{reason}}"
   },
   "groups": {
     "addGroup": "New meeting",

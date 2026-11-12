@@ -2146,7 +2146,11 @@
     "unknownSettingKey": "这个设置项未被识别，刚才的修改没有保存。请重启应用后重试。",
     "invalidSetting": "设置项 {{key}} 的值不合法，修改没有保存。",
     "quotaExceeded": "套餐额度已用尽（账号级，换 GPT 型号无效），请检查套餐与账单信息。",
-    "runtimeRequestFailed": "对话服务拒绝了这次请求，请重试。"
+    "runtimeRequestFailed": "对话服务拒绝了这次请求，请重试。",
+    "streamHardCap": "本轮已达到 60 分钟上限，连接已结束。可以重试，或把任务拆小一些。",
+    "streamIdleTimeout": "上游长时间没有输出（已超过 20 分钟），本次连接已结束。可以重试，或换一个模型再试。",
+    "streamClosed": "上游提前断开了连接，没有收到结束标记。可以重试，或换一个模型再试。",
+    "streamReadFailed": "读取上游响应失败：{{reason}}"
   },
   "groups": {
     "addGroup": "新建拉会",

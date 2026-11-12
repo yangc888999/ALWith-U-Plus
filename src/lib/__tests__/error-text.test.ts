@@ -405,6 +405,13 @@ test("the bridge's own stream timeout names the real cause", async () => {
   const message = describeError(new Error("bridge_stream_timeout: 上游超过 20 分钟没有输出"))
   expect(message).toContain("长时间没有输出")
   expect(message).not.toMatch(/bridge_stream_timeout/)
+  // The three other ways the bridge ends a stream used to read exactly like the idle clock, so a
+  // half-hour turn and a dropped socket both looked like a stalled model.
+  expect(describeError(new Error("bridge_stream_timeout: 本次请求已达到 60 分钟总上限"))).toContain("60 分钟上限")
+  expect(describeError(new Error("bridge_stream_timeout: 上游连接被关闭，没有收到结束标记"))).toContain("提前断开了连接")
+  expect(describeError(new Error("bridge_stream_timeout: 上游读取失败：connection reset by peer"))).toContain(
+    "connection reset by peer"
+  )
 })
 
 test("account-level capacity keeps its account-level wording in English", async () => {
