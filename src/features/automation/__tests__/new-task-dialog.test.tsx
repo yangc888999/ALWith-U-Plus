@@ -30,7 +30,7 @@ vi.mock("@/bindings", () => ({
     }
   })
 }))
-vi.mock("@/features/settings/sections/model-section", () => ({
+vi.mock("@/lib/model-catalog", () => ({
   modelEntries: () => [
     {
       id: "gpt-6.1-sol",

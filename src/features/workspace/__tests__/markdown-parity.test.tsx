@@ -5,6 +5,32 @@ import type { ReactNode } from "react"
 import { useMemo, useState } from "react"
 import { afterEach, expect, test, vi } from "vitest"
 
+import { createWysiwygMarkdownIntegration } from "../markdown-wysiwyg"
+import type { WysiwygLabels } from "../wysiwyg-types"
+
+const wysiwygLabels: WysiwygLabels = {
+  bold: "Bold",
+  italic: "Italic",
+  underline: "Underline",
+  strikethrough: "Strikethrough",
+  blockquote: "Blockquote",
+  bulletList: "Bullet list",
+  orderedList: "Numbered list",
+  outdent: "Outdent",
+  indent: "Indent",
+  inlineCode: "Inline code",
+  codeBlock: "Code block",
+  insertTable: "Insert table",
+  deleteRow: "Delete row",
+  deleteColumn: "Delete column",
+  deleteImage: "Delete image",
+  editHtml: "Edit",
+  finishEditHtml: "Done",
+  htmlEditBlocked: "This file cannot be edited",
+  htmlDeleted: "Deleted",
+  htmlUndoDelete: "Undo"
+}
+
 function fixture(text: string): PreviewProps {
   return {
     document: {
@@ -235,4 +261,63 @@ test("readonly code blocks preserve raw copy text, line numbers and wrap control
   fireEvent.click(wrap)
   expect(wrap).toHaveAttribute("aria-pressed", "true")
   expect(view.container.querySelector(".alwith-markdown-code-block")).toHaveAttribute("data-wrap", "true")
+})
+
+test("WYSIWYG toolbar coexists with the outline: the toolbar survives the outline's revision", async () => {
+  const props = fixture("# First\n\n## Second\n")
+  props.host.createMarkdownIntegration = (_document, context) =>
+    createWysiwygMarkdownIntegration(undefined, context, wysiwygLabels)
+  const view = render(<Workbench props={props} />)
+  await screen.findByRole("heading", { name: "First" }, { timeout: 5000 })
+  // The outline owns the header slot; the toolbar renders in the preview body, not the header.
+  const outline = await screen.findByRole("button", { name: "Document outline" })
+  expect(outline.closest("header")).not.toBeNull()
+  const toolbar = view.container.querySelector(".alwith-wysiwyg-toolbar")
+  expect(toolbar).not.toBeNull()
+  expect(toolbar?.closest("header")).toBeNull()
+  expect(screen.getByRole("button", { name: "Bold" })).toBeInTheDocument()
+  // Wait past the 800ms MutationObserver revision that re-claims setToolbarActions.
+  await new Promise((resolve) => setTimeout(resolve, 1100))
+  expect(view.container.querySelector(".alwith-wysiwyg-toolbar")).not.toBeNull()
+  expect(screen.getByRole("button", { name: "Bold" })).toBeInTheDocument()
+  // The outline still works after the revision.
+  fireEvent.click(screen.getByRole("button", { name: "Document outline" }))
+  expect(await screen.findByRole("button", { name: "Second" })).toBeInTheDocument()
+}, 15000)
+
+test("Drive + WYSIWYG double wrapping keeps the Drive surface, frontmatter and the toolbar", async () => {
+  const base = {
+    configure: vi.fn(),
+    ready: vi.fn(async () => {}),
+    dispose: vi.fn(),
+    editable: vi.fn(() => true),
+    serialize: vi.fn((text: string) => `---\ntitle: Preserved\n---\n${text}`),
+    applyExternal: vi.fn(() => false),
+    render: vi.fn(() => <aside>Drive comments</aside>)
+  }
+  const props = fixture("# Drive\n")
+  props.host.createMarkdownIntegration = (_document, context) =>
+    createWysiwygMarkdownIntegration(base, context, wysiwygLabels)
+  const view = render(<Workbench props={props} />)
+  await screen.findByRole("heading", { name: "Drive" }, { timeout: 5000 })
+  expect(screen.getByText("Drive comments")).toBeInTheDocument()
+  expect(view.container.querySelector(".alwith-wysiwyg-toolbar")).not.toBeNull()
+  expect(screen.getByRole("button", { name: "Underline" })).toBeInTheDocument()
+  expect(base.configure).toHaveBeenCalledTimes(1)
+  expect(base.ready).toHaveBeenCalledTimes(1)
+  // Editing still flows through the Drive serializer (frontmatter preserved). The wrapped editor
+  // is the one the provider created and passed to configure.
+  const editor = base.configure.mock.calls[0]?.[0] as Editor | undefined
+  if (!editor) throw new Error("Missing configured editor")
+  act(() => {
+    editor.action((ctx) => {
+      const v = ctx.get(editorViewCtx)
+      v.dispatch(v.state.tr.insertText("Edited ", 1))
+    })
+  })
+  await waitFor(() =>
+    expect(props.context.onChange).toHaveBeenCalledWith(expect.stringMatching(/^---\ntitle: Preserved\n---\n# Edited Drive/))
+  )
+  view.unmount()
+  expect(base.dispose).toHaveBeenCalledTimes(1)
 })

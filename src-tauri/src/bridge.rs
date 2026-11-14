@@ -1332,6 +1332,11 @@ const REPLAY_GAP: Duration = Duration::from_millis(200);
 /// so eight attempts span roughly half a minute — enough for a transient burst, short enough that a
 /// genuinely blocked key still surfaces the refusal instead of hanging until the 60-minute cap.
 const MAX_429_REPLAYS: u32 = 8;
+/// How many silent replays one request may make after a 502/503/504. The company relay answers
+/// 502 "Enterprise gateway request failed" when its own upstream hiccups; the request never left
+/// the building, so re-sending it is safe and usually succeeds on the second try. Two replays
+/// (400ms then 800ms) cover a transient blip without holding a genuinely dead gateway for long.
+const MAX_GATEWAY_REPLAYS: u32 = 2;
 /// Buffer cap for the first SSE event. A healthy first event is small; a huge one is simply
 /// forwarded as-is instead of being held while we look for a capacity refusal.
 const FIRST_EVENT_CAP: usize = 16 * 1024;
@@ -1400,7 +1405,9 @@ fn relay(
     let mut attempted_recovery = false;
     let mut attempted_portable = false;
     let mut attempted_connect = false;
+    let mut attempted_header = false;
     let mut replays_429 = 0u32;
+    let mut replays_gateway = 0u32;
     let response = loop {
         let attempt = request_builder
             .try_clone()
@@ -1427,11 +1434,28 @@ fn relay(
                 let body = upstream_error_body(&error);
                 return respond(request, 502, "application/json", body.as_bytes());
             }
-            // Headers never arrived: free this worker (and one of the six slots) with a 504 now
-            // instead of holding it until the 60min whole-request timeout. Only the header phase
-            // is cut; a stream that already started keeps its 20min idle / 60min hard clocks.
+            // Headers never arrived. The native ChatGPT route rides whatever tunnel/proxy the user
+            // runs, and a single dropped handshake there is common (the TCP connect succeeds but the
+            // first response byte stalls). One quick retry covers the transient case, just like the
+            // connect-failure path below — a stalled header phase is the same class of flake.
+            HeaderWait::Timeout if !attempted_header => {
+                attempted_header = true;
+                log::warn!(
+                    "bridge: retrying after header timeout ({}s)",
+                    HEADER_TIMEOUT.as_secs()
+                );
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                continue;
+            }
+            // Headers never arrived after the retry too: free this worker (and one of the six
+            // slots) with a 504 now instead of holding it until the 60min whole-request timeout.
+            // Only the header phase is cut; a stream that already started keeps its 20min idle /
+            // 60min hard clocks.
             HeaderWait::Timeout => {
-                log::warn!("bridge: upstream response headers timed out after {}s", HEADER_TIMEOUT.as_secs());
+                log::warn!(
+                    "bridge: upstream response headers timed out after {}s",
+                    HEADER_TIMEOUT.as_secs()
+                );
                 return respond(
                     request,
                     504,
@@ -1495,6 +1519,21 @@ fn relay(
             replays_429 += 1;
             log::warn!(
                 "bridge: upstream answered 429, silent replay {replays_429}/{MAX_429_REPLAYS} in {}ms",
+                delay.as_millis()
+            );
+            std::thread::sleep(delay);
+            continue;
+        }
+        // A 502/503/504 from the relay means the relay itself could not reach its upstream — the
+        // turn never ran, so re-sending the identical request cannot duplicate anything. The
+        // company gateway's "Enterprise gateway request failed" 502 used to surface as a dead
+        // turn the user had to retype; two quick replays absorb the transient case, and a gateway
+        // that is really down still answers with its own error after ~1.2s.
+        if matches!(status, 502 | 503 | 504) && replays_gateway < MAX_GATEWAY_REPLAYS {
+            let delay = REPLAY_GAP * u32::pow(2, replays_gateway);
+            replays_gateway += 1;
+            log::warn!(
+                "bridge: upstream answered {status}, silent replay {replays_gateway}/{MAX_GATEWAY_REPLAYS} in {}ms",
                 delay.as_millis()
             );
             std::thread::sleep(delay);
@@ -2870,5 +2909,98 @@ data: [DONE]
         assert!(!sent[1].contains("\"id\":\"msg_1\""), "the replay drops foreign ids: {}", sent[1]);
         assert!(!body.contains("upstream request was rejected"), "the refusal must not reach the engine: {body}");
         assert!(body.contains("response.completed"), "the replay must reach the engine: {body}");
+    }
+
+    /// The company relay's transient 502 must be absorbed by a silent replay, and a gateway that
+    /// stays down must still surface its own error after the replay budget is spent.
+    fn gateway_502_replays_then_surfaces(start: u16, fail_times: usize, expected_hits: usize, expect_success: bool) {
+        use std::io::Write;
+        use std::net::{TcpListener, TcpStream};
+        use std::sync::atomic::AtomicUsize;
+
+        let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_in_thread = Arc::clone(&hits);
+        let upstream_thread = std::thread::spawn(move || {
+            const REFUSAL: &str = r#"{"error":{"message":"Enterprise gateway request failed"}}"#;
+            const SUCCESS: &str = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n";
+            for _ in 0..expected_hits {
+                let (mut stream, _) = upstream.accept().unwrap();
+                let mut scratch = [0u8; 8192];
+                let _ = stream.read(&mut scratch).unwrap_or(0);
+                let hit = hits_in_thread.fetch_add(1, Ordering::Relaxed) + 1;
+                if hit <= fail_times {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 {start} Bad Gateway\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        REFUSAL.len(),
+                        REFUSAL
+                    );
+                } else {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        SUCCESS.len(),
+                        SUCCESS
+                    );
+                }
+            }
+        });
+
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let bridge_addr = server.server_addr().to_ip().unwrap();
+        let client_thread = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(bridge_addr).unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            stream
+                .write_all(b"POST /alwith/responses HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}")
+                .unwrap();
+            let mut body = Vec::new();
+            let mut scratch = [0u8; 4096];
+            loop {
+                match stream.read(&mut scratch) {
+                    Ok(0) => break,
+                    Ok(count) => body.extend_from_slice(&scratch[..count]),
+                    Err(_) => break,
+                }
+            }
+            String::from_utf8_lossy(&body).to_string()
+        });
+
+        let request = server.recv().unwrap();
+        let result = relay(
+            request,
+            "custom-x/m",
+            &format!("http://{upstream_addr}/responses"),
+            None,
+            &[],
+            br#"{"model":"custom-x/m","input":[]}"#.to_vec(),
+            false,
+            false,
+            false,
+            false,
+        );
+        let body = client_thread.join().unwrap();
+        let _ = upstream_thread.join();
+
+        assert!(result.is_ok(), "relay failed: {result:?}");
+        assert_eq!(hits.load(Ordering::Relaxed), expected_hits);
+        if expect_success {
+            assert!(body.contains("response.completed"), "the replay must reach the engine: {body}");
+            assert!(!body.contains("Enterprise gateway request failed"), "the 502 must not reach the engine: {body}");
+        } else {
+            assert!(body.contains("Enterprise gateway request failed"), "a dead gateway must surface its error: {body}");
+        }
+    }
+
+    #[test]
+    fn a_transient_gateway_502_is_replayed_silently() {
+        gateway_502_replays_then_surfaces(502, 1, 2, true);
+    }
+
+    #[test]
+    fn a_gateway_that_stays_down_surfaces_after_two_replays() {
+        gateway_502_replays_then_surfaces(502, 3, 3, false);
     }
 }

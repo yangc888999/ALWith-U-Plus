@@ -4,6 +4,7 @@ import { type FsAdapter, normalizePath, type WriteOptions } from "@alwith/module
 import type { NativeRequest } from "@alwith/module-fs/tauri"
 import { createMemoryAdapter } from "@alwith/module-fs/testing"
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { toast } from "sonner"
 import { StrictMode, useState } from "react"
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
@@ -16,6 +17,7 @@ import { settingsStore } from "@/lib/settings-store"
 
 import { WorkspaceHeaderContext } from "../context"
 import { FileWorkspace } from "../file-workspace"
+import { DRAFT_DIRECTORY_KEY, projectDirectoryAttempt, type ProjectDirectoryReason } from "../project-directory"
 
 vi.mock("@/features/guide/guide-window", () => ({ openGuideWindow: vi.fn() }))
 
@@ -62,6 +64,8 @@ function required<T>(value: T | undefined | null): T {
 }
 let adapter: FsAdapter
 let authorize: ((path: string) => Promise<string>) | null
+// Task #5 / ④: the native group folder picker used by the invalid empty state.
+let pickedGroupDirectory: string | null = null
 beforeEach(async () => {
   localStorage.clear()
   vi.clearAllMocks()
@@ -76,10 +80,12 @@ beforeEach(async () => {
   native.close = null
   await initI18n("en")
   authorize = null
+  pickedGroupDirectory = null
   adapter = createMemoryAdapter({ "/a/one.txt": "first", "/b/two.txt": "second" })
   native.invoke.mockImplementation(
     async (command: string, args: { cwd?: string; path?: string; request?: NativeRequest }): Promise<unknown> => {
       if (command === "draft_directory") return args.cwd
+      if (command === "pick_group_directory") return pickedGroupDirectory
       if (command === "workspace_open") return authorize === null ? args.path : authorize(required(args.path))
       if (command === "workspace_watch" || command === "workspace_dirty" || command === "workspace_exit") return null
       if (command !== "workspace_file" || !args.request) throw new Error(`Unexpected native command: ${command}`)
@@ -162,12 +168,22 @@ function Surface({
   cwd,
   chatRevealRequest = 0,
   defaultOpen = false,
-  columnsRequest = 0
+  columnsRequest = 0,
+  reason = "project",
+  guidance = null,
+  invalidDirectory = null,
+  directoryKey = undefined,
+  sessionId = null
 }: {
-  cwd: string
+  cwd: string | null
   chatRevealRequest?: number
   defaultOpen?: boolean
   columnsRequest?: number
+  reason?: ProjectDirectoryReason
+  guidance?: string | null
+  invalidDirectory?: string | null
+  directoryKey?: string
+  sessionId?: string | null
 }) {
   const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null)
   return (
@@ -175,9 +191,14 @@ function Surface({
       <div ref={setToolbar} data-testid="window-titlebar" />
       <FileWorkspace
         cwd={cwd}
+        sessionId={sessionId}
+        directoryKey={directoryKey}
         chatRevealRequest={chatRevealRequest}
         defaultOpen={defaultOpen}
         columnsRequest={columnsRequest}
+        reason={reason}
+        guidance={guidance}
+        invalidDirectory={invalidDirectory}
       >
         <ChatHeader title="Conversation" project={<span>Project</span>}>
           {null}
@@ -1024,4 +1045,122 @@ test("Windows workspace controls follow the actual canvas screen without resetti
   } finally {
     target.remove()
   }
+})
+
+// Regression for the reported "click 文件栏 and nothing happens". QA: this used to render with
+// `defaultOpen` true, but `app.tsx:507-508` *excludes* `reason === "missing"` from
+// `defaultFourColumns`, so that combination never occurs in the real app. Test the real one:
+// missing ⇒ defaultOpen=false ⇒ visible=false ⇒ the column is shut on the first frame.
+test("a directory-less (missing) surface starts with the file column closed and hidden", async () => {
+  const info = vi.spyOn(toast, "info")
+  try {
+    render(<Surface cwd={null} reason="missing" guidance="Pick a folder" />)
+    const layout = () => document.querySelector(".file-workspace-layout")
+    const slab = () => document.querySelector(".file-workspace-preview-slide .file-workspace-slab")
+    const slide = () => document.querySelector(".file-workspace-preview-slide")
+    // The empty-state node exists in the DOM (WorkspacePanels renders `preview` unconditionally),
+    // but it is zero-width, inert and aria-hidden: the reader perceives and can operate nothing.
+    expect(layout()).toHaveAttribute("data-open", "false")
+    expect(slide()).toHaveAttribute("style", expect.stringContaining("width: 0px"))
+    expect(slab()).toHaveAttribute("aria-hidden", "true")
+    expect(slab()?.hasAttribute("inert")).toBe(true)
+    expect(screen.getByTestId("workspace-empty-state")).toHaveAttribute("data-workspace-empty-reason", "missing")
+    // The header toggle and 四方格 must not claim the four columns are open.
+    expect(screen.getByTestId("header-tree-toggle")).toHaveAttribute("aria-expanded", "false")
+    expect(screen.getByRole("button", { name: "Open preview area" })).toHaveAttribute("aria-expanded", "false")
+    expect(info).not.toHaveBeenCalled()
+
+    // P0-5 minimum: a click is never a dead end — toast + an opened, actionable empty state.
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("header-tree-toggle"))
+    })
+    expect(layout()).toHaveAttribute("data-open", "true")
+    expect(slab()).toHaveAttribute("aria-hidden", "false")
+    expect(slab()?.hasAttribute("inert")).toBe(false)
+    expect(info).toHaveBeenCalled()
+    expect(screen.getByText("Pick a folder")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Choose a folder" })).toBeTruthy()
+  } finally {
+    info.mockRestore()
+  }
+})
+
+// `invalid` is NOT excluded from `defaultFourColumns` (`app.tsx:507-508`): the repair hint must
+// be on screen without any click. Construct the real combination, including the rejected path.
+test("an invalid Groups-root directory opens the column and offers the one-click repair without a click", async () => {
+  render(
+    <Surface
+      cwd={null}
+      reason="invalid"
+      defaultOpen
+      invalidDirectory="/Users/me/Documents/ALWith/groups"
+    />
+  )
+  expect(document.querySelector(".file-workspace-layout")).toHaveAttribute("data-open", "true")
+  const slab = document.querySelector(".file-workspace-preview-slide .file-workspace-slab")
+  expect(slab).toHaveAttribute("aria-hidden", "false")
+  expect(slab?.hasAttribute("inert")).toBe(false)
+  expect(await screen.findByTestId("workspace-empty-state")).toHaveAttribute(
+    "data-workspace-empty-reason",
+    "invalid"
+  )
+  expect(screen.getByText("Use the one-click repair below to point the directory back at this meeting's own folder.")).toBeTruthy()
+  expect(screen.getByRole("button", { name: "Repair now" })).toBeTruthy()
+  // Task #5 / ③: a failed heal must not be a dead end — the manual picker is always available.
+  expect(screen.getByRole("button", { name: "Choose a folder" })).toBeTruthy()
+  expect(screen.getByRole("button", { name: "Reopen file column" })).toBeTruthy()
+})
+
+// QA regression: the reported symptom was a *dead* 文件栏 click on the default two-column surface.
+// Prove the second entrance (四方格) also produces an opened, actionable empty state in that exact
+// configuration, so all 文件栏 entries behave alike.
+test("四方格 on the default two-column, directory-less surface opens the actionable empty state", async () => {
+  const info = vi.spyOn(toast, "info")
+  try {
+    render(<Surface cwd={null} reason="missing" guidance="Pick a folder" />)
+    expect(document.querySelector(".file-workspace-layout")).toHaveAttribute("data-open", "false")
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open preview area" }))
+    })
+    expect(document.querySelector(".file-workspace-layout")).toHaveAttribute("data-open", "true")
+    const empty = await screen.findByTestId("workspace-empty-state")
+    expect(empty).toHaveAttribute("data-workspace-empty-reason", "missing")
+    expect(screen.getByText("Pick a folder")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Choose a folder" })).toBeTruthy()
+    expect(info).toHaveBeenCalled()
+  } finally {
+    info.mockRestore()
+  }
+})
+
+// Task #5 / ④: `selectedId` can already be set in the frame before `session` is published, so a
+// repair/folder pick must be written under the app's `directoryKey` (selectedId ?? __draft__),
+// never under `__draft__`. Previously FileWorkspace derived the key from `sessionId` alone and the
+// selected conversation stayed unresolved after a repair. This drives the real native picker path.
+test("an invalid empty state writes a folder pick under the app's directoryKey, not __draft__", async () => {
+  const chosen = "/Users/me/Documents/ALWith/groups/定价会"
+  pickedGroupDirectory = chosen
+  const draftBefore = projectDirectoryAttempt(DRAFT_DIRECTORY_KEY)
+  render(
+    <Surface
+      cwd={null}
+      sessionId={null}
+      directoryKey="qa-selected-session"
+      reason="invalid"
+      defaultOpen
+      invalidDirectory="/Users/me/Documents/ALWith/groups"
+    />
+  )
+  expect(await screen.findByTestId("workspace-empty-state")).toHaveAttribute(
+    "data-workspace-empty-reason",
+    "invalid"
+  )
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Choose a folder" }))
+  })
+  await waitFor(() => expect(projectDirectoryAttempt("qa-selected-session")?.directory).toBe(chosen))
+  expect(projectDirectoryAttempt("qa-selected-session")?.invalid).toBeUndefined()
+  // The whole point of ④: the draft key is untouched in the "selected but not published" frame.
+  expect(projectDirectoryAttempt(DRAFT_DIRECTORY_KEY)).toBe(draftBefore)
+  expect(native.invoke).toHaveBeenCalledWith("pick_group_directory")
 })

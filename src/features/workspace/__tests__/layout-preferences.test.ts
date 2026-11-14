@@ -6,10 +6,13 @@ import {
   LAYOUT_SHARE_MIN,
   loadWorkspaceLayout,
   saveLayoutShare,
+  saveVisibleLayoutShare,
   saveWorkspaceLayout,
   sharePercents,
   requestedPreviewWidth,
+  visibleSharePercents,
   withShare,
+  withVisibleShare,
   workspaceLayoutDefaults
 } from "../layout-preferences"
 
@@ -177,4 +180,54 @@ test("a share that outgrows the workspace is narrowed instead of paging the colu
   expect(requestedPreviewWidth(1227, 0.8, 0)).toBeLessThanOrEqual(1227 - 320)
   // A wide window can honour the same share untouched.
   expect(requestedPreviewWidth(2400, 0.8, 0)).toBe(1920)
+})
+
+test("a partial layout reports percentages over the columns that are actually on", () => {
+  // Sidebar 12%, chat 15%, tree 13%, preview 60% — with the tree and the preview closed only the
+  // first two take room, so they must read as a full 100 rather than 12 + 15 = 27.
+  const percents = visibleSharePercents(workspaceLayoutDefaults, ["navigation", "chat"])
+  expect(percents.navigation + percents.chat).toBe(100)
+  expect(percents.navigation).toBe(44)
+  expect(percents.chat).toBe(56)
+  // Closed columns report 0 so a stale value can never leak into the bar or the sliders.
+  expect(percents.tree).toBe(0)
+  expect(percents.preview).toBe(0)
+  // Every visible subset still closes at exactly 100.
+  for (const subset of [
+    ["navigation"],
+    ["navigation", "chat", "tree"],
+    ["navigation", "chat", "preview"],
+    ["navigation", "chat", "tree", "preview"]
+  ] as const) {
+    const shares = visibleSharePercents(workspaceLayoutDefaults, subset)
+    expect(subset.reduce((sum, key) => sum + shares[key], 0)).toBe(100)
+  }
+})
+
+test("editing a share with columns closed fills the visible budget and keeps the rest saved", () => {
+  const layout = withVisibleShare(workspaceLayoutDefaults, ["navigation", "chat"], "navigation", 30)
+  // Sidebar 30% / chat 70% of the on-screen budget.
+  const percents = visibleSharePercents(layout, ["navigation", "chat"])
+  expect(percents.navigation).toBe(30)
+  expect(percents.chat).toBe(70)
+  // The budget still totals 100 across all four columns, and the closed ones kept their shares so
+  // switching them back on restores the width they had before.
+  expect(total(layout)).toBeCloseTo(1, 10)
+  expect(layout.treeRatio).toBeCloseTo(workspaceLayoutDefaults.treeRatio, 10)
+  expect(layout.previewRatio).toBeCloseTo(workspaceLayoutDefaults.previewRatio, 10)
+  // Reopening every column keeps the visible pair's proportions against each other.
+  const all = visibleSharePercents(layout, ["navigation", "chat", "tree", "preview"])
+  expect(all.navigation + all.chat + all.tree + all.preview).toBe(100)
+  expect(all.navigation / all.chat).toBeCloseTo(30 / 70, 1)
+})
+
+test("a visible-share edit never touches a closed column and survives a reload", () => {
+  saveWorkspaceLayout({ ...workspaceLayoutDefaults })
+  saveVisibleLayoutShare("chat", 25, ["navigation", "chat"])
+  const layout = loadWorkspaceLayout()
+  expect(total(layout)).toBeCloseTo(1, 10)
+  const percents = visibleSharePercents(layout, ["navigation", "chat"])
+  expect(percents.chat).toBe(25)
+  expect(percents.navigation).toBe(75)
+  expect(layout.previewRatio).toBeCloseTo(workspaceLayoutDefaults.previewRatio, 10)
 })

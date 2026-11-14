@@ -8,7 +8,7 @@
 
 import type { Session } from "@alwith/api"
 import { CircleStopIcon, Loader2Icon, PauseIcon, PlayIcon, RotateCcwIcon, UsersIcon } from "lucide-react"
-import { type ReactNode, useSyncExternalStore } from "react"
+import { type ReactNode, useState, useSyncExternalStore } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
@@ -32,6 +32,7 @@ import { startGroupDiscussion } from "./use-group-discussion"
 
 export function GroupDiscussionBar({ session }: { session: Session }): ReactNode {
   const { t } = useTranslation()
+  const [direction, setDirection] = useState("")
   const group = groupByDirectory(session.cwd)
   const discussion = useSyncExternalStore(
     subscribeGroupDiscussion,
@@ -51,6 +52,10 @@ export function GroupDiscussionBar({ session }: { session: Session }): ReactNode
   if (group === null) return null
 
   const members = group.roles.map((id) => groupRoleFor(id)).filter((role): role is GroupRole => role !== null)
+  // The summarizer is the member flagged moderator, falling back to the last in the roster — the
+  // same fallback the orchestrator uses, so the bar and the running discussion agree on who closes.
+  const summarizer = members.find((member) => member.moderator) ?? members.at(-1)
+  const summarizerId = summarizer?.id
   const busy = discussion.phase === "discussing" || discussion.phase === "closing"
   // The floating window mirrors the main conversation; the roster only runs where the agent does.
   const remote = client instanceof RemoteChatClient
@@ -77,8 +82,11 @@ export function GroupDiscussionBar({ session }: { session: Session }): ReactNode
   if (!busy && discussion.phase === "error") status = t("groups.barFailed", { error: discussion.error ?? "" })
 
   const run = (count: number): void => {
-    void startGroupDiscussion(session.id, count).catch((error: unknown) =>
-      toast.error(error instanceof Error ? error.message : String(error))
+    // A direction typed here is transient: it steers only the run we are starting now and is never
+    // written back to the meeting's long-term focus.
+    const nextDirection = direction.trim()
+    void startGroupDiscussion(session.id, count, nextDirection === "" ? undefined : nextDirection).catch(
+      (error: unknown) => toast.error(error instanceof Error ? error.message : String(error))
     )
   }
 
@@ -95,22 +103,33 @@ export function GroupDiscussionBar({ session }: { session: Session }): ReactNode
         <span className="min-w-0 truncate font-medium" data-group-status-text>
           {status}
         </span>
+        {/* The meeting's standing analysis direction, visible while it steers the room. */}
+        {group.focus.trim() !== "" && (
+          <span
+            className="hidden min-w-0 max-w-[14rem] shrink truncate rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary md:inline"
+            title={`${t("groups.createFocusLabel")}：${group.focus.trim()}`}
+            data-group-focus
+          >
+            {group.focus.trim()}
+          </span>
+        )}
         {members.length > 0 && (
           <div className="hidden min-w-0 flex-1 items-center gap-1 overflow-hidden md:flex">
-            {members.map((member) => {
+            {members.map((member, index) => {
               const speaking = discussion.speaker === member.name
               return (
                 <span
                   key={member.id}
-                  className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] leading-none ${
+                  className={`flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] leading-none ${
                     speaking
                       ? "border-primary/60 bg-primary/10 text-primary"
                       : "border-border/60 text-muted-foreground"
                   }`}
                   title={member.model}
                 >
-                  {member.name}
-                  {member.moderator ? ` · ${t("groups.barModerator")}` : ""}
+                  <span className="tabular-nums opacity-60">{index + 1}</span>
+                  <span>{member.name}</span>
+                  {member.id === summarizerId ? ` · ${t("groups.barSummarizer")}` : ""}
                 </span>
               )
             })}
@@ -153,6 +172,17 @@ export function GroupDiscussionBar({ session }: { session: Session }): ReactNode
           )}
         </div>
       </div>
+      {!busy && (
+        <div className="mt-1 flex items-center gap-1.5 px-1" data-group-direction>
+          <span className="shrink-0 text-[11px] text-muted-foreground">{t("groups.changeDirection")}</span>
+          <input
+            className="h-6 min-w-0 flex-1 rounded-md border border-border/60 bg-background px-2 text-[11px]"
+            placeholder={t("groups.changeDirectionPlaceholder")}
+            value={direction}
+            onChange={(event) => setDirection(event.target.value)}
+          />
+        </div>
+      )}
       {paused && (
         <p className="mt-1 px-1 text-[11px] leading-relaxed text-muted-foreground">{t("groups.barPausedHint")}</p>
       )}

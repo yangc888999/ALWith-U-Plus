@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
-import { modelEntries, type ModelEntry } from "@/features/settings/sections/model-section"
+import { modelEntries, type ModelEntry } from "@/lib/model-catalog"
 import { NATIVE_MODEL_GROUP } from "@/agent/native-models"
 import { commands } from "@/bindings"
 import { defaultModelChoice } from "@/lib/default-model"

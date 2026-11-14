@@ -13,13 +13,8 @@ import {
   DialogHeader,
   DialogTitle
 } from "@/components/ui/dialog"
-import {
-  enterpriseLoginAvailable,
-  type EnterpriseRenewal,
-  type EnterpriseStatus,
-  parseEnterpriseRenewal
-} from "@/features/auth/enterprise-status"
-import { platformApiRequest, requestAccountProviderRefresh, usePlatformAuth } from "@/features/auth/store"
+import { useEnterpriseLogin } from "@/features/auth/use-enterprise-login"
+import { requestAccountProviderRefresh, usePlatformAuth } from "@/features/auth/store"
 import { openExternal } from "@/lib/open"
 
 import { SettingGroup, SettingRow } from "./shared"
@@ -33,57 +28,27 @@ export function EnterpriseSection() {
   const { t } = useTranslation()
   const user = usePlatformAuth((state) => state.user)
   const account = user?.user_uuid
-  const [status, setStatus] = useState<EnterpriseStatus | null>(null)
-  const [renewal, setRenewal] = useState<EnterpriseRenewal | null>(null)
-  const [error, setError] = useState(false)
+  // Sign-in detection is shared with the company provider card: one event-driven source of truth,
+  // so the two can never disagree and an expired token is noticed without any interval polling.
+  const login = useEnterpriseLogin()
+  const { status, renewal, error, authorized, recheck } = login
   const [busy, setBusy] = useState(false)
-  const [revision, setRevision] = useState(0)
   const [confirm, setConfirm] = useState(false)
   const [pending, setPending] = useState<{ state: string; generation: number } | null>(null)
+
+  // A different account starts from clean controls: an in-flight login for the old account must
+  // not keep the new account's buttons disabled (its `finally` no longer matches the identity).
   useEffect(() => {
-    let active = true
-    let checking = false
     setBusy(false)
     setConfirm(false)
-    setError(false)
-    setStatus(null)
-    setRenewal(null)
     setPending(null)
-    const check = async () => {
-      if (!account || checking) return
-      checking = true
-      try {
-        const [server, native] = await Promise.all([
-          platformApiRequest<EnterpriseStatus>("/api/v1/me/enterprise/finture", "GET"),
-          commands.enterpriseStatus()
-        ])
-        if (!active || usePlatformAuth.getState().user !== user) return
-        if (typeof server.enabled !== "boolean" || typeof server.authorization_status !== "string")
-          throw new Error("Invalid enterprise status")
-        const parsed = parseEnterpriseRenewal(native)
-        setStatus(server)
-        setRenewal(parsed)
-        setError(false)
-        if (enterpriseLoginAvailable(server, parsed)) setPending(null)
-      } catch {
-        if (active) setError(true)
-      } finally {
-        checking = false
-      }
-    }
-    void check()
-    const interval = setInterval(() => void check(), 3000)
-    const focus = () => void check()
-    window.addEventListener("focus", focus)
-    return () => {
-      active = false
-      clearInterval(interval)
-      window.removeEventListener("focus", focus)
-    }
-  }, [account, user, revision])
+  }, [account])
 
+  // A completed authorization (success or failure) releases the pending login. The shared hook
+  // re-reads the status on the same event; this only clears the local "waiting for the browser"
+  // state so the controls unlock either way.
   useEffect(() => {
-    if (!pending) return
+    if (!pending || !account) return
     let active = true
     const stop = listen<Record<string, unknown>>("enterprise:event", ({ payload }) => {
       if (
@@ -94,23 +59,23 @@ export function EnterpriseSection() {
       )
         return
       setPending(null)
-      setError(Boolean(payload.error))
-      setRevision((value) => value + 1)
     })
-    void stop.catch(() => {
-      if (active) setError(true)
-    })
+    void stop.catch(() => {})
     return () => {
       active = false
       void stop.then((unlisten) => unlisten()).catch(() => {})
     }
   }, [account, pending])
 
+  // Once the channel is authorized there is nothing left to wait for.
+  useEffect(() => {
+    if (authorized) setPending(null)
+  }, [authorized])
+
   async function run(action: "login" | "logout" | "cancel") {
     const identity = usePlatformAuth.getState().user
     const current = () => usePlatformAuth.getState().user === identity
     setBusy(true)
-    setError(false)
     try {
       if (action === "login") {
         await requestAccountProviderRefresh()
@@ -139,24 +104,22 @@ export function EnterpriseSection() {
         if (!current()) return
         await commands.enterpriseLogout({ generation: enterpriseGeneration(fresh) })
         if (!current()) return
-
         setConfirm(false)
-        setRevision((value) => value + 1)
+        recheck()
       }
     } catch {
-      if (current()) setError(true)
+      // The shared hook surfaces status errors; a failed action just stops the spinner.
     } finally {
       if (current()) setBusy(false)
     }
   }
-  const authorized = !error && status !== null && renewal !== null && enterpriseLoginAvailable(status, renewal)
   const label = error
     ? t("enterprise.unknown")
     : authorized
-      ? (status.email ?? t("enterprise.authorized"))
+      ? (status?.email ?? t("enterprise.authorized"))
       : pending !== null
         ? t("enterprise.pending")
-        : status === null
+        : login.checking || status === null
           ? t("enterprise.checking")
           : !status.enabled
             ? t("enterprise.disabled")
@@ -172,7 +135,8 @@ export function EnterpriseSection() {
           ) : (
             <Button
               variant="outline"
-              disabled={busy || !account || status?.enabled === false}
+              // 授权检查还没拿到结果时先别让点：那一刻 generation 可能尚未绑定，点了也只会失败。
+              disabled={busy || !account || login.checking || status?.enabled === false}
               onClick={() => (authorized ? setConfirm(true) : void run("login"))}
             >
               {busy && <Loader2 className="size-4 animate-spin" />}
@@ -180,7 +144,7 @@ export function EnterpriseSection() {
             </Button>
           )}
           {error && (
-            <Button variant="outline" disabled={busy} onClick={() => setRevision((value) => value + 1)}>
+            <Button variant="outline" disabled={busy} onClick={() => recheck()}>
               {t("actions.retry")}
             </Button>
           )}

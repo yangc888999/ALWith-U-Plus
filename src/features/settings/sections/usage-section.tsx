@@ -2,7 +2,7 @@
 // from the machine, so the page opens with a plain "read the ledger" call and no polling — a
 // number that only changes when a turn ends does not need a timer.
 
-import { CloudIcon, RefreshCwIcon } from "lucide-react"
+import { ChevronDownIcon, CloudIcon, PlusIcon, RefreshCwIcon } from "lucide-react"
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { isTauri } from "@tauri-apps/api/core"
@@ -12,6 +12,9 @@ import {
   usePriceStore,
   costOf,
   blankPrice,
+  canonicalVendor,
+  guessVendor,
+  matchesModel,
   modelMatchKey,
   parseOpenRouterPrices,
   parsePriceArray,
@@ -25,6 +28,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { cn } from "@/lib/utils"
 import { nativeModelOverrides, providerGroups } from "@/lib/providers"
 import { useProviders } from "@/lib/use-providers"
+import { addUnpricedModels, refreshPricesIfDue } from "../price-refresh"
 
 import { SettingsCard, SettingsDetails, SettingsNote } from "./shared"
 import { Donut, GroupLines, seriesColor, Spark, StackedBars } from "../usage-charts"
@@ -300,6 +304,9 @@ export function UsageSection() {
   // Only an explicit refresh spins. The first open paints the page shell immediately; the Rust
   // snapshot returns in one cache read and heavy cards mount in later frames (see `stage`).
   const [loading, setLoading] = useState(false)
+  // What the last explicit refresh brought in: new calls vs "nothing changed", so the button
+  // never looks dead when the ledger really has no new turns.
+  const [syncNote, setSyncNote] = useState<string | null>(null)
   // 0 = overview only, 1 = charts, 2 = log + price table. Advancing one step per frame keeps the
   // first paint cheap instead of committing every chart and 100 table rows in a single render.
   const [stage, setStage] = useState(0)
@@ -314,6 +321,18 @@ export function UsageSection() {
   const [chart, setChart] = useState<ChartKind>("pie")
   const [groupBy, setGroupBy] = useState<GroupBy>("model")
   const [top, setTop] = useState(8)
+  // Price vendors start collapsed: the page opens as a short list of vendor names, and a vendor's
+  // URL / rule / model table only mounts once the reader opens it. Twenty-five price inputs per
+  // vendor on first paint was the mess this replaces.
+  const [expandedVendors, setExpandedVendors] = useState<Set<string>>(() => new Set())
+  const toggleVendor = (vendor: string): void => {
+    setExpandedVendors((previous) => {
+      const next = new Set(previous)
+      if (next.has(vendor)) next.delete(vendor)
+      else next.add(vendor)
+      return next
+    })
+  }
   // Which months the activity grid shows, and where it ends. Three is the default because one month
   // hides the trend and twelve shrinks every cell to a dot.
   const [monthSpan, setMonthSpan] = useState<3 | 6 | 12>(6)
@@ -353,24 +372,58 @@ export function UsageSection() {
   // for custom providers and for the built-in GPT rows, so the legend shows those instead of long
   // ids. A model that was never renamed keeps its id; the full id stays in the legend tooltip.
   const providers = useProviders()
+  // Subscribed here (not only with the rest of the price store further down) because the display
+  // names below need it: a name typed on a price row has to win over the provider label.
+  const prices = usePriceStore((state) => state.prices)
   const modelNames = useMemo(() => {
     const names = new Map<string, string>()
+    // Keys are folded (dots/dashes/case) so a ledger id like `claude-opus-5.5` still finds the
+    // settings row saved as `claude-opus-5-5`. Matching for pricing uses the same fold.
     for (const model of nativeModelOverrides() ?? []) {
       const id = model.api_id.trim()
       const label = model.label.trim()
-      if (id !== "" && label !== "" && label !== id) names.set(id, label)
+      if (id !== "" && label !== "" && label !== id) names.set(modelMatchKey(id), label)
     }
     if (providers !== null) {
       for (const group of providerGroups(providers)) {
         for (const model of group.models) {
           const label = model.label?.trim() ?? ""
-          if (label !== "" && label !== model.id) names.set(model.id, label)
+          if (label !== "" && label !== model.id) names.set(modelMatchKey(model.id), label)
         }
       }
     }
+    // A name typed on the price row wins over the provider label: the price table is where the
+    // reader decides how a model should read in the cost report.
+    for (const price of prices) {
+      const label = price.label?.trim() ?? ""
+      if (price.model !== "" && label !== "") names.set(modelMatchKey(price.model), label)
+    }
     return names
+  }, [providers, prices])
+  /** Display name for a raw ledger id; falls back to the id itself. Never used for matching. */
+  const displayName = useCallback(
+    (id: string): string => modelNames.get(modelMatchKey(id)) ?? id,
+    [modelNames]
+  )
+  /** Which provider group a model belongs to, so an unpriced model lands in the right vendor card
+   *  instead of the generic "其他" bucket whenever settings already know it. */
+  const vendorForModel = useMemo(() => {
+    const vendors = new Map<string, string>()
+    if (providers !== null) {
+      for (const group of providerGroups(providers)) {
+        for (const model of group.models) vendors.set(modelMatchKey(model.id), group.name)
+      }
+    }
+    return vendors
   }, [providers])
 
+  // Read through refs: `load` must keep a stable identity. Both `report` and `t` change identity on
+  // every render (i18n hands back a fresh `t`), so depending on either would re-run the mount effect
+  // below and fetch the ledger in an endless loop.
+  const reportRef = useRef(report)
+  reportRef.current = report
+  const translateRef = useRef(t)
+  translateRef.current = t
   const load = useCallback(async (force = false): Promise<void> => {
     if (!isTauri()) return
     if (force) setLoading(true)
@@ -379,9 +432,22 @@ export function UsageSection() {
       // The engine files calls under UTC days. Localize once at the boundary, so every range,
       // chart and the log agree with the local dates the reader picked. A normal read returns the
       // last snapshot instantly — even an expired one — while Rust rebuilds in the background.
-      setReport(
-        localizeUsageReport(await (force ? commands.usageReportRefresh() : commands.usageReport()))
+      const next = localizeUsageReport(
+        await (force ? commands.usageReportRefresh() : commands.usageReport())
       )
+      if (force) {
+        // Incremental sync feedback: the rebuild only re-parses transcripts the fingerprint says
+        // changed, and the report tells us how many calls the delta added.
+        const calls = (r: UsageReport | null): number =>
+          (r?.points ?? []).reduce((total, point) => total + point.requests, 0)
+        const delta = calls(next) - calls(reportRef.current)
+        setSyncNote(
+          delta > 0
+            ? translateRef.current("usageReport.syncAdded", { count: delta })
+            : translateRef.current("usageReport.syncUpToDate")
+        )
+      }
+      setReport(next)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -394,11 +460,13 @@ export function UsageSection() {
   }, [load])
 
   // Stale-while-revalidate: an expired snapshot arrives with `pending`, and the rebuild runs off
-  // the main thread. Poll quietly (no spinner, no skeleton) until the fresh snapshot lands.
-  // A self-rescheduling timer is used instead of an effect keyed on `updatedAt`: while the
-  // rebuild runs the timestamp does not change, so a dependency-based effect would schedule
-  // exactly one poll and then stop. A hard cap keeps a wedged rebuild from polling forever.
+  // the main thread. Poll quietly until the fresh snapshot lands — and stop as soon as it does,
+  // instead of re-reading on a fixed timer even after the data is current. A hard cap keeps a
+  // wedged rebuild from polling forever. `load` is read through a ref so a report change never
+  // restarts the timer chain.
   const pending = report?.pending === true
+  const loadRef = useRef(load)
+  loadRef.current = load
   useEffect(() => {
     if (!pending) return
     let cancelled = false
@@ -406,15 +474,22 @@ export function UsageSection() {
     let timer: ReturnType<typeof setTimeout>
     const poll = async (): Promise<void> => {
       attempts += 1
-      await load()
-      if (!cancelled && attempts < 24) timer = setTimeout(() => void poll(), 2500)
+      await loadRef.current()
+      if (cancelled || attempts >= 24) return
+      // One more read answers "is the rebuild done?"; if it is, no further poll is scheduled.
+      try {
+        const probe = await commands.usageReport()
+        if (!cancelled && probe.pending) timer = setTimeout(() => void poll(), 2500)
+      } catch {
+        if (!cancelled) timer = setTimeout(() => void poll(), 2500)
+      }
     }
     timer = setTimeout(() => void poll(), 2500)
     return () => {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [pending, load])
+  }, [pending])
 
   // Only the first report triggers the staged mount. A later snapshot replaces numbers in place —
   // resetting the stage here would make every card disappear and reappear on each background poll.
@@ -467,7 +542,6 @@ export function UsageSection() {
 
   // Prices come first: the analysis view's "cost" metric reads them while bucketing.
   const {
-    prices,
     usdToCny,
     utcOffset,
     vendorSources,
@@ -493,7 +567,7 @@ export function UsageSection() {
     const models = ranking(points, "model", "tokens", 1)
     const topModel = models[0] === undefined ? undefined : {
       ...models[0],
-      label: modelNames.get(models[0].key) ?? models[0].label
+      label: modelNames.get(modelMatchKey(models[0].key)) ?? models[0].label
     }
     const activeDays = days.filter((day) => day.requests > 0).length
     const streak = longestStreak(days)
@@ -502,14 +576,14 @@ export function UsageSection() {
     const allLabel = t("usageReport.groupAll")
     const groups = ranking(points, groupBy, metric, top).map((entry) => ({
       ...entry,
-      label: entry.key === ALL_GROUP ? allLabel : (modelNames.get(entry.key) ?? entry.label)
+      label: entry.key === ALL_GROUP ? allLabel : (modelNames.get(modelMatchKey(entry.key)) ?? entry.label)
     }))
     const stackedRaw = seriesByGroup(points, grain === "total" ? "day" : grain, groupBy, metric, top, from, to)
     const stacked = {
       ...stackedRaw,
       groups: stackedRaw.groups.map((group) => ({
         ...group,
-        label: group.key === ALL_GROUP ? allLabel : (modelNames.get(group.key) ?? group.label)
+        label: group.key === ALL_GROUP ? allLabel : (modelNames.get(modelMatchKey(group.key)) ?? group.label)
       }))
     }
     return {
@@ -546,14 +620,14 @@ export function UsageSection() {
     const allLabel = t("usageReport.groupAll")
     const groups = ranking(points, groupBy, metric, top).map((entry) => ({
       ...entry,
-      label: entry.key === ALL_GROUP ? allLabel : (modelNames.get(entry.key) ?? entry.label)
+      label: entry.key === ALL_GROUP ? allLabel : (modelNames.get(modelMatchKey(entry.key)) ?? entry.label)
     }))
     const stackedRaw = seriesByGroup(points, grain === "total" ? "day" : grain, groupBy, metric, top, analysisRange.from, analysisRange.to)
     const stacked = {
       ...stackedRaw,
       groups: stackedRaw.groups.map((group) => ({
         ...group,
-        label: group.key === ALL_GROUP ? allLabel : (modelNames.get(group.key) ?? group.label)
+        label: group.key === ALL_GROUP ? allLabel : (modelNames.get(modelMatchKey(group.key)) ?? group.label)
       }))
     }
     return { groups, stacked }
@@ -595,7 +669,43 @@ export function UsageSection() {
     setPrices([...prices, blankPrice(name)])
   }
 
-  const addModel = (vendor: string) => setPrices([...prices, blankPrice(vendor)])
+  const addModel = (vendor: string) => {
+    setPrices([...prices, blankPrice(vendor)])
+    setExpandedVendors((previous) => new Set(previous).add(vendor))
+  }
+
+  /** Models whose id ends in `:free` (OpenRouter and friends) are billed at zero by the upstream,
+   *  so a row for one should start already marked free instead of sitting in the unpriced list. */
+  const isFreeModelId = (id: string): boolean => id.toLowerCase().endsWith(":free")
+
+  /** Inserts a priced row for an explicit model id into a vendor (used by the "可添加" candidate
+   *  list after a vendor update finds models the table does not track yet). Auto-marks `:free` ids. */
+  const addModelId = (vendor: string, model: string): void => {
+    const existing = prices.find((price) => price.model !== "" && matchesModel(price, model))
+    if (existing !== undefined) {
+      setExpandedVendors((previous) => new Set(previous).add(existing.vendor))
+      return
+    }
+    setPrices([...prices, { ...blankPrice(vendor), model, free: isFreeModelId(model) }])
+    setExpandedVendors((previous) => new Set(previous).add(vendor))
+  }
+
+  /** Inserts a price row for a model the ledger used but no price covers yet.
+   *
+   *  The row has the exact shape the built-in rows use (`blankPrice`), carries the raw model id so
+   *  matching keeps working, and lands in the vendor group inferred from the id — or the group the
+   *  provider settings already put that model in. The group is opened so the reader can type the
+   *  three numbers straight away. A `:free` id is marked free on insert. */
+  const addUnpricedModel = (model: string): void => {
+    const existing = prices.find((price) => price.model !== "" && matchesModel(price, model))
+    if (existing !== undefined) {
+      setExpandedVendors((previous) => new Set(previous).add(existing.vendor))
+      return
+    }
+    const vendor = canonicalVendor(vendorForModel.get(modelMatchKey(model)) ?? guessVendor(model))
+    setPrices([...prices, { ...blankPrice(vendor), model, free: isFreeModelId(model) }])
+    setExpandedVendors((previous) => new Set(previous).add(vendor))
+  }
   const renameVendor = (from: string, to: string) =>
     setPrices(prices.map((price) => (price.vendor === from ? { ...price, vendor: to } : price)))
   const removeVendor = (vendor: string) => setPrices(prices.filter((price) => price.vendor !== vendor))
@@ -631,6 +741,9 @@ export function UsageSection() {
   const [updateState, setUpdateState] = useState<{ status: "idle" | "loading" | "ok" | "error"; msg?: string }>({
     status: "idle"
   })
+  // Models the catalog exposes but the table does not track yet, surfaced per vendor after an
+  // update so the reader can add the new ones in one click instead of discovering them by chance.
+  const [pendingNewModels, setPendingNewModels] = useState<Record<string, string[]>>({})
 
   // Per-vendor one-click update: fetch that vendor's official pricing page, run its regex, and swap
   // that vendor's rows only. Other vendors are untouched; a bad/empty regex throws and leaves the
@@ -663,11 +776,13 @@ export function UsageSection() {
             ...blankPrice(vendor),
             model: row.model,
             currency: source.currency,
+            free: isFreeModelId(row.model),
             input: row.input ?? 0,
             cached: row.cached ?? 0,
             output: row.output ?? 0
           }))
           setPrices([...prices, ...added])
+          setPendingNewModels((current) => ({ ...current, [vendor]: [] }))
           setVendorStatus((current) => ({
             ...current,
             [vendor]: { status: "ok", msg: t("usageReport.vendorUpdated", { count: added.length }) }
@@ -690,11 +805,28 @@ export function UsageSection() {
             output: hit.output ?? price.output
           }
         })
-        if (updated === 0) throw new Error(t("usageReport.vendorNoMatch", { count: parsed.length }))
+        // Anything the catalog publishes that this vendor's table does not yet track is a candidate
+        // to add — surfaced below the table rather than silently dropped or force-added.
+        const tracked = new Set(
+          prices.filter((price) => price.vendor === vendor).map((price) => modelMatchKey(price.model))
+        )
+        const newModels = parsed
+          .filter((row) => !tracked.has(modelMatchKey(row.model)))
+          .map((row) => row.model)
+        setPendingNewModels((current) => ({ ...current, [vendor]: newModels }))
+        if (updated === 0 && newModels.length === 0) {
+          throw new Error(t("usageReport.vendorNoMatch", { count: parsed.length }))
+        }
         setPrices(merged)
         setVendorStatus((current) => ({
           ...current,
-          [vendor]: { status: "ok", msg: t("usageReport.vendorUpdated", { count: updated }) }
+          [vendor]: {
+            status: "ok",
+            msg:
+              newModels.length > 0
+                ? t("usageReport.vendorUpdatedNew", { updated, added: newModels.length })
+                : t("usageReport.vendorUpdated", { count: updated })
+          }
         }))
       } catch (cause) {
         setVendorStatus((current) => ({
@@ -706,22 +838,31 @@ export function UsageSection() {
         }))
       }
     },
-    [vendorSources, prices, setPrices, t]
+    [vendorSources, prices, setPrices, setPendingNewModels, t]
   )
 
   const cost = useMemo(() => {
     let total = 0
-    const unpriced = new Set<string>()
+    // Per-model usage for the unpriced list: the biggest spender is the one worth pricing first,
+    // so the list is ordered by tokens rather than alphabetically.
+    const unpriced = new Map<string, { tokens: number; requests: number }>()
     const priced = new Set<string>()
     for (const point of view.points) {
       const value = costOf(point, prices, usdToCny, utcOffset)
-      if (value === null) unpriced.add(point.model)
-      else {
+      if (value === null) {
+        const row = unpriced.get(point.model) ?? { tokens: 0, requests: 0 }
+        row.tokens += point.tokens
+        row.requests += point.requests
+        unpriced.set(point.model, row)
+      } else {
         total += value
         priced.add(point.model)
       }
     }
-    return { total, unpriced: unpriced.size, priced: priced.size, unpricedModels: [...unpriced].sort() }
+    const unpricedModels = [...unpriced.entries()]
+      .sort((left, right) => right[1].tokens - left[1].tokens || left[0].localeCompare(right[0]))
+      .map(([model, usage]) => ({ model, ...usage }))
+    return { total, unpriced: unpriced.size, priced: priced.size, unpricedModels }
   }, [view.points, prices, usdToCny, utcOffset])
 
   /** Models that actually appear in the current window — what the price table is really pricing. */
@@ -730,6 +871,23 @@ export function UsageSection() {
     for (const point of view.points) if (point.model !== "") set.add(point.model)
     return set
   }, [view.points])
+
+  // A model that shows up in the ledger but has no price row gets one automatically: classified
+  // by the configured provider catalog first, then by the id's own shape. The next scheduled
+  // refresh (or the vendor's 更新 button) fills its numbers — the reader never has to notice the
+  // gap and add the row by hand. Runs once per report; the store dedupes by folded id.
+  const autoAddedRef = useRef(false)
+  useEffect(() => {
+    if (autoAddedRef.current || usedModels.size === 0) return
+    autoAddedRef.current = true
+    const added = addUnpricedModels(usedModels, vendorForModel)
+    if (added.length > 0) {
+      setUpdateState({ status: "ok", msg: t("usageReport.autoAdded", { count: added.length }) })
+      // The rows are blank until a source answers; kick the due-gated refresh right away so the
+      // reader sees numbers, not a table of zeroes.
+      void refreshPricesIfDue({ force: true }).catch(() => undefined)
+    }
+  }, [usedModels, vendorForModel, t])
 
   // A pie has no time axis and a line needs one, so those two choices move the granularity rather
   // than sitting there doing nothing.
@@ -917,6 +1075,9 @@ export function UsageSection() {
         {report !== null && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-[11px] leading-4 text-muted-foreground">
             {pending && <span>{t("usageReport.building")}</span>}
+            {syncNote !== null && !pending && (
+              <span data-testid="usage-sync-note" className="text-foreground/80">{syncNote}</span>
+            )}
             {(report.updatedAt ?? 0) > 0 && (
               <span>
                 {t("usageReport.snapshotAt", {
@@ -974,12 +1135,13 @@ export function UsageSection() {
                     <div className="mt-1.5">
                       <div className="mb-1 text-muted-foreground">{t("usageReport.unpricedModels")}</div>
                       <div className="flex flex-wrap gap-1">
-                        {cost.unpricedModels.map((id) => (
+                        {cost.unpricedModels.map((entry) => (
                           <span
-                            key={id}
-                            className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] tabular-nums"
+                            key={entry.model}
+                            title={entry.model}
+                            className="rounded bg-muted px-1.5 py-0.5 text-[10px] tabular-nums"
                           >
-                            {id}
+                            {displayName(entry.model)}
                           </span>
                         ))}
                       </div>
@@ -1507,7 +1669,9 @@ export function UsageSection() {
                     >
                       <td className="px-2 py-2 whitespace-nowrap text-muted-foreground">{stamp}</td>
                       <td className="max-w-0 px-2 py-2 text-foreground">
-                        <span className="truncate">{turn.model}</span>
+                        {/* The reader's own model name; the raw id stays in the tooltip so the
+                            ledger row can still be traced back to the transcript. */}
+                        <span className="truncate" title={turn.model}>{displayName(turn.model)}</span>
                       </td>
                       <td className="px-2 py-2 text-right text-foreground/90">{exact(turn.input, locale)}</td>
                       <td className="px-2 py-2 text-right text-foreground/90">{exact(turn.output, locale)}</td>
@@ -1655,42 +1819,143 @@ export function UsageSection() {
               <p className="mb-2 text-[11px] text-destructive">{updateState.msg}</p>
             )}
 
-            <div className="flex flex-col gap-3">
-              {vendorGroups.map(([vendor, rows]) => (
+            {/* Models the ledger used but no price covers, biggest spender first. One click inserts
+                a row in the same shape the built-in prices use, in the vendor the model belongs to,
+                and opens that vendor so the numbers can be typed straight away. */}
+            {cost.unpricedModels.length > 0 && (
+              <div
+                data-testid="unpriced-models"
+                className="mb-3 rounded-xl border border-amber-500/40 bg-amber-500/5 p-3"
+              >
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-semibold text-foreground">
+                    {t("usageReport.unpricedTitle")}
+                  </span>
+                  <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] tabular-nums text-amber-700 dark:text-amber-400">
+                    {t("usageReport.modelCount", { count: cost.unpricedModels.length })}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">{t("usageReport.unpricedHint")}</span>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {cost.unpricedModels.map((entry) => {
+                    // Surface the vendor the model will land in — the list used to hide it, so the
+                    // reader had to guess which card the row appeared in after clicking.
+                    const vendor = canonicalVendor(vendorForModel.get(modelMatchKey(entry.model)) ?? guessVendor(entry.model))
+                    return (
+                      <div
+                        key={entry.model}
+                        className="flex flex-wrap items-center gap-2 rounded-lg bg-background/60 px-2 py-1.5"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-xs font-medium text-foreground" title={entry.model}>
+                            {displayName(entry.model)}
+                          </div>
+                          <div className="truncate font-mono text-[10px] text-muted-foreground">{entry.model}</div>
+                        </div>
+                        <span
+                          className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground"
+                          title={vendor}
+                        >
+                          {vendor}
+                        </span>
+                        <span className="text-[10px] tabular-nums text-muted-foreground">
+                          {t("usageReport.unpricedUsage", {
+                            tokens: formatTokens(entry.tokens, locale),
+                            requests: exact(entry.requests, locale)
+                          })}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            addUnpricedModel(entry.model)
+                            // The vendor is expanded by the handler above; scroll it into view so the
+                            // reader lands on the exact card instead of hunting for it.
+                            requestAnimationFrame(() =>
+                              requestAnimationFrame(() => {
+                                const target = document.querySelector<HTMLElement>(
+                                  `[data-vendor="${CSS.escape(vendor)}"]`
+                                )
+                                target?.scrollIntoView({ behavior: "smooth", block: "center" })
+                                // Web Animations is not everywhere (older engines, jsdom): the
+                                // highlight is a nicety, so skip it rather than throw when absent.
+                                if (typeof target?.animate === "function") {
+                                  target.animate(
+                                    [{ outline: "2px solid rgb(59 130 246)" }, { outline: "2px solid transparent" }],
+                                    { duration: 1200 }
+                                  )
+                                }
+                              })
+                            )
+                          }}
+                        >
+                          {t("usageReport.addPriceForModel")}
+                        </Button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div className="flex flex-col gap-2">
+              {vendorGroups.map(([vendor, rows]) => {
+                const expanded = expandedVendors.has(vendor)
+                return (
                 <div
                   // Keyed by the first row's index, not the vendor name: renaming a vendor must
                   // not remount the group and steal focus from the name input mid-typing.
                   key={rows[0]?.index ?? vendor}
+                  data-testid="price-vendor"
+                  data-vendor={vendor}
                   className="overflow-hidden rounded-xl border border-border/60 bg-card/40"
                 >
                   <div className="flex flex-wrap items-center gap-2 bg-muted/30 px-3 py-2">
-                    <input
-                      type="text"
-                      value={vendor}
-                      aria-label={t("usageReport.vendor")}
-                      onChange={(event) => renameVendor(vendor, event.currentTarget.value)}
-                      className="h-7 w-32 rounded-md border border-transparent bg-transparent px-1.5 text-sm font-semibold outline-none transition-colors hover:border-input focus-visible:border-ring"
-                    />
+                    <button
+                      type="button"
+                      aria-expanded={expanded}
+                      onClick={() => toggleVendor(vendor)}
+                      className="flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-background"
+                    >
+                      <ChevronDownIcon
+                        className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", !expanded && "-rotate-90")}
+                        aria-hidden="true"
+                      />
+                      <span className="truncate text-sm font-semibold">{vendor}</span>
+                    </button>
                     <span className="rounded-full bg-background px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground">
                       {t("usageReport.modelCount", { count: rows.length })}
                     </span>
-                    <div className="ms-auto flex items-center gap-0.5">
-                      <button
-                        type="button"
-                        onClick={() => addModel(vendor)}
-                        className="rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
-                      >
-                        {t("usageReport.addModel")}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => removeVendor(vendor)}
-                        className="rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-background hover:text-destructive"
-                      >
-                        {t("usageReport.removeVendor")}
-                      </button>
-                    </div>
+                    {expanded && (
+                      <>
+                        <input
+                          type="text"
+                          value={vendor}
+                          aria-label={t("usageReport.vendor")}
+                          onChange={(event) => renameVendor(vendor, event.currentTarget.value)}
+                          className="h-7 w-32 rounded-md border border-transparent bg-transparent px-1.5 text-sm font-semibold outline-none transition-colors hover:border-input focus-visible:border-ring"
+                        />
+                        <div className="ms-auto flex items-center gap-0.5">
+                          <button
+                            type="button"
+                            onClick={() => addModel(vendor)}
+                            className="rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+                          >
+                            {t("usageReport.addModel")}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeVendor(vendor)}
+                            className="rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-background hover:text-destructive"
+                          >
+                            {t("usageReport.removeVendor")}
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
+                  {expanded && (
+                  <>
                   <div className="flex flex-col gap-2 border-t border-border/50 px-3 py-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <input
@@ -1774,13 +2039,15 @@ export function UsageSection() {
                     <table className="w-full table-fixed text-[11px] tabular-nums">
                       <thead>
                         <tr className="text-left text-[10px] uppercase tracking-wide text-muted-foreground">
-                          <th className="w-[30%] py-2 font-medium">{t("usageReport.priceModel")}</th>
-                          <th className="w-[12%] py-2 font-medium">{t("usageReport.priceCurrency")}</th>
-                          <th className="w-[14%] py-2 text-right font-medium">{t("usageReport.priceInput")}</th>
-                          <th className="w-[14%] py-2 text-right font-medium">{t("usageReport.priceCached")}</th>
-                          <th className="w-[14%] py-2 text-right font-medium">{t("usageReport.priceOutput")}</th>
-                          <th className="w-[10%] py-2 text-center font-medium">{t("usageReport.offPeak")}</th>
-                          <th className="w-[6%] py-2 font-medium" />
+                          <th className="w-[22%] py-2 font-medium">{t("usageReport.priceModel")}</th>
+                          <th className="w-[9%] py-2 font-medium">{t("usageReport.priceCurrency")}</th>
+                          <th className="w-[12%] py-2 text-right font-medium">{t("usageReport.priceInput")}</th>
+                          <th className="w-[12%] py-2 text-right font-medium">{t("usageReport.priceCached")}</th>
+                          <th className="w-[12%] py-2 text-right font-medium">{t("usageReport.priceOutput")}</th>
+                          <th className="w-[7%] py-2 text-center font-medium">{t("usageReport.priceFree")}</th>
+                          <th className="w-[9%] py-2 text-center font-medium">{t("usageReport.offPeak")}</th>
+                          <th className="w-[9%] py-2 text-center font-medium">{t("usageReport.priceDiscount")}</th>
+                          <th className="w-[8%] py-2 font-medium" />
                         </tr>
                       </thead>
                       <tbody>
@@ -1788,12 +2055,24 @@ export function UsageSection() {
                           <Fragment key={`${vendor}-${index}`}>
                             <tr className="border-t border-border/50">
                               <td className="py-1.5 pr-2">
+                                {/* Two independent fields: the reader's own name for the model
+                                    (display only) and the id that matching uses. Keeping them in
+                                    one input made renaming a row silently break its pricing. */}
+                                <input
+                                  type="text"
+                                  value={price.label ?? ""}
+                                  aria-label={t("usageReport.priceName")}
+                                  placeholder={displayName(price.model) || t("usageReport.priceNamePlaceholder")}
+                                  onChange={(event) => patchPrice(index, { label: event.currentTarget.value })}
+                                  className="mb-1 h-7 w-full rounded-md border border-border/50 bg-background/60 px-1.5 text-xs outline-none transition-colors focus-visible:border-ring"
+                                />
                                 <input
                                   type="text"
                                   value={price.model}
+                                  aria-label={t("usageReport.priceModelId")}
                                   placeholder={t("usageReport.priceModelPlaceholder")}
                                   onChange={(event) => patchPrice(index, { model: event.currentTarget.value })}
-                                  className="h-7 w-full rounded-md border border-border/50 bg-background/60 px-1.5 text-xs outline-none transition-colors focus-visible:border-ring"
+                                  className="h-7 w-full rounded-md border border-border/50 bg-background/60 px-1.5 font-mono text-xs outline-none transition-colors focus-visible:border-ring"
                                 />
                                 {price.note !== "" && (
                                   <div
@@ -1805,7 +2084,7 @@ export function UsageSection() {
                                 )}
                                 {price.model !== "" && (
                                   <div className="mt-0.5">
-                                    {usedModels.has(price.model) ? (
+                                    {[...usedModels].some((used) => matchesModel(price, used)) ? (
                                       <span className="rounded bg-emerald-600/15 px-1.5 py-0.5 text-[9px] text-emerald-600 dark:text-emerald-400">
                                         {t("usageReport.usedInRange")}
                                       </span>
@@ -1821,10 +2100,11 @@ export function UsageSection() {
                                 <select
                                   value={price.currency}
                                   aria-label={t("usageReport.priceCurrency")}
+                                  disabled={price.free === true}
                                   onChange={(event) =>
                                     patchPrice(index, { currency: event.currentTarget.value as Currency })
                                   }
-                                  className="h-7 w-full rounded-md border border-border/50 bg-background/60 px-1 text-[10px] outline-none transition-colors focus-visible:border-ring"
+                                  className="h-7 w-full rounded-md border border-border/50 bg-background/60 px-1 text-[10px] outline-none transition-colors focus-visible:border-ring disabled:opacity-40"
                                 >
                                   <option value="USD">USD</option>
                                   <option value="CNY">CNY</option>
@@ -1837,15 +2117,35 @@ export function UsageSection() {
                                     step="0.001"
                                     min="0"
                                     value={price[field]}
+                                    disabled={price.free === true}
+                                    aria-label={`${t("usageReport.priceModel")} ${field}`}
                                     onChange={(event) => updatePrice(index, field, event.currentTarget.value)}
-                                    className="h-7 w-full rounded-md border border-border/50 bg-background/60 px-1.5 text-right text-xs outline-none transition-colors focus-visible:border-ring"
+                                    className="h-7 w-full rounded-md border border-border/50 bg-background/60 px-1.5 text-right text-xs outline-none transition-colors focus-visible:border-ring disabled:opacity-40"
                                   />
                                 </td>
                               ))}
                               <td className="py-1.5 text-center">
                                 <input
                                   type="checkbox"
+                                  checked={price.free === true}
+                                  aria-label={t("usageReport.priceFree")}
+                                  onChange={(event) =>
+                                    patchPrice(index, {
+                                      free: event.currentTarget.checked,
+                                      // A free row carries no price and no peak tier; leaving the old
+                                      // numbers behind would silently bill it again when unchecked.
+                                      ...(event.currentTarget.checked
+                                        ? { input: 0, cached: 0, output: 0, offPeak: null }
+                                        : {})
+                                    })
+                                  }
+                                />
+                              </td>
+                              <td className="py-1.5 text-center">
+                                <input
+                                  type="checkbox"
                                   checked={price.offPeak !== null}
+                                  disabled={price.free === true}
                                   aria-label={t("usageReport.offPeak")}
                                   onChange={(event) => {
                                     if (event.currentTarget.checked) {
@@ -1864,6 +2164,21 @@ export function UsageSection() {
                                   }}
                                 />
                               </td>
+                              <td className="py-1.5 text-center">
+                                <input
+                                  type="number"
+                                  step="1"
+                                  min="0"
+                                  max="100"
+                                  value={Math.round((price.discount ?? 0) * 100)}
+                                  disabled={price.free === true}
+                                  aria-label={t("usageReport.priceDiscount")}
+                                  onChange={(event) =>
+                                    patchPrice(index, { discount: Number(event.currentTarget.value) / 100 })
+                                  }
+                                  className="h-7 w-14 rounded-md border border-border/50 bg-background/60 px-1 text-right text-xs tabular-nums outline-none transition-colors focus-visible:border-ring disabled:opacity-40"
+                                />
+                              </td>
                               <td className="py-1.5 text-right">
                                 <button
                                   type="button"
@@ -1876,7 +2191,7 @@ export function UsageSection() {
                             </tr>
                             {price.offPeak !== null && (
                               <tr className="bg-muted/40">
-                                <td colSpan={7} className="px-2 py-2">
+                                <td colSpan={9} className="px-2 py-2">
                                   <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
                                     <Field label={t("usageReport.peakWindows")}>
                                       <input
@@ -1927,12 +2242,40 @@ export function UsageSection() {
                         ))}
                       </tbody>
                     </table>
+                    {pendingNewModels[vendor]?.length ? (
+                      <div className="mt-2 rounded-lg border border-dashed border-border/60 bg-muted/20 px-3 py-2">
+                        <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
+                          <PlusIcon className="size-3" aria-hidden="true" />
+                          {t("usageReport.newModelsFound", { count: pendingNewModels[vendor].length })}
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {pendingNewModels[vendor].map((model) => (
+                            <button
+                              key={model}
+                              type="button"
+                              onClick={() => {
+                                addModelId(vendor, model)
+                                setPendingNewModels((current) => ({
+                                  ...current,
+                                  [vendor]: (current[vendor] ?? []).filter((m) => m !== model)
+                                }))
+                              }}
+                              className="flex items-center gap-1 rounded-md border border-border/60 bg-background px-2 py-1 font-mono text-[10px] text-foreground transition-colors hover:border-ring hover:bg-accent"
+                            >
+                              <PlusIcon className="size-3" aria-hidden="true" />
+                              {model}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
+                  </>
+                  )}
                 </div>
-              ))}
+                )
+              })}
             </div>
-            <p className="mt-2 text-[10px] leading-4 text-muted-foreground">{t("usageReport.priceHint")}</p>
-            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">{t("usageReport.costNote")}</p>
           </SettingsDetails>
             </>
           )}

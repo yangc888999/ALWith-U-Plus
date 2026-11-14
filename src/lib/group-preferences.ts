@@ -6,11 +6,31 @@
  * than a fixed prompt because the shape of a useful summary differs by team — 结论/待办/说明 is
  * the default, not the law.
  */
+/** How the capstone minutes are structured once every round has closed. */
+export type SummaryMode = "perRole" | "decision" | "debate" | "brief"
+
+/** The four supported final-summary shapes, in the order they appear in the settings dropdown. */
+export const SUMMARY_MODES: readonly SummaryMode[] = ["perRole", "decision", "debate", "brief"]
+
+/** Chinese labels for the minutes heading written to memory.md (the record is Chinese-facing). */
+export const SUMMARY_MODE_LABELS: Record<SummaryMode, string> = {
+  perRole: "逐角色陈述",
+  decision: "决议与行动项",
+  debate: "自由辩论纪要",
+  brief: "精简要点"
+}
+
+function isSummaryMode(value: unknown): value is SummaryMode {
+  return typeof value === "string" && (SUMMARY_MODES as readonly string[]).includes(value)
+}
+
 export interface GroupPreferences {
   /** Rounds a discussion runs by default (also the value a new group is created with). */
   rounds: number
   /** The moderator's per-round summary skeleton; its headings are kept verbatim. */
   summaryTemplate: string
+  /** How the final capstone minutes are structured after all rounds close. */
+  summaryMode: SummaryMode
 }
 
 export const DEFAULT_SUMMARY_TEMPLATE = `结论：
@@ -22,7 +42,7 @@ export const DEFAULT_SUMMARY_TEMPLATE = `结论：
 说明：`
 
 const STORAGE_KEY = "alwith:group-preferences"
-const DEFAULTS: GroupPreferences = { rounds: 2, summaryTemplate: DEFAULT_SUMMARY_TEMPLATE }
+const DEFAULTS: GroupPreferences = { rounds: 2, summaryTemplate: DEFAULT_SUMMARY_TEMPLATE, summaryMode: "perRole" }
 const listeners = new Set<() => void>()
 let cached: GroupPreferences | null = null
 
@@ -42,7 +62,8 @@ function read(): GroupPreferences {
       summaryTemplate:
         typeof record.summaryTemplate === "string" && record.summaryTemplate.trim() !== ""
           ? record.summaryTemplate
-          : DEFAULTS.summaryTemplate
+          : DEFAULTS.summaryTemplate,
+      summaryMode: isSummaryMode(record.summaryMode) ? record.summaryMode : DEFAULTS.summaryMode
     }
   } catch {
     cached = { ...DEFAULTS }

@@ -19,6 +19,9 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { routeHistory } from "../editor-shortcuts"
+import { createWysiwygHtmlIntegration } from "../html-wysiwyg"
+import { HTML_EDIT_BRIDGE_ID } from "../html-edit-bridge"
+import type { WysiwygLabels } from "../wysiwyg-types"
 
 const audioAnalyzers = vi.hoisted(() => ({ destroy: vi.fn() }))
 vi.mock("audiomotion-analyzer", () => ({
@@ -398,4 +401,68 @@ test("Markdown native undo and redo use Milkdown history and publish changes wit
     if (descriptor) Object.defineProperty(document, "execCommand", descriptor)
     else Reflect.deleteProperty(document, "execCommand")
   }
+})
+
+const wysiwygLabels: WysiwygLabels = {
+  bold: "Bold",
+  italic: "Italic",
+  underline: "Underline",
+  strikethrough: "Strikethrough",
+  blockquote: "Blockquote",
+  bulletList: "Bullet list",
+  orderedList: "Numbered list",
+  outdent: "Outdent",
+  indent: "Indent",
+  inlineCode: "Inline code",
+  codeBlock: "Code block",
+  insertTable: "Insert table",
+  deleteRow: "Delete row",
+  deleteColumn: "Delete column",
+  deleteImage: "Delete image",
+  editHtml: "Edit",
+  finishEditHtml: "Done",
+  htmlEditBlocked: "This file cannot be edited",
+  htmlDeleted: "Deleted",
+  htmlUndoDelete: "Undo"
+}
+
+test("HTML WYSIWYG transform composes the base bridge and the edit bridge into the opened source", async () => {
+  const onError = vi.fn()
+  const fs = createFileSystem({ adapter: createMemoryAdapter({ "/repo/report.html": "<p>Hi</p>" }), reportError: onError })
+  const controller = createEditorController({ fs, confirmClose: () => Promise.resolve("cancel"), reportError: onError })
+  let openedSource = ""
+  const htmlPreview = {
+    open: vi.fn(async (_path: string, source: string) => {
+      openedSource = source
+      return { url: "about:blank", dispose: async () => {} }
+    }),
+    subscribe: vi.fn(async () => () => {}),
+    markSelfWrite: vi.fn(),
+    setEditing: vi.fn()
+  }
+  const base: NonNullable<PreviewHost["htmlIntegration"]> = {
+    transform: (source) => `${source}<script>window.__driveComment=true</script>`,
+    render: () => null
+  }
+  const host = hostFixture({
+    htmlPreview,
+    htmlIntegration: createWysiwygHtmlIntegration(base, {
+      fs,
+      controller,
+      labels: wysiwygLabels,
+      previewControl: { markSelfWrite: vi.fn(), setEditing: vi.fn() }
+    })
+  })
+  const provider = providerFor(host, "html")
+  const rendered = render(provider.render(documentFixture("/repo/report.html", "<p>Hi</p>"), contextFixture()))
+  await waitFor(() => expect(htmlPreview.open).toHaveBeenCalledTimes(1))
+  // Both bridges are present, base first, then the resident edit bridge.
+  expect(openedSource).toContain("__driveComment")
+  expect(openedSource).toContain(`id="${HTML_EDIT_BRIDGE_ID}"`)
+  expect(openedSource.indexOf("__driveComment")).toBeLessThan(openedSource.indexOf(HTML_EDIT_BRIDGE_ID))
+  // The toolbar renders inside the preview, above the iframe.
+  expect(rendered.container.querySelector(".alwith-wysiwyg-toolbar")).not.toBeNull()
+  expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument()
+  rendered.unmount()
+  controller.dispose()
 })

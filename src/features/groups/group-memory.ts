@@ -11,6 +11,7 @@ import { isTauri } from "@tauri-apps/api/core"
 
 import type { GroupRoundRecord } from "@/agent/group-turns"
 import type { GroupConfig } from "@/lib/groups"
+import { SUMMARY_MODE_LABELS, type SummaryMode } from "@/lib/group-preferences"
 import { appendProjectMemory } from "@/lib/project-memory"
 
 /** One speech longer than this is a document, not a position: keep the record readable. */
@@ -83,5 +84,35 @@ export async function recordGroupRounds(
     } catch {
       // Memory is best-effort.
     }
+  }
+}
+
+/** The capstone minutes as the reader will see them in the group's `memory.md`. */
+export function buildFinalSummaryBlock(text: string, mode: SummaryMode, topic: string): string {
+  const label = SUMMARY_MODE_LABELS[mode] ?? "逐角色陈述"
+  const parts = [`## 最终总纪要（模式：${label}）`]
+  if (topic.trim() !== "") parts.push(`**议题**：${topic.trim()}`)
+  parts.push(clip(text))
+  return parts.join("\n\n")
+}
+
+/**
+ * Appends the final capstone minutes to the group's `memory.md`, as a section of its own — separate
+ * from the per-round blocks written by `recordGroupRounds`.
+ *
+ * Best-effort, like the round record: a read-only folder must not turn a finished discussion into an
+ * error toast. Returns without writing when there is nothing to record or the platform is not Tauri.
+ */
+export async function recordFinalSummary(
+  group: GroupConfig,
+  text: string,
+  mode: SummaryMode,
+  topic = ""
+): Promise<void> {
+  if (!isTauri() || text.trim() === "") return
+  try {
+    await appendProjectMemory(group.directory, buildFinalSummaryBlock(text, mode, topic))
+  } catch {
+    // Memory is best-effort.
   }
 }

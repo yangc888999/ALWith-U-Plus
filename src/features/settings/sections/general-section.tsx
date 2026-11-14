@@ -13,25 +13,90 @@ import {
   SelectValue
 } from "@/components/alwith-ui/select"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { predictionPreference, setPredictionsEnabled } from "@/features/chat/composer/prediction-preference"
 import { ProjectAppIcon, useExternalApps } from "@/features/chat/open-in-editor"
-import { setYupDriveEnabled, useYupDriveEnabled } from "@/features/drive/yup-drive-preference"
 import { requestChatSurface } from "@/lib/chat-window"
 import i18n, { isLanguageCode, LANGUAGES } from "@/lib/i18n"
 import { loadPreferences, savePreference } from "@/lib/preferences"
 
 import { AutostartRow } from "./autostart-row"
+import { useDriveVisible } from "@/features/drive/use-drive-visible"
+import { setYupDriveEnabled, useYupDriveEnabled } from "@/features/drive/yup-drive-preference"
 import { MemoryInjectionRow } from "./memory-injection-row"
 import { PreventSleepRow } from "./prevent-sleep-row"
 import { SandboxRow } from "./sandbox-row"
 import { SettingRow, SettingsCard } from "./shared"
 
+/** Master YUP Drive switch. Lives in the "记忆与云盘" card because turning the drive off also
+ *  drops its sidebar and settings entry — the reader needs a permanent place to turn it back on.
+ *  Closing asks for confirmation because it halts every sync and releases the drive client. */
+function YupDriveRow() {
+  const { t } = useTranslation()
+  const enabled = useYupDriveEnabled()
+  const [confirmClose, setConfirmClose] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const onTurnOn = () => {
+    setBusy(true)
+    void setYupDriveEnabled(true)
+      .catch((error: unknown) => toast.error(String(error)))
+      .finally(() => setBusy(false))
+  }
+
+  const onConfirmClose = async () => {
+    setBusy(true)
+    try {
+      await setYupDriveEnabled(false)
+      setConfirmClose(false)
+    } catch (error: unknown) {
+      toast.error(String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <SettingRow title={t("settings.yupDrive")} desc={t("settings.yupDriveDesc")}>
+        <div className="flex justify-end">
+          <Switch
+            aria-label={t("settings.yupDrive")}
+            checked={enabled}
+            disabled={busy}
+            onCheckedChange={(checked) => {
+              if (checked) onTurnOn()
+              else setConfirmClose(true)
+            }}
+          />
+        </div>
+      </SettingRow>
+      <Dialog open={confirmClose} onOpenChange={setConfirmClose}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("settings.yupDriveCloseTitle")}</DialogTitle>
+            <DialogDescription>{t("settings.yupDriveCloseDesc")}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={busy} onClick={() => setConfirmClose(false)}>
+              {t("actions.cancel")}
+            </Button>
+            <Button variant="destructive" disabled={busy} onClick={onConfirmClose}>
+              {t("actions.confirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
 export function GeneralSection() {
   const { t } = useTranslation()
+  const driveVisible = useDriveVisible()
   const predictions = useStore(predictionPreference, (state) => state.enabled)
-  const yupDrive = useYupDriveEnabled()
   const [savingPredictions, setSavingPredictions] = useState(false)
   const apps = useExternalApps()
   const [externalEditor, setExternalEditor] = useState<string | null>(null)
@@ -174,17 +239,7 @@ export function GeneralSection() {
         icon={<BrainIcon className="size-3.5" />}
       >
         <MemoryInjectionRow />
-        <SettingRow title={t("settings.yupDrive")} desc={t("settings.yupDriveDesc")}>
-          <div className="flex justify-end">
-            <Switch
-              aria-label={t("settings.yupDrive")}
-              checked={yupDrive}
-              onCheckedChange={(enabled) => {
-                void setYupDriveEnabled(enabled).catch((error: unknown) => toast.error(String(error)))
-              }}
-            />
-          </div>
-        </SettingRow>
+        {driveVisible && <YupDriveRow />}
       </SettingsCard>
     </>
   )

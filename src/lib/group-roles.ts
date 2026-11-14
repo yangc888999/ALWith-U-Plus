@@ -13,6 +13,8 @@ export interface GroupRole {
   id: string
   /** What the role is called in the discussion ("架构师"). */
   name: string
+  /** The role's title / office ("运营专家", "COO"); empty means no title, show bare name. */
+  title?: string
   /** The model this role speaks with. */
   model: string
   /** Explicit effort, or null to let the model decide. */
@@ -73,6 +75,7 @@ function readRole(value: unknown): GroupRole | null {
   return {
     id: role.id,
     name: role.name,
+    title: typeof role.title === "string" ? role.title : "",
     model: role.model,
     effort: typeof role.effort === "string" ? role.effort : null,
     ...(role.fastMode === true ? { fastMode: true } : {}),
@@ -208,6 +211,7 @@ function defaultRole(role: (typeof DEFAULT_ROLES)[number]): GroupRole {
   return {
     id: `role-default-${role.bot}`,
     name: role.name,
+    title: "",
     model: role.model,
     effort: role.effort,
     persona: { kind: "file", path: personaPath(role.bot) },
@@ -248,6 +252,70 @@ export function resetGroupRoles(): GroupRole[] {
 /** Every role, in the order the user arranged them. */
 export function groupRoles(): GroupRole[] {
   return readAll()
+}
+
+/** One bot folder the role library offers for import. */
+export interface BuiltinBot {
+  bot: string
+  persona: string
+  config: string | null
+}
+
+export interface BotImportResult {
+  /** Roles that were added by this import. */
+  added: GroupRole[]
+  /** Bots already present in the roster, left untouched. */
+  skipped: string[]
+}
+
+/**
+ * Imports every bot in the default role library (`$CODEX_HOME/rob_models`) as a group role.
+ *
+ * The library folder is the source of truth: each bot contributes its persona path plus the
+ * `config.json` sitting next to it (model / effort / moderator), so an imported role behaves
+ * exactly like the folder it came from. Import is additive — a bot whose persona is already used
+ * by a role is skipped, never overwritten, so re-running the button is safe and a role the user
+ * edited keeps its edits.
+ *
+ * `fallbackModel` is used when a bot ships no config: a role must name a model to be storable.
+ */
+export function importBuiltinBots(bots: BuiltinBot[], fallbackModel: string): BotImportResult {
+  const current = readAll()
+  const taken = new Set(current.map((role) => (role.persona.kind === "file" ? role.persona.path : "")))
+  const added: GroupRole[] = []
+  const skipped: string[] = []
+  for (const entry of bots) {
+    if (taken.has(entry.persona)) {
+      skipped.push(entry.bot)
+      continue
+    }
+    let config: { model?: unknown; effort?: unknown; moderator?: unknown; name?: unknown } = {}
+    if (entry.config !== null && entry.config !== "") {
+      try {
+        const parsed: unknown = JSON.parse(entry.config)
+        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) config = parsed
+      } catch {
+        // A hand-edited config that is not JSON must not block the import; the persona still works.
+      }
+    }
+    const role: GroupRole = {
+      id: newRoleId(),
+      name:
+        typeof config.name === "string" && config.name.trim() !== ""
+          ? config.name.trim()
+          : entry.bot.charAt(0).toUpperCase() + entry.bot.slice(1),
+      title: "",
+      model: typeof config.model === "string" && config.model !== "" ? config.model : fallbackModel,
+      effort: typeof config.effort === "string" && config.effort !== "" ? config.effort : null,
+      persona: { kind: "file", path: entry.persona },
+      skill: null,
+      moderator: config.moderator === true
+    }
+    added.push(role)
+    taken.add(entry.persona)
+  }
+  if (added.length > 0) writeAll([...current, ...added])
+  return { added, skipped }
 }
 
 export function groupRoleFor(id: string): GroupRole | null {

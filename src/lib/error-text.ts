@@ -19,6 +19,14 @@ const RULES: Rule[] = [
   { match: /bridge_upstream_timeout/i, key: "error.providerConnectionTimedOut" },
   { match: /bridge_upstream_unreachable/i, key: "error.providerUnreachable" },
   { match: /bridge_upstream_request_failed/i, key: "error.providerRequestFailed" },
+  // The account-model recovery state is not a crash: the composer already shows the model picker
+  // and the「使用所选模型继续」button. The engine's `Turn ended: account_model_required` is a
+  // machine code, so say the one action that resolves it instead of printing the code.
+  { match: /account_model_required/i, key: "error.accountModelRequired" },
+  // The company relay's own 502 body, after the bridge's silent replays are spent. The URL is a
+  // loopback address the reader cannot act on — name the layer that failed and the way out.
+  { match: /Enterprise gateway request failed/i, key: "error.enterpriseGatewayFailed" },
+  { match: /unexpected status 50[234]\b/i, key: "error.gatewayBadGateway" },
   // Sentences the Codex binary, the ACP adapter and ChatGPT's 401 body hand back verbatim.
   // They are translated by shape here, never rewritten at the source: the English originals stay
   // in the logs and diagnostics, and stay available to every other locale. Keep these ahead of

@@ -2,6 +2,8 @@ import { invoke, isTauri } from "@tauri-apps/api/core"
 import { info } from "@tauri-apps/plugin-log"
 import { toast } from "sonner"
 
+import { companyModelConfig } from "@/lib/company-model-config"
+import { isEnterpriseModel } from "@/features/auth/enterprise-providers"
 import i18n from "@/lib/i18n"
 import { modelFastModeFor } from "@/lib/model-fast-mode"
 
@@ -59,8 +61,17 @@ import {
 import { getActivePreview } from "@/lib/active-preview"
 import { getQueueSendMode } from "@/lib/chat-display-preferences"
 import { pendingPlanFor, setPendingPlan, type PendingPlan } from "@/lib/pending-plan"
-import { GROUP_TURN_PREFIX, groupTurnPrompt, type GroupRoundRecord, type GroupSpeechRecord, type GroupTurn } from "@/agent/group-turns"
+import {
+  GROUP_TURN_PREFIX,
+  groupTurnPrompt,
+  type FinalSummarySpeaker,
+  type GroupPromptFraming,
+  type GroupRoundRecord,
+  type GroupSpeechRecord,
+  type GroupTurn
+} from "@/agent/group-turns"
 import { announceGroupSpeaker, clearGroupControl, groupControlFor, patchGroupDiscussion, setGroupPaused, subscribeGroupControl } from "@/lib/group-runtime"
+import { type SummaryMode } from "@/lib/group-preferences"
 import {
   automationTitleOf,
   isAutomationSessionId,
@@ -519,6 +530,21 @@ export class CodexClient extends CodexAcpClient<AppState> {
     const overridden = readNativeEffortOverrides().find((entry) => entry.api_id === model && entry.enabled !== false)
     const fromOverride = overridden?.defaultReasoningLevel
     if (typeof fromOverride === "string" && fromOverride !== "") return fromOverride
+    // The account-managed (enterprise) model's default thinking level is configured on the 大模型
+    // page and stored in `companyModelConfig`. It is the conversation's authoritative default,
+    // independent of whether the engine catalog forwards the level into the session metadata. When
+    // that metadata is absent the chat would otherwise fall back to the global default and silently
+    // ignore this setting — the bug this branch fixes. The level is one of low/high/max and is
+    // always a supported effort for the enterprise ladder, so the callers' `includes` guard is safe.
+    if (isEnterpriseModel(model)) {
+      try {
+        // Always a supported level (low/high/max) for the enterprise ladder, so the callers'
+        // `includes` guard is safe. Falls through only if storage is unavailable here.
+        return companyModelConfig().reasoningLevel
+      } catch {
+        // localStorage unavailable (some test sandboxes); fall through to catalog metadata.
+      }
+    }
     const option = session.configOptions.find((entry) => entry.category === "model" && entry.type === "select")
     if (option === undefined || !isSelectOption(option)) return null
     const choices = isGroupedSelect(option.options) ? option.options.flatMap((group) => group.options) : option.options
@@ -1924,13 +1950,16 @@ export class CodexClient extends CodexAcpClient<AppState> {
   }
 
   /**
-   * Runs the group's roster: every role speaks once per round, then the moderator closes.
+   * Runs the group's roster: every member but the last speaks once per round, then the last member
+   * closes the round as the summarizer.
    *
    * The discussion lives in one conversation, so the members read each other's turns for free —
-   * that is what makes a group more than three independent answers. Each turn switches the shared
-   * session to that role's model, says who is speaking in the user's own bubble, and waits for the
-   * turn to settle before the next role takes over. The user's own model is restored at the end,
-   * so the composer still shows what they had.
+   * that is what makes a group more than three independent answers. The human who opened it is the
+   * host: their topic is the opening message (right-aligned, like any user bubble), and they stay
+   * out of the AI roster — the members are the speakers, the last of them summarizes. Each turn
+   * switches the shared session to that role's model, says who is speaking in the user's own bubble,
+   * and waits for the turn to settle before the next role takes over. The user's own model is
+   * restored at the end, so the composer still shows what they had.
    *
    * The user keeps the brake: between turns the roster honours a pause (the turn in flight always
    * finishes, so nothing already written is thrown away) and ends on a stop. A message the user
@@ -1942,13 +1971,19 @@ export class CodexClient extends CodexAcpClient<AppState> {
     turns: GroupTurn[],
     rounds: number,
     document: string,
-    summaryTemplate: string
-  ): Promise<{ outcome: "done" | "stopped"; rounds: GroupRoundRecord[] }> {
-    if (turns.length === 0) return { outcome: "done", rounds: [] }
+    summaryTemplate: string,
+    framing?: GroupPromptFraming,
+    summaryMode: SummaryMode = "perRole"
+  ): Promise<{ outcome: "done" | "stopped"; rounds: GroupRoundRecord[]; finalSummary: string | null }> {
+    if (turns.length === 0) return { outcome: "done", rounds: [], finalSummary: null }
     const selection = this.currentSelection(id)
     if (selection === null) throw new Error("群会话没有当前模型")
-    const speakers = turns.filter((turn) => !turn.moderator)
-    const moderator = turns.find((turn) => turn.moderator)
+    // The roster is an ordered list: every member but the last speaks, and the last member closes
+    // the round as the summarizer. The human who opened the discussion is the host and never sits in
+    // the AI roster, so the order — not a flag — decides who summarizes. A legacy `moderator` flag
+    // is still honoured, but position is what the UI guarantees.
+    const speakers = turns.slice(0, Math.max(0, turns.length - 1))
+    const moderator = turns.find((turn) => turn.moderator) ?? (turns.length > 0 ? turns[turns.length - 1] : undefined)
     const records: GroupRoundRecord[] = []
     let baseline = this.lastUserTurnKey(id)
     // A member whose model cannot take the floor is skipped, not fatal: one broken provider must
@@ -1957,7 +1992,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     let speechFailures = 0
     const speak = async (turn: GroupTurn, at: number, kind: "speech" | "summary"): Promise<string | null> => {
       try {
-        await this.speakAsRole(id, turn, at, document, kind, summaryTemplate)
+        await this.speakAsRole(id, turn, at, document, kind, summaryTemplate, framing)
         return this.lastAssistantText(id)
       } catch (error) {
         absent.push(`${turn.name}（${error instanceof Error ? error.message : String(error)}）`)
@@ -1978,7 +2013,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
       for (;;) {
         const gate = await this.groupGate(id, selection, baseline)
         baseline = gate.baseline
-        if (gate.action === "stop") return { outcome: "stopped", rounds: records }
+        if (gate.action === "stop") return { outcome: "stopped", rounds: records, finalSummary: null }
         if (gate.action === "restart") {
           // The user's interjection invalidated the premise: the record starts over with the rounds.
           round = 0
@@ -1998,13 +2033,19 @@ export class CodexClient extends CodexAcpClient<AppState> {
           }
           continue
         }
-        // The roster has gone round: the moderator summarizes this round before the next one.
+        // The roster has gone round: the last member (the summarizer) closes this round before the next one.
         const summary = moderator === undefined ? null : await speak(moderator, round, "summary")
         records.push({ round, startedAt, summary: summary ?? "", speeches })
         speeches = []
         round += 1
         index = 0
-        if (round >= rounds) return { outcome: "done", rounds: records }
+        if (round >= rounds) {
+          // Every round has closed: the user's own session model writes the capstone minutes
+          // (the roster spoke as the roles' models). The finally block hands the session back to
+          // that same selection, so the composer stays on the user's model.
+          const finalSummary = await this.runFinalSummary(id, selection, document, summaryMode, turns, summaryTemplate, framing, rounds)
+          return { outcome: "done", rounds: records, finalSummary }
+        }
       }
     } finally {
       announceGroupSpeaker(null, 0)
@@ -2107,6 +2148,50 @@ export class CodexClient extends CodexAcpClient<AppState> {
     return ""
   }
 
+  /**
+   * The capstone minutes, written by the user's own session model after every round has closed.
+   *
+   * The roster speaks as the roles' models; `selection` is the user's model captured at the start
+   * and handed back by this method's caller (the finally block of `runGroupDiscussion`). Switching
+   * to it here and letting that restore handle the hand-back keeps the composer on the user's model —
+   * the final summary is theirs, not a role's. Failure is non-fatal: the rounds already happened, so
+   * the discussion reports success and a missing minutes note is recorded, never thrown.
+   */
+  private async runFinalSummary(
+    id: string,
+    selection: { model: string; effort: string | null; fastMode: boolean },
+    document: string,
+    mode: SummaryMode,
+    turns: GroupTurn[],
+    template: string,
+    framing: GroupPromptFraming | undefined,
+    totalRounds: number
+  ): Promise<string | null> {
+    const reference = turns[0]
+    if (reference === undefined) return null
+    try {
+      announceGroupSpeaker(null, totalRounds)
+      // Take the user's session model for the capstone; the caller's finally restores it.
+      await this.switchSelectionModel(id, selection.model, "最终总纪要")
+      const speakers: FinalSummarySpeaker[] = turns.map((turn) => ({ name: turn.name, title: turn.title ?? "" }))
+      const receipt = await this.promptWithTimeout(
+        id,
+        [
+          {
+            type: "text",
+            text: groupTurnPrompt(reference, totalRounds - 1, document, "finalSummary", template, framing, mode, speakers)
+          }
+        ],
+        { display: [{ type: "text", text: "〔最终总纪要〕" }] }
+      )
+      await this.waitForTurn(id, receipt)
+      return this.lastAssistantText(id)
+    } catch (error) {
+      patchGroupDiscussion(id, { error: `最终总结失败：${error instanceof Error ? error.message : String(error)}` })
+      return null
+    }
+  }
+
   /** One role's turn: switch to its model, say who speaks, wait for the answer. */
   private async speakAsRole(
     id: string,
@@ -2114,7 +2199,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
     round: number,
     document: string,
     kind: "speech" | "summary",
-    template: string
+    template: string,
+    framing?: GroupPromptFraming
   ): Promise<void> {
     announceGroupSpeaker(turn.name, round + 1)
     await this.switchSelectionModel(id, turn.model, turn.name)
@@ -2131,17 +2217,21 @@ export class CodexClient extends CodexAcpClient<AppState> {
       if (fast !== undefined && isBooleanOption(fast) && fast.currentValue !== turn.fastMode)
         await this.setConfig(id, "fast-mode", turn.fastMode)
     }
+    // Keep the `〔…〕` wrapper: that prefix is what marks a roster turn so the restart logic in
+    // `lastUserTurnKey` skips it. The role's title (职务) is folded inside when present.
+    const speakerLabel =
+      turn.title !== undefined && turn.title.trim() !== "" ? `${turn.name}（${turn.title.trim()}）` : turn.name
     const receipt = await this.promptWithTimeout(
       id,
-      [{ type: "text", text: groupTurnPrompt(turn, round, document, kind, template) }],
+      [{ type: "text", text: groupTurnPrompt(turn, round, document, kind, template, framing) }],
       {
         display: [
           {
             type: "text",
             text:
               kind === "summary"
-                ? `〔${turn.name}〕第 ${round + 1} 轮总结`
-                : `〔${turn.name}〕第 ${round + 1} 轮`
+                ? `〔${speakerLabel}〕总结`
+                : `〔${speakerLabel}〕第 ${round + 1} 轮`
           }
         ]
       }

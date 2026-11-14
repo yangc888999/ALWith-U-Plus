@@ -259,6 +259,14 @@ fn engines_table(app: &AppHandle) -> Result<String, String> {
     }
     let catalogs = std::env::join_paths(crate::providers::bundled_model_catalogs(&resources)?)
         .map_err(|error| error.to_string())?;
+    // Every model the app has described, folded into one catalog the engine can boot with.
+    let model_catalog = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .and_then(|directory| crate::providers::merged_catalog_path(&directory))
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
     let codex_path_for_engine = |app: &AppHandle| -> Result<String, String> {
         // A user-installed engine update wins over the bundled binary.
         let over = app.path().app_data_dir().map_err(|error| error.to_string())?.join("codex-override/codex");
@@ -275,7 +283,12 @@ fn engines_table(app: &AppHandle) -> Result<String, String> {
         // present in the shared `~/.codex/config.toml` at boot, which no other Codex client
         // respects: dropping it makes Codex exit 1 with "Model provider `alwith` not found"
         // before ACP can answer (reproduced against codex-cli 0.167.0).
-        "env": {"CODEX_PATH": sidecar_path("alwith-codex-launcher")?, "ALWITH_U_CODEX_PATH": codex_path_for_engine(app)?, "CODEX_ACP_MODEL_CATALOGS": catalogs.to_string_lossy(), "ALWITH_U_ROUTER_BASE": crate::bridge::router_base_url().unwrap_or_default(), "ALWITH_U_ROUTER_TOKEN": crate::providers::ROUTER_TOKEN}
+        //
+        // `ALWITH_U_MODEL_CATALOG` carries the merged model catalog. Model info is resolved once,
+        // from a catalog the engine reads at boot: the per-thread `model_catalog_json` the ACP
+        // adapter sends is ignored for the context window (measured on 0.167.2 — a 1M model kept
+        // Codex's 272000 × 95% = 258400 default), so the 70% compaction limit never applied.
+        "env": {"CODEX_PATH": sidecar_path("alwith-codex-launcher")?, "ALWITH_U_CODEX_PATH": codex_path_for_engine(app)?, "CODEX_ACP_MODEL_CATALOGS": catalogs.to_string_lossy(), "ALWITH_U_ROUTER_BASE": crate::bridge::router_base_url().unwrap_or_default(), "ALWITH_U_ROUTER_TOKEN": crate::providers::ROUTER_TOKEN, "ALWITH_U_MODEL_CATALOG": model_catalog}
     }});
     // Development seam: `ALWITH_U_DSH_AGENT` names a dsh-agent entry (`.../dsh-agent/src/main.ts`) run with
     // bundled Bun (`ALWITH_U_BUN` explicitly overrides it). Never discover Desktop's Bun through PATH.

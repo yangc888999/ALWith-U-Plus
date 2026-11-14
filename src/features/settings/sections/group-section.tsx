@@ -1,14 +1,24 @@
-// Groups: roles defined once, groups that gather them. A role is a name, a model and the
+// Groups: roles defined once, meetings that gather them. A role is a name, a model and the
 // instructions that make that model behave like that role; the instructions can be written here,
 // point at a markdown file, or name one of the Codex skills.
 //
-// The group itself owns a directory under ~/Documents/ALWith/groups/ and a group.md that every
-// member reads, so a discussion has a context that outlives the conversation.
+// This page owns the ROLE LIBRARY and the discussion defaults only. The meetings themselves live
+// in the sidebar panel (create / edit / delete via the meeting dialog) — a second editable list
+// here was the same data twice, and its old "attach folder" flow is what pinned a meeting onto
+// `groups/` itself instead of its named subfolder.
 
 import { invoke } from "@tauri-apps/api/core"
-import { openPath } from "@tauri-apps/plugin-opener"
-import { CheckIcon, ChevronDownIcon, FileTextIcon, FolderOpenIcon, FolderPlusIcon, FolderSearchIcon, PenLineIcon, PlusIcon, Trash2Icon, UsersIcon } from "lucide-react"
-import { useCallback, useEffect, useId, useState, useSyncExternalStore } from "react"
+import {
+  ChevronDownIcon,
+  DownloadIcon,
+  FileTextIcon,
+  FolderOpenIcon,
+  PenLineIcon,
+  PlusIcon,
+  Trash2Icon,
+  UsersIcon
+} from "lucide-react"
+import { useEffect, useId, useState, useSyncExternalStore } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
@@ -19,24 +29,27 @@ import {
   ensureDefaultGroupRoles,
   groupRoleFor,
   groupRoles,
+  importBuiltinBots,
   newRoleId,
   removeGroupRole,
   roleBot,
   setGroupRole,
+  type BuiltinBot,
   type GroupRole
 } from "@/lib/group-roles"
-import { groups as listGroups, newGroupId, removeGroup, setGroup, type GroupConfig } from "@/lib/groups"
 import {
   DEFAULT_SUMMARY_TEMPLATE,
   groupPreferences,
   setGroupPreferences,
-  subscribeGroupPreferences
+  subscribeGroupPreferences,
+  SUMMARY_MODES,
+  type SummaryMode
 } from "@/lib/group-preferences"
 import { NATIVE_MODEL_GROUP } from "@/agent/client"
 import { useProviders } from "@/lib/use-providers"
 
 import { SettingsCard, SettingsNote } from "./shared"
-import { modelEntries } from "./model-section"
+import { modelEntries } from "@/lib/model-catalog"
 import { useSettingsNativeModels } from "@/lib/settings-bridge"
 
 interface SkillEntry {
@@ -53,7 +66,6 @@ export function GroupSection() {
   // A fresh install is seeded with the personas the app bundles into ~/.codex/rob_models;
   // afterwards the stored list is the only source of truth (deleting them all sticks).
   const [roles, setRoles] = useState<GroupRole[]>(() => ensureDefaultGroupRoles())
-  const [groupList, setGroups] = useState<GroupConfig[]>(() => listGroups())
   const [skills, setSkills] = useState<SkillEntry[]>([])
   const [expandedRoles, setExpandedRoles] = useState<Set<string>>(() => new Set())
   const allExpanded = roles.length > 0 && roles.every((role) => expandedRoles.has(role.id))
@@ -72,10 +84,32 @@ export function GroupSection() {
       .catch(() => setSkills([]))
   }, [])
 
-  const refreshGroups = useCallback(() => {
-    // The store is the source of truth; read it again so a change made here shows up immediately.
-    setGroups(listGroups())
-  }, [])
+  // 「导入内置机器人」: read the default role library and add every bot that is not in the roster
+  // yet, persona + config together. One pass per click — no polling, and re-clicking is a no-op
+  // because a bot already imported is skipped rather than duplicated.
+  const [importing, setImporting] = useState(false)
+  const importBots = (): void => {
+    if (importing) return
+    setImporting(true)
+    void invoke<BuiltinBot[]>("rob_models_list")
+      .then((bots) => {
+        if (bots.length === 0) {
+          toast.info(t("groups.importBotsEmpty"))
+          return
+        }
+        const result = importBuiltinBots(bots, models[0]?.id ?? "")
+        setRoles(groupRoles())
+        if (result.added.length === 0) {
+          toast.info(t("groups.importBotsNone", { count: result.skipped.length }))
+          return
+        }
+        toast.success(
+          t("groups.importBotsDone", { count: result.added.length, skipped: result.skipped.length })
+        )
+      })
+      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))
+      .finally(() => setImporting(false))
+  }
 
   const addRole = (): void => {
     const role: GroupRole = {
@@ -140,32 +174,6 @@ export function GroupSection() {
     }
   }
 
-  const createGroup = (): void => {
-    void (async () => {
-      const name = t("groups.groupDefaultName")
-      const created = await invoke<{ directory: string; document: string }>("group_directory_create", { name })
-      const group: GroupConfig = {
-        id: newGroupId(),
-        name,
-        roles: roles.map((role) => role.id),
-        rounds: groupPreferences().rounds,
-        directory: created.directory,
-        document: created.document,
-        topic: "",
-        sessionId: null,
-        autoDiscuss: true
-      }
-      setGroup(group)
-      refreshGroups()
-      toast.success(t("groups.groupCreated", { name }))
-    })().catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))
-  }
-
-  const updateGroup = (group: GroupConfig, patch: Partial<GroupConfig>): void => {
-    setGroup({ ...group, ...patch })
-    refreshGroups()
-  }
-
   return (
     <div className="space-y-4">
       <SettingsCard
@@ -174,6 +182,10 @@ export function GroupSection() {
         icon={<UsersIcon className="size-4" />}
         action={
           <div className="flex items-center gap-1">
+            <Button variant="outline" size="sm" disabled={importing} onClick={importBots}>
+              <DownloadIcon className={cn("size-3.5", importing && "animate-pulse")} />
+              {importing ? t("groups.importBotsRunning") : t("groups.importBots")}
+            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -227,39 +239,9 @@ export function GroupSection() {
         )}
       </SettingsCard>
 
-      <SettingsCard
-        title={t("groups.groupsTitle")}
-        desc={t("groups.groupsDesc")}
-        icon={<FolderPlusIcon className="size-4" />}
-        action={
-          <Button variant="outline" size="sm" onClick={createGroup}>
-            <PlusIcon className="size-3.5" />
-            {t("groups.addGroup")}
-          </Button>
-        }
-      >
-        {groupList.length === 0 ? (
-          <SettingsNote>{t("groups.noGroups")}</SettingsNote>
-        ) : (
-          <div className="space-y-3">
-            {groupList.map((group) => (
-              <GroupEditor
-                key={group.id}
-                group={group}
-                roles={roles}
-                onChange={(patch) => updateGroup(group, patch)}
-                onRemove={() => {
-                  removeGroup(group.id)
-                  refreshGroups()
-                }}
-              />
-            ))}
-          </div>
-        )}
-      </SettingsCard>
-
-      {/* Global defaults belong at the bottom: the two lists above are what a user opens this page
-          for; the template is a once-in-a-while tuning surface. */}
+      {/* Global defaults belong at the bottom: the role library above is what a user opens this
+          page for; the template is a once-in-a-while tuning surface. Meetings themselves are
+          created and edited from the sidebar panel, not here. */}
       <DiscussionDefaultsCard />
     </div>
   )
@@ -269,8 +251,22 @@ function DiscussionDefaultsCard() {
   const { t } = useTranslation()
   const roundsId = useId()
   const templateId = useId()
+  const summaryModeId = useId()
   const preferences = useSyncExternalStore(subscribeGroupPreferences, groupPreferences, groupPreferences)
   const fieldClass = "h-8 min-w-0 rounded-md border border-border/70 bg-background px-2 text-xs"
+  /** Maps each stored mode to its localized dropdown label. */
+  const modeLabel = (mode: SummaryMode): string => {
+    switch (mode) {
+      case "perRole":
+        return t("groups.modePerRole")
+      case "decision":
+        return t("groups.modeDecision")
+      case "debate":
+        return t("groups.modeDebate")
+      case "brief":
+        return t("groups.modeBrief")
+    }
+  }
   return (
     <SettingsCard
       title={t("groups.defaultsTitle")}
@@ -281,7 +277,7 @@ function DiscussionDefaultsCard() {
           variant="ghost"
           size="sm"
           onClick={() =>
-            setGroupPreferences({ rounds: 2, summaryTemplate: DEFAULT_SUMMARY_TEMPLATE })
+            setGroupPreferences({ rounds: 2, summaryTemplate: DEFAULT_SUMMARY_TEMPLATE, summaryMode: "perRole" })
           }
         >
           {t("groups.restoreDefaults")}
@@ -318,6 +314,24 @@ function DiscussionDefaultsCard() {
             </option>
           ))}
         </select>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/50 pt-3">
+        <label className="text-[11px] text-muted-foreground" htmlFor={summaryModeId}>
+          {t("groups.summaryMode")}
+        </label>
+        <select
+          id={summaryModeId}
+          className={`${fieldClass} w-44 shrink-0`}
+          value={preferences.summaryMode}
+          onChange={(event) => setGroupPreferences({ summaryMode: event.target.value as SummaryMode })}
+        >
+          {SUMMARY_MODES.map((mode) => (
+            <option key={mode} value={mode}>
+              {modeLabel(mode)}
+            </option>
+          ))}
+        </select>
+        <span className="text-[11px] leading-relaxed text-muted-foreground">{t("groups.summaryModeHint")}</span>
       </div>
     </SettingsCard>
   )
@@ -393,11 +407,6 @@ function RoleCard({
               value={role.name}
               onChange={(event) => onChange({ name: event.target.value })}
             />
-            {role.moderator && (
-              <span className="shrink-0 rounded-full bg-amber-500/12 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
-                {t("groups.roleModeratorBadge")}
-              </span>
-            )}
             {role.fastMode === true && (
               <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                 {t("groups.fieldFastMode")}
@@ -465,8 +474,23 @@ function RoleEditor({
   const fastCapable = entry?.groupId === NATIVE_MODEL_GROUP.id
   const fieldClass = "h-8 w-full min-w-0 rounded-md border border-border/70 bg-background px-2 text-xs"
   const sectionClass = "text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/75"
+  const titleId = useId()
   return (
     <div className="space-y-4">
+      <section>
+        <h4 className={`${sectionClass} mb-2`}>{t("groups.roleSectionIdentity")}</h4>
+        <label className="block min-w-0" htmlFor={titleId}>
+          <span className="mb-1 block text-[11px] text-muted-foreground">{t("groups.roleTitle")}</span>
+          <input
+            id={titleId}
+            className={fieldClass}
+            placeholder={t("groups.roleTitlePlaceholder")}
+            value={role.title ?? ""}
+            onChange={(event) => onChange({ title: event.target.value })}
+          />
+        </label>
+      </section>
+
       <section>
         <h4 className={`${sectionClass} mb-2`}>{t("groups.roleSectionModel")}</h4>
         <div className="grid gap-2 sm:grid-cols-2">
@@ -601,184 +625,12 @@ function RoleEditor({
         </label>
       </section>
 
-      <div className="flex items-center gap-2 border-t border-border/50 pt-3">
-        <Switch
-          aria-label={t("groups.roleModerator")}
-          checked={role.moderator}
-          onCheckedChange={(checked) => onChange({ moderator: checked })}
-        />
-        <span className="text-[11px] text-muted-foreground">{t("groups.roleModerator")}</span>
-      </div>
-    </div>
-  )
-}
-
-function GroupEditor({
-  group,
-  roles,
-  onChange,
-  onRemove
-}: {
-  group: GroupConfig
-  roles: GroupRole[]
-  onChange: (patch: Partial<GroupConfig>) => void
-  onRemove: () => void
-}) {
-  const { t } = useTranslation()
-  const members = group.roles.map((id) => groupRoleFor(id)).filter((role): role is GroupRole => role !== null)
-  const nameId = useId()
-  return (
-    <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
-      {/* Two labelled rows: name on top, location under it. The round count used to live here too,
-          but it is now owned by the "默认循环" default at the bottom of the page, so one setting
-          cannot disagree with the other. */}
-      <div className="flex items-center gap-2">
-        <label className="w-12 shrink-0 text-[11px] text-muted-foreground" htmlFor={nameId}>
-          {t("groups.groupName")}
-        </label>
-        <input
-          id={nameId}
-          className="h-8 min-w-0 flex-1 rounded-md border border-border/70 bg-background px-2 text-sm"
-          value={group.name}
-          onChange={(event) => onChange({ name: event.target.value })}
-        />
-        <Button variant="ghost" size="icon-sm" aria-label={t("groups.removeGroup")} onClick={onRemove}>
-          <Trash2Icon className="size-3.5" />
-        </Button>
-      </div>
-      <div className="mt-1.5 flex min-w-0 items-center gap-2">
-        <span className="w-12 shrink-0 text-[11px] text-muted-foreground">{t("groups.groupLocation")}</span>
-        <p className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground" title={group.directory}>
-          {group.directory}
-        </p>
-        {/* The group's folder is the user's to choose: a discussion about a project belongs in
-            that project's own directory, not in a folder the app invented from its name. */}
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={t("groups.chooseFolder")}
-          title={t("groups.chooseFolderHint")}
-          onClick={() => {
-            void (async () => {
-              const picked = await invoke<string | null>("pick_group_directory")
-              if (picked === null) return
-              const attached = await invoke<{ directory: string; document: string }>("group_directory_attach", {
-                path: picked
-              })
-              onChange({ directory: attached.directory, document: attached.document })
-              toast.success(t("groups.folderChanged"))
-            })().catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))
-          }}
-        >
-          <FolderSearchIcon className="size-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label={t("groups.openFolder")}
-          title={t("groups.openFolder")}
-          onClick={() => {
-            void openPath(group.directory).catch((error: unknown) =>
-              toast.error(error instanceof Error ? error.message : String(error))
-            )
-          }}
-        >
-          <FolderOpenIcon className="size-3.5" />
-        </Button>
-      </div>
-      <div className="mt-2 flex items-center gap-2">
-        <label className="w-10 shrink-0 text-[11px] text-muted-foreground">{t("groups.fieldTopic")}</label>
-        <input
-          className="h-8 min-w-0 flex-1 rounded-md border border-border/70 bg-background px-2 text-xs"
-          placeholder={t("groups.fieldTopicPlaceholder")}
-          value={group.topic}
-          onChange={(event) => onChange({ topic: event.target.value })}
-        />
-      </div>
-      {/* A roster is a set of pills, not a form list: one glance shows who is in, the number on a
-          highlighted pill is the speaking order, and unselected bots recede into the background. */}
-      <div className="mt-3 flex flex-wrap items-center gap-1.5" role="group" aria-label={t("groups.rolesTitle")}>
-        {roles.length === 0 && <SettingsNote>{t("groups.noRoles")}</SettingsNote>}
-        {roles.map((role) => {
-          const index = group.roles.indexOf(role.id)
-          const checked = index >= 0
-          return (
-            <div
-              key={role.id}
-              className={cn(
-                "inline-flex h-7 items-center rounded-full border text-xs transition-colors",
-                checked
-                  ? "border-primary/45 bg-primary/10 text-primary"
-                  : "border-border/60 bg-muted/25 text-muted-foreground hover:bg-muted/55"
-              )}
-            >
-              <button
-                type="button"
-                aria-pressed={checked}
-                title={checked ? `${t("groups.moveUp")} / ${t("groups.moveDown")}` : role.name}
-                className="flex h-full items-center gap-1.5 rounded-l-full pl-2.5 pr-1.5"
-                onClick={() => {
-                  if (checked) onChange({ roles: group.roles.filter((id) => id !== role.id) })
-                  else onChange({ roles: [...group.roles, role.id] })
-                }}
-              >
-                {checked ? (
-                  <CheckIcon className="size-3 shrink-0" aria-hidden="true" />
-                ) : (
-                  <span className="size-3 shrink-0 rounded-full border border-muted-foreground/50" aria-hidden="true" />
-                )}
-                <span className="max-w-[10rem] truncate">{role.name}</span>
-                {checked && <span className="tabular-nums opacity-65">{index + 1}</span>}
-              </button>
-              {checked && (
-                <span className="flex items-center gap-0.5 pr-1.5">
-                  <button
-                    type="button"
-                    aria-label={t("groups.moveUp")}
-                    className="rounded px-1 text-[11px] leading-none hover:bg-primary/15 disabled:opacity-35"
-                    disabled={index === 0}
-                    onClick={() => {
-                      const next = [...group.roles]
-                      const [moved] = next.splice(index, 1)
-                      if (moved === undefined) return
-                      next.splice(index - 1, 0, moved)
-                      onChange({ roles: next })
-                    }}
-                  >
-                    ↑
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={t("groups.moveDown")}
-                    className="rounded px-1 text-[11px] leading-none hover:bg-primary/15 disabled:opacity-35"
-                    disabled={index === group.roles.length - 1}
-                    onClick={() => {
-                      const next = [...group.roles]
-                      const [moved] = next.splice(index, 1)
-                      if (moved === undefined) return
-                      next.splice(index + 1, 0, moved)
-                      onChange({ roles: next })
-                    }}
-                  >
-                    ↓
-                  </button>
-                </span>
-              )}
-            </div>
-          )
-        })}
-      </div>
-      <div className="mt-2 flex items-center gap-2">
-        <Switch
-          aria-label={t("groups.groupAutoDiscuss")}
-          checked={group.autoDiscuss}
-          onCheckedChange={(checked) => onChange({ autoDiscuss: checked })}
-        />
-        <span className="text-[11px] text-muted-foreground">{t("groups.groupAutoDiscuss")}</span>
-      </div>
-      <p className="mt-1 text-[11px] text-muted-foreground">
-        {t("groups.membersHint", { count: members.length })}
+      <p className="mt-3 border-t border-border/50 pt-3 text-[11px] text-muted-foreground">
+        {t("groups.roleOrderHint")}
       </p>
     </div>
   )
 }
+
+// The roster editor lives in @/features/groups/roster-editor so the sidebar's meeting dialog
+// is the single place a roster is arranged.

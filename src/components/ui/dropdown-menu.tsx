@@ -59,16 +59,21 @@ function DropdownMenuLabel({
 }: MenuPrimitive.GroupLabel.Props & {
   inset?: boolean
 }) {
+  // GroupLabel throws Base UI error #31 unless it sits inside a Menu.Group — and callers use this
+  // as a plain section heading (the account menu, the meeting sessions menu). Wrapping every label
+  // in its own group makes both usages legal and keeps the crash from taking the whole window down.
   return (
-    <MenuPrimitive.GroupLabel
-      data-slot="dropdown-menu-label"
-      data-inset={inset}
-      className={cn(
-        "px-2 py-1.5 text-xs font-medium text-muted-foreground data-inset:ps-8",
-        className
-      )}
-      {...props}
-    />
+    <MenuPrimitive.Group data-slot="dropdown-menu-label-group">
+      <MenuPrimitive.GroupLabel
+        data-slot="dropdown-menu-label"
+        data-inset={inset}
+        className={cn(
+          "px-2 py-1.5 text-xs font-medium text-muted-foreground data-inset:ps-8",
+          className
+        )}
+        {...props}
+      />
+    </MenuPrimitive.Group>
   )
 }
 

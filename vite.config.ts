@@ -44,9 +44,15 @@ export const config = (): UserConfig => ({
       "@milkdown/plugin-math",
       "@milkdown/plugin-history",
       "@milkdown/prose/state",
+      // The WYSIWYG toolbar imports these subpaths directly; without prebundling, dev's first
+      // preview open triggers a second optimize pass and a full-page reload.
+      "@milkdown/prose/tables",
+      "@milkdown/prose/commands",
+      "@milkdown/prose/schema-list",
       "@milkdown/preset-commonmark",
       "@milkdown/preset-gfm",
-      "@milkdown/utils"
+      "@milkdown/utils",
+      "unist-util-visit"
     ]
   },
   clearScreen: false,

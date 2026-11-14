@@ -200,6 +200,11 @@ export function ChatComposer({
   const sessionId = props.session.id
   // An account-owned model that was revoked parks the chat read-only until a new model resumes it.
   const accountRecovery = useStore(client.store, (state) => state.accountModelRecovery?.[props.session.id] ?? false)
+  // The recovery card below IS the read-only explanation for this case. The package's generic
+  // "open in another client" banner would sit above it claiming a different cause (another client
+  // holds the session) with a 重试 button that cannot help — mark the surface so CSS hides that
+  // banner while the recovery card is up. Other read-only causes keep the banner.
+  const recoveryReadOnly = accountRecovery && props.session.readOnly
   // A chat lives in the quick-chat folder; anything else is a project. `groupByDirectory` looked
   // right but only matches directories the reader registered as a group, so a normal project
   // folder fell through and lost its 分工 entry (2026-11-08).
@@ -288,12 +293,28 @@ export function ChatComposer({
   // hover check cost a `session/set_config_option` round trip (0.1–8s) on every menu open and left
   // the picker spinning for the duration, for an answer the session's own catalog already had.
   return (
-    <div data-composer data-composer-mode={project === null ? "chat" : "project"} ref={shellRef} className="relative" onContextMenu={openMenu}>
+    <div
+      data-composer
+      data-composer-mode={project === null ? "chat" : "project"}
+      data-account-recovery={recoveryReadOnly ? "" : undefined}
+      ref={shellRef}
+      className="relative"
+      onContextMenu={openMenu}
+    >
       <ComposerResizeHandle shellRef={shellRef} />
       {accountRecovery && <AccountModelRecovery key={props.session.id} session={props.session} />}
       <Composer
         modelMenu={chatModelMenu}
         {...props}
+        // `@alwith/module-chat`'s Composer exposes `modelSelector` and renders it *instead of* its
+        // own `ModelMenu` (see conversation/composer/composer.d.ts). During account-model recovery
+        // that built-in picker is disabled and shows "… Preview" in grey, so a second, disabled
+        // "model" control sat next to the recovery card's picker and the reader clicked the dead
+        // one. Rendering an empty fragment removes only that picker — the textarea, toolbar and
+        // every other model selector on non-recovery surfaces are untouched. The recovery card
+        // above is now the single, clearly clickable "选择模型" and still resumes through
+        // `client.resumeAccountModel`.
+        modelSelector={accountRecovery ? <></> : props.modelSelector}
         onSubmit={submit}
         onHandOff={handOff}
         disabled={props.disabled === true || handoffBusy}

@@ -29,8 +29,9 @@ import {
 import {
   type LayoutShare,
   saveLayoutShare,
+  saveVisibleLayoutShare,
   saveWorkspaceLayout,
-  sharePercents,
+  visibleSharePercents,
   workspaceLayoutDefaults
 } from "@/features/workspace/layout-preferences"
 import { useWorkspaceLayout } from "@/features/workspace/use-workspace-layout"
@@ -175,8 +176,6 @@ function LayoutLegend({
 export function AppearanceSection() {
   const { t } = useTranslation()
   const layout = useWorkspaceLayout()
-  // Whole percentages that always add up to 100, so the four rows read as one budget.
-  const percents = sharePercents(layout)
   // Master "four columns" switch. On = every column is shown and the per-column visibility
   // toggles below are locked; off = the user picks which columns appear.
   const fourColumns = useFourColumnsDefault()
@@ -194,11 +193,20 @@ export function AppearanceSection() {
     { key: "tree", label: t("settings.layoutTree"), shown: treeShown }
   ]
   const shownColumns = columnDefs.filter((column) => column.shown)
-  const shownTotal = shownColumns.reduce((sum, column) => sum + percents[column.key], 0) || 1
+  const shownKeys = shownColumns.map((column) => column.key)
+  // Closed columns take no room on screen, so they take no slice of the displayed budget either:
+  // the on-screen columns are rescaled to a full 100 and the sliders below read the same numbers
+  // as the bar above them. A slider edit is then interpreted inside that visible budget (see
+  // `withVisibleShare`), and the hidden columns keep their saved shares for when they come back.
+  const percents = visibleSharePercents(layout, shownKeys)
+  const commitShare = (key: LayoutShare, value: number): void => {
+    if (shownKeys.length === 4) saveLayoutShare(key, value)
+    else saveVisibleLayoutShare(key, value, shownKeys)
+  }
   const visibleSegments = shownColumns.map((column) => ({
     key: column.key,
     label: column.label,
-    pct: Math.round((percents[column.key] / shownTotal) * 100)
+    pct: percents[column.key]
   }))
   const chatLayout = useChatLayout()
   const chatPercents = {
@@ -367,18 +375,18 @@ export function AppearanceSection() {
           <LayoutShareRow
             name={t("settings.layoutNavigation")}
             value={percents.navigation}
-            onCommit={(value) => saveLayoutShare("navigation", value)}
+            onCommit={(value) => commitShare("navigation", value)}
           />
           <LayoutShareRow
             name={t("settings.layoutChat")}
             value={percents.chat}
-            onCommit={(value) => saveLayoutShare("chat", value)}
+            onCommit={(value) => commitShare("chat", value)}
           />
           {previewShown && (
             <LayoutShareRow
               name={t("settings.layoutPreview")}
               value={percents.preview}
-              onCommit={(value) => saveLayoutShare("preview", value)}
+              onCommit={(value) => commitShare("preview", value)}
             />
           )}
           {/* 文件栏放最后（用户要求），与预览栏相邻便于对照。 */}
@@ -386,7 +394,7 @@ export function AppearanceSection() {
             <LayoutShareRow
               name={t("settings.layoutTree")}
               value={percents.tree}
-              onCommit={(value) => saveLayoutShare("tree", value)}
+              onCommit={(value) => commitShare("tree", value)}
             />
           )}
         </div>

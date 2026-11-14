@@ -11,7 +11,7 @@ import {
   defaultModelFallback,
   displayModelLabel,
   gatewayModelId,
-  providerGroups,
+  pickerProviderGroups,
   resolveSessionModel,
 } from "@/lib/providers";
 
@@ -39,10 +39,18 @@ export function DraftModelSelect({
   snapshot,
   model,
   onChange,
+  placeholder
 }: {
   snapshot: ProviderSnapshot | null;
   model: string | null;
   onChange: (model: string | null) => void;
+  /**
+   * When set and nothing has been picked yet, the trigger shows this text instead of the default
+   * model's name. The account-model recovery card uses it: naming a default there read as "a model
+   * is already selected", so the reader kept clicking the greyed-out main picker instead. Other
+   * callers (draft chat) omit it and keep showing the configured default.
+   */
+  placeholder?: string;
 }) {
   const { t } = useTranslation();
   const groups: { id: string; name: string; models: ChatModelOption[] }[] = [
@@ -51,7 +59,7 @@ export function DraftModelSelect({
       name: NATIVE_MODEL_GROUP.name,
       models: [nativeModel],
     },
-    ...(snapshot === null ? [] : providerGroups(snapshot)).map((provider) => ({
+    ...(snapshot === null ? [] : pickerProviderGroups(snapshot)).map((provider) => ({
       id: provider.id,
       name: provider.name,
       models: provider.models.map((item) => ({
@@ -69,12 +77,16 @@ export function DraftModelSelect({
     snapshot === null
       ? null
       : (defaultModelFallback(snapshot) ?? resolveSessionModel(null, snapshot));
+  // Nothing picked + a caller-supplied placeholder: say "选择模型", never the default model's
+  // name. `model` stays null, so the recovery button remains disabled until an actual pick.
   const selected =
     model === null
-      ? (models.find((item) => item.api_id === defaultModel) ?? {
-          api_id: defaultModel ?? "",
-          label: savedModelLabel(defaultModel) ?? defaultModel ?? NATIVE_MODEL_GROUP.name,
-        })
+      ? placeholder !== undefined
+        ? { api_id: "", label: placeholder }
+        : (models.find((item) => item.api_id === defaultModel) ?? {
+            api_id: defaultModel ?? "",
+            label: savedModelLabel(defaultModel) ?? defaultModel ?? NATIVE_MODEL_GROUP.name,
+          })
       : (models.find((item) => item.api_id === model) ?? {
           api_id: model,
           label: savedModelLabel(model) ?? model,

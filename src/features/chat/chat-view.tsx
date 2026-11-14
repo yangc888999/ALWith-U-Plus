@@ -4,6 +4,7 @@ import { type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject, use
 import { isTemporaryChatDir } from "@/lib/quick-chat"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
+import { useStore } from "zustand"
 import { ChevronUpIcon, Loader2Icon } from "lucide-react"
 import { info } from "@tauri-apps/plugin-log"
 
@@ -13,6 +14,7 @@ import { SessionPreview } from "@/features/computer/session-preview"
 import type { VoiceResume } from "@/features/voice/use-voice-handoff"
 import { client } from "@/lib/client"
 import { getConversationDetail, subscribeChatDisplayPreferences } from "@/lib/chat-display-preferences"
+import { groupByDirectory } from "@/lib/groups"
 import { snapshotProjectMemory } from "@/lib/project-memory"
 
 
@@ -327,6 +329,13 @@ export function ChatView(props: ChatViewProps) {
   const [menu, setMenu] = useState<ContextMenuTarget | null>(null)
   // 简洁/详细：compact keeps finished tool groups collapsed, full spreads them open (CSS).
   const detail = useSyncExternalStore(subscribeChatDisplayPreferences, getConversationDetail, getConversationDetail)
+  // A group discussion reads as a plain chat in the same surface; this flag lets the chat styles
+  // strip the AI "thinking" blocks and bias bubbles WeChat-style for meeting transcripts only.
+  const isGroupDiscussion = groupByDirectory(session.cwd) !== null
+  // Same recovery case as the composer's data-account-recovery: the account-model card explains
+  // the read-only state, so the generic "another client" banner must not double it. The marker
+  // sits on this wrapper because the banner renders inside it, above the composer.
+  const accountRecovery = useStore(client.store, (state) => state.accountModelRecovery?.[session.id] ?? false)
   // The floating header is a portal outside the conversation root: its right-click must open
   // the same menu, so the containment check admits the portal target as well.
   const headerRef = useRef<HTMLElement | null | undefined>(props.headerTarget)
@@ -430,6 +439,8 @@ export function ChatView(props: ChatViewProps) {
           <div
             className="relative mx-auto h-full min-h-0 w-full max-w-[1120px]"
             data-conversation-detail={detail}
+            data-group-discussion={isGroupDiscussion ? "" : undefined}
+            data-account-recovery={accountRecovery && session.readOnly ? "" : undefined}
             onContextMenu={openContextMenu}
           >
             <Conversation {...props} rootRef={rootRef} />

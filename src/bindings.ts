@@ -56,13 +56,13 @@ export const commands = {
   /**
    *  Pull a URL's body as plain text for the usage page's price refresh.
    *
-   *  A naive GET fails on several official pricing pages on macOS:
-   *    * a transparent proxy (fake-IP / TUN mode) can present a certificate the bundled
-   *      rustls roots do not know, and
-   *    * pricing pages reject a non-browser user agent.
-   *  So: send a browser-like UA, follow redirects, and — because the payload is a public
-   *  price page, never a secret — retry once without certificate verification when the
-   *  first attempt fails (e.g. on the proxy's certificate).
+   *  A naive GET fails on several official pricing pages on macOS: pricing pages reject a
+   *  non-browser user agent, and a transparent proxy can present a certificate the bundled roots
+   *  do not know. So we send a browser-like UA, follow redirects, and — because the payload is a
+   *  public price page, never a secret — retry once without certificate verification when the first
+   *  attempt fails. But the *common* failure is the connection never being made at all (offline,
+   *  proxy, or firewall block): in that case the cert retry cannot help, and the error must say so
+   *  rather than point the user at certificates.
    */
   fetchText: (args: { url: string }): Promise<string> => __t3Invoke<string>("fetch_text", args),
   larkCliStatus: (): Promise<LarkCliStatus_Serialize> => __t3Invoke<LarkCliStatus_Serialize>("lark_cli_status"),
@@ -340,23 +340,6 @@ export const commands = {
    *  fails on its own merits instead of stopping at `请求太频繁`.
    */
   setOverload429Mute: (args: { mute: boolean }): Promise<null> => __t3Invoke<null>("set_overload_429_mute", args),
-  driveGuardSetEnabled: (args: { enabled: boolean }): Promise<null> =>
-    __t3Invoke<null>("drive_guard_set_enabled", args),
-  driveGuardEnabled: (): Promise<boolean> => __t3Invoke<boolean>("drive_guard_enabled"),
-  /**
-   *  Called from the app's own file-write path. A save the user just made is trusted by the next
-   *  scan instead of being mistaken for a rollback.
-   */
-  driveGuardNoteWrite: (args: { path: string }): Promise<null> => __t3Invoke<null>("drive_guard_note_write", args),
-  /**
-   *  One scan pass over every indexed Drive root. Cheap when the switch is off: it returns at once.
-   *
-   *  Restores are written inside `DriveService::with_filesystem`, the same transaction every save
-   *  from the editor uses. That ordering matters: the daemon is told which path is about to change,
-   *  so the restored bytes are uploaded as a normal local edit instead of being seen as an outside
-   *  change and answered with a conflict copy.
-   */
-  driveGuardScan: (): Promise<ScanReport> => __t3Invoke<ScanReport>("drive_guard_scan"),
   skillsList: (): Promise<SkillEntry[]> => __t3Invoke<SkillEntry[]>("skills_list"),
   skillsSetEnabled: (args: { id: string; enabled: boolean }): Promise<null> =>
     __t3Invoke<null>("skills_set_enabled", args),
@@ -389,19 +372,39 @@ export const commands = {
   globalPromptWrite: (args: { content: string }): Promise<null> => __t3Invoke<null>("global_prompt_write", args),
   /**
    *  Creates (or reuses) the group's folder and writes the starter document into it.
+   *
+   *  `parent` picks where the meeting lives: the folder is always `<parent>/<slug(name)>`, so naming
+   *  the meeting first and choosing the parent second still lands in a subfolder named after the
+   *  meeting — never directly inside the picked folder. Omitted = the default `~/Documents/ALWith/groups`.
    */
-  groupDirectoryCreate: (args: { name: string }): Promise<GroupDirectory> =>
+  groupDirectoryCreate: (args: { name: string; parent: string | null }): Promise<GroupDirectory> =>
     __t3Invoke<GroupDirectory>("group_directory_create", args),
   /**
-   *  Points a group at a folder the user picked, laying the group's own files out inside it.
+   *  Heals a meeting record whose directory points at a PARENT folder instead of the meeting's own
+   *  named subfolder.
    *
-   *  A group used to be pinned to `~/Documents/ALWith/groups/<slug>`. A discussion about a real
-   *  project belongs in that project's folder — the data it argues from is already there — so the
-   *  directory is the user's to choose, and this only adds what the group needs (`资料/`, `产出/`,
-   *  and a `group.md` when there is not one yet). An existing `group.md` is never touched.
+   *  The retired settings-page "attach" flow pinned a group straight onto the picked folder — which
+   *  is how a meeting ended up living in `groups/` itself while its conversations ran in
+   *  `groups/<会议名>/`. The panel then matched no session to the group (继续上一次 stayed grey) and
+   *  新开一场 entered the parent. When `<directory>/<slug(name)>` exists on disk, that subfolder is
+   *  the meeting's real home: return it (creating only what is missing, never touching an existing
+   *  group.md). When it does not exist, return None and leave the record alone.
    */
-  groupDirectoryAttach: (args: { path: string }): Promise<GroupDirectory> =>
-    __t3Invoke<GroupDirectory>("group_directory_attach", args),
+  groupDirectoryHeal: (args: {
+    name: string
+    directory: string
+  }): Promise<{
+    /**  The absolute path of the group's folder. */
+    directory: string
+    /**  The absolute path of the group's document. */
+    document: string
+  } | null> =>
+    __t3Invoke<{
+      /**  The absolute path of the group's folder. */
+      directory: string
+      /**  The absolute path of the group's document. */
+      document: string
+    } | null>("group_directory_heal", args),
   /**
    *  Native folder picker for the group's own directory.
    */
@@ -425,6 +428,24 @@ export const commands = {
   groupDocumentWrite: (args: { document: string; content: string }): Promise<null> =>
     __t3Invoke<null>("group_document_write", args),
   /**
+   *  Renders one material folder as a markdown section for the group document.
+   *
+   *  A material folder is referenced, never copied: members read the originals through
+   *  `read_text_file`, so the document carries only the index — names, sizes and the instruction to
+   *  read rather than guess. The caps keep a giant vault from swamping the 6000-char context budget.
+   */
+  groupMaterialIndex: (args: { path: string }): Promise<GroupMaterialSection> =>
+    __t3Invoke<GroupMaterialSection>("group_material_index", args),
+  /**
+   *  Reads the last characters of a text file, whatever its size.
+   *
+   *  `group_document_read` caps at 256 KB and refuses more; the minutes tail comes off a `memory.md`
+   *  that grows with every round, so the tail reader must not share that cap. UTF-8 boundaries are
+   *  honoured so no glyph is cut in half.
+   */
+  groupTailText: (args: { path: string; maxChars: number }): Promise<GroupTail> =>
+    __t3Invoke<GroupTail>("group_tail_text", args),
+  /**
    *  Reads a local text file: a role definition may be a markdown file anywhere on disk.
    */
   readTextFile: (args: { path: string }): Promise<string> => __t3Invoke<string>("read_text_file", args),
@@ -432,6 +453,14 @@ export const commands = {
    *  Open the role library folder (the group-roles "打开角色库目录" action).
    */
   robModelsOpenFolder: (): Promise<string> => __t3Invoke<string>("rob_models_open_folder"),
+  /**
+   *  Lists every bot in `rob_models` that carries a persona file.
+   *
+   *  This is what the group page's「导入内置机器人」reads: the library folder is the source of truth,
+   *  so a persona added by a later build (or dropped in by hand) can be imported without reinstalling.
+   *  A folder without a `skill-<bot>.md` is skipped — a role with no instructions is not a role.
+   */
+  robModelsList: (): Promise<RobModelEntry_Serialize[]> => __t3Invoke<RobModelEntry_Serialize[]>("rob_models_list"),
   /**
    *  Read one bot's `config.json` (model / effort / moderator). Missing file → `None`.
    */
@@ -824,10 +853,6 @@ export type CommandErrors = {
   codexBundledModels: string
   setOverloadMute: never
   setOverload429Mute: never
-  driveGuardSetEnabled: never
-  driveGuardEnabled: never
-  driveGuardNoteWrite: never
-  driveGuardScan: string
   skillsList: string
   skillsSetEnabled: string
   skillsInstall: string
@@ -837,13 +862,16 @@ export type CommandErrors = {
   globalPromptRead: string
   globalPromptWrite: string
   groupDirectoryCreate: string
-  groupDirectoryAttach: string
+  groupDirectoryHeal: string
   pickGroupDirectory: string
   groupCopyMaterials: string
   groupDocumentRead: string
   groupDocumentWrite: string
+  groupMaterialIndex: string
+  groupTailText: string
   readTextFile: string
   robModelsOpenFolder: string
+  robModelsList: string
   robModelsReadConfig: string
   robModelsWriteConfig: string
   pickRoleDocument: string
@@ -1453,6 +1481,18 @@ export type GroupDirectory = {
   document: string
 }
 
+/**  One material folder rendered as a markdown section (heading, note, and path list). */
+export type GroupMaterialSection = {
+  markdown: string
+}
+
+/**  The tail of a file, cut on a character boundary so multi-byte text never breaks mid-glyph. */
+export type GroupTail = {
+  text: string
+  /**  True when older content before the tail was skipped. */
+  truncated: boolean
+}
+
 export type HostApp = "desktop" | "u"
 
 export type HttpRequest = HttpRequest_Serialize | HttpRequest_Deserialize
@@ -1849,6 +1889,29 @@ export type RevokedSessions = {
   sessionIds: string[]
 }
 
+/**  One bot folder in the role library, ready to become a group role. */
+export type RobModelEntry = RobModelEntry_Serialize | RobModelEntry_Deserialize
+
+/**  One bot folder in the role library, ready to become a group role. */
+export type RobModelEntry_Deserialize = {
+  /**  The folder name, which is also the bot id. */
+  bot: string
+  /**  Absolute path of the persona markdown the role will point at. */
+  persona: string
+  /**  Raw `config.json` (model / effort / moderator), or None when the bot ships without one. */
+  config?: string | null
+}
+
+/**  One bot folder in the role library, ready to become a group role. */
+export type RobModelEntry_Serialize = {
+  /**  The folder name, which is also the bot id. */
+  bot: string
+  /**  Absolute path of the persona markdown the role will point at. */
+  persona: string
+  /**  Raw `config.json` (model / effort / moderator), or None when the bot ships without one. */
+  config: string | null
+}
+
 export type RouterMigration = {
   /**  Threads whose recorded provider was moved onto the shared router. */
   threads: number
@@ -1871,16 +1934,6 @@ export type RuntimeExit_Serialize = {
 export type RuntimeLines = string[]
 
 export type Scan = Scan_Serialize | Scan_Deserialize
-
-/**  What one scan pass did. Returned to the UI so it can tell the user what was rescued. */
-export type ScanReport = {
-  /**  Files whose old content was pushed back and replaced by the shadow copy. */
-  restored: string[]
-  /**  Files recorded for the first time, or accepted as a newer edit. */
-  recorded: number
-  /**  Files skipped because they are too large to shadow. */
-  skipped: number
-}
 
 export type Scan_Deserialize = {
   operationId?: string | null

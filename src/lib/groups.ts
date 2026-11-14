@@ -18,6 +18,17 @@ export interface GroupConfig {
   document: string
   /** The single question the discussion answers; written into the group document. */
   topic: string
+  /**
+   * The analysis direction for this group — how to look at the topic, kept separate from the topic
+   * itself so one folder can host several angles over time. Injected into member and summary
+   * prompts when set; empty means no extra framing.
+   */
+  focus: string
+  /**
+   * Folders outside the group's own directory whose files the discussion may cite. The document
+   * carries an index of them (names + sizes), not their contents — members read what they need.
+   */
+  materialFolders: string[]
   /** The conversation that hosts the discussion. */
   sessionId: string | null
   /** Whether a user turn starts the roster automatically. Off = the group is a plain project. */
@@ -34,7 +45,9 @@ function readGroup(value: unknown): GroupConfig | null {
   // An empty name is a group mid-rename, not a broken record: dropping it here made renaming a
   // group delete it (the field clears before the new name is typed).
   if (typeof group.name !== "string") return null
-  if (typeof group.directory !== "string" || group.directory === "") return null
+  // A group may exist before its directory is created: the folder is only materialised once the
+  // meeting name is set, so an empty directory is valid (the panel just cannot open/start it yet).
+  if (typeof group.directory !== "string") return null
   const roles = Array.isArray(group.roles)
     ? group.roles.filter((role): role is string => typeof role === "string" && role !== "")
     : []
@@ -47,6 +60,12 @@ function readGroup(value: unknown): GroupConfig | null {
     directory: group.directory,
     document: typeof group.document === "string" ? group.document : "",
     topic: typeof group.topic === "string" ? group.topic : "",
+    // v2 fields: groups written before this version simply have no direction and no material folders.
+    // A whitespace-only focus is no focus at all — the prompt injection checks emptiness after trim.
+    focus: typeof group.focus === "string" ? group.focus.trim() : "",
+    materialFolders: Array.isArray(group.materialFolders)
+      ? group.materialFolders.filter((folder): folder is string => typeof folder === "string" && folder.trim() !== "").map((folder) => folder.trim())
+      : [],
     sessionId: typeof group.sessionId === "string" ? group.sessionId : null,
     // Older records predate the switch; they were written when the discussion was automatic.
     autoDiscuss: group.autoDiscuss !== false

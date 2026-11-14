@@ -19,7 +19,6 @@ mod chat_window;
 mod computer;
 mod draft_directory;
 mod drive;
-mod drive_guard;
 mod enterprise;
 mod extension_capabilities;
 mod extension_inbox;
@@ -193,7 +192,6 @@ pub fn run() {
             // first request can never be reached. The port is known now, so write it here.
             providers::repair_router_provider();
             drive::initialize(app.handle())?;
-            app.manage(drive_guard::GuardState(std::sync::Arc::new(drive_guard::Ledger::default())));
             trackpad::install(app.handle())?;
             computer::initialize(app.handle())?;
             // Ship the operator personas with the app and drop them into `$CODEX_HOME/rob_models`
@@ -453,10 +451,6 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 runtime::codex_bundled_models,
                 overload_commands::set_overload_mute,
                 overload_commands::set_overload_429_mute,
-                drive_guard::drive_guard_set_enabled,
-                drive_guard::drive_guard_enabled,
-                drive_guard::drive_guard_note_write,
-                drive_guard::drive_guard_scan,
                 skills::skills_list,
                 skills::skills_set_enabled,
                 skills::skills_install,
@@ -466,13 +460,16 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 skills::global_prompt_read,
                 skills::global_prompt_write,
                 groups::group_directory_create,
-                groups::group_directory_attach,
+                groups::group_directory_heal,
                 groups::pick_group_directory,
                 groups::group_copy_materials,
                 groups::group_document_read,
                 groups::group_document_write,
+                groups::group_material_index,
+                groups::group_tail_text,
                 groups::read_text_file,
                 groups::rob_models_open_folder,
+                groups::rob_models_list,
                 groups::rob_models_read_config,
                 groups::rob_models_write_config,
                 groups::pick_role_document,

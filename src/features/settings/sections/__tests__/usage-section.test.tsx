@@ -1,19 +1,27 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
 import { dayKey } from "@/features/settings/usage-data"
 
 const native = vi.hoisted(() => ({
-  report: vi.fn()
+  report: vi.fn(),
+  refresh: vi.fn(),
+  providers: vi.fn(),
+  fetchText: vi.fn(),
+  // The page reads the provider snapshot through this hook (which subscribes to native events),
+  // so the fixture is served here rather than through the raw command.
+  snapshot: { value: null as unknown }
 }))
 
 vi.mock("@/bindings", () => ({
   commands: {
     usageReport: native.report,
-    // The refresh button forces a rebuild; the fake serves the same fixture either way.
-    usageReportRefresh: native.report,
+    // The refresh button forces an incremental rebuild and reports what the delta added.
+    usageReportRefresh: native.refresh,
     // The usage page now reads the provider catalog to show the user's own model labels.
-    providersRead: vi.fn(async () => ({ providers: {}, customProviders: [], builtInModels: {}, revision: 0 }))
+    providersRead: native.providers,
+    // One-click vendor price updates fetch the vendor's public pricing page through this.
+    fetchText: native.fetchText
   },
   events: {
     "providers:changed": {
@@ -23,6 +31,7 @@ vi.mock("@/bindings", () => ({
   }
 }))
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true }))
+vi.mock("@/lib/use-providers", () => ({ useProviders: () => native.snapshot.value }))
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) => (options === undefined ? key : `${key}${JSON.stringify(options)}`),
@@ -31,6 +40,7 @@ vi.mock("react-i18next", () => ({
 }))
 
 import { UsageSection } from "../usage-section"
+import { blankPrice, usePriceStore } from "../../price-store"
 
 const today = dayKey(new Date())
 const yesterday = dayKey(new Date(Date.now() - 86_400_000))
@@ -84,6 +94,9 @@ function report(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   native.report.mockResolvedValue(report())
+  native.refresh.mockResolvedValue(report())
+  native.providers.mockResolvedValue({ providers: {}, customProviders: [], builtInModels: {}, revision: 0 })
+  native.snapshot.value = null
 })
 
 afterEach(() => {
@@ -325,4 +338,221 @@ test("a custom end date only takes effect after 查询", async () => {
   fireEvent.click(screen.getByRole("button", { name: "usageReport.query" }))
   expect(screen.queryByText("log-only-model")).toBeNull()
   expect(screen.getByText("usageReport.detailEmpty")).toBeInTheDocument()
+})
+
+/** Opens the price configuration disclosure; it is collapsed by default like any other detail. */
+function openPriceConfig(): void {
+  const summary = screen.getByText("usageReport.priceConfig")
+  const details = summary.closest("details")
+  if (details === null) throw new Error("missing price details")
+  details.open = true
+}
+
+test("the refresh button reports how many new calls the incremental sync brought in", async () => {
+  render(<UsageSection />)
+  await waitForStagedCards()
+  expect(native.refresh).not.toHaveBeenCalled()
+  // The rebuild found two extra calls; the page says so instead of looking like a dead button.
+  const grown = report()
+  grown.points[0].requests = 4
+  native.refresh.mockResolvedValue(grown)
+  fireEvent.click(screen.getByRole("button", { name: "usageReport.refresh" }))
+  await waitFor(() => expect(screen.getByTestId("usage-sync-note")).toHaveTextContent("usageReport.syncAdded"))
+  expect(native.refresh).toHaveBeenCalledOnce()
+
+  // Nothing new on disk → an explicit "already current", still exactly one call per click.
+  native.refresh.mockResolvedValue(grown)
+  fireEvent.click(screen.getByRole("button", { name: "usageReport.refresh" }))
+  await waitFor(() => expect(screen.getByTestId("usage-sync-note")).toHaveTextContent("usageReport.syncUpToDate"))
+  expect(native.refresh).toHaveBeenCalledTimes(2)
+})
+
+test("price vendors start collapsed and only the opened one renders its table", async () => {
+  render(<UsageSection />)
+  await waitForStagedCards()
+  openPriceConfig()
+  const vendors = screen.getAllByTestId("price-vendor")
+  expect(vendors.length).toBeGreaterThan(1)
+  // Every vendor is a closed header: no price inputs on screen until one is opened.
+  for (const vendor of vendors) {
+    expect(vendor.querySelector("button[aria-expanded]")).toHaveAttribute("aria-expanded", "false")
+  }
+  expect(screen.queryByLabelText("usageReport.priceModelId")).toBeNull()
+  expect(screen.queryByPlaceholderText("usageReport.vendorUrlPlaceholder")).toBeNull()
+
+  const openai = vendors.find((node) => node.getAttribute("data-vendor") === "OpenAI")!
+  fireEvent.click(openai.querySelector("button[aria-expanded]")!)
+  expect(openai.querySelector("button[aria-expanded]")).toHaveAttribute("aria-expanded", "true")
+  expect(screen.getAllByLabelText("usageReport.priceModelId").length).toBeGreaterThan(0)
+  // Another vendor stays closed, so opening one does not flood the page.
+  const deepseek = screen.getAllByTestId("price-vendor").find((node) => node.getAttribute("data-vendor") === "DeepSeek")!
+  expect(deepseek.querySelector("button[aria-expanded]")).toHaveAttribute("aria-expanded", "false")
+})
+
+test("unpriced models sit on top, ordered by usage, and one click inserts a matching row", async () => {
+  // Two models the ledger used; neither has a price. The heavier one must come first.
+  native.report.mockResolvedValue(
+    report({
+      points: [
+        { date: today, hour: 3, provider: "custom", model: "deepseek-V4.1-flash", requests: 3, input: 900_000, cached: 0, output: 100_000, reasoning: 0, tokens: 1_000_000 },
+        { date: today, hour: 4, provider: "custom", model: "tiny-model", requests: 1, input: 100, cached: 0, output: 10, reasoning: 0, tokens: 110 }
+      ]
+    })
+  )
+  render(<UsageSection />)
+  await waitForStagedCards()
+  openPriceConfig()
+  const list = screen.getByTestId("unpriced-models")
+  const ids = Array.from(list.querySelectorAll(".font-mono")).map((node) => node.textContent)
+  expect(ids).toEqual(["deepseek-V4.1-flash", "tiny-model"])
+
+  // Inserting lands in the vendor the id implies, opens it, and keeps the raw id for matching.
+  fireEvent.click(screen.getAllByRole("button", { name: "usageReport.addPriceForModel" })[0])
+  const deepseek = screen.getAllByTestId("price-vendor").find((node) => node.getAttribute("data-vendor") === "DeepSeek")!
+  expect(deepseek.querySelector("button[aria-expanded]")).toHaveAttribute("aria-expanded", "true")
+  const inputs = Array.from(deepseek.querySelectorAll('input[aria-label="usageReport.priceModelId"]')) as HTMLInputElement[]
+  expect(inputs.map((input) => input.value)).toContain("deepseek-V4.1-flash")
+})
+
+test("a model marked free stops being unpriced, and a typed name replaces the id", async () => {
+  native.report.mockResolvedValue(
+    report({
+      points: [
+        { date: today, hour: 3, provider: "custom", model: "deepseek-V4.1-flash", requests: 3, input: 900_000, cached: 0, output: 100_000, reasoning: 0, tokens: 1_000_000 }
+      ]
+    })
+  )
+  render(<UsageSection />)
+  await waitForStagedCards()
+  openPriceConfig()
+  expect(screen.getByTestId("unpriced-models")).toBeTruthy()
+
+  // Insert the row for the model that was used, then mark it free instead of typing prices.
+  fireEvent.click(screen.getAllByRole("button", { name: "usageReport.addPriceForModel" })[0])
+  const deepseek = screen.getAllByTestId("price-vendor").find((node) => node.getAttribute("data-vendor") === "DeepSeek")!
+  const ids = Array.from(deepseek.querySelectorAll('input[aria-label="usageReport.priceModelId"]')) as HTMLInputElement[]
+  const row = ids.find((input) => input.value === "deepseek-V4.1-flash")!.closest("tr")!
+  const free = row.querySelector('input[aria-label="usageReport.priceFree"]') as HTMLInputElement
+  expect(free.checked).toBe(false)
+  fireEvent.click(free)
+  // Free is a real price: the model leaves the "未定价" list and its paid inputs lock.
+  await waitFor(() => expect(screen.queryByTestId("unpriced-models")).toBeNull())
+  const paid = row.querySelector('input[type="number"]') as HTMLInputElement
+  expect(paid.disabled).toBe(true)
+
+  // A name typed on the price row is what the report shows; the id stays on the element.
+  const name = row.querySelector('input[aria-label="usageReport.priceName"]') as HTMLInputElement
+  fireEvent.change(name, { target: { value: "自用 DS 闪电" } })
+  const renamed = await screen.findAllByText("自用 DS 闪电")
+  expect(renamed.length).toBeGreaterThan(0)
+  expect(renamed.some((node) => node.getAttribute("title") === "deepseek-V4.1-flash")).toBe(true)
+})
+
+test("the per-row discount input edits the percentage and is independent of off-peak", async () => {
+  // The price store is a module singleton; earlier tests may have mutated it. Start clean.
+  usePriceStore.getState().resetPrices()
+  render(<UsageSection />)
+  await waitForStagedCards()
+  openPriceConfig()
+  // Open the OpenAI vendor so its price rows (and discount inputs) are on screen.
+  const openai = screen.getAllByTestId("price-vendor").find((node) => node.getAttribute("data-vendor") === "OpenAI")!
+  fireEvent.click(openai.querySelector("button[aria-expanded]")!)
+  expect(openai.querySelector("button[aria-expanded]")).toHaveAttribute("aria-expanded", "true")
+
+  const discountInputs = Array.from(
+    openai.querySelectorAll('input[aria-label="usageReport.priceDiscount"]')
+  ) as HTMLInputElement[]
+  expect(discountInputs.length).toBeGreaterThan(0)
+  // A paid row's discount field starts at 0 and is editable.
+  expect(discountInputs[0].value).toBe("0")
+  expect(discountInputs[0].disabled).toBe(false)
+  fireEvent.change(discountInputs[0], { target: { value: "25" } })
+  // The input shows the percentage; the store keeps the 0–1 fraction.
+  expect((openai.querySelectorAll('input[aria-label="usageReport.priceDiscount"]')[0] as HTMLInputElement).value).toBe("25")
+})
+
+test("the per-row discount input locks while the model is marked free", async () => {
+  native.report.mockResolvedValue(
+    report({
+      points: [
+        { date: today, hour: 3, provider: "custom", model: "deepseek-V4.1-flash", requests: 3, input: 900_000, cached: 0, output: 100_000, reasoning: 0, tokens: 1_000_000 }
+      ]
+    })
+  )
+  // The price store is a module singleton; an earlier test may have priced this model already.
+  usePriceStore.getState().resetPrices()
+  render(<UsageSection />)
+  await waitForStagedCards()
+  openPriceConfig()
+  fireEvent.click(screen.getAllByRole("button", { name: "usageReport.addPriceForModel" })[0])
+  const deepseek = screen.getAllByTestId("price-vendor").find((node) => node.getAttribute("data-vendor") === "DeepSeek")!
+  const row = (Array.from(deepseek.querySelectorAll('input[aria-label="usageReport.priceModelId"]')) as HTMLInputElement[])
+    .find((input) => input.value === "deepseek-V4.1-flash")!
+    .closest("tr")!
+  const free = row.querySelector('input[aria-label="usageReport.priceFree"]') as HTMLInputElement
+  fireEvent.click(free)
+  await waitFor(() => expect((row.querySelector('input[aria-label="usageReport.priceDiscount"]') as HTMLInputElement).disabled).toBe(true))
+})
+
+test("the log and the price table show the custom model name while matching stays on the id", async () => {
+  native.snapshot.value = {
+    providers: {},
+    customProviders: [
+      {
+        id: "custom_company",
+        name: "Finture",
+        baseUrl: "https://gateway.test/v1",
+        apiKey: "k",
+        models: [{ label: "公司 DS 闪电", api_id: "kimi-k2.6" }]
+      }
+    ],
+    builtInModels: {},
+    managedProviders: [],
+    revision: 1
+  }
+  render(<UsageSection />)
+  await waitForStagedCards()
+  // The reader's own name is what the log shows; the id stays available as the tooltip.
+  const named = await screen.findAllByText("公司 DS 闪电")
+  expect(named.length).toBeGreaterThan(0)
+  const cell = named.find((node) => node.getAttribute("title") === "kimi-k2.6")
+  expect(cell).toBeTruthy()
+})
+
+test("a vendor update surfaces untracked models as one-click candidates", async () => {
+  usePriceStore.getState().resetPrices()
+  // One tracked model for the vendor under test.
+  usePriceStore.getState().setPrices([{ ...blankPrice("Acme"), model: "acme-alpha", input: 1, output: 2 }])
+  usePriceStore.getState().setVendorSource("Acme", {
+    url: "https://acme.test/prices",
+    currency: "USD",
+    regex: "model (?<model>\\S+) price (?<input>[0-9.]+)/(?<output>[0-9.]+)"
+  })
+  // The fetched page lists the tracked model plus two the table does not track yet.
+  native.fetchText.mockResolvedValue(
+    "model acme-alpha price 1/2 model acme-beta price 3/4 model acme-gamma price 5/6"
+  )
+
+  render(<UsageSection />)
+  await waitForStagedCards()
+  openPriceConfig()
+
+  const acme = screen.getAllByTestId("price-vendor").find((node) => node.getAttribute("data-vendor") === "Acme")!
+  fireEvent.click(acme.querySelector("button[aria-expanded]")!)
+  fireEvent.click(within(acme).getByRole("button", { name: "usageReport.vendorUpdate" }))
+
+  // The update refreshes the tracked model and lists the two new ones as candidates.
+  await waitFor(() =>
+    expect(screen.getByText('usageReport.newModelsFound{"count":2}')).toBeInTheDocument()
+  )
+  expect(screen.getByRole("button", { name: "acme-beta" })).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "acme-gamma" })).toBeInTheDocument()
+  // The already-tracked model is not offered as a candidate.
+  expect(screen.queryByRole("button", { name: "acme-alpha" })).toBeNull()
+
+  // One click adds the candidate to the table and removes it from the list.
+  fireEvent.click(screen.getByRole("button", { name: "acme-beta" }))
+  await waitFor(() => expect(screen.getByDisplayValue("acme-beta")).toBeInTheDocument())
+  expect(screen.queryByRole("button", { name: "acme-beta" })).toBeNull()
+  expect(screen.getByRole("button", { name: "acme-gamma" })).toBeInTheDocument()
 })

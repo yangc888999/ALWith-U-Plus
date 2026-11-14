@@ -15,6 +15,7 @@ export function PreviewSurface({
   editor,
   treeVisible,
   onTreeVisibleChange,
+  onShowProjectTree,
   maximized,
   onMaximize,
   onClose
@@ -23,6 +24,12 @@ export function PreviewSurface({
   editor: (controls: { leading: ReactNode; trailing: ReactNode }) => ReactNode
   treeVisible: boolean
   onTreeVisibleChange: (visible: boolean) => void
+  /**
+   * The collapsed-state FolderTree must run the same `showProjectTree()` action as 四方格 and the
+   * header toggle: it has to ensure/open the workspace, not just flip a flag no column is rendering.
+   * Optional so the standalone layout test can still drive the tree pane directly.
+   */
+  onShowProjectTree?: () => void
   maximized: boolean
   onMaximize: () => void
   onClose: () => void
@@ -95,7 +102,10 @@ export function PreviewSurface({
                 aria-expanded={false}
                 aria-label={t("workspace.showTree")}
                 title={t("workspace.showTree")}
-                onClick={() => onTreeVisibleChange(true)}
+                onClick={() => {
+                  if (onShowProjectTree !== undefined) onShowProjectTree()
+                  else onTreeVisibleChange(true)
+                }}
               >
                 <FolderTree />
               </Button>

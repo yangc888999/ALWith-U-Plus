@@ -23,6 +23,12 @@ vi.mock("@/lib/providers", async (importOriginal) => ({
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }))
 
+// These suites drive the whole settings panel through jsdom, and the slowest case already takes
+// ~1.4s on an idle machine — close enough to the 5s default that a busy `maxWorkers: "50%"` run
+// times out spuriously. Raise the ceiling for this file only; the assertions are unchanged, so a
+// genuine hang still fails, just against a budget that reflects real rendering cost.
+vi.setConfig({ testTimeout: 15_000 })
+
 beforeAll(async () => {
   await initI18n("en")
 })

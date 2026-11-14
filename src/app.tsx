@@ -27,7 +27,6 @@ import { ChatProjectMenu } from "@/features/chat/project-session-popover"
 import { useDriveArchive } from "@/features/drive/archive-runtime"
 import { DriveDeleteConfirmation, DrivePage, DriveStatus, useDriveConnection } from "@/features/drive/drive"
 import { useDrivePluginBridge } from "@/features/drive/plugin-bridge-hook"
-import { useDriveVersionGuard } from "@/features/drive/version-guard-runtime"
 import { sendExtensionMessage, setExtensionDraft } from "@/features/extensions/chat/chat"
 import { connectExtensionNavigation } from "@/features/extensions/chat/navigation"
 import { ExtensionNavigation } from "@/features/extensions/extension-navigation"
@@ -59,6 +58,13 @@ import { useVoiceHandoff } from "@/features/voice/use-voice-handoff"
 import { WorkspaceHeaderContext } from "@/features/workspace/context"
 import { createChatDirectory, isTemporaryChatDir } from "@/lib/quick-chat"
 import { FileWorkspace } from "@/features/workspace/file-workspace"
+import {
+  bindProjectDirectory,
+  DRAFT_DIRECTORY_KEY,
+  isGroupsRoot,
+  resolveProjectDirectory,
+  useBoundProjectDirectory
+} from "@/features/workspace/project-directory"
 import { useFourColumnsDefault } from "@/features/workspace/four-columns-preference"
 import { usePreviewVisiblePreference } from "@/features/workspace/preview-visible-preference"
 import { closeOnlineBiWindow } from "@/features/workspace/online-bi"
@@ -70,6 +76,7 @@ import { playCompletionSound, soundForRunState } from "@/lib/completion-sound"
 import { bumpDockBadge, clearDockBadge } from "@/lib/dock-badge"
 import { settingsStore } from "@/lib/settings-store"
 import { startFreeModelWatch } from "@/features/providers/free-model-watch"
+import { startPriceRefresh } from "@/features/settings/price-refresh"
 import { installChatShortcut } from "@/lib/chat-shortcut"
 import {
   openChatWindow,
@@ -86,6 +93,7 @@ import { client, markRead, useApp, useSession, watchRunStates } from "@/lib/clie
 import { watchForNotifications } from "@/lib/notifications"
 import { type Preferences, savePreference } from "@/lib/preferences"
 import { ensureDefaultGroupRoles } from "@/lib/group-roles"
+import { groupByDirectory } from "@/lib/groups"
 import { groupSessionRows } from "@/lib/group-sessions"
 import { ensureProjectMemory } from "@/lib/project-memory"
 import { applyProvidersWhenIdle } from "@/lib/providers"
@@ -134,7 +142,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   useDriveConnection()
   useDrivePluginBridge()
   useDriveArchive()
-  useDriveVersionGuard()
   const { host: extensions, runtime: extensionRuntime, state: extensionState } = useExtensions()
   const { t } = useTranslation()
   const connection = useApp((state) => state.connection)
@@ -317,6 +324,14 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       // A project opened from history must have its memory file too, not only the ones picked in
       // the composer: the read-memory action would otherwise find nothing on older projects.
       void ensureProjectMemory(sessionRow.cwd)
+      // One directory source for the whole surface. A 拉会 session is a project like any other;
+      // binding its cwd here is what makes the four columns, the file tree and the preview appear
+      // on the very first frame instead of waiting for a lookup that never ran.
+      bindProjectDirectory(
+        sessionRow.sessionId,
+        sessionRow.cwd,
+        groupByDirectory(sessionRow.cwd)?.id ?? null
+      )
       const token = ++selectionRef.current
       const isCurrent = () => token === selectionRef.current
       // Codex refuses to resume an archived session; opening one restores it first, as the
@@ -361,8 +376,11 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   // once per project per run, so without this signal a project already visited would stay in two
   // columns after an explicit "create a chat here".
   const [columnsRequest, setColumnsRequest] = useState(0)
-  const chooseDraftFolder = useCallback((directory: string | null) => {
+  const chooseDraftFolder = useCallback((directory: string | null, groupId: string | null = null) => {
     setLastDirectory(directory)
+    // The draft surface has no session id, so the meeting's folder is bound under the shared draft
+    // key. Without it a "新开一场" looked like a chat with no directory and opened only two columns.
+    if (directory !== null) bindProjectDirectory(DRAFT_DIRECTORY_KEY, directory, groupId)
     if (directory !== null && !isQuickChatDirectory(directory)) setColumnsRequest((value) => value + 1)
     // Every project a chat is opened in gets a memory.md, including composer folder picks.
     // Temporary chats (quick-chat directory) are not projects and must not create one.
@@ -463,21 +481,66 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     })()
   }, [connection, knownSessions])
 
-  // A temporary chat lives in the quick-chat folder: no file tree, no preview by default.
-  const currentDirectory = session?.cwd ?? lastDirectory
-  const isTemporaryChat = isTemporaryChatDir(currentDirectory)
+  // One directory for the whole surface. The old `session?.cwd ?? lastDirectory` resolved to null
+  // whenever a resumed conversation had not published its cwd yet, and `isTemporaryChatDir(null)`
+  // then turned a real project/meeting into a two-column "temporary chat". A binding written by
+  // select / 新开一场 / 查看会议文件 wins over the session cwd, so 拉会 always has a directory even
+  // on the very first frame. Subscribing keeps this value fresh on every binding write.
+  const directoryKey = selectedId ?? DRAFT_DIRECTORY_KEY
+  useBoundProjectDirectory(directoryKey)
+  const projectDirectory = resolveProjectDirectory({
+    sessionId: selectedId,
+    sessionCwd: session?.cwd ?? null,
+    lastDirectory
+  })
+  const directory = projectDirectory.directory
+  const directoryReason = projectDirectory.reason
+  // `readOnly` is deliberately NOT a condition: an account-model recovery session is still a
+  // project with files, and hiding its columns because the composer is locked was the reported bug.
+  const isTemporaryChat = directoryReason === "temporary"
   // Projects open four columns wide unless 设置 → 主题和外观 → 界面布局 says otherwise. A temporary
   // chat is two columns regardless: it has no project behind it to preview. With four columns off,
-  // the preview still opens by default only when its own visibility toggle is on.
+  // the preview still opens by default only when its own visibility toggle is on. `missing` does
+  // NOT auto-open the columns: a fresh install that has never picked a folder should not be greeted
+  // by an empty third pane — clicking 文件栏 opens the column and shows the guidance on demand.
+  // `invalid` IS opened automatically, so the one-click repair is on screen without an extra click.
   const fourColumnsDefault = useFourColumnsDefault()
   const [previewVisible] = usePreviewVisiblePreference()
+  const defaultFourColumns =
+    directoryReason !== "temporary" && directoryReason !== "missing" && (fourColumnsDefault || previewVisible)
+  const directoryGuidance = t(
+    directoryReason === "invalid"
+      ? "workspace.invalidDirectoryHint"
+      : directoryReason === "missing"
+        ? "workspace.noDirectoryHint"
+        : "workspace.selectFileHint"
+  )
+  const invalidDirectory = directoryReason === "invalid" ? (session?.cwd ?? lastDirectory) : null
+
+  /**
+   * 查看会议文件: show a meeting's folder (group.md / memory.md / 资料 / 产出) without creating a
+   * conversation. Binds the current surface — session id, or the draft key before the first turn —
+   * then reopens the four columns through the same signal a new project chat uses.
+   */
+  const openMeetingFiles = useCallback(
+    (meetingDirectory: string, groupId: string): void => {
+      if (meetingDirectory.trim() === "" || isGroupsRoot(meetingDirectory)) {
+        toast.error(t("workspace.invalidDirectory"))
+        return
+      }
+      bindProjectDirectory(directoryKey, meetingDirectory, groupId)
+      setLastDirectory(meetingDirectory)
+      setColumnsRequest((value) => value + 1)
+    },
+    [directoryKey, t]
+  )
 
   const [draftCollection, setDraftCollection] = useState<{
     id: string
     generation: number
   } | null>(null)
   const newChatInDirectory = useCallback(
-    (cwd?: string | null, collectionId?: string) => {
+    (cwd?: string | null, collectionId?: string, groupId: string | null = null) => {
       void operation
         .run(async () => {
           const directory = newChatDirectory(cwd === undefined ? (extensionSession.current?.cwd ?? lastDirectory) : cwd)
@@ -485,7 +548,9 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           setDraftCollection(
             collectionId === undefined ? null : { id: collectionId, generation: surfaceGeneration + 1 }
           )
-          chooseDraftFolder(directory)
+          // A group draft still owns the meeting folder; binding it here keeps four columns and the
+          // group's files visible before the first message creates a session id.
+          chooseDraftFolder(directory, groupId)
           importDraft(DRAFT_SESSION_ID, null)
           setSurfaceGeneration((value) => value + 1)
           setChatRevealRequest((value) => value + 1)
@@ -997,6 +1062,8 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   useEffect(() => clearDockBadge(), [])
   // App 开着就检查 OpenRouter 有没有新上架的 :free 模型（开关默认关，设置页可开）。
   useEffect(() => startFreeModelWatch(), [])
+  // 用量页价格自动刷新：启动时到期就跑，之后每 6 小时一次；失败静默，不打断当前操作。
+  useEffect(() => startPriceRefresh(), [])
 
   useEffect(() => {
     let cancelled = false
@@ -1255,6 +1322,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
               onNewProject={newProject}
               onSearch={() => setPaletteOpen(true)}
               onNewProjectChat={newChatInDirectory}
+              onViewFiles={openMeetingFiles}
               onOpenSettings={() => void openSettingsWindow()}
               onEditProfile={() => void openSettingsWindow("account")}
               onOpenPlugins={openPlugins}
@@ -1295,7 +1363,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                 {pluginsVisited && (
                   <div className={leadingPage === "plugins" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
                     <Suspense fallback={null}>
-                      <PluginsPage cwd={session?.cwd ?? lastDirectory} active={view === "plugins"} />
+                      <PluginsPage cwd={directory} active={view === "plugins"} />
                     </Suspense>
                   </div>
                 )}
@@ -1349,14 +1417,19 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
               {!leading && actionCards}
               <WorkspaceHeaderContext.Provider value={workspaceTrailing ?? workspaceToolbar}>
                 <FileWorkspace
-                  cwd={session?.cwd ?? lastDirectory}
+                  cwd={directory}
                   sessionId={session?.id ?? null}
                   chatRevealRequest={chatRevealRequest}
                   columnsRequest={columnsRequest}
                   busy={session != null && session.state !== "idle"}
+                  reason={directoryReason}
+                  guidance={directoryGuidance}
+                  invalidDirectory={invalidDirectory}
+                  directoryKey={directoryKey}
                   // Projects open with the preview when four columns is on, or when its own
-                  // visibility toggle is on; temporary chats stay two-column.
-                  defaultOpen={!isTemporaryChat && (fourColumnsDefault || previewVisible)}
+                  // visibility toggle is on; temporary chats stay two-column. `readOnly` never
+                  // suppresses the columns: an account-model recovery is still a project session.
+                  defaultOpen={defaultFourColumns}
                 >
                   <DriveDeleteConfirmation />
                   <div className="flex min-h-0 flex-1 flex-col">{main}</div>
@@ -1372,7 +1445,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                             onNewChat={() => void newChatInDirectory(root.localPath)}
                           />
                         )}
-                        currentProject={session?.cwd ?? lastDirectory}
+                        currentProject={directory}
                         onOpenProject={(root) =>
                           operation.run(async () => {
                             await client.discardDraft("main")

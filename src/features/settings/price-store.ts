@@ -32,6 +32,14 @@ export type ModelPrice = PriceTier & {
   vendor: string
   /** Matches `UsagePoint.model` (the bare name, or the part after `provider/`). */
   model: string
+  /** Display name typed by the reader. Empty = fall back to the model id. Never used for
+   *  matching, so renaming a row cannot break an existing ledger id. */
+  label?: string
+  /** Explicitly free: the model is priced at 0 and must not be reported as "未定价". */
+  free?: boolean
+  /** Flat discount as a fraction off the list price (0.2 = 20% off), applied to every tier
+   *  (standard and off-peak) and independent of the time-of-day off-peak tier. 0 = no discount. */
+  discount: number
   /** Currency the three prices above are quoted in. */
   currency: Currency
   /** Discounted tier for off-peak hours; null = flat pricing. */
@@ -100,18 +108,56 @@ function looksCny(vendor: string): boolean {
   return CNY_VENDORS.some((keyword) => name.includes(keyword))
 }
 
-/** Best-effort vendor for a persisted entry that predates the vendor column. */
+/** Best-effort vendor for a persisted entry that predates the vendor column. The names must match
+ *  the curated table's vendor groups — a guess that invents a second spelling ("Qwen" next to
+ *  "千问 Qwen") splits one vendor into two cards, one of them without a price source. */
 export function guessVendor(model: string): string {
   const name = model.toLowerCase()
-  if (name.includes("claude")) return "Anthropic"
+  if (name.includes("claude")) return "Claude"
   if (name.includes("gpt") || name.startsWith("o3") || name.startsWith("o4")) return "OpenAI"
   if (name.includes("gemini")) return "Google"
   if (name.includes("deepseek")) return "DeepSeek"
   if (name.includes("kimi") || name.includes("moonshot")) return "Kimi"
-  if (name.includes("qwen")) return "Qwen"
-  if (name.includes("glm")) return "智谱"
+  if (name.includes("qwen")) return "千问 Qwen"
+  if (name.includes("glm")) return "智谱 GLM"
   if (name.includes("grok")) return "xAI"
+  if (name.includes("minimax")) return "MiniMax"
+  if (name.includes("mimo")) return "小米 MiMo"
   return "其他"
+}
+
+/**
+ * Fold a provider-catalog group name onto the price table's vendor group. The catalog calls the
+ * vendor "Qwen" while the curated table (and its price source) lives under "千问 Qwen"; without
+ * this fold an auto-added model lands in a brand-new card with no URL. Only exact aliases fold —
+ * a custom provider keeps its own name.
+ */
+const VENDOR_ALIASES: Record<string, string> = {
+  qwen: "千问 Qwen",
+  千问: "千问 Qwen",
+  通义: "千问 Qwen",
+  通义千问: "千问 Qwen",
+  anthropic: "Claude",
+  claude: "Claude",
+  glm: "智谱 GLM",
+  zhipu: "智谱 GLM",
+  智谱: "智谱 GLM",
+  moonshot: "Kimi",
+  kimi: "Kimi",
+  xai: "xAI",
+  "x-ai": "xAI",
+  minimax: "MiniMax",
+  mimo: "小米 MiMo",
+  小米: "小米 MiMo",
+  deepseek: "DeepSeek",
+  openai: "OpenAI",
+  google: "Google",
+  gemini: "Google"
+}
+
+export function canonicalVendor(vendor: string): string {
+  const trimmed = vendor.trim()
+  return VENDOR_ALIASES[trimmed.toLowerCase()] ?? trimmed
 }
 
 function entry(
@@ -125,6 +171,9 @@ function entry(
   return {
     vendor,
     model,
+    label: "",
+    free: false,
+    discount: 0,
     currency: looksCny(vendor) ? "CNY" : "USD",
     input,
     cached,
@@ -182,6 +231,7 @@ export const DEFAULT_PRICES: ModelPrice[] = [
   }),
 
   // 千问 Qwen — RMB, implicit cache-hit price.
+  entry("千问 Qwen", "qwen4-max-preview", 12, 0, 36, { note: "预览版按 qwen3.8-max 同档暂计；官方价格页未单列，发布后点「更新」校准" }),
   entry("千问 Qwen", "qwen3.8-max", 12, 1.5, 36, { note: "隐式缓存命中；显式缓存命中 ¥1.00/MTok" }),
   entry("千问 Qwen", "qwen3.8-27b", 3, 0.6, 12, { note: "隐式缓存命中；显式缓存命中 ¥0.30/MTok" }),
   entry("千问 Qwen", "qwen3.8-flash", 0.8, 0.1, 2.7, { note: "隐式 / 显式缓存命中价均为 ¥0.10/MTok" }),
@@ -254,6 +304,9 @@ export function parsePriceArray(parsed: unknown): ModelPrice[] {
       return {
         vendor,
         model: String(item.model ?? ""),
+        label: String(item.label ?? ""),
+        free: Boolean(item.free),
+        discount: Number(item.discount) || 0,
         currency: (String(item.currency ?? "").toUpperCase() === "CNY" ? "CNY" : "USD") as Currency,
         input: Number(item.input) || 0,
         cached: Number(item.cached) || 0,
@@ -280,12 +333,6 @@ export function parsePriceArray(parsed: unknown): ModelPrice[] {
  *  A field the regex did not capture stays `undefined` so an update never zeroes a price the
  *  page simply does not publish (Qwen's cache price lives in a separate table, for example). */
 export type ParsedModelPrice = { model: string; input?: number; cached?: number; output?: number }
-
-const PRICE_NUM = "\\d+(?:\\.\\d+)?"
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-}
 
 /** Strip $ / ¥ / ￥ / thousand separators, then parse; an absent or unparseable group is undefined. */
 function toPrice(raw: string | undefined): number | undefined {
@@ -398,17 +445,6 @@ export function parseOpenRouterPrices(text: string, prefix: string): ParsedModel
   return rows
 }
 
-/** Build a best-effort flat regex: model id, then input / cached / output prices in order. */
-function flatSource(url: string, currency: Currency, models: string[]): VendorSource {
-  const alts = models.map(escapeRegex).join("|")
-  const symbol = "[$¥￥]?\\s*"
-  return {
-    url,
-    currency,
-    regex: `(?<model>${alts})[\\s\\S]{0,600}?${symbol}(?<input>${PRICE_NUM})[\\s\\S]{0,200}?${symbol}(?<cached>${PRICE_NUM})[\\s\\S]{0,200}?${symbol}(?<output>${PRICE_NUM})`
-  }
-}
-
 /** One reachable JSON endpoint that quotes every major vendor; used where the vendor's own page
  *  is JS-only, RSC, or blocked. Prices are USD per token and scaled to per-1M by the parser. */
 const OPENROUTER_MODELS = "https://openrouter.ai/api/v1/models"
@@ -416,8 +452,10 @@ const OPENROUTER_MODELS = "https://openrouter.ai/api/v1/models"
 /**
  * Pricing sources, keyed by vendor: a URL plus either a regex (HTML pages) or an OpenRouter prefix.
  * Official pages are HTML and change without notice, so the regex is editable in the UI and should
- * be tested with the vendor's "更新" button. Verified against the live page: OpenAI, DeepSeek, Kimi,
- * Qwen, MiniMax (M3.1-Flash). Claude / 智谱 / xAI read from OpenRouter.
+ * be tested with the vendor's "更新" button. Verified 2026-11-13 against the live page: OpenAI,
+ * DeepSeek, Kimi, Qwen, MiniMax (M3.1-Flash + tiered M3), 智谱 (docs pricing table).
+ * Claude / xAI / 小米 MiMo read from OpenRouter (their own pages are RSC, id-mismatched, or the
+ * CNY platform domain does not resolve).
  */
 export const DEFAULT_VENDOR_SOURCES: Record<string, VendorSource> = {
   // OpenAI: platform.openai.com 301-redirects here, and that redirect is what a transparent
@@ -429,9 +467,9 @@ export const DEFAULT_VENDOR_SOURCES: Record<string, VendorSource> = {
     regex:
       "\\[0,&quot;(?<model>[^&]+)&quot;\\],\\[0,(?<input>[0-9.]+)\\],\\[0,(?<cached>[0-9.]+)\\],\\[0,(?:[0-9.]+|&quot;-&quot;)\\],\\[0,(?<output>[0-9.]+)\\]"
   },
-  // Anthropic / 智谱 / xAI: their own pages are an RSC payload, a JS-only shell, and an id format
-  // (`grok-4-7`) no flat table exposes. OpenRouter's JSON is reachable and quotes every one of them,
-  // so these read from it (USD per token → per-1M).
+  // Anthropic / xAI: their own pages are an RSC payload and an id format (`grok-4-7`) no flat
+  // table exposes. OpenRouter's JSON is reachable and quotes both, so these read from it
+  // (USD per token → per-1M).
   Claude: { url: OPENROUTER_MODELS, currency: "USD", regex: "", openrouter: "anthropic" },
   DeepSeek: {
     url: "https://api-docs.deepseek.com/zh-cn/quick_start/pricing",
@@ -443,11 +481,13 @@ export const DEFAULT_VENDOR_SOURCES: Record<string, VendorSource> = {
   },
   // Qwen: the model catalogue carries no prices; the billing page does. Verified 12/36, 0.8/2.7,
   // 3/12. Cache prices live in a separate table, so `cached` is left untouched by an update.
+  // The id pattern covers every qwen generation (3.6/3.7/3.8/4…): a new model the page publishes
+  // is discovered instead of silently skipped, and preview ids (`qwen4-max-preview`) match too.
   "千问 Qwen": {
     url: "https://help.aliyun.com/zh/model-studio/billing-for-model-studio",
     currency: "CNY",
     regex:
-      "<p>(?<model>qwen3\\.8-[a-z0-9-]+)</p>[\\s\\S]{0,1200}?<p>(?<input>[\\d.]+)<span class=\"help-letter-space\"></span>元</p>[\\s\\S]{0,260}?<p>(?<output>[\\d.]+)<span class=\"help-letter-space\"></span>元</p>"
+      "<p>(?<model>qwen[0-9][a-z0-9.-]*)</p>[\\s\\S]{0,1200}?<p>(?<input>[\\d.]+)<span class=\"help-letter-space\"></span>元</p>[\\s\\S]{0,260}?<p>(?<output>[\\d.]+)<span class=\"help-letter-space\"></span>元</p>"
   },
   // Kimi: a JS `rows:` array — model, then input / output / cache-read, in ¥ per MTok. Verified
   // 13/68/1.30, 26/136/1.30, 20/100/2.00.
@@ -457,28 +497,39 @@ export const DEFAULT_VENDOR_SOURCES: Record<string, VendorSource> = {
     regex:
       "children:`(?<model>kimi-k[0-9.]+[a-z-]*)`\\}\\),`¥(?<input>[\\d.]+) / MTok`,`¥(?<output>[\\d.]+) / MTok`,`¥(?<cached>[\\d.]+) / MTok`"
   },
-  // 智谱 stays on its own page on purpose: OpenRouter's `z-ai/glm-5.3` quotes 0.08 USD/M while the
-  // official standard rate is 8 CNY/M (~1.1 USD) — a different tier, so switching would understate
-  // cost by ~14×. Needs a 智谱 JSON source, not OpenRouter.
-  "智谱 GLM": flatSource("https://open.bigmodel.cn/pricing", "CNY", [
-    "GLM-5.3",
-    "GLM-5.3-Flash",
-    "GLM-5.3-FlashX"
-  ]),
+  // 智谱: open.bigmodel.cn/pricing is a Vue shell (prices load from an authed API), but the
+  // docs site ships the same table server-rendered. Columns: 模型名称 | 上下文 | 输入 | 输出 |
+  // 缓存存储 | 缓存命中 — the tiers of the three tracked models all quote 1M context, and the
+  // "-Legal" variant is excluded by requiring `</td><td>1M</td>` right after the name.
+  // Verified 2026-11-13 against the live page: 8/2/28, 0.8/0.23/2.8, 2/0.57/7 (CNY, matches
+  // the curated rows).
+  "智谱 GLM": {
+    url: "https://docs.bigmodel.cn/cn/guide/start/pricing",
+    currency: "CNY",
+    regex:
+      "(?<model>GLM-5\\.3-FlashX|GLM-5\\.3-Flash|GLM-5\\.3)</td><td[^>]*>1M</td><td[^>]*>(?<input>[\\d.]+)</td><td[^>]*>(?<output>[\\d.]+)</td><td>[^<]*</td><td[^>]*>(?<cached>[\\d.]+)</td>"
+  },
   xAI: { url: OPENROUTER_MODELS, currency: "USD", regex: "", openrouter: "x-ai" },
-  // MiniMax: a plain HTML table — model, input, output, cache-read (元/百万). Verified for
-  // M3.1-Flash (1/4/0.10); M3's tiered rows carry a <del> list price and may need a tweak.
+  // MiniMax: a plain HTML table — model, input, output, cache-read (元/百万). Restricted to the
+  // M series so the per-image/video H3 rows (different column meaning) stay out of the LLM table.
+  // The tiered M3 rows put a `<br/>≤ 512k…<span>永久五折</span>` badge inside the name cell and a
+  // `<del>list</del>` strike price before each number — both are optional groups here, so the
+  // first row of the standard tab wins (`seen` drops the >512k tier and the priority-tab
+  // duplicates). Verified 2026-11-13: M3.1-Flash 1/0.10/4, M3 ≤512k 2.10/0.42/8.40.
   MiniMax: {
     url: "https://platform.minimaxi.com/document/price",
     currency: "CNY",
     regex:
-      "(?<model>MiniMax-[^<]+)</strong></td><td[^>]*>(?:<del>[^<]*</del>\\s*)?(?<input>[\\d.]+)</td><td[^>]*>(?:<del>[^<]*</del>\\s*)?(?<output>[\\d.]+)</td><td[^>]*>(?:<del>[^<]*</del>\\s*)?(?<cached>[\\d.]+)</td>"
+      "(?<model>MiniMax-M[^<]+)</strong>(?:<br/>[^<]*<span[^>]*>[^<]*</span>)?</td><td[^>]*>(?:<del>[^<]*</del>\\s*)?(?<input>[\\d.]+)</td><td[^>]*>(?:<del>[^<]*</del>\\s*)?(?<output>[\\d.]+)</td><td[^>]*>(?:<del>[^<]*</del>\\s*)?(?<cached>[\\d.]+)</td>"
   },
-  "小米 MiMo": flatSource("https://platform.xiaomi.com/mimo/pricing", "CNY", [
-    "mimo-v2.6-pro",
-    "mimo-v2.6-flash",
-    "mimo-v2.6-pro-ultraspeed"
-  ]),
+  // 小米 MiMo: the platform that publishes the domestic CNY rate (platform.xiaomi.com) does not
+  // resolve, and mimo.xiaomi.com is a blog with no pricing table. OpenRouter carries every MiMo
+  // model at Xiaomi's own overseas USD rate (single prefix keeps the bare id, so
+  // `xiaomi/mimo-v2.6-pro` refreshes the curated `mimo-v2.6-pro` row). Verified 2026-11-13:
+  // pro 0.435/0.0036/0.87, flash 0.14/0.0028/0.28, ultraspeed 4.35/0.036/8.7 USD — updating
+  // therefore switches the two CNY rows to the overseas tier (the USD↔CNY difference is already
+  // recorded in each row's `note`).
+  "小米 MiMo": { url: OPENROUTER_MODELS, currency: "USD", regex: "", openrouter: "xiaomi" },
   // OpenRouter 自己就是一个厂商分组：多个前缀一起拉，解析器保留完整 id，正好刷新下面预置的
   // 6 行（已有厂商只刷新已跟踪模型，不会把全平台几百个模型灌进表）。
   OpenRouter: {
@@ -487,6 +538,81 @@ export const DEFAULT_VENDOR_SOURCES: Record<string, VendorSource> = {
     regex: "",
     openrouter: "moonshotai,minimax,z-ai,deepseek,qwen,x-ai"
   }
+}
+
+/**
+ * Merge duplicate vendor cards that are the same vendor under two spellings ("Qwen" next to
+ * "千问 Qwen"). The canonical group is the one the curated table / price sources use; rows move
+ * over, and a folded id keeps the row that already carries prices. The source map follows the
+ * same fold so the merged card keeps its URL. Pure and idempotent — safe on every load.
+ */
+export function mergeVendorAliases(
+  prices: ModelPrice[],
+  sources: Record<string, VendorSource>
+): { prices: ModelPrice[]; sources: Record<string, VendorSource> } {
+  const canonicalOf = (vendor: string): string => {
+    const folded = canonicalVendor(vendor)
+    // A name that is itself a curated group (or has a source) is canonical already.
+    if (DEFAULT_VENDOR_SOURCES[folded] !== undefined || sources[folded] !== undefined) return folded
+    return vendor
+  }
+  const seen = new Map<string, number>()
+  const merged: ModelPrice[] = []
+  for (const price of prices) {
+    const vendor = canonicalOf(price.vendor)
+    const key = `${vendor}\u0000${modelMatchKey(price.model)}`
+    const at = seen.get(key)
+    if (at === undefined) {
+      seen.set(key, merged.length)
+      merged.push(price.vendor === vendor ? price : { ...price, vendor })
+      continue
+    }
+    // Same vendor + same folded id twice: keep the priced row, drop the empty duplicate.
+    const kept = merged[at]
+    const keptPriced = kept.input > 0 || kept.cached > 0 || kept.output > 0
+    const nextPriced = price.input > 0 || price.cached > 0 || price.output > 0
+    if (!keptPriced && nextPriced) merged[at] = { ...price, vendor }
+  }
+  const mergedSources: Record<string, VendorSource> = {}
+  for (const [vendor, source] of Object.entries(sources)) {
+    const target = canonicalOf(vendor)
+    // The canonical entry wins; an alias only fills a gap.
+    if (mergedSources[target] === undefined) mergedSources[target] = source
+  }
+  return { prices: merged, sources: mergedSources }
+}
+
+/**
+ * Persist migration for the price store (the v5 note below is the why). Exported so the rule
+ * "a stale persisted source map must not survive" is directly testable.
+ */
+export function migratePriceState(persisted: unknown): PriceState {
+  const state = (persisted ?? {}) as Partial<PriceState>
+  // v4 keeps the user's edited table and rate/timezone; it only adds the per-vendor
+  // fetch sources (and drops the retired single top-level update-URL). Earlier migrations
+  // already swapped in the hand-checked 25-model snapshot, so don't reset prices again.
+  //
+  // v5 resets vendorSources unconditionally. The fork ships different sources than the
+  // upstream app (which shares this bundle id and therefore this storage), and v4's
+  // `state.vendorSources ?? DEFAULT` only fills a missing map — it kept upstream's stale
+  // platform.openai.com URLs and flat model-list regexes, which either fail to fetch or
+  // grab the wrong numbers from the redesigned pricing pages (the "自动更新不对" report:
+  // gpt-6.1-sol landed on 0 / 2 / 0). The sources are the app's own verified configuration,
+  // not user data — the curated price table above them stays untouched, and the per-vendor
+  // URL/regex fields remain editable in the UI.
+  //
+  // v6 folds alias vendor cards into their canonical group (the auto-add path used to mint a
+  // second "Qwen" card next to "千问 Qwen", with no price source). The user's numbers survive;
+  // only the grouping and the source map's keys move.
+  const folded = mergeVendorAliases(state.prices ?? DEFAULT_PRICES, DEFAULT_VENDOR_SOURCES)
+  return {
+    ...state,
+    prices: folded.prices,
+    usdToCny: state.usdToCny ?? DEFAULT_USD_TO_CNY,
+    utcOffset: state.utcOffset ?? DEFAULT_UTC_OFFSET,
+    vendorSources: folded.sources,
+    updatedAt: state.updatedAt ?? null
+  } as PriceState
 }
 
 export const usePriceStore = create<PriceState>()(
@@ -510,29 +636,18 @@ export const usePriceStore = create<PriceState>()(
     }),
     {
       name: "alwith-settings-prices",
-      version: 4,
-      migrate: (persisted) => {
-        const state = (persisted ?? {}) as Partial<PriceState>
-        // v4 keeps the user's edited table and rate/timezone; it only adds the per-vendor
-        // fetch sources (and drops the retired single top-level update-URL). Earlier migrations
-        // already swapped in the hand-checked 25-model snapshot, so don't reset prices again.
-        return {
-          ...state,
-          prices: state.prices ?? DEFAULT_PRICES,
-          usdToCny: state.usdToCny ?? DEFAULT_USD_TO_CNY,
-          utcOffset: state.utcOffset ?? DEFAULT_UTC_OFFSET,
-          vendorSources: state.vendorSources ?? DEFAULT_VENDOR_SOURCES,
-          updatedAt: state.updatedAt ?? null
-        } as PriceState
-      }
+      version: 6,
+      migrate: migratePriceState
     }
   )
 )
 
-/** Case-insensitive match; a configured `vendor/model` also matches the bare model name. */
+/** Case-insensitive match on the folded key (dots/dashes/whitespace), so `claude-opus-5.5` and
+ *  `claude-opus-5-5` agree everywhere — pricing and the vendor updater use the same fold. A
+ *  configured `vendor/model` also matches the bare model name. */
 export function matchesModel(price: ModelPrice, model: string): boolean {
-  const configured = price.model.trim().toLowerCase()
-  const actual = model.trim().toLowerCase()
+  const configured = modelMatchKey(price.model)
+  const actual = modelMatchKey(model)
   if (configured === "" || actual === "") return false
   if (configured === actual) return true
   const bare = configured.includes("/") ? configured.split("/").pop() ?? "" : configured
@@ -599,6 +714,9 @@ export function costOf(
 ): number | null {
   const price = findPrice(prices, point.model)
   if (price === undefined) return null
+  // An explicitly free model is priced at zero on purpose. Without this branch it would fall into
+  // the "all three prices are zero" placeholder check below and be reported as unpriced.
+  if (price.free === true) return 0
   // A row whose three prices are all zero is an unfilled placeholder (a freshly added row or the
   // OpenRouter group), not a free model. Treating it as "priced" would report 0 spend and inflate
   // the matched-model count, hiding the fact that cost is actually unknown.
@@ -614,5 +732,10 @@ export function costOf(
     (point.input / 1_000_000) * tier.input +
     (point.cached / 1_000_000) * tier.cached +
     (point.output / 1_000_000) * tier.output
-  return price.currency === "CNY" ? amount : amount * usdToCny
+  // A flat discount applies on top of whichever tier is in effect (standard or off-peak) and is
+  // independent of the time-of-day off-peak price. Clamp defensively: only a 0–1 fraction off is
+  // meaningful; anything outside that range is ignored so a stray value cannot negate or inflate cost.
+  const discount = price.discount ?? 0
+  const charged = amount * (1 - (discount > 0 && discount <= 1 ? discount : 0))
+  return price.currency === "CNY" ? charged : charged * usdToCny
 }

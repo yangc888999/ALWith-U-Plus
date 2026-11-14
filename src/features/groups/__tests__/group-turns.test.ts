@@ -42,6 +42,10 @@ test("a member's turn asks for a position, not another plan", () => {
   expect(prompt).toContain("要做支付告警收敛。")
   expect(prompt).toContain("关注可扩展性与长期维护成本。")
   expect(prompt).toContain("明确表态")
+  // The transcript is a group chat: the speech prompt must ask for the answer only, never the
+  // reasoning trace or a tool play-by-play, and keep the floor time short.
+  expect(prompt).toContain("不要展示推理过程")
+  expect(prompt).toContain("300 字以内")
 })
 
 test("the moderator summarizes each round on the configured template", () => {
@@ -81,4 +85,31 @@ test("a user turn is a discussion to run", () => {
   )
   expect(target?.question).toBe("原始问题")
   expect(target?.answer).toBe("初稿")
+})
+
+// v0.3.8 redesign: a meeting's standing analysis direction (focus) and the presence of material
+// folders change the prompt only when configured — an old group must speak exactly as before.
+test("a configured focus reframes speech and summary", () => {
+  const framing = { focus: "补贴退坡后的毛利弹性", materials: false }
+  const speech = groupTurnPrompt(architect, 0, "群说明", "speech", "", framing)
+  expect(speech).toContain("【分析方向】")
+  expect(speech).toContain("补贴退坡后的毛利弹性")
+  expect(speech).toContain("发言须围绕该方向展开")
+  const summary = groupTurnPrompt(architect, 0, "群说明", "summary", "", framing)
+  expect(summary).toContain("总结须回应这个方向")
+})
+
+test("an empty focus injects no direction block at all", () => {
+  const prompt = groupTurnPrompt(architect, 0, "群说明", "speech", "", { focus: "  ", materials: false })
+  expect(prompt).not.toContain("【分析方向】")
+})
+
+test("materials framing tells members to read the index instead of guessing", () => {
+  const framing = { focus: "", materials: true }
+  const speech = groupTurnPrompt(architect, 0, "群说明", "speech", "", framing)
+  expect(speech).toContain("读文件，不要猜")
+  // The identification line still closes the speech prompt.
+  expect(speech.trimEnd().endsWith("架构师：」开头，便于其他人识别发言者。")).toBe(true)
+  const summary = groupTurnPrompt(architect, 0, "群说明", "summary", "", framing)
+  expect(summary).toContain("引用材料时写明文件路径")
 })

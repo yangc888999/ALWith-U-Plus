@@ -2,6 +2,7 @@
 // configuration panel. A saved key puts that provider's models into every chat's model picker;
 // each chat picks its own model. Nothing global is written.
 import {
+  Building2,
   ChevronDownIcon,
   CircleHelpIcon,
   ExternalLinkIcon,
@@ -120,12 +121,13 @@ import {
   saveProviderKey,
   testProvider,
 } from "@/lib/providers"
+import { LEGACY_ENTERPRISE_PROVIDER_ID } from "@/features/auth/enterprise-providers"
 import { orchestratedSessionsUsing, providerCloseBlocker } from "@/lib/provider-usage"
 import { useProviders } from "@/lib/use-providers"
 import { cn } from "@/lib/utils"
 
 import { CodexProviderSection } from "./codex-provider-section"
-import { CompanyReasoningRow } from "./company-reasoning-row"
+import { CompanyProviderCard, COMPANY_PROVIDER_TAB } from "./company-provider-card"
 import { ModelSection } from "./model-section"
 import { SettingsCard } from "./shared"
 
@@ -437,18 +439,31 @@ export function ProviderSection({ initialProviderId }: { initialProviderId?: str
 
   const activeBuiltIn = PROVIDERS.find((provider) => provider.id === activeId) ?? null
   const activeCustom = snapshot?.customProviders.find((provider) => provider.id === activeId) ?? null
+  // Account-issued providers (the company channel). They are not editable: the account owns the
+  // gateway, the key and the model list, so they render as a state card instead of an editor.
+  // Memoised because the fallback `[]` would otherwise be a new array on every render and keep
+  // re-triggering the effect below.
+  // `managedProviders` also carries the `litellm` legacy alias used to keep pre-rename sessions
+  // resolvable. It is the same catalog under an old id, so it must not become a second tab.
+  const managedProviders = useMemo(
+    () => (snapshot?.managedProviders ?? []).filter((provider) => provider.id !== LEGACY_ENTERPRISE_PROVIDER_ID),
+    [snapshot]
+  )
+  const activeManaged = managedProviders.find((provider) => provider.id === activeId) ?? null
 
   useEffect(() => {
-    if (!snapshot || activeId === "new" || activeBuiltIn || activeCustom) return
+    if (!snapshot || activeId === "new" || activeId === COMPANY_PROVIDER_TAB) return
+    if (activeBuiltIn || activeCustom || activeManaged) return
     // The remembered provider no longer exists (a removed custom one): fall back to the provider
     // the default model points at, and only then to the first built-in.
     const fromDefault = providerIdForModel(defaultModelSnapshot()?.model ?? null)
     const resolvable =
       fromDefault !== null &&
       (PROVIDERS.some((provider) => provider.id === fromDefault) ||
-        snapshot.customProviders.some((provider) => provider.id === fromDefault))
+        snapshot.customProviders.some((provider) => provider.id === fromDefault) ||
+        managedProviders.some((provider) => provider.id === fromDefault))
     setActiveId(resolvable && fromDefault !== null ? fromDefault : (PROVIDERS[0]?.id ?? ""))
-  }, [snapshot, activeId, activeBuiltIn, activeCustom, setActiveId])
+  }, [snapshot, activeId, activeBuiltIn, activeCustom, activeManaged, managedProviders, setActiveId])
 
   const configuredCount = snapshot
     ? PROVIDERS.filter((provider) => provider.native === true || keys[provider.id] !== undefined).length +
@@ -492,9 +507,23 @@ export function ProviderSection({ initialProviderId }: { initialProviderId?: str
               activeId={activeId}
               keys={keys}
               customProviders={snapshot.customProviders}
+              managedProviders={managedProviders}
               onSelect={setActiveId}
               onAdd={() => setActiveId("new")}
             />
+            {/* The company channel renders first: it is issued by the signed-in account, not
+                configured here, and it only exposes what the account cannot set itself (the
+                default thinking level) plus the sign-in action when it is missing. */}
+            {managedProviders.length === 0 && (
+              <div hidden={activeId !== COMPANY_PROVIDER_TAB} className="pb-3">
+                <CompanyProviderCard provider={null} />
+              </div>
+            )}
+            {managedProviders.map((provider) => (
+              <div key={provider.id} hidden={activeId !== provider.id} className="pb-3">
+                <CompanyProviderCard provider={provider} />
+              </div>
+            ))}
             {PROVIDERS.map((provider) => (
               // The provider card is a boxed block: keep its border off the card's bottom edge.
               <div key={provider.id} hidden={activeId !== provider.id} className="pb-3">
@@ -567,8 +596,6 @@ export function ProviderSection({ initialProviderId }: { initialProviderId?: str
             </div>
           </>
           )}
-          {/* 公司模型默认思考级别：从上面的独立卡片搬到这里，与它作用的模型放在一起。 */}
-          <CompanyReasoningRow />
         </SettingsCard>
       </div>
     </div>
@@ -603,18 +630,44 @@ export function ProviderTabs({
   activeId,
   keys,
   customProviders,
+  managedProviders,
   onSelect,
   onAdd
 }: {
   activeId: string
   keys: Record<string, ProviderKey>
   customProviders: CustomProvider[]
+  managedProviders: CustomProvider[]
   onSelect: (id: string) => void
   onAdd: () => void
 }) {
   const { t } = useTranslation()
   return (
     <div data-testid="provider-tabs" className="grid grid-cols-2 gap-2 pb-4 sm:grid-cols-3">
+        {/* The company channel leads: it needs no key and no URL, only the account. Signed out, a
+            single placeholder tab keeps the entry point visible instead of hiding it entirely. */}
+        {managedProviders.length === 0 ? (
+          <ProviderTab
+            id={COMPANY_PROVIDER_TAB}
+            name={t("provider.companyName")}
+            active={activeId === COMPANY_PROVIDER_TAB}
+            configured={false}
+            icon={<Building2 className="size-5 shrink-0" />}
+            onClick={() => onSelect(COMPANY_PROVIDER_TAB)}
+          />
+        ) : (
+          managedProviders.map((provider) => (
+            <ProviderTab
+              key={provider.id}
+              id={provider.id}
+              name={provider.name}
+              active={activeId === provider.id}
+              configured
+              icon={<Building2 className="size-5 shrink-0" />}
+              onClick={() => onSelect(provider.id)}
+            />
+          ))
+        )}
         {PROVIDERS.map((provider) => {
           // Native providers run on the Codex sign-in: they are always ready, no key needed.
           // A closed provider still has metadata (its key is kept) but is not configured.

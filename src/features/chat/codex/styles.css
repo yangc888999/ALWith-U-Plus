@@ -1,5 +1,44 @@
 @import "@alwith/module-chat/styles.css";
 
+/* A group discussion reads like a meeting transcript: each member's internal reasoning is hidden
+   so only the spoken answer shows, and the human host's turns sit right while the AI members sit
+   left — the symmetric, chat-like layout. */
+[data-group-discussion] .codex-reasoning-details {
+  display: none;
+}
+
+/* A meeting is a conversation, not an agent trace: the work section (tool calls, command cards,
+   "用时 N 秒" timers) and the plan/todo blocks are process noise between two speeches. Hide the
+   whole work section — it wraps the activity groups, the reasoning header and the duration line —
+   plus standalone command/diff/plan cards. The spoken answer (.codex-final-answer) and the user's
+   own turns stay untouched. */
+[data-group-discussion] .codex-work-section,
+[data-group-discussion] .codex-activity-group,
+[data-group-discussion] .codex-command-card,
+[data-group-discussion] .codex-edited-files-card,
+[data-group-discussion] .codex-plan,
+[data-group-discussion] .codex-subagent-details {
+  display: none;
+}
+
+/* Account-model recovery: the composer's recovery card already explains the read-only state and
+   carries the one action that fixes it. The package's generic "open in another client" banner
+   would claim a different cause with a useless 重试 button — hide it while the recovery marker
+   is set.
+
+   The first rule kept this banner on screen: lucide v1 renders the lock icon with several aliases,
+   so `.lucide-lock` is not a reliable hook. The generic read-only banner is a direct child of
+   `[data-chat-content]` that wraps an `[data-slot="alert"]` (the reconnect/stopped banner is
+   suppressed while `readOnly` is true, and transcript error items are nested inside the timeline,
+   not direct children). Matching that structure hides the banner regardless of the icon.
+
+   Both rules are scoped to `[data-account-recovery]`, which is only set for this one cause; every
+   other read-only reason (another client holding the session) keeps its banner and 重试 button. */
+[data-account-recovery] [data-chat-content] > div:has(> [data-slot="alert"] .lucide-lock),
+[data-account-recovery] [data-chat-content] > div:has(> [data-slot="alert"]) {
+  display: none;
+}
+
 .codex-turn-errors {
   display: flex;
   flex-direction: column;

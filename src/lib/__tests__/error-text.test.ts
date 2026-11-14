@@ -434,3 +434,22 @@ test("a stale provider revision says what to do instead of naming another window
   expect(message).toContain("更新模型列表")
   expect(message).not.toContain("another window")
 })
+test("the account-model recovery code names the recovery action, not the machine code", async () => {
+  await chinese()
+
+  const message = describeError(new Error("Turn ended: account_model_required"))
+  expect(message).toContain("使用所选模型继续")
+  expect(message).not.toContain("account_model_required")
+})
+
+test("the company gateway's 502 body reads as a gateway outage, not a loopback URL", async () => {
+  await chinese()
+
+  const message = describeError(
+    new Error("unexpected status 502 Bad Gateway: Enterprise gateway request failed, url: http://127.0.0.1:53750/alwith/responses")
+  )
+  expect(message).toContain("公司模型网关")
+  expect(message).not.toContain("127.0.0.1")
+  // A bare 502/503/504 from another relay gets the generic gateway wording.
+  expect(describeError(new Error("unexpected status 503 Service Unavailable"))).toContain("模型网关")
+})

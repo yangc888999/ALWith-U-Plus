@@ -156,7 +156,9 @@ type SessionSidebarProps = {
   onNewChat: () => void
   /** Creates a project: the user picks a directory first. The header carries the button. */
   onNewProject?: () => void
-  onNewProjectChat: (cwd: string | null, collectionId?: string) => void
+  onNewProjectChat: (cwd: string | null, collectionId?: string, groupId?: string | null) => void
+  /** 查看会议文件: opens a meeting's folder in the four-column workspace without a new chat. */
+  onViewFiles?: (directory: string, groupId: string) => void
   onSearch: () => void
   onOpenSettings: () => void
   /** Opens Settings on the profile editor (nickname and avatar). */
@@ -188,6 +190,7 @@ function SidebarPanels({
   onSelect,
   onNewChat,
   onNewProjectChat,
+  onViewFiles,
   onSearch,
   onOpenSettings,
   onEditProfile,
@@ -440,7 +443,11 @@ function SidebarPanels({
           }}
         >
         {view === "drive" ? null : view === "groups" ? (
-          <GroupPanel onSelect={onSelect} onNewChat={(cwd) => onNewProjectChat(cwd)} />
+          <GroupPanel
+            onSelect={onSelect}
+            onNewChat={(cwd, groupId) => onNewProjectChat(cwd, undefined, groupId ?? null)}
+            onViewFiles={onViewFiles}
+          />
         ) : view === "collections" ? (
           <CollectionPanel renderRow={renderRow} onSelect={onSelect} onNewChat={(id) => onNewProjectChat(null, id)} />
         ) : view === "activity" ? (

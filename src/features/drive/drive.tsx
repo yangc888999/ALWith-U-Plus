@@ -1,4 +1,4 @@
-import { logBackgroundError, reportBackgroundError } from "@/lib/background-errors"
+import { logBackgroundError } from "@/lib/background-errors"
 import { describeError } from "@/lib/error-text"
 
 import { drive } from "./controller"
@@ -22,7 +22,7 @@ import { confirm, open } from "@tauri-apps/plugin-dialog"
 import { info } from "@tauri-apps/plugin-log"
 import { revealItemsInDir } from "@tauri-apps/plugin-opener"
 import { CloudIcon } from "lucide-react"
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
+import { type ReactNode, useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
@@ -41,20 +41,18 @@ import { useDriveVisible } from "./use-drive-visible"
 import { useYupDriveEnabled } from "./yup-drive-preference"
 
 export function useDriveConnection(start = true): void {
-  const yupEnabled = useYupDriveEnabled()
-  const yupRef = useRef(yupEnabled)
-  yupRef.current = yupEnabled
+  const enabled = useYupDriveEnabled()
   useEffect(() => {
     if (!isTauri()) return
+    // Master switch off: never attach, and release any client the previous run opened.
+    if (!enabled) {
+      drive.dispose()
+      return
+    }
     let disposed = false
     void drive
       .attach()
       .then(async () => {
-        if (!yupRef.current) {
-          // The master switch is off: the Drive stays attached for settings reads but never syncs.
-          await drive.request({ type: "stop" })
-          return
-        }
         if (start && !disposed && drive.getSnapshot().snapshot?.configured) {
           await drive.request({ type: "start" })
           await drive.request({ type: "refreshClientConfig" })
@@ -69,14 +67,7 @@ export function useDriveConnection(start = true): void {
       disposed = true
       drive.dispose()
     }
-  }, [start])
-  // Toggling the master switch stops or resumes synchronization immediately; the sidebar
-  // visibility follows the same switch through `useDriveVisible`.
-  useEffect(() => {
-    if (!isTauri() || drive.getSnapshot().snapshot === null) return
-    const request = yupEnabled && start ? drive.request({ type: "start" }) : drive.request({ type: "stop" })
-    void request.catch((error: unknown) => reportBackgroundError("drive-toggle", error))
-  }, [yupEnabled, start])
+  }, [start, enabled])
 }
 
 export function DrivePage({

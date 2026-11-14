@@ -13,6 +13,10 @@ use std::path::{Path, PathBuf};
 const TEXT_SUFFIXES: [&str; 4] = ["md", "markdown", "txt", "text"];
 /// A role definition longer than this is a document the app must not paste into a prompt.
 const MAX_TEXT_BYTES: u64 = 256 * 1024;
+/// An index lists at most this many files per material folder; past it the rest is counted, not named.
+const MAX_INDEX_FILES: usize = 200;
+/// One folder index renders within this many characters, so several folders cannot swamp the doc.
+const MAX_INDEX_CHARS: usize = 4000;
 
 #[derive(Debug, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +25,22 @@ pub struct GroupDirectory {
     pub directory: String,
     /// The absolute path of the group's document.
     pub document: String,
+}
+
+/// One material folder rendered as a markdown section (heading, note, and path list).
+#[derive(Debug, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupMaterialSection {
+    pub markdown: String,
+}
+
+/// The tail of a file, cut on a character boundary so multi-byte text never breaks mid-glyph.
+#[derive(Debug, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupTail {
+    pub text: String,
+    /// True when older content before the tail was skipped.
+    pub truncated: bool,
 }
 
 /// The folder every group lives in.
@@ -59,9 +79,19 @@ fn starter_document(name: &str) -> String {
 }
 
 /// Creates (or reuses) the group's folder and writes the starter document into it.
+///
+/// `parent` picks where the meeting lives: the folder is always `<parent>/<slug(name)>`, so naming
+/// the meeting first and choosing the parent second still lands in a subfolder named after the
+/// meeting — never directly inside the picked folder. Omitted = the default `~/Documents/ALWith/groups`.
 #[tauri3_specta::command]
-pub fn group_directory_create(name: String) -> Result<GroupDirectory, String> {
-    let root = groups_root()?;
+pub fn group_directory_create(name: String, parent: Option<String>) -> Result<GroupDirectory, String> {
+    let root = match parent {
+        Some(path) if !path.trim().is_empty() => expand_home(path.trim()),
+        _ => groups_root()?,
+    };
+    if !root.is_absolute() {
+        return Err("父文件夹必须是绝对路径".into());
+    }
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     let directory = root.join(slug_of(&name));
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
@@ -81,33 +111,38 @@ pub fn group_directory_create(name: String) -> Result<GroupDirectory, String> {
     })
 }
 
-/// Points a group at a folder the user picked, laying the group's own files out inside it.
+/// Heals a meeting record whose directory points at a PARENT folder instead of the meeting's own
+/// named subfolder.
 ///
-/// A group used to be pinned to `~/Documents/ALWith/groups/<slug>`. A discussion about a real
-/// project belongs in that project's folder — the data it argues from is already there — so the
-/// directory is the user's to choose, and this only adds what the group needs (`资料/`, `产出/`,
-/// and a `group.md` when there is not one yet). An existing `group.md` is never touched.
+/// The retired settings-page "attach" flow pinned a group straight onto the picked folder — which
+/// is how a meeting ended up living in `groups/` itself while its conversations ran in
+/// `groups/<会议名>/`. The panel then matched no session to the group (继续上一次 stayed grey) and
+/// 新开一场 entered the parent. When `<directory>/<slug(name)>` exists on disk, that subfolder is
+/// the meeting's real home: return it (creating only what is missing, never touching an existing
+/// group.md). When it does not exist, return None and leave the record alone.
 #[tauri3_specta::command]
-pub fn group_directory_attach(path: String) -> Result<GroupDirectory, String> {
-    let directory = expand_home(path.trim());
-    if !directory.is_dir() {
-        return Err("文件夹不存在".into());
+pub fn group_directory_heal(name: String, directory: String) -> Result<Option<GroupDirectory>, String> {
+    let parent = expand_home(directory.trim());
+    if !parent.is_absolute() || !parent.is_dir() {
+        return Ok(None);
+    }
+    let slug = slug_of(&name);
+    let child = parent.join(&slug);
+    // Already the meeting's own folder (or the slug would collide with the parent itself).
+    if child == parent || !child.is_dir() {
+        return Ok(None);
     }
     for folder in ["资料", "产出"] {
-        fs::create_dir_all(directory.join(folder)).map_err(|error| error.to_string())?;
+        fs::create_dir_all(child.join(folder)).map_err(|error| error.to_string())?;
     }
-    let document = directory.join("group.md");
+    let document = child.join("group.md");
     if !document.exists() {
-        let name = directory
-            .file_name()
-            .map(|value| value.to_string_lossy().to_string())
-            .unwrap_or_else(|| "群聊".to_string());
-        fs::write(&document, starter_document(&name)).map_err(|error| error.to_string())?;
+        fs::write(&document, starter_document(name.trim())).map_err(|error| error.to_string())?;
     }
-    Ok(GroupDirectory {
-        directory: directory.to_string_lossy().to_string(),
+    Ok(Some(GroupDirectory {
+        directory: child.to_string_lossy().to_string(),
         document: document.to_string_lossy().to_string(),
-    })
+    }))
 }
 
 /// Native folder picker for the group's own directory.
@@ -186,6 +221,168 @@ pub fn group_copy_materials(paths: Vec<String>, group_directory: String) -> Resu
 #[tauri3_specta::command]
 pub fn group_document_read(document: String) -> Result<String, String> {
     read_text_file_at(&document)
+}
+
+/// Walks one folder collecting text-file paths (relative, sorted), bounded by the index caps.
+fn collect_index_files(root: &Path, cap: usize) -> Result<(Vec<String>, usize), String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut overflow: usize = 0;
+    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = fs::read_dir(&dir).map_err(|error| error.to_string())?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if path.is_dir() {
+                // Hidden folders (.git, .obsidian, …) are not meeting material.
+                if name.starts_with('.') {
+                    continue;
+                }
+                stack.push(path);
+                continue;
+            }
+            let suffix = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(|value| value.to_lowercase())
+                .unwrap_or_default();
+            if !TEXT_SUFFIXES.contains(&suffix.as_str()) {
+                continue;
+            }
+            if name.starts_with('.') {
+                continue;
+            }
+            if found.len() < cap {
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                found.push(relative);
+            } else {
+                overflow += 1;
+            }
+        }
+    }
+    found.sort();
+    Ok((found, overflow))
+}
+
+/// Renders one material folder as a markdown section for the group document.
+///
+/// A material folder is referenced, never copied: members read the originals through
+/// `read_text_file`, so the document carries only the index — names, sizes and the instruction to
+/// read rather than guess. The caps keep a giant vault from swamping the 6000-char context budget.
+#[tauri3_specta::command]
+pub fn group_material_index(path: String) -> Result<GroupMaterialSection, String> {
+    let directory = expand_home(path.trim());
+    if !directory.is_absolute() {
+        return Err("材料文件夹必须是绝对路径".into());
+    }
+    if !directory.is_dir() {
+        return Err("材料文件夹不存在".into());
+    }
+    let (files, overflow) = collect_index_files(&directory, MAX_INDEX_FILES)?;
+    let label = directory
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| directory.to_string_lossy().to_string());
+    let mut lines: Vec<String> = vec![format!("### {}", label)];
+    if files.is_empty() {
+        lines.push(format!(
+            "（{} 下没有可读的文本文件（支持 md/txt）。）",
+            directory.to_string_lossy()
+        ));
+        return Ok(GroupMaterialSection {
+            markdown: lines.join("\n"),
+        });
+    }
+    for file in &files {
+        // The size guides reading order: a 4KB note is safe to read in full, a 250KB log is not.
+        let size = fs::metadata(directory.join(file))
+            .map(|metadata| {
+                if metadata.len() >= 1024 * 1024 {
+                    format!("，约 {} MB", metadata.len() / (1024 * 1024))
+                } else if metadata.len() >= 1024 {
+                    format!("，约 {} KB", metadata.len() / 1024)
+                } else {
+                    "，小于 1 KB".to_string()
+                }
+            })
+            .unwrap_or_default();
+        lines.push(format!("- {}{}", file, size));
+    }
+    if overflow > 0 {
+        lines.push(format!("- …另有 {} 个文件未列出", overflow));
+    }
+    lines.push(format!(
+        "\n（共 {} 个文件。引用材料时写明 `/{}/相对路径`。）",
+        files.len(),
+        directory.to_string_lossy()
+    ));
+    let mut markdown = lines.join("\n");
+    // Character-safe budget cut: drop the listed lines from the end until it fits, keep the note.
+    if markdown.chars().count() > MAX_INDEX_CHARS {
+        let mut kept = files.clone();
+        while kept.len() > 1 {
+            kept.pop();
+            let mut retried: Vec<String> = vec![format!("### {}", label)];
+            for file in &kept {
+                retried.push(format!("- {}", file));
+            }
+            retried.push(format!(
+                "- …另有 {} 个文件未列出",
+                files.len() - kept.len() + overflow
+            ));
+            retried.push(format!(
+                "\n（共 {} 个文件。引用材料时写明 `/{}/相对路径`。）",
+                files.len(),
+                directory.to_string_lossy()
+            ));
+            markdown = retried.join("\n");
+            if markdown.chars().count() <= MAX_INDEX_CHARS {
+                break;
+            }
+        }
+    }
+    Ok(GroupMaterialSection { markdown })
+}
+
+/// Reads the last characters of a text file, whatever its size.
+///
+/// `group_document_read` caps at 256 KB and refuses more; the minutes tail comes off a `memory.md`
+/// that grows with every round, so the tail reader must not share that cap. UTF-8 boundaries are
+/// honoured so no glyph is cut in half.
+#[tauri3_specta::command]
+pub fn group_tail_text(path: String, max_chars: usize) -> Result<GroupTail, String> {
+    let file = expand_home(&path);
+    let metadata = fs::metadata(&file).map_err(|error| error.to_string())?;
+    if !metadata.is_file() {
+        return Err("文件不存在".into());
+    }
+    // Read from the end window directly: memory.md stays small for months, but the cap must never
+    // force a full-file read of a gigabyte log. 4 bytes per char is the worst-case UTF-8 width.
+    let budget = max_chars.clamp(1, 200_000);
+    let window = (budget as u64 * 4).min(metadata.len());
+    let start = metadata.len() - window;
+    let mut handle = fs::File::open(&file).map_err(|error| error.to_string())?;
+    use std::io::{Read, Seek, SeekFrom};
+    handle.seek(SeekFrom::Start(start)).map_err(|error| error.to_string())?;
+    let mut bytes = Vec::with_capacity(window as usize);
+    handle.read_to_end(&mut bytes).map_err(|error| error.to_string())?;
+    // If the window started mid-character, the leading replacement char drops; its bytes belong to
+    // a character whose front half we intentionally skipped.
+    let mut text = String::from_utf8_lossy(&bytes).to_string();
+    while text.starts_with('\u{FFFD}') {
+        text.remove(0);
+    }
+    let characters: Vec<char> = text.chars().collect();
+    let truncated = start > 0 || characters.len() > budget;
+    let kept: String = characters[characters.len().saturating_sub(budget)..].iter().collect();
+    Ok(GroupTail {
+        text: kept,
+        truncated,
+    })
 }
 
 /// A save that fires before the read has finished used to flush an empty string over the real
@@ -386,6 +583,52 @@ fn valid_bot(bot: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
+/// One bot folder in the role library, ready to become a group role.
+#[derive(Debug, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RobModelEntry {
+    /// The folder name, which is also the bot id.
+    pub bot: String,
+    /// Absolute path of the persona markdown the role will point at.
+    pub persona: String,
+    /// Raw `config.json` (model / effort / moderator), or None when the bot ships without one.
+    pub config: Option<String>,
+}
+
+/// Lists every bot in `rob_models` that carries a persona file.
+///
+/// This is what the group page's「导入内置机器人」reads: the library folder is the source of truth,
+/// so a persona added by a later build (or dropped in by hand) can be imported without reinstalling.
+/// A folder without a `skill-<bot>.md` is skipped — a role with no instructions is not a role.
+#[tauri3_specta::command]
+pub fn rob_models_list() -> Result<Vec<RobModelEntry>, String> {
+    let root = rob_models_root()?;
+    let Ok(entries) = fs::read_dir(&root) else {
+        return Ok(Vec::new());
+    };
+    let mut bots = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else { continue };
+        let Ok(bot) = valid_bot(name) else { continue };
+        let persona = path.join(format!("skill-{bot}.md"));
+        if !persona.is_file() {
+            continue;
+        }
+        let config = fs::read_to_string(path.join("config.json")).ok();
+        bots.push(RobModelEntry {
+            bot,
+            persona: persona.to_string_lossy().to_string(),
+            config,
+        });
+    }
+    bots.sort_by(|left, right| left.bot.cmp(&right.bot));
+    Ok(bots)
+}
+
 /// Read one bot's `config.json` (model / effort / moderator). Missing file → `None`.
 #[tauri3_specta::command]
 pub fn rob_models_read_config(bot: String) -> Result<Option<String>, String> {
@@ -421,6 +664,63 @@ mod tests {
     use super::*;
 
     #[test]
+    fn directory_create_lands_in_a_named_subfolder_of_the_chosen_parent() {
+        let parent = std::env::temp_dir().join(format!("alwith-group-parent-{}", std::process::id()));
+        let created = group_directory_create("交易北极星指标".into(), Some(parent.to_string_lossy().to_string())).unwrap();
+        let directory = PathBuf::from(&created.directory);
+        assert_eq!(directory.parent().unwrap(), parent.as_path());
+        assert_eq!(directory.file_name().unwrap().to_string_lossy(), "交易北极星指标");
+        assert!(directory.join("group.md").is_file());
+        assert!(directory.join("资料").is_dir());
+        // Re-creating with the same name reuses the folder instead of erroring or suffixing.
+        let again = group_directory_create("交易北极星指标".into(), Some(parent.to_string_lossy().to_string())).unwrap();
+        assert_eq!(again.directory, created.directory);
+        let _ = fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn directory_create_rejects_a_relative_parent() {
+        assert!(group_directory_create("会".into(), Some("relative/path".into())).is_err());
+    }
+
+    #[test]
+    fn heal_moves_a_parent_pinned_record_into_the_named_subfolder() {
+        let parent = std::env::temp_dir().join(format!("alwith-group-heal-{}", std::process::id()));
+        let child = parent.join("交易北极星指标");
+        fs::create_dir_all(&child).unwrap();
+        fs::write(child.join("group.md"), "# 已有的会议文档").unwrap();
+        let healed = group_directory_heal("交易北极星指标".into(), parent.to_string_lossy().to_string())
+            .unwrap()
+            .expect("the named subfolder exists, so the record heals");
+        assert_eq!(healed.directory, child.to_string_lossy().to_string());
+        assert!(child.join("资料").is_dir());
+        assert!(child.join("产出").is_dir());
+        // An existing document is never overwritten by the heal.
+        assert_eq!(fs::read_to_string(child.join("group.md")).unwrap(), "# 已有的会议文档");
+        let _ = fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn heal_leaves_records_without_a_named_subfolder_alone() {
+        let parent = std::env::temp_dir().join(format!("alwith-group-heal-none-{}", std::process::id()));
+        fs::create_dir_all(&parent).unwrap();
+        // No `<parent>/<slug>` on disk: nothing to heal into.
+        assert!(group_directory_heal("没有目录的会".into(), parent.to_string_lossy().to_string())
+            .unwrap()
+            .is_none());
+        // A record already pointing at its own folder is not "healed" into a nested copy.
+        let own = parent.join("自己的会");
+        fs::create_dir_all(&own).unwrap();
+        assert!(group_directory_heal("自己的会".into(), own.to_string_lossy().to_string())
+            .unwrap()
+            .is_none());
+        // Missing / relative directories are a no-op, not an error.
+        assert!(group_directory_heal("会".into(), "/no/such/folder-at-all".into()).unwrap().is_none());
+        assert!(group_directory_heal("会".into(), "relative/path".into()).unwrap().is_none());
+        let _ = fs::remove_dir_all(&parent);
+    }
+
+    #[test]
     fn slug_keeps_readable_names() {
         assert_eq!(slug_of("支付告警 方案"), "支付告警-方案");
         assert_eq!(slug_of("  ///  "), "group");
@@ -433,6 +733,88 @@ mod tests {
         fs::write(&path, b"not text").unwrap();
         assert!(read_text_file_at(&path.to_string_lossy()).is_err());
         let _ = fs::remove_file(&path);
+    }
+
+    /// A unique temp folder per fixture so parallel test runs never collide.
+    fn temp_case(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("alwith-material-{}-{}", name, std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn material_index_lists_text_files_sorted_with_relative_paths() {
+        let root = temp_case("sorted");
+        fs::write(root.join("b.md"), "x").unwrap();
+        fs::write(root.join("a.txt"), "x").unwrap();
+        fs::write(root.join("image.png"), "x").unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".git/ignored.md"), "x").unwrap();
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("sub/note.md"), "x").unwrap();
+        let section = group_material_index(root.to_string_lossy().to_string()).unwrap();
+        assert!(section.markdown.contains("- a.txt"));
+        assert!(section.markdown.contains("- b.md"));
+        assert!(section.markdown.contains("- sub/note.md"));
+        assert!(!section.markdown.contains("image.png"));
+        assert!(!section.markdown.contains("ignored.md"));
+        assert!(section.markdown.contains("共 3 个文件"));
+        // Order is the sorted list, not the readdir order.
+        let a = section.markdown.find("a.txt").unwrap();
+        let b = section.markdown.find("b.md").unwrap();
+        let sub = section.markdown.find("sub/note.md").unwrap();
+        assert!(a < b && b < sub);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn material_index_rejects_missing_and_relative_folders() {
+        assert!(group_material_index("/no/such/folder-at-all".into()).is_err());
+        assert!(group_material_index("relative/path".into()).is_err());
+    }
+
+    #[test]
+    fn material_index_empty_folder_says_so() {
+        let root = temp_case("empty");
+        fs::write(root.join("only.png"), "x").unwrap();
+        let section = group_material_index(root.to_string_lossy().to_string()).unwrap();
+        assert!(section.markdown.contains("没有可读的文本文件"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn material_index_counts_overflow_past_the_cap() {
+        let root = temp_case("cap");
+        for index in 0..(MAX_INDEX_FILES + 5) {
+            fs::write(root.join(format!("f{:04}.md", index)), "x").unwrap();
+        }
+        let section = group_material_index(root.to_string_lossy().to_string()).unwrap();
+        // The cap overflows by 5, and the char budget may fold more lines into the note; either
+        // way the section must state a "not listed" count and stay inside the budget.
+        assert!(section.markdown.contains("个文件未列出"));
+        // The budget cut keeps the heading and the reference note, so the section stays usable.
+        assert!(section.markdown.chars().count() <= MAX_INDEX_CHARS);
+        assert!(section.markdown.contains("###"));
+        assert!(section.markdown.contains("引用材料时写明"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn tail_text_returns_whole_small_file_and_cut_tail_for_large() {
+        let root = temp_case("tail");
+        let small = root.join("small.md");
+        fs::write(&small, "# 纪要\n第一行\n第二行").unwrap();
+        let got = group_tail_text(small.to_string_lossy().to_string(), 500).unwrap();
+        assert_eq!(got.text, "# 纪要\n第一行\n第二行");
+        assert!(!got.truncated);
+        // Chinese content near the boundary must not cut a character in half.
+        let big = root.join("big.md");
+        fs::write(&big, format!("{}\n结尾一二三", "早".repeat(5000))).unwrap();
+        let got = group_tail_text(big.to_string_lossy().to_string(), 5).unwrap();
+        assert_eq!(got.text, "结尾一二三");
+        assert!(got.truncated);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

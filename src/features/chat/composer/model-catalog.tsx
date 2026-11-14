@@ -14,7 +14,7 @@ import {
   nativeCatalogStatus,
   nativeModelOverrides,
   servedNativeRows,
-  providerGroups,
+  pickerProviderGroups,
   PROVIDERS
 } from "@/lib/providers";
 
@@ -104,7 +104,7 @@ function withSnapshotModels(groups: ModelGroup[]): ModelGroup[] {
   const snapshot = getProviderSnapshot()
   if (snapshot === null) return groups
   const next = groups.map((group) => ({ ...group, models: group.models.map((model) => ({ ...model })) }))
-  for (const provider of providerGroups(snapshot)) {
+  for (const provider of pickerProviderGroups(snapshot)) {
     // The snapshot keeps the public ID; session catalogs use the gateway's encoded runtime ID.
     // Derive that alias through the routing helper without rewriting either persisted identity.
     const runtimeId = decodeURIComponent(gatewayModelId(provider.id, "").split(":")[1])

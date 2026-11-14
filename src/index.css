@@ -746,6 +746,99 @@ body,
   background-color: var(--app-scrollbar-thumb-hover);
 }
 
+/* WYSIWYG toolbars (Markdown + HTML preview). They render inside integration.render(), above the
+   scroll container / iframe — never through EditorWorkbench's single setToolbarActions slot, which
+   the outline popover owns and would overwrite ~800ms after mount. Both surfaces are built from the
+   shared Toolbar / ToolbarButton components, so they share one visual language and can never drift.
+   The surface is a restrained chrome bar that follows the app's semantic theme variables, so it is
+   correct in light + dark + 主题色 presets. */
+.alwith-wysiwyg-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+  padding: 6px 12px;
+  background: var(--muted);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.alwith-wysiwyg-toolbar .alwith-wysiwyg-separator {
+  width: 1px;
+  height: 14px;
+  margin: 0 6px;
+  background: color-mix(in oklab, var(--border) 65%, transparent);
+  flex-shrink: 0;
+}
+/* Every action button: a 32px square with a 16px linear icon, transparent until hovered/pressed.
+   Scoped under .alwith-wysiwyg-toolbar so it overrides the package's 24px / full-fill defaults. */
+.alwith-wysiwyg-toolbar .alwith-markdown-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: min(var(--radius-md), 10px);
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.alwith-wysiwyg-toolbar .alwith-markdown-action svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+/* Subtle 8% hover overlay (matches the app chrome), overriding the package's full-accent fill. */
+.alwith-wysiwyg-toolbar .alwith-markdown-action:hover:not(:disabled):not([aria-pressed="true"]) {
+  background-color: color-mix(in oklab, currentColor 8%, transparent);
+  background-image: none;
+}
+/* Active format state (toggle on): a neutral highlight — a filled state, not a filled icon. */
+.alwith-wysiwyg-toolbar .alwith-markdown-action[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+.alwith-wysiwyg-toolbar .alwith-markdown-action[aria-pressed="true"]:hover:not(:disabled) {
+  background-color: var(--accent);
+}
+.alwith-wysiwyg-toolbar .alwith-markdown-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+  background: transparent;
+  color: var(--foreground);
+}
+.alwith-wysiwyg-toolbar .alwith-markdown-action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+/* The only accent action: the edit toggle. Outline (non-editing) → filled (editing). */
+.alwith-wysiwyg-toolbar .alwith-markdown-action.alwith-toolbar-btn--primary {
+  width: auto;
+  padding: 0 10px;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--settings-accent-ink);
+  border-color: color-mix(in oklab, var(--settings-accent) 35%, transparent);
+  background: transparent;
+}
+.alwith-wysiwyg-toolbar .alwith-markdown-action.alwith-toolbar-btn--primary:hover:not(:disabled) {
+  background-color: color-mix(in oklab, var(--settings-accent) 12%, transparent);
+  background-image: none;
+}
+.alwith-wysiwyg-toolbar .alwith-markdown-action.alwith-toolbar-btn--primary[aria-pressed="true"] {
+  background: var(--settings-accent);
+  color: var(--primary-foreground);
+  border-color: var(--settings-accent);
+}
+.alwith-wysiwyg-toolbar .alwith-markdown-action.alwith-toolbar-btn--primary[aria-pressed="true"]:hover:not(:disabled) {
+  background-color: var(--settings-accent);
+}
+
 /* Active (open) file in the tree reads heavier so the document you are looking at stands out. */
 .alwith-tree-row[data-active="true"] .alwith-tree-name,
 .alwith-tree-row[aria-selected="true"] .alwith-tree-name {

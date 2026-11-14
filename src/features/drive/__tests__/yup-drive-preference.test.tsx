@@ -1,9 +1,12 @@
 import { act, cleanup, renderHook } from "@testing-library/react"
-import { afterEach, expect, test } from "vitest"
+import { afterEach, expect, test, vi } from "vitest"
 
 import { settingsFixture } from "@/lib/__tests__/settings-fixture"
 
 import { setYupDriveEnabled, useYupDriveEnabled } from "../yup-drive-preference"
+
+// `setYupDriveEnabled(false)` now also stops the drive client; keep the unit test off the native IPC.
+vi.mock("../controller", () => ({ drive: { request: vi.fn().mockResolvedValue(undefined) } }))
 
 afterEach(cleanup)
 

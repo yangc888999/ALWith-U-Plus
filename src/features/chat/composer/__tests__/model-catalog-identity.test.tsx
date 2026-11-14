@@ -15,6 +15,8 @@ vi.mock("@/lib/providers", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/providers")>(),
   getProviderSnapshot: () => state.snapshot,
   providerGroups: () => state.groups,
+  // The picker path filters the legacy litellm alias; the fixture drives the same groups through it.
+  pickerProviderGroups: () => state.groups.filter((group) => group.id !== "litellm"),
   displayModelLabel: () => null
 }))
 const { presentModelCatalog } = await import("../model-catalog")

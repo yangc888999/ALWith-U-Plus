@@ -26,7 +26,6 @@ import {
 } from "@alwith/module-file-tree"
 import { containsPath, createFileSystem, dirname, type FileSystem, normalizePath } from "@alwith/module-fs"
 import { createTauriAdapter } from "@alwith/module-fs/tauri"
-import { hideConflictCopies, isIgnoredWatchPath } from "@/features/drive/conflict-copy-filter"
 import { createWatchRelay } from "./watch-relay"
 import { writeText } from "@tauri-apps/plugin-clipboard-manager"
 import { confirm } from "@tauri-apps/plugin-dialog"
@@ -109,12 +108,23 @@ import { WorkspacePanels } from "./workspace-panels"
 import "./workspace.css"
 import { routeHistory, routeReplace } from "./editor-shortcuts"
 import { createHtmlPreviewHost } from "./html-preview"
+import { createWysiwygHtmlIntegration, freezeHtmlSourceDuringEditing, HTML_EDITING_ATTRIBUTE } from "./html-wysiwyg"
+import { createWysiwygMarkdownIntegration } from "./markdown-wysiwyg"
+import type { WysiwygLabels } from "./wysiwyg-types"
 import { localPreviewProviders } from "./local-previews"
 import { MoveToDialog } from "./move-to-dialog"
 import { moveWorkspaceFiles, type WorkspaceMoveOutcome } from "./move-workspace-files"
 import { resolvePreviewResource } from "./preview-resources"
 import { createTreeOpener } from "./tree-opener"
 import { useTreeVisiblePreference } from "./tree-visible-preference"
+import {
+  DRAFT_DIRECTORY_KEY,
+  projectDirectoryAttempt,
+  projectDirectoryFor,
+  type ProjectDirectoryReason,
+  type WorkspaceEmptyReason
+} from "./project-directory"
+import { WorkspaceEmptyState } from "./workspace-empty-state"
 import { useEditorPreferences } from "./use-editor-preferences"
 import { openWorkspaceScope, workspaceTask } from "./workspace-lifecycle"
 import {
@@ -143,6 +153,21 @@ const noEditorSubscription = (): (() => void) => () => {}
 function report(error: unknown): void {
   toast.error(describeError(error))
 }
+
+/** Which empty-state message a directory resolution calls for; `null` means "workspace is loading". */
+function emptyReasonFor(reason: ProjectDirectoryReason, cwd: string | null): WorkspaceEmptyReason | null {
+  if (cwd === null) return reason === "invalid" ? "invalid" : "missing"
+  if (reason === "invalid") return "invalid"
+  if (reason === "temporary" || isTemporaryChatDir(cwd)) return "temporary"
+  return null
+}
+
+/** Which hint to show when a click cannot open a workspace. */
+function emptyHintKey(reason: ProjectDirectoryReason): string {
+  if (reason === "invalid") return "workspace.invalidDirectoryHint"
+  if (reason === "temporary") return "workspace.selectFileHint"
+  return "workspace.noDirectoryHint"
+}
 /**
  * True when the right-click belongs to the file tree, which brings its own menu (open / reveal /
  * rename / delete). The editor surface wraps the tree and would otherwise swallow the click into
@@ -159,7 +184,11 @@ export function FileWorkspace({
   chatRevealRequest = 0,
   defaultOpen = false,
   columnsRequest = 0,
-  busy = false
+  busy = false,
+  reason = "project",
+  guidance = null,
+  invalidDirectory = null,
+  directoryKey
 }: {
   cwd: string | null
   children: ReactNode
@@ -175,11 +204,27 @@ export function FileWorkspace({
    * turns false, so an AI editing a document does not make the preview flicker under the reader.
    */
   busy?: boolean
+  /** Why the resolved directory is (not) a project; drives the actionable empty state. */
+  reason?: ProjectDirectoryReason
+  /** Extra, caller-supplied guidance shown next to the empty state and in the click toast. */
+  guidance?: string | null
+  /** The rejected path when `reason === "invalid"`, so 一键修复 knows what to heal. */
+  invalidDirectory?: string | null
+  /**
+   * The exact key the app used to resolve this surface's directory (`selectedId ?? __draft__`).
+   * `session` can still be null in the frame where `selectedId` is already set, so deriving the key
+   * from `sessionId` here would write a repair/folder pick under `__draft__` and leave the selected
+   * conversation unresolved. Standalone tests omit it and fall back to `sessionId ?? __draft__`.
+   */
+  directoryKey?: string
 }) {
   const windowsControls = useContext(WindowsWorkspaceControlsContext)
   const { resolvedTheme } = useTheme()
   const { t, i18n } = useTranslation(),
     { ask, dialog } = useHostDialog()
+  // Every directory read/write inside this component (retry, invalid path, empty-state repair and
+  // folder pick) uses this one key, so it always lands on the binding the app resolves against.
+  const projectBindingKey = directoryKey ?? sessionId ?? DRAFT_DIRECTORY_KEY
   const workspaces = useRef(new Map<string, Workspace>()),
     opening = useRef(new Map<string, Promise<Workspace>>())
   // File-watch events produced while an agent turn is running are buffered per workspace and
@@ -281,7 +326,30 @@ export function FileWorkspace({
   // A temporary chat has none of these columns, so its window header carries no switches for them.
   // Leaving them visible offered 评论栏 / 文件树 / 工作区 on a surface that has no tree to hide.
   const temporaryChat = isTemporaryChatDir(cwd)
-  const showMainControls = (canvas === null || canvas.selected === 1) && !temporaryChat
+  // P0-5: hiding the *whole* toolbar for a temporary chat (or a chat whose directory has not
+  // arrived) removed the only buttons that could explain why 文件栏 does nothing. Keep 四方格 and
+  // 文件栏 always reachable; only the chat-specific actions are hidden when there is no directory.
+  const showMainControls = canvas === null || canvas.selected === 1
+  const hasProjectDirectory = cwd !== null && !temporaryChat
+  const [emptyReason, setEmptyReason] = useState<WorkspaceEmptyReason | null>(() => emptyReasonFor(reason, cwd))
+  const reportEmptyState = useCallback((): void => {
+    setEmptyReason(emptyReasonFor(reason, cwd))
+  }, [reason, cwd])
+  useEffect(() => {
+    reportEmptyState()
+  }, [reportEmptyState])
+  /**
+   * Called by the empty state after a repair, a folder pick or a plain retry. A successful repair
+   * writes a binding synchronously, so check it here: the app's re-render (with the healed `cwd`)
+   * is one frame away, and showing the "no directory" message in that gap read as a failed fix.
+   */
+  const retryWorkspace = useCallback((): void => {
+    const bound = projectDirectoryFor(projectBindingKey)
+    const ready = bound !== null || (cwd !== null && !isTemporaryChatDir(cwd))
+    setEmptyReason(ready ? null : emptyReasonFor(reason, cwd))
+    setViewMode(false)
+    setVisible(true)
+  }, [projectBindingKey, cwd, reason])
   const previousChatRevealRequest = useRef(chatRevealRequest)
   useEffect(() => {
     if (previousChatRevealRequest.current === chatRevealRequest) return
@@ -362,33 +430,57 @@ export function FileWorkspace({
         setViewMode(false)
         setVisible(false)
       }
+      // No bare return: remember *why* there is no workspace so the tree toggle can explain it.
+      reportEmptyState()
       return
     }
-    if (cwd === null || openedProjects.current.has(cwd)) return
+    if (cwd === null) {
+      // Reached only while `defaultOpen` is true (a project, or an `invalid` directory whose repair
+      // hint must be visible immediately). `missing` is NOT auto-opened by app.tsx: a fresh install
+      // starts in two columns, and clicking 文件栏 / 四方格 calls showProjectTree() (or toggle()),
+      // which opens the column and shows the guidance instead of forcing an empty pane up front.
+      reportEmptyState()
+      setTreeVisible(true)
+      setVisible(true)
+      return
+    }
+    if (openedProjects.current.has(cwd)) {
+      reportEmptyState()
+      return
+    }
     openedProjects.current.add(cwd)
     // Opening `visible` is what makes the cwd effect load the workspace, so this must not wait
     // for `workspace` to exist (that would deadlock the four-column layout).
+    reportEmptyState()
     setVisible(true)
-  }, [defaultOpen, cwd])
+  }, [defaultOpen, cwd, setTreeVisible, reportEmptyState])
   // An explicit "create a chat in this project" always shows the four columns, even for a project
   // that was opened (and maybe collapsed) earlier in this run. `openedProjects` still keeps the
   // ordinary revisits quiet; this signal deliberately bypasses it.
   useEffect(() => {
-    if (columnsRequest === 0 || !defaultOpen || cwd === null) return
+    if (columnsRequest === 0 || !defaultOpen || cwd === null) {
+      reportEmptyState()
+      return
+    }
     openedProjects.current.add(cwd)
     setTreeVisible(true)
     setVisible(true)
-  }, [columnsRequest, defaultOpen, cwd, setTreeVisible])
+    reportEmptyState()
+  }, [columnsRequest, defaultOpen, cwd, setTreeVisible, reportEmptyState])
   // Opening any conversation of a project restores the four columns — session list, chat, file tree
   // and preview. This is keyed by the conversation, not by the project: entering the same project
   // again through another chat (or through the floated chat window) must not inherit the collapsed
   // state a previous visit left behind.
   useEffect(() => {
-    if (!defaultOpen || cwd === null || sessionId === null) return
+    if (!defaultOpen || cwd === null || sessionId === null) {
+      reportEmptyState()
+      return
+    }
     openedProjects.current.add(cwd)
     setTreeVisible(true)
     setVisible(true)
-  }, [sessionId, defaultOpen, cwd, setTreeVisible])
+    reportEmptyState()
+  }, [sessionId, defaultOpen, cwd, setTreeVisible, reportEmptyState])
   const [navigation, setNavigation] = useState<{ path: string; position: FilePosition } | null>(null)
   const editorSnapshot = useSyncExternalStore(
     workspace ? workspace.editor.subscribe : noEditorSubscription,
@@ -536,8 +628,17 @@ export function FileWorkspace({
           setPreviewSelection(null)
           return
         }
-        const left = Math.max(8, Math.min(box.left + Number(rect.left ?? 0) + Number(rect.width ?? 0) / 2 - 98, window.innerWidth - 204))
-        const top = box.top + Number(rect.bottom ?? 0) + 8
+        // In WYSIWYG edit mode the iframe body is contenteditable; suppress the copy/quote pill so
+        // it doesn't overlap the editing surface — native cut/copy/paste is available instead.
+        if (frame?.getAttribute(HTML_EDITING_ATTRIBUTE) === "true") {
+          setPreviewSelection(null)
+          return
+        }
+        // Account for iframe zoom: rect is in the iframe's own coordinate space, so scale by the
+        // ratio of the on-screen box width to the frame's intrinsic offsetWidth.
+        const a = box.width / (frame ? frame.offsetWidth || box.width : box.width)
+        const left = Math.max(8, Math.min(box.left + (Number(rect.left ?? 0) + Number(rect.width ?? 0) / 2) * a - 98, window.innerWidth - 204))
+        const top = box.top + Number(rect.bottom ?? 0) * a + 8
         setPreviewSelection({ left, top, text: text.slice(0, 20_000) })
         return
       }
@@ -546,16 +647,25 @@ export function FileWorkspace({
         (element) => element.contentWindow === event.source
       )
       const rect = frame?.getBoundingClientRect()
-      const measured = pointer.current
-      // Prefer the real pointer position: it is what the user actually aimed at. A frame that
-      // cannot be matched still opens the menu instead of silently doing nothing.
-      const x = measured.x > 0 ? measured.x : (rect?.left ?? 0) + Number(data.x ?? 0)
-      const y = measured.y > 0 ? measured.y : (rect?.top ?? 0) + Number(data.y ?? 0)
+      // Scale the in-frame pointer coordinates by the iframe zoom ratio. The parent window's own
+      // pointer (pointer.current) is unreliable here: mousemove inside the iframe never bubbles to
+      // the parent, so the last position before entering the frame is often 0. Prefer the scaled
+      // formula; when a === 1 (no zoom) keep the measured pointer as a fallback.
+      const a = rect ? rect.width / (frame ? frame.offsetWidth || rect.width : rect.width) : 1
+      const x = a === 1 && pointer.current.x > 0 ? pointer.current.x : (rect?.left ?? 0) + Number(data.x ?? 0) * a
+      const y = a === 1 && pointer.current.y > 0 ? pointer.current.y : (rect?.top ?? 0) + Number(data.y ?? 0) * a
+      // While the HTML frame is in WYSIWYG edit mode its body is contenteditable, so cut/paste
+      // apply. The frame's own editing state never reaches this document; the toolbar marks the
+      // live iframe element instead.
+      const editable = frame?.getAttribute(HTML_EDITING_ATTRIBUTE) === "true"
+      // In edit mode the native browser right-click menu (cut/copy/paste) is what the user wants,
+      // not the translated preview menu — skip it (the Rust bridge already lets it through, see T03).
+      if (editable) return
       setPreviewMenu({
         x,
         y,
         text: typeof data.text === "string" ? data.text : "",
-        editable: false
+        editable
       })
     }
     window.addEventListener("message", handler)
@@ -627,6 +737,79 @@ export function FileWorkspace({
       zoomOut: translateRef.current("workspace.zoomOut"),
       resetZoom: translateRef.current("workspace.resetZoom")
     }
+    // The native HTML host plus the WYSIWYG self-write/editing controls. Created once per
+    // workspace so the iframe's rebuild identity stays stable across renders.
+    const htmlPreviewHost = createHtmlPreviewHost(
+      workspace.root,
+      workspace.fs,
+      invoke,
+      navigator.userAgent.includes("Windows")
+    )
+    const wysiwygLabels: WysiwygLabels = {
+      bold: translateRef.current("workspace.bold"),
+      italic: translateRef.current("workspace.italic"),
+      underline: translateRef.current("workspace.underline"),
+      strikethrough: translateRef.current("workspace.strikethrough"),
+      blockquote: translateRef.current("workspace.blockquote"),
+      bulletList: translateRef.current("workspace.bulletList"),
+      orderedList: translateRef.current("workspace.orderedList"),
+      outdent: translateRef.current("workspace.outdent"),
+      indent: translateRef.current("workspace.indent"),
+      inlineCode: translateRef.current("workspace.inlineCode"),
+      codeBlock: translateRef.current("workspace.codeBlock"),
+      insertTable: translateRef.current("workspace.insertTable"),
+      deleteRow: translateRef.current("workspace.deleteRow"),
+      deleteColumn: translateRef.current("workspace.deleteColumn"),
+      deleteImage: translateRef.current("workspace.deleteImage"),
+      editHtml: translateRef.current("workspace.editHtml"),
+      finishEditHtml: translateRef.current("workspace.finishEditHtml"),
+      htmlEditBlocked: translateRef.current("workspace.htmlEditBlocked"),
+      htmlDeleted: translateRef.current("workspace.htmlDeleted"),
+      htmlUndoDelete: translateRef.current("workspace.htmlUndoDelete")
+    }
+    // Drive occupies both integration extension points when visible; the WYSIWYG wrappers layer
+    // on top and forward every base hook, so collaboration/comments keep working.
+    const driveIntegrations = driveVisible ? drivePreviewIntegrations(previewHost) : {}
+    const providers = localPreviewProviders({
+      ...driveIntegrations,
+      createMarkdownIntegration: (document, context) =>
+        createWysiwygMarkdownIntegration(driveIntegrations.createMarkdownIntegration?.(document, context), context, wysiwygLabels),
+      htmlIntegration: createWysiwygHtmlIntegration(driveIntegrations.htmlIntegration, {
+        fs: workspace.fs,
+        controller: workspace.editor,
+        labels: wysiwygLabels,
+        previewControl: htmlPreviewHost
+      }),
+      htmlPreview: htmlPreviewHost,
+      openLink: openExternal,
+      resolveResource: (path, reference) => resolvePreviewResource(workspace.fs, workspace.root, path, reference),
+      openExternal,
+      allowRemoteResources: true,
+      autoSaveDelay: 800,
+      imageLabels,
+      labels: {
+        loading: translateRef.current("workspace.previewsLoading"),
+        openExternal: translateRef.current("workspace.openExternal"),
+        legacyWord: translateRef.current("workspace.legacyWord"),
+        mediaUnsupported: translateRef.current("workspace.mediaUnsupported"),
+        emptySheet: translateRef.current("workspace.emptySheet"),
+        worksheets: translateRef.current("workspace.worksheets"),
+        bold: translateRef.current("workspace.bold"),
+        italic: translateRef.current("workspace.italic"),
+        outline: translateRef.current("workspace.outline"),
+        outlineEmpty: translateRef.current("workspace.outlineEmpty"),
+        editMarkdown: translateRef.current("workspace.editMarkdown"),
+        copyCode: translateRef.current("workspace.copyCode"),
+        toggleWrap: translateRef.current("workspace.toggleWrap"),
+        previousSheet: translateRef.current("workspace.previousSheet"),
+        nextSheet: translateRef.current("workspace.nextSheet"),
+        page: translateRef.current("workspace.page"),
+        thumbnails: translateRef.current("workspace.thumbnails"),
+        zoomIn: translateRef.current("workspace.zoomIn"),
+        zoomOut: translateRef.current("workspace.zoomOut"),
+        resetZoom: translateRef.current("workspace.resetZoom")
+      }
+    })
     return [
       {
         id: "image",
@@ -636,45 +819,13 @@ export function FileWorkspace({
           <ImagePreview document={document} labels={imageLabels} onError={report} />
         )
       },
-      ...localPreviewProviders({
-        ...(driveVisible ? drivePreviewIntegrations(previewHost) : {}),
-        htmlPreview: createHtmlPreviewHost(
-          workspace.root,
-          workspace.fs,
-          invoke,
-          navigator.userAgent.includes("Windows")
-        ),
-        openLink: openExternal,
-        resolveResource: (path, reference) => resolvePreviewResource(workspace.fs, workspace.root, path, reference),
-        openExternal,
-        allowRemoteResources: true,
-        autoSaveDelay: 800,
-        imageLabels,
-        labels: {
-          loading: translateRef.current("workspace.previewsLoading"),
-          openExternal: translateRef.current("workspace.openExternal"),
-          legacyWord: translateRef.current("workspace.legacyWord"),
-          mediaUnsupported: translateRef.current("workspace.mediaUnsupported"),
-          emptySheet: translateRef.current("workspace.emptySheet"),
-          worksheets: translateRef.current("workspace.worksheets"),
-          bold: translateRef.current("workspace.bold"),
-          italic: translateRef.current("workspace.italic"),
-          outline: translateRef.current("workspace.outline"),
-          outlineEmpty: translateRef.current("workspace.outlineEmpty"),
-          editMarkdown: translateRef.current("workspace.editMarkdown"),
-          copyCode: translateRef.current("workspace.copyCode"),
-          toggleWrap: translateRef.current("workspace.toggleWrap"),
-          previousSheet: translateRef.current("workspace.previousSheet"),
-          nextSheet: translateRef.current("workspace.nextSheet"),
-          page: translateRef.current("workspace.page"),
-          thumbnails: translateRef.current("workspace.thumbnails"),
-          zoomIn: translateRef.current("workspace.zoomIn"),
-          zoomOut: translateRef.current("workspace.zoomOut"),
-          resetZoom: translateRef.current("workspace.resetZoom")
-        }
-      })
+      // The HTML provider rebuilds its iframe when document.savedText changes; freeze the source
+      // while editing so our own save (which reloads the controller document) keeps the frame.
+      ...providers.map((provider) =>
+        provider.id === "html" ? freezeHtmlSourceDuringEditing(provider, htmlPreviewHost) : provider
+      )
     ]
-  }, [workspace, i18n.language, previewHost])
+  }, [workspace, i18n.language, previewHost, driveVisible])
   const reportedDirty = useRef(false)
   const requestGeneration = useRef(0),
     currentCwd = useRef(cwd)
@@ -730,10 +881,9 @@ export function FileWorkspace({
             watch: async (path, changed, onError) => {
               // Drive writes a synced project one file at a time. Every raw event used to broadcast
               // a `change`, and each one invalidates the editor's document cache and rebuilds the
-              // open preview — so a sync burst made the preview flicker continuously. Drop the
-              // conflict copies hidden from the tree, then coalesce the rest into one notification
-              // per quiet period.
-              const relay = createWatchRelay(changed, (changedPath) => !isIgnoredWatchPath(changedPath))
+              // open preview — so a sync burst made the preview flicker continuously. Coalesce the
+              // events into one notification per quiet period.
+              const relay = createWatchRelay(changed)
               changeHandlers.current.set(root, relay.schedule)
               const stop = await listen<{ root: string; paths: string[]; error: string | null }>(
                 "workspace:change",
@@ -745,14 +895,13 @@ export function FileWorkspace({
                   }
                   // Hold the reload while an agent turn runs: it writes many times and the preview
                   // must stay readable. The effect below replays the union when the turn ends.
-                  const visible = event.payload.paths.filter((changedPath) => !isIgnoredWatchPath(changedPath))
                   if (busyRef.current) {
                     const pending = pendingChanges.current.get(root) ?? new Set<string>()
-                    for (const changedPath of visible) pending.add(changedPath)
+                    for (const changedPath of event.payload.paths) pending.add(changedPath)
                     if (pending.size > 0) pendingChanges.current.set(root, pending)
                     return
                   }
-                  relay.schedule(visible)
+                  relay.schedule(event.payload.paths)
                 }
               )
               try {
@@ -771,10 +920,7 @@ export function FileWorkspace({
           }),
           reportError: report
         })
-        // Conflict copies are hidden from every listing while the Drive switch is on. Wrapping the
-        // filesystem (not the tree) also covers search, the chat's file pickers and anything else
-        // that reads a directory, and it never touches the sync daemon or the files on disk.
-        const fs = hideConflictCopies(rawFs)
+        const fs = rawFs
         const editor = yield* Effect.acquireRelease(
           Effect.sync(() =>
             createEditorController({
@@ -1012,30 +1158,54 @@ export function FileWorkspace({
         setViewMode(false)
       }
     } else {
+      if (cwd === null || isTemporaryChatDir(cwd)) {
+        // A dead click was the reported bug. Open the column with an actionable explanation
+        // instead of calling `ensure(null)` and silently returning.
+        reportEmptyState()
+        setViewMode(false)
+        setVisible(true)
+        toast.info(guidance ?? t(emptyHintKey(reason)))
+        return
+      }
       const generation = ++requestGeneration.current,
         owner = cwd
       void ensure(cwd)
         .then((value) => {
           if (generation !== requestGeneration.current || owner !== currentCwd.current) return
           setWorkspace(value)
+          setEmptyReason(null)
           setViewMode(false)
           setVisible(true)
         })
         .catch(report)
     }
-  }, [cwd, ensure, visible])
+  }, [cwd, ensure, visible, reportEmptyState, guidance, reason, t])
+  /**
+   * The one action behind 四方格 (when no directory is bound), the header 文件栏 toggle and the
+   * collapsed-state FolderTree. It ensures the workspace *and* opens/expands the columns; the old
+   * header toggle only flipped `treeVisible`, which did nothing at all when `visible` was false.
+   */
   const showProjectTree = useCallback((): void => {
+    if (cwd === null || isTemporaryChatDir(cwd)) {
+      reportEmptyState()
+      setViewMode(false)
+      setVisible(true)
+      toast.info(guidance ?? t(emptyHintKey(reason)))
+      return
+    }
     const generation = ++requestGeneration.current,
       owner = cwd
     void ensure(cwd)
       .then((value) => {
         if (generation !== requestGeneration.current || owner !== currentCwd.current) return
         setWorkspace(value)
+        setEmptyReason(null)
         setVisible(true)
         setTreeVisible(true)
+        setViewMode(false)
       })
       .catch(report)
-  }, [cwd, ensure, setTreeVisible])
+  }, [cwd, ensure, setTreeVisible, reportEmptyState, guidance, reason, t])
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.altKey || event.key.toLowerCase() !== "e")
@@ -1280,9 +1450,11 @@ export function FileWorkspace({
     },
     [ensure, setTreeVisible]
   )
+  const hasWorkspace = workspace !== null
+  const directoryReady = hasWorkspace && cwd !== null
   const context = useMemo(
-    () => ({ visible, viewMode, toggle, openFile, openProject, revealEntry }),
-    [visible, viewMode, toggle, openFile, openProject, revealEntry]
+    () => ({ visible, viewMode, directoryReady, toggle, showProjectTree, openFile, openProject, revealEntry }),
+    [visible, viewMode, directoryReady, toggle, showProjectTree, openFile, openProject, revealEntry]
   )
   const treeLabels: FileTreeLabels = {
     files: t("workspace.files"),
@@ -1318,6 +1490,26 @@ export function FileWorkspace({
     loadFailed: t("workspace.loadFailed"),
     retry: t("workspace.retry")
   }
+  // `workspace === null` used to make the whole preview column disappear (`visible && workspace !==
+  // null`) while the 文件栏 button kept running. Render an actionable empty state in that column
+  // instead; a bare loading line covers the short gap before `ensure(cwd)` resolves for a real
+  // project. All three 文件栏 entries funnel through `showProjectTree`.
+  const emptyStateNode: ReactNode =
+    emptyReason === null ? (
+      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t("workspace.loading")}</div>
+    ) : (
+      <WorkspaceEmptyState
+        reason={emptyReason}
+        directory={
+          emptyReason === "invalid"
+            ? (invalidDirectory ?? cwd ?? projectDirectoryAttempt(projectBindingKey)?.directory ?? null)
+            : cwd
+        }
+        bindingKey={projectBindingKey}
+        guidance={guidance}
+        onRetry={retryWorkspace}
+      />
+    )
   return (
     <WorkspaceContext.Provider value={context}>
       <ChatContextMenu
@@ -1340,29 +1532,33 @@ export function FileWorkspace({
                 keeps its toggle so the control is reachable from both places. */}
             {/* Tooltip, not `title`: the sibling workspace button opens instantly, and a native
                 title next to it reads as a bug. */}
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    data-testid="header-comments-toggle"
-                    aria-label={t(commentsOff ? "workspace.showComments" : "workspace.hideComments")}
-                    aria-pressed={!commentsOff}
-                    onClick={() => {
-                      const next = !commentsOff
-                      setCommentsOff(next)
-                      setCommentsHidden(next)
-                    }}
-                  >
-                    <MessageSquare />
-                  </Button>
-                }
-              />
-              <TooltipContent side="bottom">
-                {t(commentsOff ? "workspace.showComments" : "workspace.hideComments")}
-              </TooltipContent>
-            </Tooltip>
+            {/* Chat-only controls need a real project. 四方格 and 文件栏 stay visible even without
+                one: they are the buttons that explain/repair a missing directory. */}
+            {hasProjectDirectory && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      data-testid="header-comments-toggle"
+                      aria-label={t(commentsOff ? "workspace.showComments" : "workspace.hideComments")}
+                      aria-pressed={!commentsOff}
+                      onClick={() => {
+                        const next = !commentsOff
+                        setCommentsOff(next)
+                        setCommentsHidden(next)
+                      }}
+                    >
+                      <MessageSquare />
+                    </Button>
+                  }
+                />
+                <TooltipContent side="bottom">
+                  {t(commentsOff ? "workspace.showComments" : "workspace.hideComments")}
+                </TooltipContent>
+              </Tooltip>
+            )}
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -1371,31 +1567,35 @@ export function FileWorkspace({
                     size="icon-xs"
                     className="workspace-explorer-toggle"
                     data-testid="header-tree-toggle"
-                    aria-label={t(treeVisible ? "workspace.hideTree" : "workspace.showTree")}
-                    aria-expanded={treeVisible}
-                    onClick={() => setTreeVisible(!treeVisible)}
+                    aria-label={t(treeVisible && visible && workspace !== null ? "workspace.hideTree" : "workspace.showTree")}
+                    aria-expanded={visible && workspace !== null && treeVisible}
+                    onClick={() =>
+                      visible && workspace !== null ? setTreeVisible(!treeVisible) : showProjectTree()
+                    }
                   >
                     <FolderTree />
                   </Button>
                 }
               />
               <TooltipContent side="bottom">
-                {t(treeVisible ? "workspace.hideTree" : "workspace.showTree")}
+                {t(treeVisible && visible && workspace !== null ? "workspace.hideTree" : "workspace.showTree")}
                 <span className="ms-1.5 text-muted-foreground">⌘⇧E</span>
               </TooltipContent>
             </Tooltip>
-            <ChatCondenseEntry
-              cwd={cwd}
-              controller={drive}
-              controls={driveControls}
-              locale={i18n.language.startsWith("zh") ? "zh-CN" : "en"}
-              host={condenseHost}
-              onBackgroundError={report}
-              onCondense={(scope, job) => {
-                setCondenseJob(job)
-                setCondenseScope(scope)
-              }}
-            />
+            {hasProjectDirectory && (
+              <ChatCondenseEntry
+                cwd={cwd}
+                controller={drive}
+                controls={driveControls}
+                locale={i18n.language.startsWith("zh") ? "zh-CN" : "en"}
+                host={condenseHost}
+                onBackgroundError={report}
+                onCondense={(scope, job) => {
+                  setCondenseJob(job)
+                  setCondenseScope(scope)
+                }}
+              />
+            )}
             {windowsControls === null && <WorkspaceButton />}
           </div>,
           headerTarget
@@ -1410,7 +1610,7 @@ export function FileWorkspace({
         )}
       <WorkspacePanels
         controlsRef={panelControls}
-        visible={visible && workspace !== null}
+        visible={visible}
         maximized={visible && workspace !== null && viewMode}
         onMaximizedChange={setViewMode}
         onVisibleChange={(next) => {
@@ -1419,10 +1619,13 @@ export function FileWorkspace({
         }}
         chat={children}
         preview={
-          workspace && (
+          workspace === null ? (
+            emptyStateNode
+          ) : (
             <PreviewSurface
               treeVisible={treeVisible}
               onTreeVisibleChange={setTreeVisible}
+              onShowProjectTree={showProjectTree}
               maximized={viewMode}
               onMaximize={() => setViewMode((value) => !value)}
               onClose={() => {
@@ -1431,6 +1634,7 @@ export function FileWorkspace({
                 closePreviewExtension()
               }}
               tree={
+                hasWorkspace ? (
                 <FileTree
                   controller={workspace.tree}
                   collapsed={!treeVisible}
@@ -1562,6 +1766,9 @@ export function FileWorkspace({
                     })) === "delete"
                   }
                 />
+                ) : (
+                  emptyStateNode
+                )
               }
               editor={({ leading, trailing }) => {
                 const onlineBi = previewExtension === ONLINE_BI_VIEW_ID

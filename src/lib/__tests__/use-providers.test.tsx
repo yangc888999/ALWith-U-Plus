@@ -26,6 +26,9 @@ const enterprise = {
   baseUrl: "https://issued-gateway.test",
   models: [{ api_id: "issued/model", label: "Issued" }]
 }
+/** The catalog is projected twice: the current id plus the pre-rename `litellm` alias. */
+const legacy = { ...enterprise, id: "litellm", name: "Company (legacy)" }
+const managed = [enterprise, legacy]
 function snapshot(revision: number, status: ProviderSnapshot["status"] = "applied"): ProviderSnapshot {
   return {
     revision,
@@ -75,10 +78,13 @@ for (const revision of [2, 3]) {
     const current = view.result.current!
     expect(current.revision).toBe(revision)
     expect(current.status).toBe("pending")
-    expect(current.managedProviders).toEqual([enterprise])
+    expect(current.managedProviders).toEqual(managed)
     expect(providers.getProviderSnapshot()).toBe(current)
     const id = providers.gatewayModelId(enterprise.id, "issued/model")
     expect(providers.resolveSessionModel(id, providers.getProviderSnapshot()!)).toBe(id)
+    // A conversation stored before the provider-id rename (`gateway:litellm:…`) still resolves.
+    const legacyId = providers.gatewayModelId("litellm", "issued/model")
+    expect(providers.resolveSessionModel(legacyId, providers.getProviderSnapshot()!)).toBe(legacyId)
     view.unmount()
   })
 }
@@ -93,7 +99,7 @@ for (const [eventRevision, readRevision, expectedRevision] of [[3, 2, 3], [1, 2,
     await act(async () => read.resolve(snapshot(readRevision!)))
     expect(view.result.current?.revision).toBe(expectedRevision)
     if (eventRevision === readRevision) expect(view.result.current?.status).toBe("pending")
-    expect(view.result.current?.managedProviders).toEqual([enterprise])
+    expect(view.result.current?.managedProviders).toEqual(managed)
     await act(async () => emit("providers:changed", snapshot(0)))
     expect(view.result.current?.revision).toBe(expectedRevision)
     expect(providers.getProviderSnapshot()).toBe(view.result.current)
@@ -141,7 +147,7 @@ test("direct reads publish the same projected snapshot to cache and subscribers"
   mocks.read.mockResolvedValue(snapshot(3))
   let loaded!: ProviderSnapshot
   await act(async () => { loaded = await providers.loadProviders() })
-  expect(loaded.managedProviders).toEqual([enterprise])
+  expect(loaded.managedProviders).toEqual(managed)
   expect(providers.getProviderSnapshot()).toBe(loaded)
   expect(view.result.current).toBe(loaded)
   view.unmount()
@@ -160,7 +166,7 @@ test("out-of-order projections cannot replace a newer event or notify subscriber
   expect(first.result.current).toBe(accepted)
   expect(second.result.current).toBe(accepted)
   expect(accepted?.revision).toBe(4)
-  expect(accepted?.managedProviders).toEqual([enterprise])
+  expect(accepted?.managedProviders).toEqual(managed)
   first.unmount()
   second.unmount()
 })

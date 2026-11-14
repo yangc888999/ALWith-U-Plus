@@ -350,14 +350,76 @@ fn hour_of(at: &str) -> u8 {
         .unwrap_or(0)
 }
 
+/// One transcript's parsed result, kept beside the identity that produced it.
+///
+/// A rollout only ever grows, so (length, mtime) answers "did this file change?" without reading
+/// it. That is what makes the refresh button incremental: a 70 MiB ledger with one new turn
+/// re-parses one file instead of every session on disk.
+#[derive(Clone)]
+struct ParsedFile {
+    len: u64,
+    modified: std::time::SystemTime,
+    turns: Vec<UsageTurn>,
+    prompts: Vec<String>,
+    contributed: bool,
+}
+
+static PARSED_FILES: Mutex<Option<BTreeMap<PathBuf, ParsedFile>>> = Mutex::new(None);
+
+/// Parses a transcript, reusing the previous result when the file is byte-for-byte the same size
+/// and mtime. Entries for files that disappeared are dropped so the cache cannot grow forever.
+fn parse_file_cached(path: &Path, turns: &mut Vec<UsageTurn>, prompts: &mut Vec<String>) -> bool {
+    let identity = std::fs::metadata(path)
+        .ok()
+        .and_then(|meta| meta.modified().ok().map(|modified| (meta.len(), modified)));
+    if let Some((len, modified)) = identity {
+        let mut guard = PARSED_FILES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let cache = guard.get_or_insert_with(BTreeMap::new);
+        if let Some(hit) = cache.get(path) {
+            if hit.len == len && hit.modified == modified {
+                let contributed = hit.contributed;
+                turns.extend(hit.turns.iter().cloned());
+                prompts.extend(hit.prompts.iter().cloned());
+                return contributed;
+            }
+        }
+        let turns_before = turns.len();
+        let prompts_before = prompts.len();
+        let contributed = parse_file(path, turns, prompts);
+        cache.insert(
+            path.to_path_buf(),
+            ParsedFile {
+                len,
+                modified,
+                turns: turns[turns_before..].to_vec(),
+                // Only this file's prompts: cloning the whole accumulator would replay every
+                // earlier session's words on each cache hit and blow past PROMPT_LIMIT.
+                prompts: prompts[prompts_before..].to_vec(),
+                contributed,
+            },
+        );
+        return contributed;
+    }
+    parse_file(path, turns, prompts)
+}
+
 fn build(directory: &Path) -> UsageReport {
     let files = rollout_files(directory);
+    // Forget transcripts that were deleted or rotated away; everything still present is either
+    // reused or re-parsed below.
+    {
+        let mut guard = PARSED_FILES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cache) = guard.as_mut() {
+            let live: std::collections::BTreeSet<&PathBuf> = files.iter().collect();
+            cache.retain(|path, _| live.contains(path));
+        }
+    }
     let mut turns = Vec::new();
     let mut prompts = Vec::new();
     let mut sessions = 0;
     for file in &files {
         let before = turns.len();
-        if parse_file(file, &mut turns, &mut prompts) && turns.len() > before {
+        if parse_file_cached(file, &mut turns, &mut prompts) && turns.len() > before {
             sessions += 1;
         }
     }
@@ -554,13 +616,13 @@ struct CachedReport {
 
 /// Pull a URL's body as plain text for the usage page's price refresh.
 ///
-/// A naive GET fails on several official pricing pages on macOS:
-///   * a transparent proxy (fake-IP / TUN mode) can present a certificate the bundled
-///     rustls roots do not know, and
-///   * pricing pages reject a non-browser user agent.
-/// So: send a browser-like UA, follow redirects, and — because the payload is a public
-/// price page, never a secret — retry once without certificate verification when the
-/// first attempt fails (e.g. on the proxy's certificate).
+/// A naive GET fails on several official pricing pages on macOS: pricing pages reject a
+/// non-browser user agent, and a transparent proxy can present a certificate the bundled roots
+/// do not know. So we send a browser-like UA, follow redirects, and — because the payload is a
+/// public price page, never a secret — retry once without certificate verification when the first
+/// attempt fails. But the *common* failure is the connection never being made at all (offline,
+/// proxy, or firewall block): in that case the cert retry cannot help, and the error must say so
+/// rather than point the user at certificates.
 #[tauri3_specta::command]
 pub async fn fetch_text(url: String) -> Result<String, String> {
     // A synchronous command would hold the webview's main thread for up to the 20s timeout.
@@ -598,8 +660,33 @@ fn fetch_text_blocking(url: String) -> Result<String, String> {
         }
         response.text().map_err(|error| error.to_string())
     }
-    attempt(&url, false)
-        .or_else(|first| attempt(&url, true).map_err(|second| format!("{first}; retried without cert verification: {second}")))
+    let first = attempt(&url, false);
+    match first {
+        Ok(body) => Ok(body),
+        Err(first_msg) => match attempt(&url, true) {
+            Ok(body) => Ok(body),
+            Err(second_msg) => {
+                // Most failures here are not a TLS trust problem: a proxy, offline link, or firewall
+                // block makes the connection itself fail, so retrying without cert verification cannot
+                // help. Diagnose that instead of pointing the user at certificates.
+                let diagnosis = if is_tls_error(&first_msg) {
+                    "首次请求因证书校验失败，但跳过证书校验后重试仍然失败"
+                } else {
+                    "网络不可达（多为离线、代理或防火墙拦截），跳过证书校验重试也无法连接"
+                };
+                Err(format!(
+                    "无法拉取 {url}：{diagnosis}。首次：{first_msg}；重试：{second_msg}"
+                ))
+            }
+        },
+    }
+}
+
+/// True when the error reads like a TLS/certificate trust failure rather than a plain connection
+/// failure — only then is the cert-verification retry actually relevant to the diagnosis.
+fn is_tls_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("certificate") || lower.contains("tls") || lower.contains("ssl") || lower.contains("cert verify")
 }
 
 /// Reads the last snapshot. The numbers are a 30-minute snapshot, not a live meter: an expired
@@ -652,6 +739,59 @@ mod tests {
         assert_eq!(cached.fingerprint, 7);
         assert_eq!(cached.report.updated_at, 0);
         assert!(!cached.report.pending);
+    }
+
+    #[test]
+    fn an_unchanged_transcript_is_reused_and_a_grown_one_is_reparsed() {
+        // The refresh button must be incremental: with one new turn on disk only that file is
+        // parsed again, and the reused file contributes exactly its own turns and prompts.
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path();
+        let token = |at: &str, total: u64| {
+            format!(
+                r#"{{"type":"event_msg","timestamp":"{at}","payload":{{"type":"token_count","info":{{"last_token_usage":{{"total_tokens":{total},"input_tokens":{total},"output_tokens":0}}}}}}}}"#
+            )
+        };
+        let first = directory.join("rollout-a.jsonl");
+        std::fs::write(&first, token("2026-11-13T01:00:00.000Z", 10)).unwrap();
+        let mut turns = Vec::new();
+        let mut prompts = vec!["carried over".to_string()];
+        assert!(parse_file_cached(&first, &mut turns, &mut prompts));
+        assert_eq!(turns.len(), 1);
+        // The cache must hold only this file's prompts, not the accumulator it was handed.
+        {
+            let guard = PARSED_FILES.lock().unwrap();
+            let entry = guard.as_ref().unwrap().get(&first).unwrap();
+            assert!(entry.prompts.is_empty(), "a cache hit must not replay earlier prompts");
+        }
+
+        // Same bytes → reused, and the prompt accumulator is not duplicated.
+        let mut second_turns = Vec::new();
+        let mut second_prompts = Vec::new();
+        assert!(parse_file_cached(&first, &mut second_turns, &mut second_prompts));
+        assert_eq!(second_turns.len(), 1);
+        assert!(second_prompts.is_empty());
+
+        // A grown file is re-parsed: two calls now, not the stale one.
+        std::fs::write(
+            &first,
+            format!(
+                "{}\n{}",
+                token("2026-11-13T01:00:00.000Z", 10),
+                token("2026-11-13T02:00:00.000Z", 20)
+            ),
+        )
+        .unwrap();
+        let mut grown = Vec::new();
+        let mut grown_prompts = Vec::new();
+        assert!(parse_file_cached(&first, &mut grown, &mut grown_prompts));
+        assert_eq!(grown.len(), 2);
+        {
+            let mut guard = PARSED_FILES.lock().unwrap();
+            if let Some(cache) = guard.as_mut() {
+                cache.remove(&first);
+            }
+        }
     }
 
     fn write_session(directory: &Path, name: &str, lines: &[&str]) {

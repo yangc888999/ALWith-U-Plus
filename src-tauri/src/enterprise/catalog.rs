@@ -148,75 +148,24 @@ pub(super) async fn connection(
         .collect();
     let catalog = host.model_catalog(generation, &source, &models).await.map_err(|reason| reason.to_string())?;
     let router = crate::bridge::router_base_url().ok_or("Shared ALwith router unavailable")?;
-    // Compact earlier than the engine's 95% default: see `tune_compaction`.
-    let catalog_path = tuned_catalog(app, &catalog.path).unwrap_or_else(|| catalog.path.clone());
+    // Keep a copy inside the app's own data directory: the engine boots with one merged catalog
+    // (`providers::merged_catalog_path`), and this is where that merge looks for the enterprise
+    // models. The bytes are copied untouched — compaction stays at the engine's 95% default.
+    let catalog_path = relocated_catalog(app, &catalog.path).unwrap_or_else(|| catalog.path.clone());
     Ok(connection_params(id, provider, relay, catalog_path, catalog.has_known_model, &router))
 }
 
-/// The share of a model's window at which the engine is told to compact.
+/// Copies the native owner's catalog into `app_data/enterprise-catalogs`, unchanged.
 ///
-/// Codex compacts at 95% of the window, which is calibrated for the vendor serving the model. A
-/// company relay is one more hop: the request that finally trips compaction is already the size
-/// that makes the relay go quiet, and a quiet relay reads as「上游长时间没有输出」rather than as a
-/// context problem. Compacting at 70% keeps every upstream request far below the ceiling, so the
-/// reader sees a short "compacting" step instead of a dead turn near the end of the window.
-const COMPACT_AT: f64 = 0.7;
-
-/// Injects `auto_compact_token_limit = window * ratio` into every catalog model that declares a
-/// positive `context_window`. Pure and idempotent: a model already holding the exact limit is left
-/// untouched, so repeated passes never rewrite an unchanged file.
-///
-/// Shared with the account-managed (company) catalog tuner, which re-applies the same 70% rule to
-/// the engine-owned `model-catalogs/alwith/models.json` (the company DeepSeek V4.1 Flash path).
-pub(crate) fn inject_auto_compact(catalog: &mut Value, ratio: f64) -> usize {
-    let Some(models) = catalog.get_mut("models").and_then(Value::as_array_mut) else { return 0 };
-    let mut count = 0;
-    for model in models.iter_mut() {
-        let Some(window) = model.get("context_window").and_then(Value::as_u64).filter(|window| *window > 0) else {
-            continue;
-        };
-        let limit = (window as f64 * ratio) as u64;
-        if model.get("auto_compact_token_limit").and_then(Value::as_u64) != Some(limit) {
-            model["auto_compact_token_limit"] = serde_json::json!(limit);
-            count += 1;
-        }
-    }
-    count
-}
-
-/// Adds `auto_compact_token_limit` to every catalog entry that declares a window.
-///
-/// The catalog is built by the native owner, but the shape is the engine's own (`models[]` with
-/// `context_window`), and the threshold is per model — exactly where the engine looks for it. A
-/// catalog without windows, or without a `models` array, is left alone: guessing a limit for an
-/// unknown model would compact far too often instead of too late.
-fn tune_compaction(catalog: &Value) -> Option<Value> {
-    let mut tuned = catalog.clone();
-    if inject_auto_compact(&mut tuned, COMPACT_AT) == 0 {
-        return None;
-    }
-    if let Some(models) = tuned.get("models").and_then(Value::as_array) {
-        for model in models {
-            if let (Some(window), Some(limit)) = (
-                model.get("context_window").and_then(Value::as_u64),
-                model.get("auto_compact_token_limit").and_then(Value::as_u64),
-            ) {
-                let slug = model.get("slug").and_then(Value::as_str).unwrap_or("?");
-                log::info!("enterprise: {slug} compacts at {limit} of {window} tokens");
-            }
-        }
-    }
-    Some(tuned)
-}
-
-/// Writes the tuned copy under the app cache and returns its path, so the native catalog stays
-/// untouched (it is the owner's file) and repeated refreshes reuse the same bytes.
-fn tuned_catalog(app: &tauri::AppHandle, source: &std::path::Path) -> Option<std::path::PathBuf> {
+/// The owner rebuilds its catalog under a content-addressed name on every refresh, so the merged
+/// catalog needs one stable place to find it. Nothing is injected: an earlier build rewrote the
+/// threshold to 70% of the window here, which never reached the engine's model resolution and only
+/// made the app disagree with what Codex actually did.
+fn relocated_catalog(app: &tauri::AppHandle, source: &std::path::Path) -> Option<std::path::PathBuf> {
     use std::hash::{Hash, Hasher};
     use tauri::Manager;
-    let catalog: Value = serde_json::from_slice(&std::fs::read(source).ok()?).ok()?;
-    let bytes = serde_json::to_vec(&tune_compaction(&catalog)?).ok()?;
-    let directory = app.path().app_cache_dir().ok()?.join("enterprise-catalogs");
+    let bytes = std::fs::read(source).ok()?;
+    let directory = app.path().app_data_dir().ok()?.join("enterprise-catalogs");
     std::fs::create_dir_all(&directory).ok()?;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
@@ -282,40 +231,4 @@ mod connection_tests {
         assert_eq!(connection.params["_meta"]["alwith"]["models"][0]["id"], "issued/model");
     }
 
-    #[test]
-    fn inject_auto_compact_sets_the_window_fraction_and_is_idempotent() {
-        let mut catalog = json!({"models":[
-            {"slug":"big","context_window":1000000},
-            {"slug":"small","context_window":200000},
-            {"slug":"unknown"}
-        ]});
-        assert_eq!(inject_auto_compact(&mut catalog, 0.7), 2);
-        assert_eq!(catalog["models"][0]["auto_compact_token_limit"], 700000);
-        assert_eq!(catalog["models"][1]["auto_compact_token_limit"], 140000);
-        assert!(catalog["models"][2].get("auto_compact_token_limit").is_none());
-        // A second pass on an already-tuned catalog changes nothing.
-        assert_eq!(inject_auto_compact(&mut catalog, 0.7), 0);
-        // A different ratio re-tunes.
-        assert_eq!(inject_auto_compact(&mut catalog, 0.8), 2);
-        assert_eq!(catalog["models"][0]["auto_compact_token_limit"], 800000);
-        // Catalogs without a `models` array are left alone.
-        assert_eq!(inject_auto_compact(&mut json!({"data":[]}), 0.7), 0);
-    }
-
-    #[test]
-    fn enterprise_models_compact_before_the_window_is_full() {
-        let catalog = json!({"models":[
-            {"slug":"big","context_window":1000000},
-            {"slug":"small","context_window":200000},
-            {"slug":"unknown"}
-        ]});
-        let tuned = tune_compaction(&catalog).expect("a catalog with windows is tuned");
-        let models = tuned["models"].as_array().unwrap();
-        assert_eq!(models[0]["auto_compact_token_limit"], 700000);
-        assert_eq!(models[1]["auto_compact_token_limit"], 140000);
-        assert!(models[2].get("auto_compact_token_limit").is_none(), "a model without a window keeps the engine default");
-        assert!(catalog["models"][0].get("auto_compact_token_limit").is_none(), "the owner's catalog is never mutated");
-        assert!(tune_compaction(&json!({"models":[]})).is_none(), "nothing to tune means no copy");
-        assert!(tune_compaction(&json!({"data":[]})).is_none(), "an unexpected shape falls back to the original");
-    }
 }

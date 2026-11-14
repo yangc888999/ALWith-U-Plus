@@ -36,6 +36,24 @@ fn escape_toml(value: &str) -> String {
 /// So the engine no longer depends on that file at all. `base_url` is injected only once the
 /// bridge has bound a port: without it Codex still boots (measured), which is strictly better
 /// than refusing to start — the request then fails visibly instead of taking the ACP agent down.
+/// The catalog argument for the engine's command line, when one was prepared for this launch.
+///
+/// Codex resolves a model's context window and its `auto_compact_token_limit` from the catalog it
+/// reads while booting. Measured against 0.167.2 with a throwaway `CODEX_HOME` and a fake
+/// upstream: the same catalog named by `model_catalog_json` in `config.toml` was honoured (a 1M
+/// model reported 950000 = 1M × 95%), but passing it as the per-thread `config` value the ACP
+/// adapter sends left the engine on its 272000 × 95% = 258400 default. The per-thread catalog
+/// still fills the picker, so the two disagreed without looking wrong: the app showed a 1M-token
+/// company model while the engine compacted at 245k. This is the channel that actually binds, and
+/// it stays out of the shared `config.toml` the other Codex clients write to.
+fn catalog_override(path: Option<&str>) -> Option<String> {
+    let path = path?.trim();
+    if path.is_empty() {
+        return None;
+    }
+    Some(format!("model_catalog_json=\"{}\"", escape_toml(path)))
+}
+
 fn router_overrides(base: Option<&str>, token: Option<&str>) -> Vec<String> {
     let mut overrides = vec![
         "model_provider=\"alwith\"".to_string(),
@@ -98,6 +116,9 @@ fn run() -> io::Result<()> {
     let token = std::env::var("ALWITH_U_ROUTER_TOKEN").ok().filter(|value| !value.trim().is_empty());
     for override_value in router_overrides(base.as_deref(), token.as_deref()) {
         command.args(["-c", override_value.as_str()]);
+    }
+    if let Some(catalog) = catalog_override(std::env::var("ALWITH_U_MODEL_CATALOG").ok().as_deref()) {
+        command.args(["-c", catalog.as_str()]);
     }
     // U renders ACP form elicitations in both collaboration modes. Enable Codex's
     // default-mode question tool for this process only, without editing user config.
@@ -267,6 +288,17 @@ mod tests {
         write_catalog(&path, &mut output).unwrap();
         assert_eq!(output, bytes);
         assert!(write_catalog(&directory.path().join("missing"), &mut output).is_err());
+    }
+    #[test]
+    fn the_merged_catalog_rides_on_the_command_line_like_the_router_table() {
+        // Codex only reads model info from a catalog it sees at boot; the per-thread one is
+        // ignored. Quote the path so spaces survive TOML parsing.
+        assert_eq!(
+            catalog_override(Some("/Users/x/Library/Application Support/ai.alwith.u/model-catalogs/merged.json")),
+            Some("model_catalog_json=\"/Users/x/Library/Application Support/ai.alwith.u/model-catalogs/merged.json\"".into())
+        );
+        assert_eq!(catalog_override(Some("  ")), None);
+        assert_eq!(catalog_override(None), None);
     }
     #[test]
     fn router_overrides_define_the_table_not_only_the_key_that_names_it() {

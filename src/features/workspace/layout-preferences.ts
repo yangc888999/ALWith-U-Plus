@@ -195,10 +195,8 @@ export function contentShares(
   }
 }
 
-/** Rounds the four shares to whole percentages that always add up to exactly 100. */
-export function sharePercents(layout: WorkspaceLayoutPreferences): Record<LayoutShare, number> {
-  const shares = layoutShares(layout)
-  const raw = SHARE_KEYS.map((key) => ({ key, value: shares[key] * 100 }))
+/** Rounds raw percentages to whole numbers that add up to exactly 100. */
+function roundToHundred(raw: Array<{ key: LayoutShare; value: number }>): Record<LayoutShare, number> {
   const rounded = raw.map((entry) => ({ key: entry.key, value: Math.round(entry.value) }))
   const drift = 100 - rounded.reduce((sum, entry) => sum + entry.value, 0)
   if (drift !== 0) {
@@ -209,6 +207,78 @@ export function sharePercents(layout: WorkspaceLayoutPreferences): Record<Layout
     rounded[worst.index].value += drift
   }
   return Object.fromEntries(rounded.map((entry) => [entry.key, entry.value])) as Record<LayoutShare, number>
+}
+
+/** Rounds the four shares to whole percentages that always add up to exactly 100. */
+export function sharePercents(layout: WorkspaceLayoutPreferences): Record<LayoutShare, number> {
+  const shares = layoutShares(layout)
+  return roundToHundred(SHARE_KEYS.map((key) => ({ key, value: shares[key] * 100 })))
+}
+
+/**
+ * Percentages over the columns that are currently *on*, summing to exactly 100.
+ *
+ * A closed column takes no room on screen, so it must not take a slice of the displayed budget
+ * either: with the file tree and the preview both off, a sidebar saved at 12% of four columns and
+ * a chat saved at 15% render as roughly 44 / 56 of the window. Showing 12% and 15% next to that
+ * bar describes a layout the user is not looking at. Hidden columns therefore drop out of the
+ * denominator and the visible ones are rescaled to a full 100.
+ */
+export function visibleSharePercents(
+  layout: WorkspaceLayoutPreferences,
+  visible: readonly LayoutShare[]
+): Record<LayoutShare, number> {
+  const shares = layoutShares(layout)
+  const keys = SHARE_KEYS.filter((key) => visible.includes(key))
+  const total = keys.reduce((sum, key) => sum + shares[key], 0)
+  return roundToHundred(
+    SHARE_KEYS.map((key) => ({
+      key,
+      value: keys.includes(key) && total > 0 ? (shares[key] / total) * 100 : 0
+    }))
+  )
+}
+
+/**
+ * Applies a percentage edit inside the visible budget, leaving closed columns untouched.
+ *
+ * `withShare` assumes all four columns share one 100% budget and uses the preview as the buffer.
+ * That buffer may be closed, so for a partial layout the edited column instead takes its slice of
+ * the *visible* total and the other on-screen columns absorb the difference in their current
+ * proportions. Closed columns keep their saved shares, which is what lets them restore their
+ * previous width when switched back on.
+ */
+export function withVisibleShare(
+  layout: WorkspaceLayoutPreferences,
+  visible: readonly LayoutShare[],
+  key: LayoutShare,
+  percent: number
+): WorkspaceLayoutPreferences {
+  const keys = SHARE_KEYS.filter((entry) => visible.includes(entry))
+  if (!keys.includes(key)) return layout
+  const shares = layoutShares(layout)
+  const total = keys.reduce((sum, entry) => sum + shares[entry], 0)
+  if (!Number.isFinite(total) || total <= 1e-9) return layout
+  const target = clamp(percent / 100, 0, 0, 1) * total
+  const others = keys.filter((entry) => entry !== key)
+  const othersTotal = others.reduce((sum, entry) => sum + shares[entry], 0)
+  const remaining = total - target
+  const next = { ...shares }
+  next[key] = target
+  if (others.length > 0) {
+    if (othersTotal <= 1e-9) {
+      for (const entry of others) next[entry] = remaining / others.length
+    } else {
+      for (const entry of others) next[entry] = (shares[entry] / othersTotal) * remaining
+    }
+  }
+  return {
+    ...layout,
+    navigationRatio: next.navigation,
+    chatRatio: next.chat,
+    treeRatio: next.tree,
+    previewRatio: next.preview
+  }
 }
 
 /** Resolves a stored fraction to a pixel width bounded by the given min/max. */
@@ -286,6 +356,21 @@ export function requestedPreviewWidth(budget: number, previewShare: number, drag
 /** Applies a percentage edit and redistributes the remaining shares to keep the total at 100%. */
 export function saveLayoutShare(key: LayoutShare, percent: number, storage: Storage = localStorage): void {
   saveWorkspaceLayout(withShare(loadWorkspaceLayout(storage), key, percent), storage)
+}
+
+/**
+ * Same as `saveLayoutShare`, but the percentage is read against the columns that are on.
+ * Used by the appearance page whenever a column is hidden, so the slider value the user sees is
+ * the value the workspace will render.
+ */
+export function saveVisibleLayoutShare(
+  key: LayoutShare,
+  percent: number,
+  visible: readonly LayoutShare[],
+  storage: Storage = localStorage
+): void {
+  const layout = loadWorkspaceLayout(storage)
+  saveWorkspaceLayout(withVisibleShare(layout, visible, key, percent), storage)
 }
 
 // `useSyncExternalStore` needs a stable snapshot while the value is unchanged. Re-read storage

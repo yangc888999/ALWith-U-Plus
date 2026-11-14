@@ -1,11 +1,18 @@
 import { describe, expect, test } from "vitest"
 
 import {
+  blankPrice,
+  canonicalVendor,
   costOf,
   DEFAULT_PRICES,
+  DEFAULT_USD_TO_CNY,
+  DEFAULT_UTC_OFFSET,
   DEFAULT_VENDOR_SOURCES,
+  guessVendor,
   isPeak,
   matchesModel,
+  mergeVendorAliases,
+  migratePriceState,
   parseOpenRouterPrices,
   parseVendorPrices,
   parseWindows
@@ -96,9 +103,38 @@ describe("costOf", () => {
     expect(costOf(bucket("2026-11-03", 5, "kimi-k3", 1_000_000), [{ ...placeholder, input: 1 }], 7.2, 8)).toBeGreaterThan(0)
   })
 
+  test("an explicitly free model costs zero instead of counting as unpriced", () => {
+    // Free is a price, not a missing one: an empty row would otherwise be reported as 未定价 and
+    // inflate that list forever.
+    const free = { ...blankPrice("OpenRouter"), model: "vendor/free-model", free: true }
+    expect(costOf(bucket("2026-11-03", 5, "free-model", 1_000_000), [free], 7.2, 8)).toBe(0)
+    expect(costOf(bucket("2026-11-03", 5, "free-model", 1_000_000), [{ ...free, free: false }], 7.2, 8)).toBeNull()
+  })
+
   test("a configured vendor/model also matches the bare name", () => {
     expect(matchesModel({ ...gpt, model: "openai/gpt-6.1-sol" }, "gpt-6.1-sol")).toBe(true)
     expect(matchesModel({ ...gpt, model: "GPT-6.1-SOL" }, "gpt-6.1-sol")).toBe(true)
+  })
+
+  test("a flat discount reduces the charged amount by the fraction off", () => {
+    // gpt-6.1-sol: 2 USD/M input → 14.4 CNY at 7.2; a 20% discount brings it to 11.52.
+    const discounted = { ...gpt, discount: 0.2 }
+    expect(costOf(bucket("2026-11-03", 5, "gpt-6.1-sol", 1_000_000), [discounted], 7.2, 8)).toBeCloseTo(11.52)
+    // No discount keeps the full list price.
+    expect(costOf(bucket("2026-11-03", 5, "gpt-6.1-sol", 1_000_000), [gpt], 7.2, 8)).toBeCloseTo(14.4)
+  })
+
+  test("a discount applies on top of the off-peak tier, not just the standard one", () => {
+    // DeepSeek flash off-peak (13:00 Beijing): 1 CNY/M input. A 50% discount halves it to 0.5.
+    const offPeakDiscount = { ...deepseek, discount: 0.5 }
+    expect(costOf(bucket("2026-11-03", 5, "deepseek-flash", 1_000_000), [offPeakDiscount], 7.2, 8)).toBeCloseTo(0.5)
+    // And in peak hours the standard 2 CNY/M tier is halved to 1.
+    expect(costOf(bucket("2026-11-03", 1, "deepseek-flash", 1_000_000), [offPeakDiscount], 7.2, 8)).toBeCloseTo(1)
+  })
+
+  test("a discount outside 0–1 is ignored so a stray value cannot negate or inflate cost", () => {
+    const bogus = { ...gpt, discount: 5 }
+    expect(costOf(bucket("2026-11-03", 5, "gpt-6.1-sol", 1_000_000), [bogus], 7.2, 8)).toBeCloseTo(14.4)
   })
 })
 
@@ -120,10 +156,19 @@ describe("parseVendorPrices", () => {
     ])
   })
 
-  test("flat regex extracts one USD row", () => {
-    const html = '<tr><td>mimo-v2.6-pro</td><td>$3.00</td><td>$0.025</td><td>$6.00</td></tr>'
-    expect(parseVendorPrices(html, DEFAULT_VENDOR_SOURCES["小米 MiMo"].regex)).toEqual([
-      { model: "mimo-v2.6-pro", input: 3, cached: 0.025, output: 6 }
+  test("GLM docs regex extracts the three tracked rows and skips the -Legal variant", () => {
+    // The live table: 模型名称 | 上下文 | 输入 | 输出 | 缓存存储 | 缓存命中. The `-Legal` row
+    // shares the GLM-5.3-FlashX prices, so anchoring on `<td>1M</td>` right after the name is
+    // what keeps it out of the result.
+    const html =
+      '<tr><td>GLM-5.3</td><td data-numeric="true">1M</td><td data-numeric="true">8</td><td data-numeric="true">28</td><td>限时免费</td><td data-numeric="true">2</td><td>文本</td></tr>' +
+      '<tr><td>GLM-5.3-Flash</td><td data-numeric="true">1M</td><td data-numeric="true">0.8</td><td data-numeric="true">2.8</td><td>限时免费</td><td data-numeric="true">0.23</td><td>图片、视频、文件、文本</td></tr>' +
+      '<tr><td>GLM-5.3-FlashX</td><td data-numeric="true">1M</td><td data-numeric="true">2</td><td data-numeric="true">7</td><td>限时免费</td><td data-numeric="true">0.57</td><td>图片、视频、文件、文本</td></tr>' +
+      '<tr><td>GLM-5.3-FlashX-Legal</td><td data-numeric="true">1M</td><td data-numeric="true">2</td><td data-numeric="true">7</td><td>限时免费</td><td data-numeric="true">0.57</td><td></td></tr>'
+    expect(parseVendorPrices(html, DEFAULT_VENDOR_SOURCES["智谱 GLM"].regex)).toEqual([
+      { model: "GLM-5.3", input: 8, cached: 2, output: 28 },
+      { model: "GLM-5.3-Flash", input: 0.8, cached: 0.23, output: 2.8 },
+      { model: "GLM-5.3-FlashX", input: 2, cached: 0.57, output: 7 }
     ])
   })
 
@@ -137,12 +182,15 @@ describe("parseVendorPrices", () => {
     ])
   })
 
-  test("deduplicates repeated ids", () => {
+  test("MiniMax tiered M3 row matches through the badge and <del> list prices, deduped", () => {
+    // M3's rows put `<br/>≤ 512k 输入 tokens <span>永久五折</span>` inside the name cell and a
+    // `<del>list</del>` before each number; the >512k tier repeats the model id, so the fold in
+    // `push` keeps only the first (base tier) row.
     const html =
-      '<tr><td>mimo-v2.6-pro</td><td>$3</td><td>$0.025</td><td>$6</td></tr>' +
-      '<tr><td>mimo-v2.6-pro</td><td>$99</td><td>$99</td><td>$99</td></tr>'
-    expect(parseVendorPrices(html, DEFAULT_VENDOR_SOURCES["小米 MiMo"].regex)).toEqual([
-      { model: "mimo-v2.6-pro", input: 3, cached: 0.025, output: 6 }
+      '<tr><td><strong>MiniMax-M3</strong><br/>≤ 512k 输入 tokens <span class="mint-tag">永久五折</span></td><td data-numeric="true"><del>4.20</del> 2.10</td><td data-numeric="true"><del>16.80</del> 8.40</td><td data-numeric="true"><del>0.84</del> 0.42</td></tr>' +
+      '<tr><td><strong>MiniMax-M3</strong><br/>&gt; 512k 输入 tokens* <span class="mint-tag">永久五折</span></td><td data-numeric="true"><del>8.40</del> 4.20</td><td data-numeric="true"><del>33.60</del> 16.80</td><td data-numeric="true"><del>1.68</del> 0.84</td></tr>'
+    expect(parseVendorPrices(html, DEFAULT_VENDOR_SOURCES.MiniMax.regex)).toEqual([
+      { model: "MiniMax-M3", input: 2.1, cached: 0.42, output: 8.4 }
     ])
   })
 
@@ -220,5 +268,155 @@ describe("parseOpenRouterPrices", () => {
       { model: "moonshotai/kimi-k3", input: 2, output: 10 },
       { model: "x-ai/grok-4.6", input: 1, output: 5 }
     ])
+  })
+})
+
+describe("model id matching", () => {
+  test("dots and dashes fold together, so the ledger id and the saved row agree", () => {
+    // Vendors quote `claude-opus-5.5` while the table says `claude-opus-5-5`; pricing must use the
+    // same fold as the vendor updater, or a used model reads as unpriced.
+    expect(matchesModel({ ...gpt, model: "claude-opus-5-5" }, "claude-opus-5.5")).toBe(true)
+    expect(matchesModel({ ...gpt, model: "GPT-6.1-SOL" }, "gpt-6-1-sol")).toBe(true)
+    // A vendor-qualified row still matches the bare ledger id after folding.
+    expect(matchesModel({ ...gpt, model: "openai/gpt-6.1-sol" }, "gpt-6-1-sol")).toBe(true)
+    // Different models never collide.
+    expect(matchesModel({ ...gpt, model: "gpt-6.1-sol" }, "gpt-6.1-terra")).toBe(false)
+    expect(matchesModel({ ...gpt, model: "" }, "gpt-6.1-sol")).toBe(false)
+  })
+
+  test("a blank inserted row keeps the built-in shape and stays unpriced until numbers are typed", () => {
+    const row = blankPrice("DeepSeek")
+    expect(row).toMatchObject({
+      vendor: "DeepSeek",
+      model: "",
+      label: "",
+      free: false,
+      currency: "CNY",
+      input: 0,
+      cached: 0,
+      output: 0,
+      offPeak: null,
+      peakWindows: "",
+      weekdaysOnly: false,
+      note: ""
+    })
+    const inserted = { ...row, model: "deepseek-V4.1-flash" }
+    // All-zero prices are not a price: the model stays in the unpriced list.
+    expect(costOf(bucket("2026-11-13", 3, "deepseek-V4.1-flash", 1000), [inserted], 7.2, 8)).toBeNull()
+    // The id matches regardless of the dot/dash spelling the transcript used.
+    expect(matchesModel(inserted, "deepseek-v4-1-flash")).toBe(true)
+    expect(costOf(bucket("2026-11-13", 3, "deepseek-V4.1-flash", 1_000_000), [{ ...inserted, input: 2 }], 7.2, 8)).toBe(2)
+  })
+
+  test("a renamed row still matches on its id", () => {
+    // The display name is cosmetic: renaming a row must not detach it from the ledger id.
+    const renamed = { ...gpt, model: "gpt-6.1-sol", label: "我的主力模型" }
+    expect(matchesModel(renamed, "gpt-6.1-sol")).toBe(true)
+    expect(costOf(bucket("2026-11-03", 5, "gpt-6.1-sol", 1_000_000), [renamed], 7, 8)).toBeCloseTo(14)
+  })
+
+  test("an unpriced model is grouped under the vendor its id implies", () => {
+    expect(guessVendor("deepseek-V4.1-flash")).toBe("DeepSeek")
+    // The guess must land in the curated table's own group — "Anthropic" next to "Claude" (or
+    // "Qwen" next to "千问 Qwen") would split one vendor into two cards, one without a source.
+    expect(guessVendor("claude-opus-5.5")).toBe("Claude")
+    expect(guessVendor("qwen4-max-preview")).toBe("千问 Qwen")
+    expect(guessVendor("GLM-5.3")).toBe("智谱 GLM")
+    expect(guessVendor("some-unknown-model")).toBe("其他")
+  })
+
+  test("provider-catalog names fold onto the price table's vendor groups", () => {
+    expect(canonicalVendor("Qwen")).toBe("千问 Qwen")
+    expect(canonicalVendor("Anthropic")).toBe("Claude")
+    expect(canonicalVendor("GLM")).toBe("智谱 GLM")
+    // A custom provider keeps its own name — only known aliases fold.
+    expect(canonicalVendor("某网关")).toBe("某网关")
+    expect(canonicalVendor("千问 Qwen")).toBe("千问 Qwen")
+  })
+})
+
+describe("mergeVendorAliases", () => {
+  test("a duplicate Qwen card folds into 千问 Qwen and keeps the priced row", () => {
+    const prices = [
+      { ...blankPrice("千问 Qwen"), model: "qwen3.8-max", input: 12, cached: 1.5, output: 36, currency: "CNY" as const },
+      // The auto-add path used to mint this second card from the provider catalog's "Qwen" name.
+      { ...blankPrice("Qwen"), model: "qwen4-max-preview", input: 0, cached: 0, output: 0 },
+      // Same folded id under both spellings: the priced row survives, the empty one drops.
+      { ...blankPrice("Qwen"), model: "qwen3.8-max", input: 0, cached: 0, output: 0 }
+    ]
+    const merged = mergeVendorAliases(prices, DEFAULT_VENDOR_SOURCES)
+    expect(merged.prices).toHaveLength(2)
+    expect(merged.prices.every((price) => price.vendor === "千问 Qwen")).toBe(true)
+    const max = merged.prices.find((price) => price.model === "qwen3.8-max")!
+    expect(max.input).toBe(12)
+    // The merged card keeps the canonical price source (the aliyun billing page).
+    expect(merged.sources["千问 Qwen"].url).toContain("aliyun")
+    expect(merged.sources.Qwen).toBeUndefined()
+    // Idempotent: a second pass changes nothing.
+    const again = mergeVendorAliases(merged.prices, merged.sources)
+    expect(again.prices).toEqual(merged.prices)
+  })
+
+  test("a custom vendor with its own source is not folded away", () => {
+    const prices = [{ ...blankPrice("某网关"), model: "gateway-model", input: 1, cached: 0, output: 1 }]
+    const sources = { ...DEFAULT_VENDOR_SOURCES, 某网关: { url: "https://example.com/prices", regex: "", currency: "USD" as const } }
+    const merged = mergeVendorAliases(prices, sources)
+    expect(merged.prices[0].vendor).toBe("某网关")
+    expect(merged.sources["某网关"].url).toBe("https://example.com/prices")
+  })
+})
+
+describe("migratePriceState (v6)", () => {
+  test("a persisted vendor-source map from the upstream app is replaced wholesale", () => {
+    // The upstream app shares this bundle id, so its localStorage can arrive with the old
+    // platform.openai.com URL and a flat model-list regex — exactly the state that produced the
+    // "自动更新不对" report (gpt-6.1-sol updated to 0 / 2 / 0). v5 must ignore the stored map.
+    const stale = {
+      prices: DEFAULT_PRICES,
+      usdToCny: 7.1,
+      utcOffset: 8,
+      vendorSources: {
+        OpenAI: {
+          url: "https://platform.openai.com/docs/pricing",
+          currency: "USD",
+          regex: "(?<model>gpt-6-astra|gpt-6.1-sol)[\\s\\S]{0,600}?(?<input>\\d+(?:\\.\\d+)?)"
+        }
+      },
+      updatedAt: null
+    }
+    const migrated = migratePriceState(stale)
+    expect(migrated.vendorSources.OpenAI.url).toBe(DEFAULT_VENDOR_SOURCES.OpenAI.url)
+    expect(migrated.vendorSources.OpenAI.regex).toBe(DEFAULT_VENDOR_SOURCES.OpenAI.regex)
+    // User settings and the curated numbers survive — only the source map resets.
+    expect(migrated.usdToCny).toBe(7.1)
+    expect(migrated.prices).toEqual(stale.prices)
+  })
+
+  test("v6 folds an persisted alias vendor card into its canonical group", () => {
+    const stale = {
+      prices: [
+        ...DEFAULT_PRICES,
+        { ...blankPrice("Qwen"), model: "qwen4-max-preview", input: 0, cached: 0, output: 0 }
+      ],
+      usdToCny: 7.2,
+      utcOffset: 8,
+      vendorSources: { Qwen: { url: "", regex: "", currency: "CNY" } },
+      updatedAt: null
+    }
+    const migrated = migratePriceState(stale)
+    const preview = migrated.prices.find((price) => price.model === "qwen4-max-preview")
+    expect(preview?.vendor).toBe("千问 Qwen")
+    expect(migrated.vendorSources.Qwen).toBeUndefined()
+    expect(migrated.vendorSources["千问 Qwen"].url).toContain("aliyun")
+  })
+
+  test("a fresh (versionless) state still gets the full default source map", () => {
+    const migrated = migratePriceState(undefined)
+    expect(migrated.vendorSources).toEqual(DEFAULT_VENDOR_SOURCES)
+    // v6 folds aliases, which rebuilds the array — the content is what must survive.
+    expect(migrated.prices).toEqual(DEFAULT_PRICES)
+    expect(migrated.usdToCny).toBe(DEFAULT_USD_TO_CNY)
+    expect(migrated.utcOffset).toBe(DEFAULT_UTC_OFFSET)
+    expect(migrated.updatedAt).toBeNull()
   })
 })

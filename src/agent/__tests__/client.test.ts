@@ -1833,6 +1833,38 @@ test("a per-model effort override wins over the catalog default", async () => {
   }
 })
 
+test("an enterprise (account-managed) model defaults to the 大模型-page reasoning level", async () => {
+  // The company model's default thinking level is configured on the 大模型 page (stored in
+  // `companyModelConfig`), independent of the gateway catalog's own default. Here the catalog says
+  // "high" but the configured level is "low" — the conversation must open on the configured level,
+  // not the gateway's "high" and not the global "medium" fallback.
+  const models: ReasoningModelFixture[] = [
+    { id: "gateway:finture-enterprise:company", groupId: "finture-enterprise", efforts: ["low", "high", "max"], defaultEffort: "high" }
+  ]
+  const { client } = await make((fake) => {
+    configureReasoningModels(fake, models, "gateway:finture-enterprise:company", "high")
+  })
+  const store = new Map<string, string>()
+  const storage = {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
+    clear: () => store.clear(),
+    key: () => null,
+    length: 0
+  } as Storage
+  Object.defineProperty(globalThis, "localStorage", { value: storage, configurable: true })
+  storage.setItem("alwith:company-model", JSON.stringify({ reasoningLevel: "low" }))
+  try {
+    const id = await client.newSession("/tmp/enterprise-default-effort")
+    await until(() => client.effortOf(id) === "low")
+    expect(client.effortOf(id)).toBe("low")
+  } finally {
+    store.clear()
+    Reflect.deleteProperty(globalThis, "localStorage")
+  }
+})
+
 test("switching models in a running chat lands on the new model's configured effort", async () => {
   const models: ReasoningModelFixture[] = [
     { id: "gpt-6.1-sol", groupId: "chatgpt", efforts: ["low", "medium", "high", "max"], defaultEffort: "max" },
@@ -3826,6 +3858,8 @@ test("a group's conversations stay out of the project list and reach the group p
     directory,
     document: `${directory}/group.md`,
     topic: "",
+    focus: "",
+    materialFolders: [],
     sessionId: null,
     autoDiscuss: true
   })

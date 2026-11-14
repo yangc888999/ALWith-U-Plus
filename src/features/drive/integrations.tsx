@@ -8,9 +8,7 @@ import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 
-import { useBlockConflictCopies } from "./block-conflict-copies-preference"
 import { drive } from "./controller"
-import { useVersionGuard } from "./version-guard-preference"
 
 // Cheap structural comparison so the 5s refresh doesn't re-render when nothing changed.
 function contentEqual<T>(previous: T | null, next: T): boolean {
@@ -18,14 +16,10 @@ function contentEqual<T>(previous: T | null, next: T): boolean {
 }
 
 export function DriveIntegrations(): ReactNode {
-  const { i18n, t: translate } = useTranslation()
+  const { i18n } = useTranslation()
   const zh = i18n.language.startsWith("zh")
   const t = driveTranslator(zh ? "zh-CN" : "en", "settings")
   const { connected, snapshot } = useDrive(drive)
-  // Local switch, not a Drive preference: it is read by the filesystem wrapper, so it needs no
-  // connection and still applies while the daemon is stopped.
-  const [blockConflictCopies, setBlockConflictCopies] = useBlockConflictCopies()
-  const [versionGuard, setVersionGuard] = useVersionGuard()
   const [preferences, setPreferences] = useState<Preferences | null>(null)
   const [archive, setArchive] = useState<ArchiveStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -155,34 +149,6 @@ export function DriveIntegrations(): ReactNode {
           checked={preferences?.knowledgeInject ?? false}
           disabled={!connected || busy || !preferences}
           onCheckedChange={(value) => change("knowledgeInject", value)}
-        />
-      </div>
-      <div className="alwith-drive-setting">
-        <div>
-          <strong>{translate("versionGuard.title")}</strong>
-          <p>{translate("versionGuard.desc")}</p>
-        </div>
-        <Switch
-          aria-label={translate("versionGuard.title")}
-          // Local guard, not a Drive preference: it runs entirely on this machine and must stay
-          // usable before the daemon attaches (and while it is stopped).
-          data-local-preference="true"
-          checked={versionGuard}
-          onCheckedChange={setVersionGuard}
-        />
-      </div>
-      <div className="alwith-drive-setting">
-        <div>
-          <strong>{translate("drive.blockConflictCopies")}</strong>
-          <p>{translate("drive.blockConflictCopiesHint")}</p>
-        </div>
-        <Switch
-          aria-label={translate("drive.blockConflictCopies")}
-          // Local display preference, not a Drive setting: it must stay usable before the daemon
-          // attaches (and while it is stopped), unlike the archive/knowledge switches above.
-          data-local-preference="true"
-          checked={blockConflictCopies}
-          onCheckedChange={setBlockConflictCopies}
         />
       </div>
     </section>

@@ -797,6 +797,9 @@ fn persist(path: &std::path::Path, saved: &Saved) -> Result<(), String> {
     if let Err(error) = sync_managed_config(saved) {
         log::warn!("Config: could not sync config.toml: {error}");
     }
+    // Keep the launch catalog in step with what was just saved: the engine reads it at boot, so a
+    // provider added or edited now has to be in the file before the next launch.
+    let _ = merged_catalog_path(directory);
     Ok(())
 }
 #[tauri3_specta::command]
@@ -1057,16 +1060,10 @@ async fn reconcile_target(
                 AppliedProvider::Custom(provider) => {
                     // The per-thread catalog lets Codex resolve the model instead of falling back to
                     // tiny metadata, and exposes each model's real reasoning levels to the picker.
-                    // The account-managed company provider compacts earlier: its gateway sits one
-                    // hop further from the model, and a request that only trips compaction at 95%
-                    // of the window is the size that makes that relay go quiet.
-                    let compact_early = inner
-                        .saved
-                        .managed
-                        .as_ref()
-                        .and_then(|cache| cache.provider.as_ref())
-                        .is_some_and(|managed| managed.id == provider.id);
-                    let catalog = write_custom_catalog(catalog_dir, provider, compact_early)?;
+                    // It carries no compaction threshold: the engine's own 95% default is what the
+                    // user asked for, and a per-model override here only ever reached the picker —
+                    // see `merged_catalog_path` for the channel that actually binds.
+                    let catalog = write_custom_catalog(catalog_dir, provider)?;
                     (
                         Value::String(provider.name.clone()),
                         Value::String(provider.base_url.clone()),
@@ -1719,7 +1716,7 @@ fn effort_description(effort: &str) -> &'static str {
     }
 }
 
-fn custom_catalog(provider: &CustomProvider, compact_early: bool) -> Result<Value, String> {
+fn custom_catalog(provider: &CustomProvider) -> Result<Value, String> {
     let models = provider
         .models
         .iter()
@@ -1769,12 +1766,10 @@ fn custom_catalog(provider: &CustomProvider, compact_early: bool) -> Result<Valu
             if let Some(window) = model.context_window {
                 object.insert("context_window".into(), json!(window));
                 object.insert("max_context_window".into(), json!(window));
-                if compact_early && window > 0 {
-                    // 70% leaves room for the turn that is already running when the threshold is
-                    // crossed; Codex's 95% default only fires once the next request is at the
-                    // ceiling, which is exactly where a company relay stops answering.
-                    object.insert("auto_compact_token_limit".into(), json!(window * 7 / 10));
-                }
+                // No `auto_compact_token_limit`: the engine compacts at its own 95% default, which
+                // is what the user chose. The key used to be forced to 70% for the company relay,
+                // but a per-thread catalog never reached model resolution anyway (see
+                // `merged_catalog_path`), so all it did was disagree with the engine.
             } else {
                 // Providers saved before contextWindow existed must not fall back to Codex's
                 // tiny unknown-model window: that triggers premature auto-compaction mid-turn.
@@ -1787,9 +1782,9 @@ fn custom_catalog(provider: &CustomProvider, compact_early: bool) -> Result<Valu
     Ok(json!({ "models": models }))
 }
 
-fn write_custom_catalog(directory: &Path, provider: &CustomProvider, compact_early: bool) -> Result<PathBuf, String> {
+fn write_custom_catalog(directory: &Path, provider: &CustomProvider) -> Result<PathBuf, String> {
     use std::hash::{Hash, Hasher};
-    let catalog = custom_catalog(provider, compact_early)?;
+    let catalog = custom_catalog(provider)?;
     let bytes = serde_json::to_vec(&catalog).map_err(|error| error.to_string())?;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
@@ -1834,18 +1829,15 @@ fn inject_default_reasoning(catalog: &mut Value, level: Option<&str>) -> usize {
     changed
 }
 
-/// Injects `auto_compact_token_limit` and `default_reasoning_level` into the shared ALwith model
-/// catalog that the account-managed (company) provider points at, in place.
+/// Injects `default_reasoning_level` into the shared ALwith model catalog that the
+/// account-managed (company) provider points at, in place.
 ///
 /// The account-managed `litellm` provider's `model_catalog_json` is the engine-owned
 /// `model-catalogs/alwith/models.json`, which the Codex plugin regenerates from a bundled template
-/// at startup. That template leaves `auto_compact_token_limit` unset (so the engine compacts at its
-/// own 95% default — the late-window silence "上游长时间没有输出" the enterprise relay already avoids
-/// by compacting at 70%) and pins `default_reasoning_level` to `high` (the user wants `max`, and
-/// wants it configurable). We mirror both fixes here: `inject_auto_compact` sets
-/// `auto_compact_token_limit = window * 0.7`, and `inject_default_reasoning` sets the model's
-/// default thinking level from the configured company-model reasoning level.
+/// at startup. That template pins `default_reasoning_level` to `high`; the user wants `max`, and
+/// wants it configurable, so this mirrors the configured level into the catalog the picker reads.
 ///
+/// Compaction is deliberately NOT touched: the engine's own 95% default is the chosen behaviour.
 /// The plugin rewrites this file on every Codex launch, so the caller re-runs this after startup
 /// (see `start_managed_catalog_tuner`). Returns whether the file existed and was (re)tuned.
 fn tune_managed_catalog(app: &AppHandle) -> bool {
@@ -1854,9 +1846,8 @@ fn tune_managed_catalog(app: &AppHandle) -> bool {
     let path = directory.join("model-catalogs").join("alwith").join("models.json");
     let Ok(bytes) = std::fs::read(&path) else { return false };
     let Ok(mut catalog) = serde_json::from_slice::<Value>(&bytes) else { return false };
-    let compacted = crate::enterprise::catalog::inject_auto_compact(&mut catalog, 0.7);
     let reasoned = inject_default_reasoning(&mut catalog, company_reasoning_level().as_deref());
-    if compacted == 0 && reasoned == 0 {
+    if reasoned == 0 {
         return false;
     }
     if let Ok(next) = serde_json::to_vec_pretty(&catalog) {
@@ -1907,6 +1898,91 @@ pub async fn set_company_model_reasoning(app: AppHandle, level: Option<String>) 
         let _ = inner.snapshot().emit(&app);
     }
     Ok(())
+}
+
+/// Every model the app has spelled out, in one catalog the engine can be launched with.
+///
+/// Measured against codex-cli 0.167.2 with a throwaway `CODEX_HOME` and a fake upstream:
+/// a catalog named by `model_catalog_json` in `config.toml` sets the window (a 1M model reported
+/// 950000 = 1M × 95%), while the exact same path passed as the per-thread `config` value the ACP
+/// adapter sends is ignored — the engine stayed on Codex's default 272000 × 95% = 258400. The
+/// per-thread catalog still feeds the picker (display name, reasoning ladder), which is why the
+/// gap was invisible: the app advertised a 1M-token company model while the engine compacted at
+/// 245k and never reached the 70% limit we inject.
+///
+/// The launcher therefore hands this merged file to the engine on the command line, next to the
+/// router table it already injects. Sources are the catalogs the app generates itself: the
+/// account-managed one, the enterprise relay's tuned copy, one per built-in provider carrying
+/// overrides, and one per custom provider. The newest file per provider prefix wins so a stale
+/// hash left behind by an older build can never shadow the current entry.
+pub(crate) fn merged_catalog_path(app_data: &std::path::Path) -> Option<std::path::PathBuf> {
+    let catalog = merged_catalog(app_data)?;
+    let bytes = serde_json::to_vec(&catalog).ok()?;
+    let path = app_data.join("model-catalogs").join("merged.json");
+    if std::fs::read(&path).ok().as_deref() != Some(bytes.as_slice()) {
+        std::fs::create_dir_all(path.parent()?).ok()?;
+        if let Err(error) = std::fs::write(&path, &bytes) {
+            log::warn!("merged catalog: could not write {}: {error}", path.display());
+            return None;
+        }
+    }
+    Some(path)
+}
+
+fn merged_catalog(app_data: &std::path::Path) -> Option<Value> {
+    let mut sources = vec![app_data.join("model-catalogs").join("alwith").join("models.json")];
+    sources.extend(newest_catalog_files(&app_data.join("enterprise-catalogs"), "tuned-"));
+    sources.extend(newest_catalog_files(&app_data.join("provider-catalogs"), "builtin-"));
+    sources.extend(newest_catalog_files(&app_data.join("provider-catalogs"), "custom-"));
+    let mut entries: Vec<Value> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for source in sources {
+        let Ok(bytes) = std::fs::read(&source) else { continue };
+        let Ok(catalog) = serde_json::from_slice::<Value>(&bytes) else { continue };
+        let Some(models) = catalog.get("models").and_then(Value::as_array) else { continue };
+        for model in models {
+            let Some(slug) = model.get("slug").and_then(Value::as_str) else { continue };
+            // A slug can only resolve to one entry; the first source in priority order owns it.
+            if !seen.insert(slug.to_string()) {
+                continue;
+            }
+            // The engine compacts at its own 95% default. A limit left in a catalog written by an
+            // older build (70% of the window) would silently win here, so drop it on the way
+            // through: this file is the one the engine actually reads.
+            let mut entry = model.clone();
+            if let Some(object) = entry.as_object_mut() {
+                object.remove("auto_compact_token_limit");
+            }
+            entries.push(entry);
+        }
+    }
+    if entries.is_empty() {
+        return None;
+    }
+    Some(json!({ "models": entries }))
+}
+
+/// The newest catalog file per provider prefix (`builtin-deepseek-<hash>.json` →
+/// `builtin-deepseek`) in a directory. Catalogs are content-addressed, so an edit leaves the old
+/// file behind; only the newest one describes what the provider currently offers.
+fn newest_catalog_files(directory: &std::path::Path, prefix: &str) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = std::fs::read_dir(directory) else { return Vec::new() };
+    let mut newest: BTreeMap<String, (std::time::SystemTime, std::path::PathBuf)> = BTreeMap::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else { continue };
+        let Some(stem) = name.strip_suffix(".json") else { continue };
+        let Some((stem_prefix, _hash)) = stem.rsplit_once('-') else { continue };
+        if !stem_prefix.starts_with(prefix) {
+            continue;
+        }
+        let modified = entry.metadata().and_then(|meta| meta.modified()).unwrap_or(std::time::UNIX_EPOCH);
+        let slot = newest.entry(stem_prefix.to_string()).or_insert_with(|| (modified, path.clone()));
+        if modified > slot.0 {
+            *slot = (modified, path.clone());
+        }
+    }
+    newest.into_values().map(|(_, path)| path).collect()
 }
 
 /// Keeps the account-managed (company) model catalog tuned across Codex restarts.
@@ -3072,7 +3148,7 @@ mod tests {
     }
 
     #[test]
-    fn the_company_provider_compacts_before_the_window_is_full() {
+    fn no_catalog_entry_requests_an_early_compaction() {
         let provider = CustomProvider {
             id: "litellm".into(),
             name: "LiteLLM".into(),
@@ -3088,13 +3164,11 @@ mod tests {
                 enabled: None,
             }],
         };
-        let early = custom_catalog(&provider, true).unwrap();
-        assert_eq!(early["models"][0]["auto_compact_token_limit"], 700_000);
-        assert_eq!(early["models"][0]["context_window"], 1_000_000, "the window itself is untouched");
-        // Every other custom provider keeps the engine's own threshold: compacting early is a
-        // remedy for the company relay, not a new global default.
-        let plain = custom_catalog(&provider, false).unwrap();
-        assert!(plain["models"][0].get("auto_compact_token_limit").is_none());
+        // The window is spelled out so the engine stops guessing, but the threshold is left to
+        // Codex's own 95% default — the user's choice, and the only value the engine honours.
+        let catalog = custom_catalog(&provider).unwrap();
+        assert_eq!(catalog["models"][0]["context_window"], 1_000_000);
+        assert!(catalog["models"][0].get("auto_compact_token_limit").is_none());
     }
 
     #[test]
@@ -3945,5 +4019,75 @@ base_url = "http://127.0.0.1:54936/alwith"
             render_managed_config(&healed, &[], Some("http://127.0.0.1:60636/alwith".into())),
             healed
         );
+    }
+}
+
+#[cfg(test)]
+mod merged_catalog_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn every_provider_lands_in_one_catalog_and_a_stale_hash_never_shadows_it() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::create_dir_all(root.join("model-catalogs/alwith")).unwrap();
+        std::fs::write(
+            root.join("model-catalogs/alwith/models.json"),
+            json!({"models":[{"slug":"company","context_window":1_000_000,"auto_compact_token_limit":700_000}]})
+                .to_string(),
+        )
+        .unwrap();
+        let catalogs = root.join("provider-catalogs");
+        std::fs::create_dir_all(&catalogs).unwrap();
+        std::fs::write(
+            catalogs.join("builtin-deepseek-aaaa.json"),
+            json!({"models":[{"slug":"deepseek-old","context_window":1}]}).to_string(),
+        )
+        .unwrap();
+        // Content-addressed catalogs leave the previous hash behind; the newer file must win.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(
+            catalogs.join("builtin-deepseek-bbbb.json"),
+            json!({"models":[{"slug":"deepseek-flash","context_window":1_048_576,"auto_compact_token_limit":734_003}]})
+                .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            catalogs.join("custom-6162-cccc.json"),
+            json!({"models":[{"slug":"company","context_window":500_000}]}).to_string(),
+        )
+        .unwrap();
+
+        let path = merged_catalog_path(root).expect("a catalog with models is written");
+        let merged: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let models = merged["models"].as_array().unwrap();
+        let slugs: Vec<&str> = models.iter().filter_map(|model| model["slug"].as_str()).collect();
+        assert!(slugs.contains(&"company"));
+        assert!(slugs.contains(&"deepseek-flash"));
+        assert!(!slugs.contains(&"deepseek-old"), "the stale hash must not shadow the current catalog");
+        // A duplicated slug is resolved once, by the highest-priority source.
+        assert_eq!(slugs.iter().filter(|slug| **slug == "company").count(), 1);
+        assert_eq!(models[0]["context_window"], 1_000_000);
+        // The engine compacts at its own 95% default: a limit written by an older build must not
+        // survive the merge, or it would keep overriding the engine after the policy changed.
+        assert!(
+            models.iter().all(|model| model.get("auto_compact_token_limit").is_none()),
+            "compaction stays at the engine default"
+        );
+        let flash = models.iter().find(|model| model["slug"] == "deepseek-flash").unwrap();
+        assert_eq!(flash["context_window"], 1_048_576);
+
+        // Idempotent: an unchanged set of inputs must not rewrite the file.
+        let before = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        merged_catalog_path(root).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), before);
+    }
+
+    #[test]
+    fn a_machine_with_no_catalogs_asks_for_none() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(merged_catalog_path(root.path()).is_none());
     }
 }

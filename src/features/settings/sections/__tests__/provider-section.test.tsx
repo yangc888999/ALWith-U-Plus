@@ -275,6 +275,7 @@ test("provider tabs show configuration state and switch the single active panel"
           activeId={active}
           keys={{ hakimi: { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" } }}
           customProviders={[custom]}
+          managedProviders={[]}
           onSelect={setActive}
           onAdd={() => setActive("new")}
         />

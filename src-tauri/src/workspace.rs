@@ -72,30 +72,14 @@ pub async fn workspace_file(window: tauri::WebviewWindow, request: Value) -> Res
     }
     request.root = root.clone();
     let fs = FileSystem::new([root])?;
-    let writing = request.operation == "writeFile";
-    let written_path = request.path.clone();
     let app = window.app_handle().clone();
-    let result = execute_workspace_request(
+    execute_workspace_request(
         &fs,
         request,
         collaboration_owner,
         app.state::<crate::drive::DriveState>().service()?,
     )
-    .await;
-    // A save the user just made is trusted by the Drive version guard: recording it here keeps the
-    // next scan from mistaking the user's own edit for another device pushing an old version.
-    if writing && result.is_ok()
-        && let Some(state) = app.try_state::<crate::drive_guard::GuardState>()
-    {
-        state.0.note_user_write(
-            std::path::Path::new(&written_path),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|elapsed| elapsed.as_millis() as i64)
-                .unwrap_or(0),
-        );
-    }
-    result
+    .await
 }
 
 async fn execute_workspace_request(

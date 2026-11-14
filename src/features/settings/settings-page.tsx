@@ -32,6 +32,7 @@ import { Pane } from "@/components/alwith-ui/pane"
 import { AutomationSection } from "@/features/automation/automation-section"
 import { DriveSettings } from "@/features/drive/drive"
 import { useDriveVisible } from "@/features/drive/use-drive-visible"
+import { useYupDriveEnabled } from "@/features/drive/yup-drive-preference"
 import { ExtensionSettingsContent, ExtensionSettingsNavigation } from "@/features/extensions/extension-outlets"
 import { ExtensionMount } from "@/features/extensions/extension-view"
 import { ExtensionsSection } from "@/features/extensions/extensions-section"
@@ -98,6 +99,7 @@ function normalizeSection(value: string | null): SettingsSection | null {
 
 export function SettingsPage() {
   const driveVisible = useDriveVisible()
+  const driveEnabled = useYupDriveEnabled()
   const { host, state } = useExtensions()
   const [extensionSection, setExtensionSection] = useState<string | null>(null)
   const { t } = useTranslation()
@@ -170,7 +172,7 @@ export function SettingsPage() {
       (() => {
         switch (section) {
           case "drive":
-            return driveVisible ? <DriveSettings /> : <AccountSection />
+            return driveVisible && driveEnabled ? <DriveSettings /> : <AccountSection />
           case "account":
             return <AccountSection />
           case "editor":
@@ -221,7 +223,7 @@ export function SettingsPage() {
         className="min-h-0 overflow-y-auto px-3 pt-5 pb-4 [&>*]:shrink-0"
       >
         {SECTION_GROUPS.map((group) => {
-          const sections = group.sections.filter((id) => id !== "drive" || driveVisible)
+          const sections = group.sections.filter((id) => id !== "drive" || (driveVisible && driveEnabled))
           if (sections.length === 0) return null
           return (
             <div key={group.label} className="settings-nav-group">

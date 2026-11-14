@@ -94,6 +94,9 @@ const PREVIEW_MENU_BRIDGE: &str = r#"
   // The hosting page never sees events inside this frame, so right-click and text selection are
   // both forwarded: contextmenu opens the translated menu, selection drives the copy/quote pill.
   document.addEventListener('contextmenu', function (event) {
+    // When the frame is in WYSIWYG edit mode its body is contenteditable, so let the native
+    // browser context menu (cut/copy/paste) appear instead of the translated overlay menu.
+    if (document.body && document.body.isContentEditable) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     var text = '';
