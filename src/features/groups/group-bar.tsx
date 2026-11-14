@@ -7,6 +7,7 @@
 // you interject with.
 
 import type { Session } from "@alwith/api"
+import { invoke } from "@tauri-apps/api/core"
 import { CircleStopIcon, Loader2Icon, PauseIcon, PlayIcon, RotateCcwIcon, UsersIcon } from "lucide-react"
 import { type ReactNode, useState, useSyncExternalStore } from "react"
 import { useTranslation } from "react-i18next"
@@ -83,11 +84,18 @@ export function GroupDiscussionBar({ session }: { session: Session }): ReactNode
 
   const run = (count: number): void => {
     // A direction typed here is transient: it steers only the run we are starting now and is never
-    // written back to the meeting's long-term focus.
+    // written back to the meeting's long-term focus. It IS archived into the meeting's topic &
+    // rules document with a timestamp, so the record shows when the room changed course.
     const nextDirection = direction.trim()
+    if (nextDirection !== "" && group.document !== "") {
+      void appendTopicAndRules(group.document, nextDirection, t("groups.topicRulesDirectionEntry")).catch((error: unknown) =>
+        toast.error(error instanceof Error ? error.message : String(error))
+      )
+    }
     void startGroupDiscussion(session.id, count, nextDirection === "" ? undefined : nextDirection).catch(
       (error: unknown) => toast.error(error instanceof Error ? error.message : String(error))
     )
+    setDirection("")
   }
 
   return (
@@ -103,16 +111,6 @@ export function GroupDiscussionBar({ session }: { session: Session }): ReactNode
         <span className="min-w-0 truncate font-medium" data-group-status-text>
           {status}
         </span>
-        {/* The meeting's standing analysis direction, visible while it steers the room. */}
-        {group.focus.trim() !== "" && (
-          <span
-            className="hidden min-w-0 max-w-[14rem] shrink truncate rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary md:inline"
-            title={`${t("groups.createFocusLabel")}：${group.focus.trim()}`}
-            data-group-focus
-          >
-            {group.focus.trim()}
-          </span>
-        )}
         {members.length > 0 && (
           <div className="hidden min-w-0 flex-1 items-center gap-1 overflow-hidden md:flex">
             {members.map((member, index) => {
@@ -173,14 +171,15 @@ export function GroupDiscussionBar({ session }: { session: Session }): ReactNode
         </div>
       </div>
       {!busy && (
-        <div className="mt-1 flex items-center gap-1.5 px-1" data-group-direction>
-          <span className="shrink-0 text-[11px] text-muted-foreground">{t("groups.changeDirection")}</span>
-          <input
-            className="h-6 min-w-0 flex-1 rounded-md border border-border/60 bg-background px-2 text-[11px]"
+        <div className="mt-1.5 px-1" data-group-direction>
+          <textarea
+            aria-label={t("groups.changeDirection")}
+            className="min-h-16 w-full resize-y rounded-lg border border-border/60 bg-background px-2.5 py-2 text-xs leading-relaxed"
             placeholder={t("groups.changeDirectionPlaceholder")}
             value={direction}
             onChange={(event) => setDirection(event.target.value)}
           />
+          <p className="mt-0.5 text-[10px] text-muted-foreground">{t("groups.documentHint")}</p>
         </div>
       )}
       {paused && (
@@ -191,4 +190,18 @@ export function GroupDiscussionBar({ session }: { session: Session }): ReactNode
       )}
     </div>
   )
+}
+
+/**
+ * Appends one timestamped direction entry to the meeting's topic & rules document. Appending —
+ * never rewriting — keeps the history of how the room changed course, which is the record the
+ * members comply with.
+ */
+async function appendTopicAndRules(document: string, direction: string, entryLabel: string): Promise<void> {
+  const current = await invoke<string>("group_document_read", { document })
+  const now = new Date()
+  const pad = (value: number): string => String(value).padStart(2, "0")
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
+  const entry = `\n\n## ${stamp} · ${entryLabel}\n\n${direction}\n`
+  await invoke("group_document_write", { document, content: current + entry })
 }

@@ -1,9 +1,9 @@
 // The create/edit-meeting dialog: the sidebar's one entry into starting a discussion.
 //
 // The form reads top-to-bottom in the order a decision is actually made (name → members → folder →
-// direction → materials). It opens at 640px and is resizable in both axes (drag the bottom-right
-// corner) — the direction text and the material list both grow, and a fixed 460px box made long
-// directions scroll inside a 3-line textarea.
+// direction → materials). It opens centered at min(1040px, 96vw) and behaves like a small window:
+// drag the header to move (double-click resets), drag any edge or corner to resize. The box is
+// clamped to the viewport on every move and on window resize, so it can never hang off-screen.
 //
 // Folder flow (v2): the picked folder is the PARENT. The meeting always lands in
 // `<parent>/<会议名>` — name first, pick the parent second, and the preview line shows the exact
@@ -15,7 +15,7 @@
 // a retry lands on the thing that actually broke.
 
 import { CircleAlertIcon, FolderIcon, FolderPlusIcon, PlusIcon, XIcon } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
@@ -94,6 +94,21 @@ export function CreateMeetingDialog({
   const [submitting, setSubmitting] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
   const [collision, setCollision] = useState<GroupConfig | null>(null)
+  // Create mode keeps the dialog open after success (the user closes it); edit mode closes as before.
+  const [created, setCreated] = useState(false)
+  // Header drag / edge-and-corner resize: once used, the dialog is positioned and sized
+  // explicitly. Inline styles win over the shared base classes deterministically — the base
+  // `sm:max-w-md` capped the dialog at 448px and its translate utility did not survive composition.
+  const [position, setPosition] = useState<{ x: number; y: number } | null>(null)
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null)
+  const dragOffset = useRef<{ x: number; y: number } | null>(null)
+  const popupRef = useRef<HTMLDivElement | null>(null)
+  // Latest box for the window-resize clamp; the listener mounts once per open, not per move.
+  const boxRef = useRef<{ position: { x: number; y: number } | null; size: { w: number; h: number } | null }>({
+    position: null,
+    size: null
+  })
+  boxRef.current = { position, size }
 
   // Re-open starts from the meeting's own values; a fresh dialog starts from a sensible roster so
   // the common case (brainstorm with everyone on the shelf) is one click, not N.
@@ -102,6 +117,9 @@ export function CreateMeetingDialog({
     setFailure(null)
     setCollision(null)
     setSubmitting(false)
+    setCreated(false)
+    setPosition(null)
+    setSize(null)
     if (group !== null) {
       setName(group.name)
       setRoles(group.roles)
@@ -176,6 +194,137 @@ export function CreateMeetingDialog({
       .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))
   }
 
+  /** Header drag: the dialog follows the pointer until release; position sticks for the session. */
+  const startDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    const rect = event.currentTarget.closest("[data-slot=dialog-content]")?.getBoundingClientRect()
+    if (rect === undefined) return
+    dragOffset.current = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+    const move = (moveEvent: PointerEvent): void => {
+      if (dragOffset.current === null) return
+      // The dialog stays fully inside the window at all times — a partially off-screen box
+      // reads as the clipping bug it once had, and is hard to grab back.
+      const x = Math.min(
+        Math.max(moveEvent.clientX - dragOffset.current.x, 8),
+        Math.max(8, window.innerWidth - rect.width - 8)
+      )
+      const y = Math.min(
+        Math.max(moveEvent.clientY - dragOffset.current.y, 8),
+        Math.max(8, window.innerHeight - rect.height - 8)
+      )
+      setPosition({ x, y })
+    }
+    const up = (): void => {
+      dragOffset.current = null
+      window.removeEventListener("pointermove", move)
+      window.removeEventListener("pointerup", up)
+    }
+    window.addEventListener("pointermove", move)
+    window.addEventListener("pointerup", up)
+  }
+
+  /** Native-window resize: every edge and corner drags the box. WebKit refuses CSS `resize`
+   *  on an explicitly sized element, so the handles are real pointer handlers. Each axis is
+   *  clamped so the whole dialog stays inside the window with an 8px margin. */
+  const startResize =
+    (edge: "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw") =>
+    (event: ReactPointerEvent<HTMLDivElement>): void => {
+      if (event.button !== 0) return
+      event.preventDefault()
+      const rect = event.currentTarget.closest("[data-slot=dialog-content]")?.getBoundingClientRect()
+      if (rect === undefined) return
+      const start = {
+        x: event.clientX,
+        y: event.clientY,
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom
+      }
+      const move = (moveEvent: PointerEvent): void => {
+        const dx = moveEvent.clientX - start.x
+        const dy = moveEvent.clientY - start.y
+        const minW = Math.min(420, Math.max(240, window.innerWidth - 16))
+        const minH = Math.min(360, Math.max(200, window.innerHeight - 16))
+        let { left, top, right, bottom } = start
+        // Opposite edges stay anchored; a corner moves one horizontal and one vertical edge,
+        // so each clamp below always reads the untouched opposite side.
+        if (edge.includes("e")) right = Math.min(Math.max(start.right + dx, left + minW), window.innerWidth - 8)
+        if (edge.includes("w")) left = Math.max(Math.min(start.left + dx, right - minW), 8)
+        if (edge.includes("s")) bottom = Math.min(Math.max(start.bottom + dy, top + minH), window.innerHeight - 8)
+        if (edge.includes("n")) top = Math.max(Math.min(start.top + dy, bottom - minH), 8)
+        setPosition({ x: left, y: top })
+        setSize({ w: right - left, h: bottom - top })
+      }
+      const up = (): void => {
+        window.removeEventListener("pointermove", move)
+        window.removeEventListener("pointerup", up)
+      }
+      window.addEventListener("pointermove", move)
+      window.addEventListener("pointerup", up)
+    }
+
+  // Shrinking the window must never leave the dialog hanging off-screen: re-clamp the explicit
+  // box on every window resize. The centered default needs no help — vw/vh + margin:auto follow
+  // the viewport on their own.
+  useEffect(() => {
+    if (!open) return
+    const clampToWindow = (): void => {
+      const box = boxRef.current
+      if (box.position === null) return
+      const popup = popupRef.current
+      const w = Math.min(box.size?.w ?? popup?.offsetWidth ?? 420, Math.max(240, window.innerWidth - 16))
+      const h = Math.min(box.size?.h ?? popup?.offsetHeight ?? 360, Math.max(200, window.innerHeight - 16))
+      setPosition({
+        x: Math.min(Math.max(box.position.x, 8), Math.max(8, window.innerWidth - w - 8)),
+        y: Math.min(Math.max(box.position.y, 8), Math.max(8, window.innerHeight - h - 8))
+      })
+      if (box.size !== null) setSize({ w, h })
+    }
+    window.addEventListener("resize", clampToWindow)
+    return () => window.removeEventListener("resize", clampToWindow)
+  }, [open])
+
+  const close = (): void => {
+    if (submitting) return
+    // Position and size are per-open only: a stale offset made the dialog reopen off-center.
+    setPosition(null)
+    setSize(null)
+    onClose()
+  }
+
+  // The centered default is pure CSS (fixed + inset:0 + margin:auto): no measurement, no
+  // timer, nothing to drift between dev and release builds. Inline styles outrank the shared
+  // base Popup classes, which matter here: `relative` passed via className once overrode the
+  // base `fixed` and parked the dialog off-screen; Tailwind v4's -translate-x/y-1/2 compile to
+  // the `translate` property (not `transform`), so both are neutralized; maxWidth:none defeats
+  // the base sm:max-w-md 448px cap. After a drag/resize we switch to explicit left/top.
+  const dialogStyle: React.CSSProperties = {
+    position: "fixed",
+    // Tailwind v4 translate utilities use the `translate` property, not `transform` —
+    // both must be neutralized or the base -50%/-50% shift parks the box off-center.
+    translate: "none",
+    transform: "none",
+    maxWidth: "none",
+    ...(position === null
+      ? {
+          inset: 0,
+          margin: "auto",
+          width: "min(1040px, 96vw)",
+          height: "fit-content",
+          maxHeight: "92vh"
+        }
+      : {
+          inset: "auto",
+          left: position.x,
+          top: position.y,
+          margin: 0,
+          width: size?.w ?? "min(1040px, 96vw)",
+          ...(size !== null ? { height: size.h, maxHeight: "none" } : { height: "fit-content", maxHeight: "92vh" })
+        })
+  }
+
   const submit = (): void => {
     if (!canSubmit) return
     // A name that slugifies onto an existing meeting's folder reuses that folder — say so first.
@@ -213,7 +362,10 @@ export function CreateMeetingDialog({
       }
       setGroup(record)
       onCreated(record, created.directory)
-      onClose()
+      // Create mode keeps the dialog open: the reader confirms the folder and topic & rules
+      // landed, then closes it by hand. Edit mode closes right away, as it always did.
+      if (editing) onClose()
+      else setCreated(true)
     } catch (error: unknown) {
       setFailure(error instanceof Error ? error.message : String(error))
     } finally {
@@ -221,16 +373,20 @@ export function CreateMeetingDialog({
     }
   }
 
-  const close = (): void => {
-    if (submitting) return
-    onClose()
-  }
-
   return (
     <Dialog open={open} onOpenChange={(value) => !value && close()}>
-      <DialogContent className="flex max-h-[85vh] w-[640px] min-h-[420px] min-w-[480px] max-w-[92vw] resize overflow-auto sm:max-w-[92vw]">
+      <DialogContent ref={popupRef} style={dialogStyle} className="flex min-h-[min(420px,92vh)] overflow-hidden">
         <div className="flex min-h-0 w-full flex-1 flex-col gap-4">
-          <DialogHeader>
+          <DialogHeader
+            className="cursor-move select-none"
+            title={t("groups.dialogHint")}
+            onPointerDown={startDrag}
+            onDoubleClick={() => {
+              // Double-click the header: back to the centered default size and position.
+              setPosition(null)
+              setSize(null)
+            }}
+          >
             <DialogTitle>{editing ? t("groups.editTitle") : t("groups.createTitle")}</DialogTitle>
             <DialogDescription>{t("groups.createDesc")}</DialogDescription>
           </DialogHeader>
@@ -403,14 +559,42 @@ export function CreateMeetingDialog({
             )}
           </div>
 
+          {created && (
+            <p className="rounded-md border border-emerald-500/40 bg-emerald-500/5 px-2.5 py-1.5 text-[11px] text-emerald-700 dark:text-emerald-300">
+              {t("groups.createDone")}
+            </p>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={close} disabled={submitting}>
-              {t("actions.cancel")}
+              {created ? t("groups.createClose") : t("actions.cancel")}
             </Button>
-            <Button onClick={submit} disabled={!canSubmit}>
-              {submitting ? t("groups.createSubmitting") : editing ? t("groups.createSave") : t("groups.createSubmit")}
-            </Button>
+            {!created && (
+              <Button onClick={submit} disabled={!canSubmit}>
+                {submitting ? t("groups.createSubmitting") : editing ? t("groups.createSave") : t("groups.createSubmit")}
+              </Button>
+            )}
           </DialogFooter>
+        </div>
+        {/* Native-window resize affordances: every edge and corner is a live handle with the
+            matching cursor, so resizing is discoverable by feel, not by hunting one grip. The
+            bottom-right corner carries a visible diagonal mark. Handles sit above the form but
+            inside the popup, so they never trigger the backdrop close. */}
+        <div aria-hidden="true" onPointerDown={startResize("n")} className="absolute inset-x-4 top-0 z-20 h-2 cursor-ns-resize touch-none" />
+        <div aria-hidden="true" onPointerDown={startResize("s")} className="absolute inset-x-4 bottom-0 z-20 h-2 cursor-ns-resize touch-none" />
+        <div aria-hidden="true" onPointerDown={startResize("e")} className="absolute inset-y-4 end-0 z-20 w-2 cursor-ew-resize touch-none" />
+        <div aria-hidden="true" onPointerDown={startResize("w")} className="absolute inset-y-4 start-0 z-20 w-2 cursor-ew-resize touch-none" />
+        <div aria-hidden="true" onPointerDown={startResize("nw")} className="absolute start-0 top-0 z-20 size-4 cursor-nwse-resize touch-none" />
+        <div aria-hidden="true" onPointerDown={startResize("ne")} className="absolute end-0 top-0 z-20 size-4 cursor-nesw-resize touch-none" />
+        <div aria-hidden="true" onPointerDown={startResize("sw")} className="absolute bottom-0 start-0 z-20 size-4 cursor-nesw-resize touch-none" />
+        <div
+          aria-hidden="true"
+          onPointerDown={startResize("se")}
+          className="absolute end-0 bottom-0 z-20 size-5 cursor-nwse-resize touch-none"
+          data-dialog-resize
+        >
+          <svg viewBox="0 0 10 10" className="absolute end-1 bottom-1 size-2.5 text-muted-foreground/60">
+            <path d="M9 1 1 9M9 5 5 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+          </svg>
         </div>
       </DialogContent>
     </Dialog>

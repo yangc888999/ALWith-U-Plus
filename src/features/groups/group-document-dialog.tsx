@@ -75,7 +75,7 @@ export function GroupDocumentDialog({
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>{t("groups.documentTitle", { name: group?.name ?? "" })}</DialogTitle>
-          <DialogDescription>{group?.document}</DialogDescription>
+          <DialogDescription title={group?.document}>{t("groups.documentHint")}</DialogDescription>
         </DialogHeader>
         {readError !== null ? (
           <p className="h-80 w-full rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">

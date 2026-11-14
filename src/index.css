@@ -734,6 +734,18 @@ body,
   overflow: hidden;
 }
 
+/* base-ui leaves the dialog portal wrapper in normal flow at the end of body: it stretches the
+   document (phantom scrollbar, page scrolls) and the absolute popup inside it drifts with the
+   scroll offset. Pin the wrapper over the viewport instead; children keep their own events. */
+body > div:has(> [data-slot="dialog-overlay"]) {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+body > div:has(> [data-slot="dialog-overlay"]) > * {
+  pointer-events: auto;
+}
+
 [data-tauri-drag-region] {
   -webkit-user-select: none;
   user-select: none;
