@@ -65,7 +65,6 @@ import {
   resolveProjectDirectory,
   useBoundProjectDirectory
 } from "@/features/workspace/project-directory"
-import { useFourColumnsDefault } from "@/features/workspace/four-columns-preference"
 import { usePreviewVisiblePreference } from "@/features/workspace/preview-visible-preference"
 import { closeOnlineBiWindow } from "@/features/workspace/online-bi"
 import { usePreviewExtension } from "@/features/workspace/preview-extension"
@@ -150,8 +149,8 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   // 「正在启动」也要等 800ms 之后才允许出现 —— 热启动只要几百毫秒，画了再抹就是"闪一下"。
   // 这段窗口由 lib/startup-window.ts 统一维护（主窗口 / 草稿页 / 浮窗 / toast 读同一个状态），
   // 早先这里是各自的 5 秒定时器，冷启动慢一点就会先红一下再消失（2026-11-08）。
-  const silent = useStartupSilent()
   const stalled = useStartupStalled()
+  const silent = useStartupSilent()
   // The silent window is closed by `connect()` once providers are applied — not here. Closing it
   // on the `connection` event opened a hole between `client.connect()` and
   // `applyProvidersWhenIdle()`, and a failure inside that hole reached the reader as a raw toast.
@@ -498,16 +497,15 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   // `readOnly` is deliberately NOT a condition: an account-model recovery session is still a
   // project with files, and hiding its columns because the composer is locked was the reported bug.
   const isTemporaryChat = directoryReason === "temporary"
-  // Projects open four columns wide unless 设置 → 主题和外观 → 界面布局 says otherwise. A temporary
-  // chat is two columns regardless: it has no project behind it to preview. With four columns off,
-  // the preview still opens by default only when its own visibility toggle is on. `missing` does
-  // NOT auto-open the columns: a fresh install that has never picked a folder should not be greeted
-  // by an empty third pane — clicking 文件栏 opens the column and shows the guidance on demand.
-  // `invalid` IS opened automatically, so the one-click repair is on screen without an extra click.
-  const fourColumnsDefault = useFourColumnsDefault()
+  // Projects open the preview column by default when its own visibility toggle is on (设置 →
+  // 界面布局 → 显示预览栏). A temporary chat is two columns regardless: it has no project behind
+  // it to preview. `missing` does NOT auto-open the columns: a fresh install that has never picked
+  // a folder should not be greeted by an empty third pane — clicking 文件栏 opens the column and
+  // shows the guidance on demand. `invalid` IS opened automatically, so the one-click repair is on
+  // screen without an extra click.
   const [previewVisible] = usePreviewVisiblePreference()
   const defaultFourColumns =
-    directoryReason !== "temporary" && directoryReason !== "missing" && (fourColumnsDefault || previewVisible)
+    directoryReason !== "temporary" && directoryReason !== "missing" && previewVisible
   const directoryGuidance = t(
     directoryReason === "invalid"
       ? "workspace.invalidDirectoryHint"

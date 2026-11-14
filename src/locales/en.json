@@ -151,7 +151,8 @@
     "automation": "Scheduled tasks",
     "automationHint": "Each scheduled task owns one fixed monitor; every run's result and summary accumulate in it",
     "automationShowAll": "Show the other {{count}}",
-    "automationRuns": "Scheduled tasks"
+    "automationRuns": "Scheduled tasks",
+    "account": "Account"
   },
   "welcome": {
     "title": "What would you like to build?",
@@ -564,16 +565,11 @@
     "layoutPreviewDesc": "Width of the preview content.",
     "treeVisible": "Show the file column",
     "treeVisibleDesc": "When off, chat and preview take the whole workspace and projects no longer list their files on open. The folder button at the start of the preview toolbar brings the column back.",
-    "fourColumnsDefault": "Open project chats in four columns",
-    "fourColumnsDefaultDesc": "When on, a project chat opens with the preview column already showing. When off it starts three columns wide, and the preview appears the first time you open a file.",
-    "sidebarAutoCollapse": "Auto-collapse sidebar",
-    "sidebarAutoCollapseDesc": "When on, the sidebar starts collapsed and expands automatically when the cursor reaches the left edge.",
     "previewVisible": "Show preview",
     "previewVisibleDesc": "When off, a project no longer opens with the preview open; the toolbar button can still bring it back.",
     "chatColumnLocked": "Chat (always shown)",
     "chatColumnLockedDesc": "The chat column cannot be closed; there is always a conversation area.",
-    "layoutTogglesLockedHint": "With four columns on, all columns show by default and the options below cannot be changed individually.",
-    "layoutCustomHint": "Four columns is off; you can set each column's visibility separately.",
+    "layoutCustomHint": "Whichever columns you enable here are the ones a project chat opens with.",
     "alwaysOn": "Always on",
     "layoutDesc": "Chat and preview belong to the same share set and always add up to 100%.",
     "layoutRatioDesc": "Scales with the window width as a percentage of the open window.",
@@ -857,7 +853,9 @@
     "customizedFromSuffix": "",
     "customizedFromProject": "ALwith U project",
     "groups": "Meetings",
-    "groupsDesc": "Define the roles in a meeting and manage the meetings themselves."
+    "groupsDesc": "Define the roles in a meeting and manage the meetings themselves.",
+    "sidebarVisible": "Show sidebar",
+    "sidebarVisibleDesc": "Project chats open with the sidebar docked; off keeps the icon rail — click an icon to expand."
   },
   "usage": {
     "title": "Plan usage limits",
@@ -2169,6 +2167,7 @@
     "driveEntryGone": "The selected Drive entry is no longer there — it may have been deleted or moved.",
     "driveInvalidResponse": "Drive returned data this build does not understand (likely a version mismatch). Retry; if it persists, restart the app.",
     "aborted": "The operation was cancelled.",
+    "folderAccessDenied": "macOS blocked access to this folder ({{path}}): the system only lets the app that created it open it. Grant ALWith access under System Settings → Privacy & Security → Files and Folders, then retry.",
     "requestCanceled": "The request timed out and was cancelled — most likely the account service (api.alwith.ai) is unreachable, which happens outside the company network. Retry on that network.",
     "chatWindowNoResponse": "The chat window did not respond. Try again.",
     "chatWindowInitFailed": "The chat window failed to start. Try again.",

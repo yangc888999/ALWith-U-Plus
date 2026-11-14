@@ -89,6 +89,10 @@ export function useMainCanvas(
     manageInert: false,
     // Changing this option rebuilds Atlas. Defer docking until motion settles.
     navigationPinned: pinned && (moving ? settledSelection.current : selected) === 1,
+    // No hover peek: the collapsed sidebar carries its own icon rail, so sliding the panel out
+    // under the pointer duplicated the same destinations and fought the rail for the edge.
+    // Expanding is an explicit click (a rail entry or the title-bar pin toggle).
+    hoverNavigation: false,
     navigationWidth: size.navigation || 248,
     onNavigationChange: setNavigationPeeking,
     trackpadEnabled: enabled,

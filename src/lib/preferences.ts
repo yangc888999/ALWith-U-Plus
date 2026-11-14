@@ -91,7 +91,8 @@ export async function loadPreferences(): Promise<Preferences> {
   }
   return {
     composerPredictions: (await store.get<boolean>("composerPredictions")) ?? true,
-    sidebarPinned: sidebarPinned ?? false,
+    // Default to the expanded (pinned) sidebar: a fresh install opens with the panel docked.
+    sidebarPinned: sidebarPinned ?? true,
     chatWindowShortcut: (await store.get<string>("chatWindowShortcut")) ?? "Alt+Space",
     lastProjectDirectory: restoredDirectory,
     language: language ?? null,

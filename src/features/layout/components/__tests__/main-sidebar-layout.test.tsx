@@ -91,48 +91,6 @@ async function afterCloseDelay() {
     await new Promise((resolve) => setTimeout(resolve, 550))
   })
 }
-async function hover(target: Element) {
-  fireEvent.pointerMove(document, { pointerType: "mouse", clientX: 500, clientY: 100 })
-  fireEvent.pointerMove(target, {
-    pointerType: "mouse",
-    clientX: target.matches("[data-atlas-viewport]") ? 0 : target.matches("[data-atlas-navigation-trigger]") ? 500 : 20,
-    clientY: 100
-  })
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 130))
-  })
-}
-function leave(target: Element | Window = document.body) {
-  fireEvent.pointerMove(target, { pointerType: "mouse", clientX: 700, clientY: 100 })
-}
-
-test("starts collapsed; edge hover previews without saving and closes after the delay", async () => {
-  const view = setup()
-  expect(view.mode()).toBe("hidden")
-  expect(view.panel.hasAttribute("inert")).toBe(true)
-  const edge = must(view.container.querySelector("[data-atlas-viewport]"), "Atlas viewport")
-  await hover(edge)
-  expect(view.mode()).toBe("floating")
-  expect(view.panel.hasAttribute("inert")).toBe(false)
-  leave()
-  expect(view.mode()).toBe("floating")
-  await afterCloseDelay()
-  expect(view.mode()).toBe("hidden")
-  expect(view.presentation()).toBe("floating")
-  expect(save).not.toHaveBeenCalled()
-})
-
-test("hovering the switch previews and approaching the panel keeps it open", async () => {
-  const view = setup()
-  await hover(view.toggle)
-  expect(view.mode()).toBe("floating")
-  fireEvent.pointerMove(document, { pointerType: "mouse", clientX: 300, clientY: 100 })
-  fireEvent.pointerMove(view.panel, { pointerType: "mouse", clientX: 20, clientY: 100 })
-  await afterCloseDelay()
-  expect(view.mode()).toBe("floating")
-  expect(save).not.toHaveBeenCalled()
-})
-
 test("click pins and persists; leaving a pinned sidebar neither hides it nor steals focus", async () => {
   const view = setup()
   await act(() => Promise.try(() => fireEvent.click(view.toggle)))
@@ -142,9 +100,6 @@ test("click pins and persists; leaving a pinned sidebar neither hides it nor ste
   expect(save).toHaveBeenLastCalledWith("sidebarPinned", true)
   const count = view.getByRole("button", { name: "Count 0" })
   act(() => count.focus())
-  await hover(view.panel)
-  leave()
-  await afterCloseDelay()
   expect(view.mode()).toBe("pinned")
   expect(document.activeElement).toBe(count)
   await act(() => Promise.try(() => fireEvent.click(view.toggle)))
@@ -162,14 +117,9 @@ test("restores a saved pinned preference without rewriting it", () => {
   expect(save).not.toHaveBeenCalled()
 })
 
-test("solid and dashed sidebar icons follow the pin preference, not the temporary hover preview", async () => {
+test("solid and dashed sidebar icons follow the pin preference", async () => {
   const view = setup()
   expect(view.toggle.querySelector(".lucide-panel-left-dashed")).toBeTruthy()
-  await hover(view.toggle)
-  expect(view.mode()).toBe("floating")
-  expect(view.toggle.querySelector(".lucide-panel-left-dashed")).toBeTruthy()
-  expect(view.toggle.querySelector(".lucide-panel-left")).toBeNull()
-  expect(save).not.toHaveBeenCalled()
   await act(() => Promise.try(() => fireEvent.click(view.toggle)))
   expect(view.toggle.querySelector(".lucide-panel-left")).toBeTruthy()
   expect(view.toggle.querySelector(".lucide-panel-left-dashed")).toBeNull()
@@ -184,81 +134,28 @@ test("collapsing preserves the sidebar instance, local state and scroll position
   list.scrollTop = 180
   fireEvent.click(view.getByRole("button", { name: "Count 0" }))
   await act(() => Promise.try(() => fireEvent.click(view.toggle)))
-  await hover(view.toggle)
-  expect(view.getByTestId("list")).toBe(list)
+  // The collapsed panel is inert; queries must look past it to prove the instance survived.
+  expect(view.container.querySelector("[data-testid='list']")).toBe(list)
   expect(list.scrollTop).toBe(180)
-  expect(view.getByRole("button", { name: "Count 1" })).toBeTruthy()
+  // The Count button survives collapse (same instance, count preserved) even though the panel
+  // is inert now — query the raw DOM, inert subtrees are skipped by role queries.
+  expect([...view.container.querySelectorAll("button")].some((b) => b.textContent === "Count 1")).toBe(true)
+  expect(list.closest(".main-sidebar-panel")?.hasAttribute("inert")).toBe(true)
 })
 
-test("Escape and outside presses close only the temporary preview", async () => {
+test("switching between collapsed and docked states retains the viewport and sidebar state", async () => {
   const view = setup()
-  await hover(view.toggle)
-  const count = view.getByRole("button", { name: "Count 0" })
-  act(() => count.focus())
-  fireEvent.keyDown(count, { key: "Escape" })
-  await afterCloseDelay()
-  expect(view.mode()).toBe("hidden")
-  expect(document.activeElement).toBe(view.toggle)
-  await hover(view.toggle)
-  fireEvent.pointerDown(view.getByTestId("chat"))
-  await afterCloseDelay()
-  expect(view.mode()).toBe("hidden")
-  expect(save).not.toHaveBeenCalled()
-})
-
-test("portalled sidebar menus retain the preview and their clicks are not outside presses", async () => {
-  const view = setup()
-  await hover(view.toggle)
-  fireEvent.click(view.getByRole("button", { name: "Menu" }))
-  leave()
-  await afterCloseDelay()
-  expect(view.mode()).toBe("floating")
-  fireEvent.pointerDown(view.getByTestId("portal"))
-  fireEvent.keyDown(view.getByTestId("portal"), { key: "Escape" })
-  expect(view.mode()).toBe("floating")
-  fireEvent.click(view.getByRole("button", { name: "Close menu" }))
-  await afterCloseDelay()
-  expect(view.mode()).toBe("hidden")
-})
-
-test("touch does not trigger hover preview", () => {
-  const view = setup()
-  fireEvent.pointerOver(view.toggle, { pointerType: "touch" })
-  expect(view.mode()).toBe("hidden")
-})
-
-test("switching between floating and docked animations retains the viewport and sidebar state", async () => {
-  const view = setup()
-  await hover(view.toggle)
+  // Start from pinned: the collapsed start is inert, so the count button is only reachable
+  // after an explicit pin — exactly how a reader reaches it now that hover peeking is gone.
+  await act(() => Promise.try(() => fireEvent.click(view.toggle)))
   fireEvent.click(view.getByRole("button", { name: "Count 0" }))
-  expect(view.presentation()).toBe("floating")
-  await act(() => Promise.try(() => fireEvent.click(view.toggle)))
-  expect(view.mode()).toBe("pinned")
   expect(view.presentation()).toBe("docked")
   await act(() => Promise.try(() => fireEvent.click(view.toggle)))
   expect(view.mode()).toBe("hidden")
   expect(view.presentation()).toBe("docked")
-  await hover(view.toggle)
-  expect(view.mode()).toBe("floating")
-  expect(view.presentation()).toBe("floating")
   expect(view.container.querySelector(".main-sidebar-viewport")).toBe(view.viewport)
   expect(view.container.querySelector(".main-sidebar-panel")).toBe(view.panel)
-  expect(view.getByRole("button", { name: "Count 1" })).toBeTruthy()
-})
-
-test("reopening during fade-out cancels pending close and does not persist a hover state", async () => {
-  const view = setup()
-  await hover(view.toggle)
-  leave()
-  await afterCloseDelay()
-  // The shared spring returns the surface to its docked position after exit.
-  expect(view.mode()).toBe("hidden")
-  expect(view.panel.hasAttribute("inert")).toBe(true)
-  await hover(view.toggle)
-  await afterCloseDelay()
-  expect(view.mode()).toBe("floating")
-  expect(view.panel.hasAttribute("inert")).toBe(false)
-  expect(save).not.toHaveBeenCalled()
+  expect(view.container.innerHTML).toContain("Count 1")
 })
 
 test("rapid pin reversals keep the last choice and serialize preference writes", async () => {
@@ -280,7 +177,6 @@ test("leading screen stays docked without a toggle and ignores dismissal and the
   expect(view.presentation()).toBe("docked")
   expect(view.queryByRole("switch")).toBeNull()
   expect(view.container.querySelector(".main-sidebar-edge")).toBeNull()
-  leave()
   fireEvent.keyDown(window, { key: "Escape" })
   fireEvent.keyDown(window, { key: "b", metaKey: true })
   fireEvent.pointerDown(view.getByTestId("plugins"))
@@ -306,24 +202,6 @@ test.each([false, true])(
     expect(save).not.toHaveBeenCalled()
   }
 )
-
-test("entering the leading screen clears the hover timer and returning restores edge hover", async () => {
-  const view = setup()
-  await hover(view.toggle)
-  leave()
-  view.showScreen("leading")
-  await afterCloseDelay()
-  expect(view.mode()).toBe("pinned")
-  view.showScreen("main")
-  expect(view.mode()).toBe("hidden")
-  const edge = must(view.container.querySelector("[data-atlas-viewport]"), "Atlas viewport")
-  await hover(edge)
-  expect(view.mode()).toBe("floating")
-  leave()
-  await afterCloseDelay()
-  expect(view.mode()).toBe("hidden")
-  expect(save).not.toHaveBeenCalled()
-})
 
 test("switching screens keeps the same sidebar, chat draft and scroll nodes, with only the visible screen interactive", () => {
   const view = setup(true)

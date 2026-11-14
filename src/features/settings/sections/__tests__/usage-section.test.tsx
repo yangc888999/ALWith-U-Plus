@@ -394,7 +394,7 @@ test("unpriced models sit on top, ordered by usage, and one click inserts a matc
   native.report.mockResolvedValue(
     report({
       points: [
-        { date: today, hour: 3, provider: "custom", model: "deepseek-V4.1-flash", requests: 3, input: 900_000, cached: 0, output: 100_000, reasoning: 0, tokens: 1_000_000 },
+        { date: today, hour: 3, provider: "custom", model: "deepseek-x9-sample", requests: 3, input: 900_000, cached: 0, output: 100_000, reasoning: 0, tokens: 1_000_000 },
         { date: today, hour: 4, provider: "custom", model: "tiny-model", requests: 1, input: 100, cached: 0, output: 10, reasoning: 0, tokens: 110 }
       ]
     })
@@ -404,21 +404,21 @@ test("unpriced models sit on top, ordered by usage, and one click inserts a matc
   openPriceConfig()
   const list = screen.getByTestId("unpriced-models")
   const ids = Array.from(list.querySelectorAll(".font-mono")).map((node) => node.textContent)
-  expect(ids).toEqual(["deepseek-V4.1-flash", "tiny-model"])
+  expect(ids).toEqual(["deepseek-x9-sample", "tiny-model"])
 
   // Inserting lands in the vendor the id implies, opens it, and keeps the raw id for matching.
   fireEvent.click(screen.getAllByRole("button", { name: "usageReport.addPriceForModel" })[0])
   const deepseek = screen.getAllByTestId("price-vendor").find((node) => node.getAttribute("data-vendor") === "DeepSeek")!
   expect(deepseek.querySelector("button[aria-expanded]")).toHaveAttribute("aria-expanded", "true")
   const inputs = Array.from(deepseek.querySelectorAll('input[aria-label="usageReport.priceModelId"]')) as HTMLInputElement[]
-  expect(inputs.map((input) => input.value)).toContain("deepseek-V4.1-flash")
+  expect(inputs.map((input) => input.value)).toContain("deepseek-x9-sample")
 })
 
 test("a model marked free stops being unpriced, and a typed name replaces the id", async () => {
   native.report.mockResolvedValue(
     report({
       points: [
-        { date: today, hour: 3, provider: "custom", model: "deepseek-V4.1-flash", requests: 3, input: 900_000, cached: 0, output: 100_000, reasoning: 0, tokens: 1_000_000 }
+        { date: today, hour: 3, provider: "custom", model: "deepseek-x9-sample", requests: 3, input: 900_000, cached: 0, output: 100_000, reasoning: 0, tokens: 1_000_000 }
       ]
     })
   )
@@ -431,7 +431,7 @@ test("a model marked free stops being unpriced, and a typed name replaces the id
   fireEvent.click(screen.getAllByRole("button", { name: "usageReport.addPriceForModel" })[0])
   const deepseek = screen.getAllByTestId("price-vendor").find((node) => node.getAttribute("data-vendor") === "DeepSeek")!
   const ids = Array.from(deepseek.querySelectorAll('input[aria-label="usageReport.priceModelId"]')) as HTMLInputElement[]
-  const row = ids.find((input) => input.value === "deepseek-V4.1-flash")!.closest("tr")!
+  const row = ids.find((input) => input.value === "deepseek-x9-sample")!.closest("tr")!
   const free = row.querySelector('input[aria-label="usageReport.priceFree"]') as HTMLInputElement
   expect(free.checked).toBe(false)
   fireEvent.click(free)
@@ -445,7 +445,7 @@ test("a model marked free stops being unpriced, and a typed name replaces the id
   fireEvent.change(name, { target: { value: "自用 DS 闪电" } })
   const renamed = await screen.findAllByText("自用 DS 闪电")
   expect(renamed.length).toBeGreaterThan(0)
-  expect(renamed.some((node) => node.getAttribute("title") === "deepseek-V4.1-flash")).toBe(true)
+  expect(renamed.some((node) => node.getAttribute("title") === "deepseek-x9-sample")).toBe(true)
 })
 
 test("the per-row discount input edits the percentage and is independent of off-peak", async () => {
@@ -475,7 +475,7 @@ test("the per-row discount input locks while the model is marked free", async ()
   native.report.mockResolvedValue(
     report({
       points: [
-        { date: today, hour: 3, provider: "custom", model: "deepseek-V4.1-flash", requests: 3, input: 900_000, cached: 0, output: 100_000, reasoning: 0, tokens: 1_000_000 }
+        { date: today, hour: 3, provider: "custom", model: "deepseek-x9-sample", requests: 3, input: 900_000, cached: 0, output: 100_000, reasoning: 0, tokens: 1_000_000 }
       ]
     })
   )
@@ -487,7 +487,7 @@ test("the per-row discount input locks while the model is marked free", async ()
   fireEvent.click(screen.getAllByRole("button", { name: "usageReport.addPriceForModel" })[0])
   const deepseek = screen.getAllByTestId("price-vendor").find((node) => node.getAttribute("data-vendor") === "DeepSeek")!
   const row = (Array.from(deepseek.querySelectorAll('input[aria-label="usageReport.priceModelId"]')) as HTMLInputElement[])
-    .find((input) => input.value === "deepseek-V4.1-flash")!
+    .find((input) => input.value === "deepseek-x9-sample")!
     .closest("tr")!
   const free = row.querySelector('input[aria-label="usageReport.priceFree"]') as HTMLInputElement
   fireEvent.click(free)

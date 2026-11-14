@@ -91,7 +91,8 @@ test.each([undefined, { main: "gateway:deepseek:deepseek-flash", chat: "gpt-6-as
 )
 test.each([undefined, false, true])("sidebar pin preference restores %p", async (saved) => {
   settingsFixture(saved === undefined ? {} : { "appearance.sidebarPinned": saved })
-  expect((await loadPreferences()).sidebarPinned).toBe(saved ?? false)
+  // A missing value means the expanded (pinned) sidebar is the fresh-install default.
+  expect((await loadPreferences()).sidebarPinned).toBe(saved ?? true)
 })
 
 test("input suggestions default to enabled and preserve an explicit saved choice", async () => {

@@ -151,7 +151,8 @@
     "automation": "定时任务",
     "automationHint": "每个定时任务对应一条固定监控，历次运行结果和总结都累积在这条监控里",
     "automationShowAll": "显示其余 {{count}} 条",
-    "automationRuns": "定时任务"
+    "automationRuns": "定时任务",
+    "account": "账户"
   },
   "welcome": {
     "title": "想做点什么?",
@@ -564,16 +565,11 @@
     "layoutPreviewDesc": "预览内容的宽度。",
     "treeVisible": "显示文件栏",
     "treeVisibleDesc": "关掉后对话和预览占满整个工作区，项目打开时不再自动列出文件。预览标题栏左侧的目录按钮随时可以重新打开。",
-    "fourColumnsDefault": "项目对话默认四分栏",
-    "fourColumnsDefaultDesc": "打开项目对话时直接展开右侧预览区。关掉后先按三栏打开，打开文件时预览区再出现。",
-    "sidebarAutoCollapse": "侧边栏自动收起",
-    "sidebarAutoCollapseDesc": "开启后侧边栏默认收起，鼠标移到屏幕最左侧时自动展开。",
     "previewVisible": "显示预览栏",
     "previewVisibleDesc": "关闭后项目打开时不再自动展开预览区；仍可从预览标题栏的按钮重新打开。",
     "chatColumnLocked": "对话栏（始终显示）",
     "chatColumnLockedDesc": "对话栏无法关闭，保证始终有对话区域。",
-    "layoutTogglesLockedHint": "四分栏开启时四栏均默认显示，下方选项不可单独调整。",
-    "layoutCustomHint": "已关闭四分栏，可分别设置各栏的显示方式。",
+    "layoutCustomHint": "勾选哪些栏，打开项目对话时就默认显示哪些栏。",
     "alwaysOn": "始终显示",
     "layoutDesc": "输入栏与演示栏同属一组比例，合计始终为 100%。",
     "layoutRatioDesc": "按窗口宽度比例自适应，随窗口大小缩放。",
@@ -857,7 +853,9 @@
     "customizedFromSuffix": "定制",
     "customizedFromProject": "ALwith U 开源项目",
     "groups": "拉会",
-    "groupsDesc": "一键拉会：把几个 AI 角色拉进同一场讨论，轮流发言，最后由主持人收敛出结论。"
+    "groupsDesc": "一键拉会：把几个 AI 角色拉进同一场讨论，轮流发言，最后由主持人收敛出结论。",
+    "sidebarVisible": "显示侧边栏",
+    "sidebarVisibleDesc": "打开项目对话时默认展开侧边栏；关闭后侧边栏收起为左侧图标栏，点图标随时展开。"
   },
   "usage": {
     "title": "套餐用量限额",
@@ -2169,6 +2167,7 @@
     "driveEntryGone": "选中的云盘文件已经不在了（可能被删除或移动）。",
     "driveInvalidResponse": "云盘返回的数据不对（可能是版本不匹配）。重试一次；如果一直这样，重启应用。",
     "aborted": "操作已取消。",
+    "folderAccessDenied": "macOS 限制了该文件夹的访问（{{path}}）：系统只允许创建它的 App 打开。请在「系统设置 → 隐私与安全性 → 文件与文件夹」中给 ALWith 授权后重试。",
     "requestCanceled": "请求超时被取消了：多半是连不上账号服务（api.alwith.ai），公司网络外访问不了。换到公司网络再试。",
     "chatWindowNoResponse": "聊天浮窗没有响应，请重试。",
     "chatWindowInitFailed": "聊天浮窗启动失败，请重试。",

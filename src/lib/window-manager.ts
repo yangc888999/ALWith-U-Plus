@@ -3,9 +3,7 @@
 import { emitTo } from "@tauri-apps/api/event"
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow"
 
-import { commands } from "@/bindings"
 import i18n from "@/lib/i18n"
-import { isMac } from "@/lib/platform"
 
 export type SettingsSection =
   | "mobile"
@@ -70,24 +68,26 @@ function themeBackgroundRGB(): [number, number, number] {
  * Settings window: the right content keeps Desktop's 520px width while the navigation
  * sidebar grows to 240px, with a solid ground (Desktop keeps tool windows opaque).
  * Existing → shown and focused (its close is intercepted into hide); otherwise created.
- * On macOS it is attached as a child of the main window, so it floats over it and never
- * becomes its own Stage Manager stage.
+ * The window is independent on every platform: attaching it as a macOS child window made
+ * edge-resize run through the system's low-frame-rate child-window path (visible jank).
  */
 export type SettingsTarget = { providerId?: string }
 export type SettingsNavigation = { section: SettingsSection; providerId?: string }
 
+/** Click-again closes: the rail's avatar/gear toggle Settings instead of stacking focus. */
+export async function toggleSettingsWindow(section?: SettingsSection, target: SettingsTarget = {}): Promise<void> {
+  const existing = await WebviewWindow.getByLabel("settings")
+  if (existing && (await existing.isVisible())) {
+    // Hide, not destroy: scroll offset and section survive for the next open.
+    await existing.hide().catch(() => {})
+    return
+  }
+  await openSettingsWindow(section, target)
+}
+
 export async function openSettingsWindow(section?: SettingsSection, target: SettingsTarget = {}): Promise<void> {
   const existing = await WebviewWindow.getByLabel("settings")
   if (existing) {
-    // Attach re-parents a window that was detached; a hidden window still needs show and focus.
-    // A failing attach must not swallow the rest: the window would stay hidden forever.
-    if (isMac()) {
-      try {
-        await commands.attachWindowToMain({ label: "settings" })
-      } catch {
-        // Fall through to showing it as a normal window.
-      }
-    }
     let shown = true
     try {
       await existing.show()
@@ -115,7 +115,6 @@ export async function openSettingsWindow(section?: SettingsSection, target: Sett
       return
     }
   }
-  const attachToMain = isMac()
   const win = new WebviewWindow("settings", {
     url: `/settings.html?tab=${section ?? "general"}${target.providerId ? `&provider=${encodeURIComponent(target.providerId)}` : ""}`,
     title: i18n.t("settings.title"),
@@ -131,22 +130,11 @@ export async function openSettingsWindow(section?: SettingsSection, target: Sett
     hiddenTitle: true,
     titleBarStyle: "overlay",
     backgroundColor: themeBackgroundRGB(),
-    // Shown by the native attach (child windows must not pop up as stages first).
-    ...(attachToMain ? { visible: false } : {})
   })
   void win.once(
     "tauri://created",
     () =>
       void (async () => {
-        // Attaching is best-effort: when it fails the window was left invisible, which is exactly
-        // what made Settings look like it refused to open. Show it either way.
-        if (attachToMain) {
-          try {
-            await commands.attachWindowToMain({ label: "settings" })
-          } catch {
-            // Fall through: a standalone Settings window beats none at all.
-          }
-        }
         await win.show()
         await win.setFocus()
       })()

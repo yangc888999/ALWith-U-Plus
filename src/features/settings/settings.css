@@ -98,6 +98,8 @@
 }
 
 /* ---------- cards ---------- */
+/* WorkBuddy-style restraint: the card carries one outer border; its head is a plain label with
+   no gradient, no rule — rows are separated by spacing alone, not lines. */
 .settings-card {
   overflow: hidden;
   border: 1px solid color-mix(in oklab, var(--border) 90%, transparent);
@@ -118,12 +120,6 @@
   justify-content: space-between;
   gap: 0.5rem 0.75rem;
   padding: 0.625rem 0.875rem;
-  border-bottom: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
-  background: linear-gradient(
-    to bottom,
-    color-mix(in oklab, var(--settings-accent) 5.5%, var(--card)),
-    color-mix(in oklab, var(--settings-accent) 1.5%, var(--card))
-  );
 }
 
 /* 应用扩展页原先只有 5.5% 的 accent 渐变，加上大面积 bg-muted 图标块，整页读起来是灰的。
@@ -136,7 +132,6 @@
   );
   box-shadow: inset 3px 0 0 color-mix(in oklab, var(--settings-accent) 65%, transparent);
 }
-
 .extensions-section .settings-card-title {
   color: var(--settings-accent-ink);
 }
@@ -183,16 +178,14 @@
 /* Rows carry their own vertical inset; a hand-built block (a table header, a grid of provider
    chips, a legend) does not, and used to sit flush against the header rule. Give every block the
    same breathing room so cards read alike. */
-.settings-card-body
-  > :first-child:not(.settings-row):not(.settings-group):not(.settings-note):not(.settings-details) {
+.settings-card-body > :first-child:not(.settings-row):not(.settings-group):not(.settings-note):not(.settings-details) {
   margin-block-start: 0.75rem;
 }
 
 /* The closing block gets the same inset as the opening one. Without this a nested card, table or
    paragraph ended flush against the card's bottom edge — the "大模块套小模块框，底部都合在一起"
    report. Rows, groups, notes and details already carry their own bottom padding. */
-.settings-card-body
-  > :last-child:not(.settings-row):not(.settings-group):not(.settings-note):not(.settings-details) {
+.settings-card-body > :last-child:not(.settings-row):not(.settings-group):not(.settings-note):not(.settings-details) {
   margin-block-end: 0.75rem;
 }
 
@@ -219,17 +212,18 @@
   border-bottom: 0;
 }
 
-/* Rows inside a card drop the full-width form rhythm for a compact list rhythm. */
+/* Rows inside a card drop the full-width form rhythm for a compact list rhythm. Without
+   divider lines, the spacing alone separates rows (WorkBuddy-style), so the inset carries
+   the extra half-step the old hairline used to provide. */
 .settings-card-body > .settings-row,
 .settings-card-body > .settings-group > .settings-row {
   min-height: 0;
-  padding-block: 0.75rem;
-  border-bottom: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
+  padding-block: 0.875rem;
 }
 
 .settings-card-body > :where(.settings-row, .settings-group):last-child > .settings-row:last-child,
 .settings-card-body > .settings-row:last-child {
-  border-bottom: 0;
+  padding-block-end: 1rem;
 }
 
 .settings-card-body > .settings-row:has(.settings-row-description),
@@ -242,10 +236,6 @@
   font-size: 0.75rem;
   line-height: 1.125rem;
   color: var(--muted-foreground);
-}
-
-.settings-note + .settings-row {
-  border-top: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
 }
 
 .settings-details {
@@ -299,11 +289,6 @@
   justify-content: space-between;
   gap: 1.5rem;
   padding-block: 1rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.settings-row:last-child {
-  border-bottom: 0;
 }
 
 .settings-row:has(.settings-row-description) {
@@ -387,6 +372,15 @@
   border-bottom: 0;
 }
 
+/* Module-provided rows follow the same no-divider rule as host rows: spacing alone separates
+   them, so the Drive page reads like every other settings page instead of a form dump. */
+.settings-content .alwith-drive-setting,
+.settings-content .alwith-drive-row,
+.settings-content .alwith-legacy .setting-item {
+  border-bottom: 0;
+  padding-block: 0.875rem;
+}
+
 .settings-content .alwith-legacy .setting-item-info {
   min-width: 0;
 }
@@ -454,7 +448,6 @@
 .settings-content .alwith-legacy .setting-item {
   display: flex;
   justify-content: space-between;
-  border-bottom: 1px solid var(--border);
 }
 .settings-content .alwith-legacy .setting-item-control {
   display: flex;

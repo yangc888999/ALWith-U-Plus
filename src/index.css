@@ -224,31 +224,20 @@ html[data-window-backdrop="acrylic"] {
   --tauri-plugin-decoration-z-index: 60;
 }
 /* The native recovery frame already supplies its own title bar. */
-html[data-window-backdrop="acrylic"]:not(
-    :has([data-tauri-plugin-decoration-active])
-  )
-  .windows-main-titlebar {
+html[data-window-backdrop="acrylic"]:not(:has([data-tauri-plugin-decoration-active])) .windows-main-titlebar {
   display: none;
 }
-html[data-window-backdrop="acrylic"]
-  [data-tauri-plugin-decoration-root]
-  [data-tauri-decoration-control] {
+html[data-window-backdrop="acrylic"] [data-tauri-plugin-decoration-root] [data-tauri-decoration-control] {
   width: calc(46px / var(--main-window-zoom, 1));
   min-width: 0;
   height: var(--tauri-plugin-decoration-titlebar-height, 32px);
   color: var(--foreground);
 }
-html[data-window-backdrop="acrylic"]
-  [data-tauri-plugin-decoration-root]
-  [data-tauri-decoration-control]:hover,
-html[data-window-backdrop="acrylic"]
-  [data-tauri-plugin-decoration-root]
-  [data-tauri-decoration-hover] {
+html[data-window-backdrop="acrylic"] [data-tauri-plugin-decoration-root] [data-tauri-decoration-control]:hover,
+html[data-window-backdrop="acrylic"] [data-tauri-plugin-decoration-root] [data-tauri-decoration-hover] {
   background: color-mix(in srgb, var(--foreground) 10%, transparent);
 }
-html[data-window-backdrop="acrylic"]
-  [data-tauri-plugin-decoration-root]
-  [data-tauri-decoration-control="close"]:hover,
+html[data-window-backdrop="acrylic"] [data-tauri-plugin-decoration-root] [data-tauri-decoration-control="close"]:hover,
 html[data-window-backdrop="acrylic"]
   [data-tauri-plugin-decoration-root]
   [data-tauri-decoration-control="close"][data-tauri-decoration-hover] {
@@ -420,7 +409,6 @@ html[data-window-backdrop="acrylic"]
   flex-shrink: 0;
   width: var(--active-sidebar-width);
   height: 100%;
-  transition: width var(--sidebar-resize-duration) ease-in-out;
 }
 /* A drag owns the width: skip the open/close easing so the edge follows the pointer. */
 .main-sidebar-shell[data-resizing] {
@@ -428,9 +416,7 @@ html[data-window-backdrop="acrylic"]
 }
 /* Measure from the chat surface's visible edge, including its gutter and border. */
 [data-sidebar-mode="pinned"] .main-sidebar-shell {
-  --sidebar-scrollbar-extension: calc(
-    var(--main-surface-gutter) / 2 + var(--main-surface-border-width)
-  );
+  --sidebar-scrollbar-extension: calc(var(--main-surface-gutter) / 2 + var(--main-surface-border-width));
 }
 /* Clip a full-width sidebar instead of squeezing its contents during resize. */
 .main-sidebar-viewport {
@@ -458,22 +444,135 @@ html[data-window-backdrop="acrylic"]
   z-index: 31;
   width: 0;
 }
+/* The vendored sidebar hides itself with fixed positioning and a viewport-tall height when
+   collapsed; inside this layout the shell/viewport own placement, so the inner surface must
+   simply fill its panel. This also keeps the pinned panel inside the window body (h-svh used
+   to overflow the top and bottom edges). */
+.main-sidebar-panel [data-slot="sidebar-wrapper"] {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.main-sidebar-panel [data-slot="sidebar"] {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  transition: none;
+}
+/* Only a pinned sidebar reserves flow space; collapsed and peeking keep the chat frame put. */
+[data-sidebar-mode="hidden"] .main-screen-track > .main-sidebar-shell,
+[data-sidebar-mode="floating"] .main-screen-track > .main-sidebar-shell {
+  width: 0;
+}
+/* The rail owns a static 58px slot (52px column + 6px seam) in both collapsed and peeking
+   states, so opening or dismissing the floating card never moves the chat frame. */
+[data-sidebar-mode="hidden"] .main-screen-content > .main-chat-surface,
+[data-sidebar-mode="floating"] .main-screen-content > .main-chat-surface {
+  margin-inline-start: calc(58px + var(--main-surface-gutter) / 2);
+}
 [data-sidebar-mode="hidden"] .main-sidebar-viewport {
   pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(-12px);
+  transition:
+    opacity 140ms ease,
+    transform 180ms ease,
+    visibility 0s linear 140ms;
 }
-[data-sidebar-mode="floating"]
-  .main-sidebar-shell[data-atlas-floating]
-  > .main-sidebar-viewport {
-  /* Atlas paints this outer surface; include the canvas's 4px window gutter. */
-  inset-inline-start: 4px;
-  padding-inline: 0;
+/* The peek is a floating card beside the rail: inset from the window edges, fully rounded,
+   soft shadow, painted over the chat surface. The shell stays zero-width in flow. */
+[data-sidebar-mode="floating"] .main-sidebar-viewport {
+  inset-block: var(--main-surface-gutter);
+  /* Atlas' surface rule sets height:100%, which would override the block insets and push the
+     bottom corners out of the window; auto lets the insets define the card height. */
+  height: auto;
+  inset-inline-start: calc(58px + var(--main-surface-gutter) / 2);
+  width: var(--sidebar-width);
   overflow: clip;
   border-radius: var(--main-surface-radius);
+  background-color: var(--background);
+  box-shadow:
+    0 12px 32px -12px rgb(0 0 0 / 0.18),
+    0 2px 8px rgb(0 0 0 / 0.08);
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition:
+    opacity 160ms ease-out,
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s;
 }
-[data-sidebar-mode="floating"] .main-sidebar-panel {
-  overflow: clip;
-  border-radius: var(--main-surface-radius);
+/* When the sidebar is unpinned, a one-column icon rail stays on the leading edge: the header
+   menu rows become icon buttons so every destination remains one click away. The sidebar
+   portals its rail content in through SidebarRailContext. The rail is a rounded column with a
+   hairline divider on its chat-facing edge; it stays visible while the peek card floats beside
+   it and fades out only when the sidebar docks. */
+.main-sidebar-rail {
+  /* Always mounted, faded with opacity only. Visibility is driven by data-rail-show (set by
+     the layout whenever the sidebar is unpinned) — the frame itself never animates, so
+     collapse/expand is an instant layout change plus this one visual crossfade. */
+  display: flex;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-8px);
+  transition:
+    opacity 160ms ease,
+    transform 180ms ease,
+    visibility 0s;
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: var(--main-surface-gutter);
+  /* The peek card floats beside the rail (never over it), so the rail only needs to sit below
+     the docked shell's stacking context. */
+  z-index: 20;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 52px;
+  padding-block: 10px;
+  padding-inline: 2px;
+  overflow: hidden;
+  /* Square column: the divider runs full height without following the surface radius. */
+  background-color: var(--background);
 }
+[data-rail-show] .main-sidebar-rail {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: none;
+  transition:
+    opacity 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s;
+}
+/* Each icon starts tucked left and transparent; the visible state releases them one after
+   another (40ms apart) for a cascade. The footer pair lands last, mirroring the panel's
+   bottom-anchored footer. */
+.main-sidebar-rail button {
+  opacity: 0;
+  transform: translateX(-10px);
+  transition:
+    opacity 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+[data-rail-show] .main-sidebar-rail button {
+  opacity: 1;
+  transform: none;
+}
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(1) { transition-delay: 60ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(2) { transition-delay: 100ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(3) { transition-delay: 140ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(4) { transition-delay: 180ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(5) { transition-delay: 220ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(6) { transition-delay: 260ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(7) { transition-delay: 300ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(8) { transition-delay: 340ms; }
+[data-rail-show] .main-sidebar-rail > .mt-auto > button:nth-child(1) { transition-delay: 400ms; }
+[data-rail-show] .main-sidebar-rail > .mt-auto > button:nth-child(2) { transition-delay: 440ms; }
 @keyframes activity-notification-pulse {
   0%,
   100% {
@@ -532,9 +631,9 @@ html[data-window-backdrop="acrylic"]
 }
 /* Application controls use a hover overlay; conversations keep their own presentation. */
 @media (hover: hover) {
-  :is(button, [role="button"], [class~="group/button"]):not(:disabled):not(
-      [aria-disabled="true"]
-    ):not([data-disabled]):not(
+  :is(button, [role="button"], [class~="group/button"]):not(:disabled):not([aria-disabled="true"]):not(
+      [data-disabled]
+    ):not(
       :where(
         .codex-timeline-content *,
         .timeline-user-message-navigation *,
@@ -587,11 +686,7 @@ html[data-window-backdrop="acrylic"]
   --native-viewport-width: 100vw;
   /* The renderer updates 100vw with native page zoom; no React/IPC timing participates in compensation. */
   --window-zoom-correction: calc(100vw / var(--native-viewport-width));
-  --chrome-hover-background: color-mix(
-    in oklab,
-    var(--foreground) 8%,
-    transparent
-  );
+  --chrome-hover-background: color-mix(in oklab, var(--foreground) 8%, transparent);
 }
 /* Trigger composition replaces data-slot, but preserves the shadcn button class. */
 .main-sidebar-panel :is([class~="group/button"], .chrome-hover):hover,
@@ -601,8 +696,7 @@ html[data-window-backdrop="acrylic"]
 .main-extension-toolbar button:hover,
 .windows-extension-controls button:hover,
 .main-workspace-toolbar .file-workspace-toolbar button:hover,
-.main-window-statusbar
-  button:not(.canvas-dots button):is(:hover, [aria-expanded="true"]) {
+.main-window-statusbar button:not(.canvas-dots button):is(:hover, [aria-expanded="true"]) {
   background-color: var(--chrome-hover-background);
 }
 
@@ -622,14 +716,15 @@ html[data-window-backdrop="acrylic"]
   .main-screen-leading,
   .main-screen-content,
   .main-sidebar-shell,
-  [data-sidebar-presentation] .main-sidebar-viewport {
+  .main-sidebar-rail,
+  .main-sidebar-rail button,
+  .main-sidebar-viewport {
     transition: none;
   }
 }
 :root {
   --chat-font-size: 14px;
-  --font-mono:
-    ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 html,
@@ -647,10 +742,7 @@ body,
 /* The session list labels its sections in order. Every project group carries the "项目" label so
    the first one always has it (the list re-renders on its own, so first-call state cannot be
    trusted); only the first labelled group may show it. */
-.session-list-scroll
-  div:has(> [data-project-label])
-  ~ div
-  [data-project-label] {
+.session-list-scroll div:has(> [data-project-label]) ~ div [data-project-label] {
   display: none;
 }
 
@@ -662,28 +754,12 @@ body,
   /* Kept faint on purpose: the rail sits next to dense rows and a strong colour reads as a
      status marker instead of a scrollbar. Dark mode needs a little more because the foreground
      there is light and mixes down faster against the surface. */
-  --app-scrollbar-thumb: color-mix(
-    in oklab,
-    var(--foreground) 12%,
-    transparent
-  );
-  --app-scrollbar-thumb-hover: color-mix(
-    in oklab,
-    var(--foreground) 22%,
-    transparent
-  );
+  --app-scrollbar-thumb: color-mix(in oklab, var(--foreground) 12%, transparent);
+  --app-scrollbar-thumb-hover: color-mix(in oklab, var(--foreground) 22%, transparent);
 }
 .dark {
-  --app-scrollbar-thumb: color-mix(
-    in oklab,
-    var(--foreground) 16%,
-    transparent
-  );
-  --app-scrollbar-thumb-hover: color-mix(
-    in oklab,
-    var(--foreground) 28%,
-    transparent
-  );
+  --app-scrollbar-thumb: color-mix(in oklab, var(--foreground) 16%, transparent);
+  --app-scrollbar-thumb-hover: color-mix(in oklab, var(--foreground) 28%, transparent);
 }
 * {
   scrollbar-width: thin;
@@ -784,7 +860,10 @@ body,
   background: transparent;
   color: var(--foreground);
   cursor: pointer;
-  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
 }
 .alwith-wysiwyg-toolbar .alwith-markdown-action svg {
   width: 16px;
@@ -851,9 +930,7 @@ body,
   padding-inline-end: var(--sidebar-scrollbar-extension, 0px);
 }
 .session-list-scroll {
-  --app-scrollbar-track-size: calc(
-    var(--app-scrollbar-size) + 2 * var(--app-scrollbar-edge-gap)
-  );
+  --app-scrollbar-track-size: calc(var(--app-scrollbar-size) + 2 * var(--app-scrollbar-edge-gap));
   margin-inline-end: calc(-1 * var(--sidebar-scrollbar-extension, 0px));
   padding-inline-end: calc(8px + var(--sidebar-scrollbar-extension, 0px));
 }
@@ -876,8 +953,7 @@ body,
   background: var(--app-scrollbar-thumb);
 }
 [data-slot="scroll-area-thumb"]:hover,
-[data-slot="scroll-area-scrollbar"][data-dragging]
-  [data-slot="scroll-area-thumb"] {
+[data-slot="scroll-area-scrollbar"][data-dragging] [data-slot="scroll-area-thumb"] {
   background: var(--app-scrollbar-thumb-hover);
 }
 [data-slot="scroll-area-scrollbar"][data-hovering],
@@ -924,9 +1000,7 @@ body,
   --computer-cursor-outline: rgb(230 230 230);
 }
 .computer-agent-cursor {
-  filter: drop-shadow(
-    0 1px 2px color-mix(in srgb, var(--foreground) 25%, transparent)
-  );
+  filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--foreground) 25%, transparent));
 }
 /* Inset chrome hover surfaces within the 32px title and status rows. */
 .main-sidebar-toggle {
@@ -1000,7 +1074,6 @@ body,
 }
 
 .main-screen-track {
-  will-change: transform;
   padding-inline-start: var(--canvas-leading-width);
 }
 
@@ -1032,16 +1105,8 @@ body,
    model from each provider, letting this host stylesheet restore equal group headings without
    changing the shared package. Native and gateway models deliberately share the same row rhythm. */
 [data-slot="dropdown-menu-content"]:has([data-model-menu-list]) {
-  --model-picker-row-background: color-mix(
-    in oklab,
-    var(--background) 76%,
-    var(--muted)
-  );
-  --model-picker-selected-background: color-mix(
-    in oklab,
-    var(--settings-accent) 12%,
-    var(--background)
-  );
+  --model-picker-row-background: color-mix(in oklab, var(--background) 76%, var(--muted));
+  --model-picker-selected-background: color-mix(in oklab, var(--settings-accent) 12%, var(--background));
 }
 [data-model-menu-list] [role="menuitemradio"] {
   position: relative;
@@ -1059,12 +1124,10 @@ body,
 }
 [data-model-menu-list] [role="menuitemradio"][aria-checked="true"] {
   background-color: var(--model-picker-selected-background);
-  box-shadow: inset 0 0 0 1px
-    color-mix(in oklab, var(--settings-accent) 22%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--settings-accent) 22%, transparent);
   font-weight: 500;
 }
-[data-model-menu-list]
-  [role="menuitemradio"]:has(.model-picker-icon[data-model-group-title]) {
+[data-model-menu-list] [role="menuitemradio"]:has(.model-picker-icon[data-model-group-title]) {
   margin-top: 1.5rem;
 }
 .model-picker-icon {
@@ -1105,9 +1168,7 @@ body,
   text-transform: uppercase;
   white-space: nowrap;
 }
-[data-model-menu-list]
-  [role="menuitemradio"][aria-checked="true"]
-  .model-picker-icon {
+[data-model-menu-list] [role="menuitemradio"][aria-checked="true"] .model-picker-icon {
   border-color: color-mix(in oklab, var(--settings-accent) 28%, transparent);
   background: color-mix(in oklab, var(--settings-accent) 14%, var(--background));
   color: var(--foreground);
@@ -1161,27 +1222,38 @@ body,
 :root {
   --settings-accent: oklch(0.62 0.21 28);
   --settings-accent-ink: oklch(0.49 0.19 26);
-  --settings-accent-soft: color-mix(in oklab, var(--settings-accent) 12%, var(--card));
+  --settings-accent-soft: color-mix(in oklab, var(--settings-accent) var(--accent-surface), var(--card));
+
+  /* ── 浅色主题色强度标尺 ────────────────────────────────────────────────────
+     浅色此前完全没有标尺：所有引用 --accent-surface/edge/strong/active 的消费点取值落空，
+     徽标、选中描边、hover 环在浅色下整体失效，只剩 2.2% 的整窗底色——读起来就是“没有主题色”。
+     白底比深底更容易把彩度冲淡，所以浅色各档取值比深色低一档，而不是照抄深色。 */
+  --accent-wash: 4%;         /* 整窗常驻底色 */
+  --accent-wash-top: 11%;    /* 顶部光带 */
+  --accent-surface: 12%;     /* 徽标 / 选中项 / 卡片底色 */
+  --accent-surface-hover: 16%;
+  --accent-edge: 28%;        /* 描边 */
+  --accent-strong: 40%;      /* hover 描边 / 焦点环 */
+  --accent-active: 12%;      /* 侧栏选中项 */
 }
 
 /* ── 深色主题色强度标尺 ────────────────────────────────────────────────────────
    感知强度 ≈ 彩度 × 混入比例。7 个主题深色 accent 的彩度从 0.02(亚麻灰) 到 0.18(YUP红)
    差 9 倍，但过去每个消费点各写死一个百分比，于是彩色主题看得见、低彩度主题等于没主题。
    现在把深色下所有主题色叠加收成这一组语义变量：消费点只引用语义，不再各自写数字；
-   低彩度主题只需覆盖这一组（配合略提彩度）即可把感知强度补齐，全窗表现一致。
-   浅色不参与——浅色的 --settings-accent 本身彩度够、且背景是白，不需要补偿。 */
+   低彩度主题只需覆盖这一组（配合略提彩度）即可把感知强度补齐，全窗表现一致。 */
 .dark {
   --settings-accent: oklch(0.74 0.18 30);
   --settings-accent-ink: oklch(0.85 0.15 30);
   --settings-accent-soft: color-mix(in oklab, var(--settings-accent) var(--accent-surface), var(--card));
 
-  --accent-wash: 3%;         /* 整窗常驻底色 */
-  --accent-wash-top: 8%;     /* 顶部光带 */
-  --accent-surface: 16%;     /* 徽标 / 选中项 / 卡片底色 */
+  --accent-wash: 3%; /* 整窗常驻底色 */
+  --accent-wash-top: 8%; /* 顶部光带 */
+  --accent-surface: 16%; /* 徽标 / 选中项 / 卡片底色 */
   --accent-surface-hover: 20%;
-  --accent-edge: 34%;        /* 描边 */
-  --accent-strong: 50%;      /* hover 描边 / 焦点环 */
-  --accent-active: 14%;      /* 侧栏选中项 */
+  --accent-edge: 34%; /* 描边 */
+  --accent-strong: 50%; /* hover 描边 / 焦点环 */
+  --accent-active: 14%; /* 侧栏选中项 */
 }
 
 :root[data-accent="lemon-green"] {
@@ -1246,6 +1318,31 @@ body,
 .dark[data-accent="emerald"] {
   --settings-accent: oklch(0.76 0.13 170);
   --settings-accent-ink: oklch(0.85 0.11 170);
+}
+
+/* ── 主题色色板的双外观取值 ──────────────────────────────────────────────────
+   The 外观 picker's swatches must show what each preset looks like under the CURRENT
+   appearance, not a fixed light colour: accent-store's swatch constant is the light value,
+   while .dark[data-accent] re-themes to a lighter accent. Each preset therefore exposes a
+   light and a dark swatch token, and --accent-preset-<id> picks the one matching the active
+   theme — so the picker previews reality in both appearances. */
+:root {
+  --accent-preset-yup-red: oklch(0.64 0.20 29);
+  --accent-preset-lemon-green: oklch(0.80 0.16 125);
+  --accent-preset-girly-pink: oklch(0.74 0.14 350);
+  --accent-preset-linen-gray: oklch(0.72 0.025 85);
+  --accent-preset-warm-brown: oklch(0.62 0.09 55);
+  --accent-preset-sky-blue: oklch(0.66 0.13 240);
+  --accent-preset-emerald: oklch(0.68 0.12 168);
+}
+.dark {
+  --accent-preset-yup-red: oklch(0.74 0.18 30);
+  --accent-preset-lemon-green: oklch(0.82 0.16 128);
+  --accent-preset-girly-pink: oklch(0.80 0.13 352);
+  --accent-preset-linen-gray: oklch(0.78 0.045 85);
+  --accent-preset-warm-brown: oklch(0.70 0.11 58);
+  --accent-preset-sky-blue: oklch(0.74 0.14 242);
+  --accent-preset-emerald: oklch(0.76 0.13 170);
 }
 
 /* ── 布局预览条四段配色 ────────────────────────────────────────────────────────
@@ -1325,7 +1422,9 @@ body,
    full-size viewer. */
 [data-chat-content] img {
   cursor: zoom-in;
-  transition: transform 140ms ease-out, box-shadow 140ms ease-out;
+  transition:
+    transform 140ms ease-out,
+    box-shadow 140ms ease-out;
 }
 [data-chat-content] img:hover {
   position: relative;
@@ -1387,12 +1486,11 @@ body,
    同一高度永远是同一个颜色。
    两层：常驻 2.2% 底色（没有纯白）+ 顶部 6% 光带，420px 散尽。深色 3% / 8%。 */
 :root {
-  --wash-base: 2.2%;
-  --wash-top: 6%;
+  /* 浅色同样从主题色标尺取值（此前硬编码 2.2%/6%，浅色下几乎不可见）。 */
+  --wash-base: var(--accent-wash);
+  --wash-top: var(--accent-wash-top);
   --overlay-z: 60;
 }
-/* 深色只需覆盖强度，不再重写一整块 background-image。此前这两个变量定义了却
-   从没被 body::after 引用（里面是硬编码 3%/8%），改变量完全不生效——现在收成单一真源。 */
 .dark {
   --wash-base: var(--accent-wash);
   --wash-top: var(--accent-wash-top);
@@ -1419,16 +1517,15 @@ body::after {
 
 /* 选中项是主题色唯一「实色」的落脚点。 */
 [data-slot="sidebar-menu-button"][data-active] {
-  background: color-mix(in oklab, var(--settings-accent) 8%, var(--sidebar));
-  color: color-mix(in oklab, var(--settings-accent-ink) 55%, var(--sidebar-foreground));
+  background: color-mix(in oklab, var(--settings-accent) var(--accent-active), var(--sidebar));
+  color: color-mix(in oklab, var(--settings-accent-ink) 60%, var(--sidebar-foreground));
 }
 [data-slot="sidebar-menu-button"][data-active] svg {
   color: color-mix(in oklab, var(--settings-accent-ink) 70%, var(--sidebar-foreground));
 }
 
-/* 深色选中项再提一档：底色走 --accent-active，并加左侧主题色边线，
-   让当前主题色在深色一眼可辨（浅色沿用上面的 8%，不动）。 */
-.dark [data-slot="sidebar-menu-button"][data-active] {
+/* 选中项统一走标尺（底色 --accent-active + 左侧主题色边线），浅色不再缺席。 */
+[data-slot="sidebar-menu-button"][data-active] {
   background: color-mix(in oklab, var(--settings-accent) var(--accent-active), var(--sidebar));
   box-shadow: inset 2px 0 0 0 var(--settings-accent);
 }
@@ -1448,7 +1545,6 @@ body::after {
 .alwith-model-pill > svg:last-child {
   order: 4;
 }
-
 
 /* 仅在聊天模式隐藏输入框左侧的「+」（attachImage）。项目对话保留它——那里附件是常规操作。
    按钮由 @alwith/module-chat 硬编码渲染、没有开关属性，所以按工具栏结构 + 模式标记定位；

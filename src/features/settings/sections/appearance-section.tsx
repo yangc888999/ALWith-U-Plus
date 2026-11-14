@@ -1,3 +1,4 @@
+import { Slider } from "@base-ui/react/slider"
 import { CheckIcon, MonitorIcon, MoonIcon, SunIcon } from "lucide-react"
 import { useEffect, useState, useSyncExternalStore } from "react"
 import { useTranslation } from "react-i18next"
@@ -13,8 +14,6 @@ import {
   SelectValue
 } from "@/components/alwith-ui/select"
 import { type Theme, useTheme } from "@/components/theme-provider"
-import { Slider } from "@base-ui/react/slider"
-
 import {
   NAVIGATION_INSTRUMENT_GROUPS,
   NAVIGATION_SOUND_MODES,
@@ -26,6 +25,7 @@ import {
   setNavigationInstrument,
   setNavigationSoundMode
 } from "@/features/chat/codex/navigation-sound-store"
+import { chatLayoutDefaults, saveChatLayout, useChatLayout } from "@/features/workspace/chat-layout"
 import {
   type LayoutShare,
   saveLayoutShare,
@@ -34,11 +34,9 @@ import {
   visibleSharePercents,
   workspaceLayoutDefaults
 } from "@/features/workspace/layout-preferences"
-import { useWorkspaceLayout } from "@/features/workspace/use-workspace-layout"
-import { useFourColumnsDefault } from "@/features/workspace/four-columns-preference"
-import { useTreeVisiblePreference } from "@/features/workspace/tree-visible-preference"
 import { usePreviewVisiblePreference } from "@/features/workspace/preview-visible-preference"
-import { chatLayoutDefaults, saveChatLayout, useChatLayout } from "@/features/workspace/chat-layout"
+import { useTreeVisiblePreference } from "@/features/workspace/tree-visible-preference"
+import { useWorkspaceLayout } from "@/features/workspace/use-workspace-layout"
 import {
   getConversationDetail,
   getQueueSendMode,
@@ -50,11 +48,10 @@ import { cn } from "@/lib/utils"
 import { setZoomLevel, ZOOM_LEVELS, zoomStore } from "@/lib/zoom"
 
 import { ACCENT_PRESETS, useAccentStore } from "../accent-store"
-import { SettingRow, SettingsCard } from "./shared"
-import { FourColumnsRow } from "./four-columns-row"
-import { TreeVisibleRow } from "./tree-visible-row"
 import { PreviewVisibleRow } from "./preview-visible-row"
-import { SidebarAutoCollapseRow } from "./sidebar-auto-collapse-row"
+import { SettingRow, SettingsCard } from "./shared"
+import { SidebarVisibleRow } from "./sidebar-visible-row"
+import { TreeVisibleRow } from "./tree-visible-row"
 
 /**
  * One row of the layout share table: column name on the left, its width share on the right.
@@ -78,12 +75,10 @@ function LayoutShareRow({
   const read = (next: number | readonly number[]): number =>
     Array.isArray(next) ? Number(next[0] ?? value) : Number(next)
   return (
-    <div className="flex items-center gap-3 border-b border-border/60 px-4 py-2 last:border-b-0">
+    <div className="flex items-center gap-3 px-4 py-2">
       <div className="w-16 shrink-0">
         <p className="text-[13px] leading-5">{name}</p>
-        {desc !== undefined && desc !== "" && (
-          <p className="truncate text-[11px] text-muted-foreground">{desc}</p>
-        )}
+        {desc !== undefined && desc !== "" && <p className="truncate text-[11px] text-muted-foreground">{desc}</p>}
       </div>
       <Slider.Root
         value={[draft]}
@@ -96,15 +91,18 @@ function LayoutShareRow({
       >
         <Slider.Control className="relative flex h-5 w-full items-center">
           <Slider.Track className="relative h-1 w-full rounded-full bg-muted">
-            <Slider.Indicator className="absolute h-full rounded-full" style={{ background: "var(--settings-accent)" }} />
+            <Slider.Indicator
+              className="absolute h-full rounded-full"
+              style={{ background: "var(--settings-accent)" }}
+            />
           </Slider.Track>
           <Slider.Thumb
             aria-label={name}
-            className="size-3.5 rounded-full border border-border bg-background shadow-sm outline-none transition-shadow hover:shadow focus-visible:ring-2 focus-visible:ring-ring"
+            className="size-3.5 rounded-full border border-border bg-background shadow-sm transition-shadow outline-none hover:shadow focus-visible:ring-2 focus-visible:ring-ring"
           />
         </Slider.Control>
       </Slider.Root>
-      <span className="w-10 shrink-0 text-right text-xs tabular-nums text-muted-foreground">{draft}%</span>
+      <span className="w-10 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{draft}%</span>
     </div>
   )
 }
@@ -148,25 +146,13 @@ function ThemeSegmented({
 /** One coloured band of the layout-share bar. Colour comes from the --layout-seg-* tokens
  *  (defined per light/dark in index.css), so the bar and its legend always agree and dark
  *  mode keeps a fixed lightness ladder that stays clear of the muted track. */
-function LayoutSegment({
-  pct,
-  seg
-}: {
-  pct: number
-  seg: "navigation" | "chat" | "preview" | "tree"
-}) {
+function LayoutSegment({ pct, seg }: { pct: number; seg: "navigation" | "chat" | "preview" | "tree" }) {
   return <span style={{ width: `${pct}%`, background: `var(--layout-seg-${seg})` }} />
 }
 
-function LayoutLegend({
-  seg,
-  label
-}: {
-  seg: "navigation" | "chat" | "preview" | "tree"
-  label: string
-}) {
+function LayoutLegend({ seg, label }: { seg: "navigation" | "chat" | "preview" | "tree"; label: string }) {
   return (
-    <span className="inline-flex items-center gap-1.5 justify-self-start whitespace-nowrap pe-2 text-[11px] leading-4 text-muted-foreground">
+    <span className="inline-flex items-center gap-1.5 justify-self-start pe-2 text-[11px] leading-4 whitespace-nowrap text-muted-foreground">
       <span className="size-2.5 rounded-[3px]" style={{ background: `var(--layout-seg-${seg})` }} />
       {label}
     </span>
@@ -176,14 +162,11 @@ function LayoutLegend({
 export function AppearanceSection() {
   const { t } = useTranslation()
   const layout = useWorkspaceLayout()
-  // Master "four columns" switch. On = every column is shown and the per-column visibility
-  // toggles below are locked; off = the user picks which columns appear.
-  const fourColumns = useFourColumnsDefault()
+  // Each column answers to its own visibility toggle; there is no master four-columns switch.
   const [treeVisible] = useTreeVisiblePreference()
   const [previewVisible] = usePreviewVisiblePreference()
-  // A column is on when four columns forces it, or its own visibility preference is on.
-  const previewShown = fourColumns || previewVisible
-  const treeShown = fourColumns || treeVisible
+  const previewShown = previewVisible
+  const treeShown = treeVisible
   // The preview diagram only draws the columns that are actually on, and rescales them so the
   // visible set still fills the bar — turning a column off visibly shrinks the preview.
   const columnDefs: Array<{ key: LayoutShare; label: string; shown: boolean }> = [
@@ -252,19 +235,21 @@ export function AppearanceSection() {
                   <span
                     className="grid size-9 place-items-center rounded-full transition-transform"
                     style={{
-                      background: preset.swatch,
+                      // Live token, not the light-only constant: the swatch shows what the
+                      // preset looks like under the current appearance (see --accent-preset-*).
+                      background: `var(--accent-preset-${preset.id})`,
                       boxShadow: active
                         ? "0 0 0 2px var(--card), 0 0 0 4px var(--settings-accent-ink), inset 0 1px 2px rgba(255,255,255,.45)"
                         : "inset 0 1px 2px rgba(255,255,255,.4), 0 1px 2px rgba(0,0,0,.10)"
                     }}
                   >
-                  {active && (
-                    <CheckIcon
-                      className="size-5"
-                      style={{ color: "#fff", filter: "drop-shadow(0 1px 1.5px rgba(0,0,0,.55))" }}
-                      aria-hidden="true"
-                    />
-                  )}
+                    {active && (
+                      <CheckIcon
+                        className="size-5"
+                        style={{ color: "#fff", filter: "drop-shadow(0 1px 1.5px rgba(0,0,0,.55))" }}
+                        aria-hidden="true"
+                      />
+                    )}
                   </span>
                   <span
                     className={cn(
@@ -322,36 +307,17 @@ export function AppearanceSection() {
           </button>
         }
       >
-        {/* Master switch first: it decides whether the per-column toggles below are live. */}
-        <div className="border-b border-border/60">
-          <FourColumnsRow compact />
-        </div>
-
-        <div className="px-4 py-2">
-          <p className="text-[11.5px] leading-[18px] text-muted-foreground">
-            {fourColumns ? t("settings.layoutTogglesLockedHint") : t("settings.layoutCustomHint")}
-          </p>
-        </div>
-
-        {/* Per-column visibility — only editable once four columns is off. */}
-        <div className="border-t border-border/60">
-          <SidebarAutoCollapseRow compact disabled={fourColumns} />
-        </div>
-        <div className="border-t border-border/60">
-          <PreviewVisibleRow compact disabled={fourColumns} />
-        </div>
-        <div className="border-t border-border/60">
-          <TreeVisibleRow compact disabled={fourColumns} />
-        </div>
-        <div className="border-t border-border/60">
-          {/* The chat column can never be closed, so it is a locked row rather than a switch. */}
-          <SettingRow compact title={t("settings.chatColumnLocked")} desc={t("settings.chatColumnLockedDesc")}>
-            <span className="text-xs text-muted-foreground">{t("settings.alwaysOn")}</span>
-          </SettingRow>
-        </div>
+        {/* Per-column visibility — each toggle owns its column. */}
+        <SidebarVisibleRow compact />
+        <PreviewVisibleRow compact />
+        <TreeVisibleRow compact />
+        {/* The chat column can never be closed, so it is a locked row rather than a switch. */}
+        <SettingRow compact title={t("settings.chatColumnLocked")} desc={t("settings.chatColumnLockedDesc")}>
+          <span className="text-xs text-muted-foreground">{t("settings.alwaysOn")}</span>
+        </SettingRow>
 
         {/* Live preview of the resulting layout — only the on columns are drawn, rescaled to fill. */}
-        <div className="px-4 pb-2 pt-3">
+        <div className="px-4 pt-3 pb-2">
           <div className="flex h-2.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
             {visibleSegments.map((segment) => (
               <LayoutSegment key={segment.key} pct={segment.pct} seg={segment.key} />
@@ -365,39 +331,35 @@ export function AppearanceSection() {
               <LayoutLegend key={segment.key} seg={segment.key} label={segment.label} />
             ))}
           </div>
-          <p className="mt-2 text-[11px] leading-4 text-muted-foreground">
-            {t("settings.layoutShareCaption")}
-          </p>
+          <p className="mt-2 text-[11px] leading-4 text-muted-foreground">{t("settings.layoutShareCaption")}</p>
         </div>
 
         {/* Width sliders for the columns that are actually on. */}
-        <div className="border-t border-border/60">
+        <LayoutShareRow
+          name={t("settings.layoutNavigation")}
+          value={percents.navigation}
+          onCommit={(value) => commitShare("navigation", value)}
+        />
+        <LayoutShareRow
+          name={t("settings.layoutChat")}
+          value={percents.chat}
+          onCommit={(value) => commitShare("chat", value)}
+        />
+        {previewShown && (
           <LayoutShareRow
-            name={t("settings.layoutNavigation")}
-            value={percents.navigation}
-            onCommit={(value) => commitShare("navigation", value)}
+            name={t("settings.layoutPreview")}
+            value={percents.preview}
+            onCommit={(value) => commitShare("preview", value)}
           />
+        )}
+        {/* 文件栏放最后（用户要求），与预览栏相邻便于对照。 */}
+        {treeShown && (
           <LayoutShareRow
-            name={t("settings.layoutChat")}
-            value={percents.chat}
-            onCommit={(value) => commitShare("chat", value)}
+            name={t("settings.layoutTree")}
+            value={percents.tree}
+            onCommit={(value) => commitShare("tree", value)}
           />
-          {previewShown && (
-            <LayoutShareRow
-              name={t("settings.layoutPreview")}
-              value={percents.preview}
-              onCommit={(value) => commitShare("preview", value)}
-            />
-          )}
-          {/* 文件栏放最后（用户要求），与预览栏相邻便于对照。 */}
-          {treeShown && (
-            <LayoutShareRow
-              name={t("settings.layoutTree")}
-              value={percents.tree}
-              onCommit={(value) => commitShare("tree", value)}
-            />
-          )}
-        </div>
+        )}
         <p className="px-4 pt-1 pb-2 text-[11.5px] leading-[18px] text-muted-foreground">
           {t("settings.layoutShareNote")}
         </p>
@@ -429,18 +391,16 @@ export function AppearanceSection() {
             <LayoutLegend seg="chat" label={t("settings.layoutChat")} />
           </div>
         </div>
-        <div className="border-t border-border/60">
-          <LayoutShareRow
-            name={t("settings.layoutNavigation")}
-            value={chatPercents.navigation}
-            onCommit={(value) => saveChatLayout({ navigationRatio: value / 100 })}
-          />
-          <LayoutShareRow
-            name={t("settings.layoutChat")}
-            value={chatPercents.chat}
-            onCommit={(value) => saveChatLayout({ chatRatio: value / 100 })}
-          />
-        </div>
+        <LayoutShareRow
+          name={t("settings.layoutNavigation")}
+          value={chatPercents.navigation}
+          onCommit={(value) => saveChatLayout({ navigationRatio: value / 100 })}
+        />
+        <LayoutShareRow
+          name={t("settings.layoutChat")}
+          value={chatPercents.chat}
+          onCommit={(value) => saveChatLayout({ chatRatio: value / 100 })}
+        />
         <p className="px-4 pt-1 pb-2 text-[11.5px] leading-[18px] text-muted-foreground">
           {t("settings.chatLayoutShareNote")}
         </p>

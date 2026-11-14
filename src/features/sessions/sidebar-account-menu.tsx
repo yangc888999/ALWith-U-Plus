@@ -69,6 +69,7 @@ export function SidebarAccountMenu({
           <Button
             variant="ghost"
             disabled={busy}
+            aria-label={displayName}
             className="h-8 w-full justify-start gap-2 rounded-[10px] px-2 font-normal text-muted-foreground [corner-shape:superellipse(1.5)] hover:bg-foreground/5 data-popup-open:bg-foreground/5"
           />
         }

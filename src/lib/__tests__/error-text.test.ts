@@ -39,9 +39,18 @@ test("an unknown failure keeps its sentence, loses the transport prefix and lead
 test("a rejected overlapping handoff names the remedy instead of raw English", async () => {
   await chinese()
 
-  expect(describeError(new Error("A chat operation is already in progress"))).toBe(
-    "另一个窗口操作还在进行，请稍后再试"
+  expect(describeError(new Error("A chat operation is already in progress"))).toBe("另一个窗口操作还在进行，请稍后再试")
+})
+
+test("a macOS macl-denied folder names the remedy instead of the raw os error", async () => {
+  await chinese()
+
+  const message = describeError(
+    new Error("open filesystem root /Users/me/Documents/ALwith/groups/交易: Operation not permitted (os error 1)")
   )
+  expect(message).toContain("macOS 限制了该文件夹的访问")
+  expect(message).toContain("/Users/me/Documents/ALwith/groups/交易")
+  expect(message).not.toContain("Operation not permitted")
 })
 
 test("the backend's own capacity sentence still says the model is full", async () => {
@@ -74,9 +83,7 @@ test("a Drive deadline is not reported as a model timeout", async () => {
 test("a model catalog refresh timeout is a background failure too", async () => {
   await chinese()
 
-  expect(describeError(new Error("failed to refresh available models: request timed out"))).toContain(
-    "后台服务"
-  )
+  expect(describeError(new Error("failed to refresh available models: request timed out"))).toContain("后台服务")
 })
 
 test("a real model timeout still keeps the retry hint", async () => {
@@ -202,7 +209,9 @@ test("the engine's capacity and sign-in sentences are said in Chinese", async ()
   expect(auth).not.toMatch(/Authentication required/i)
 
   const refresh = describeError(
-    new Error("auth: Failed to refresh token: Your access token could not be refreshed. Please log out and sign in again.")
+    new Error(
+      "auth: Failed to refresh token: Your access token could not be refreshed. Please log out and sign in again."
+    )
   )
   expect(refresh).toContain("重新登录")
   expect(refresh).not.toMatch(/could not be refreshed/i)
@@ -216,7 +225,7 @@ test("the engine's capacity and sign-in sentences are said in Chinese", async ()
   expect(body).not.toMatch(/invalid_jwt|appropriate key/i)
 
   expect(describeError(new Error("Quota exceeded. Check your plan and billing details."))).toContain("额度")
-  expect(describeError(new Error('Runtime request failed (-32603): Internal error'))).toContain("对话服务")
+  expect(describeError(new Error("Runtime request failed (-32603): Internal error"))).toContain("对话服务")
 })
 
 test("settings store rejections stay distinguishable from sign-in failures", async () => {
@@ -281,7 +290,7 @@ test("engine file-edit and Drive failures never reach the reader in English", as
     ["This path does not belong to an indexed Drive project", "云盘项目"],
     // Protocol assertions collapse into one honest line rather than a dozen English names.
     ["Invalid Drive snapshot", "云盘"],
-    ["Pinned documents belong to the main window", "云盘"],
+    ["Pinned documents belong to the main window", "云盘"]
   ]
   for (const [raw, hint] of cases) {
     const message = describeError(new Error(raw))
@@ -290,7 +299,8 @@ test("engine file-edit and Drive failures never reach the reader in English", as
   }
 })
 
-test("the router message is localized whatever quoting the engine uses", async () => {  await chinese()
+test("the router message is localized whatever quoting the engine uses", async () => {
+  await chinese()
 
   // codex-cli 0.167.0 prints single quotes; older builds used backticks; a future one may use
   // double quotes. Matching only backticks let the raw English line reach the window on
@@ -326,7 +336,7 @@ test("an unparseable config.toml is explained instead of flashing the raw Englis
   // The first shape comes from the adapter, this one from the engine's own loader. Both must
   // land on the same explanation, and neither may print the raw English block.
   const duplicate = describeError(
-    new Error("Error loading config.toml:\n/tmp/x/config.toml:2:1: duplicate key\n  |\n2 | model_provider = \"alwith\"")
+    new Error('Error loading config.toml:\n/tmp/x/config.toml:2:1: duplicate key\n  |\n2 | model_provider = "alwith"')
   )
   expect(duplicate).not.toContain("duplicate key")
   expect(duplicate).toContain("config.toml")
@@ -408,7 +418,9 @@ test("the bridge's own stream timeout names the real cause", async () => {
   // The three other ways the bridge ends a stream used to read exactly like the idle clock, so a
   // half-hour turn and a dropped socket both looked like a stalled model.
   expect(describeError(new Error("bridge_stream_timeout: 本次请求已达到 60 分钟总上限"))).toContain("60 分钟上限")
-  expect(describeError(new Error("bridge_stream_timeout: 上游连接被关闭，没有收到结束标记"))).toContain("提前断开了连接")
+  expect(describeError(new Error("bridge_stream_timeout: 上游连接被关闭，没有收到结束标记"))).toContain(
+    "提前断开了连接"
+  )
   expect(describeError(new Error("bridge_stream_timeout: 上游读取失败：connection reset by peer"))).toContain(
     "connection reset by peer"
   )
@@ -418,17 +430,13 @@ test("account-level capacity keeps its account-level wording in English", async 
   await initI18n("en")
 
   expect(describeError(new Error("server_is_overloaded"))).toContain("GPT model on this account")
-  expect(describeError(new Error("Quota exceeded. Check your plan and billing details."))).toContain(
-    "account-level"
-  )
+  expect(describeError(new Error("Quota exceeded. Check your plan and billing details."))).toContain("account-level")
 })
 
 test("a stale provider revision says what to do instead of naming another window", async () => {
   await chinese()
 
-  const message = describeError(
-    new Error("Provider settings changed in another window; reload and retry")
-  )
+  const message = describeError(new Error("Provider settings changed in another window; reload and retry"))
   // One card writes twice (model toggle, then 保存连接); the retry usually hides this, so the
   // wording must not send the reader hunting for a second window that does not exist.
   expect(message).toContain("更新模型列表")
@@ -446,7 +454,9 @@ test("the company gateway's 502 body reads as a gateway outage, not a loopback U
   await chinese()
 
   const message = describeError(
-    new Error("unexpected status 502 Bad Gateway: Enterprise gateway request failed, url: http://127.0.0.1:53750/alwith/responses")
+    new Error(
+      "unexpected status 502 Bad Gateway: Enterprise gateway request failed, url: http://127.0.0.1:53750/alwith/responses"
+    )
   )
   expect(message).toContain("公司模型网关")
   expect(message).not.toContain("127.0.0.1")

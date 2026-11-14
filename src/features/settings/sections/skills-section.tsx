@@ -186,24 +186,62 @@ export function SkillsSection() {
         )}
 
         {userSkills.length > 0 && (
-          <div className="divide-border mb-1 divide-y">
+          <div className="mb-1 grid grid-cols-1 gap-2 lg:grid-cols-2">
             {userSkills.map((skill) => (
               <div
                 key={skill.id}
-                className="group flex items-center gap-3 py-2.5 transition-colors"
+                className="group flex flex-col gap-1.5 rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5 transition-colors"
               >
-                <PuzzleIcon className="size-4 shrink-0 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{skill.name}</p>
-                  <p
-                    className="truncate text-xs text-muted-foreground"
-                    title={cleanDescription(skill.description) || skill.path}
-                  >
-                    {cleanDescription(skill.description) || skill.path}
+                <div className="flex items-center gap-2">
+                  <PuzzleIcon className="size-4 shrink-0 text-muted-foreground" />
+                  <p className="min-w-0 flex-1 truncate text-sm font-medium" title={skill.name}>
+                    {skill.name}
                   </p>
+                  {confirming === skill.id ? null : (
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {busy === skill.id && <Spinner />}
+                      <Switch
+                        aria-label={t("skills.enabled")}
+                        title={t("skills.enabled")}
+                        checked={skill.enabled}
+                        disabled={busy !== null}
+                        onCheckedChange={() => void toggle(skill)}
+                      />
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          render={
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={t("skills.actions")}
+                              className="shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100"
+                            >
+                              <MoreHorizontalIcon className="size-4" />
+                            </Button>
+                          }
+                        />
+                        <DropdownMenuContent align="end" className="min-w-44">
+                          <DropdownMenuItem onClick={() => void copyPath(skill)}>
+                            {t("skills.copyPath")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => void openFolder()}>
+                            {t("skills.openFolder")}
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem variant="destructive" onClick={() => setConfirming(skill.id)}>
+                            <Trash2Icon className="size-3.5" />
+                            {t("skills.uninstall")}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  )}
                 </div>
                 {confirming === skill.id ? (
-                  <div className="flex shrink-0 items-center gap-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                      {t("skills.uninstall")}「{skill.name}」?
+                    </p>
                     <Button
                       variant="destructive"
                       size="sm"
@@ -222,45 +260,12 @@ export function SkillsSection() {
                     </Button>
                   </div>
                 ) : (
-                  <>
-                    <div className="flex shrink-0 items-center gap-2">
-                      {busy === skill.id && <Spinner />}
-                      <Switch
-                        aria-label={t("skills.enabled")}
-                        title={t("skills.enabled")}
-                        checked={skill.enabled}
-                        disabled={busy !== null}
-                        onCheckedChange={() => void toggle(skill)}
-                      />
-                    </div>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        render={
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={t("skills.actions")}
-                            className="shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100"
-                          >
-                            <MoreHorizontalIcon className="size-4" />
-                          </Button>
-                        }
-                      />
-                      <DropdownMenuContent align="end" className="min-w-44">
-                        <DropdownMenuItem onClick={() => void copyPath(skill)}>
-                          {t("skills.copyPath")}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => void openFolder()}>
-                          {t("skills.openFolder")}
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem variant="destructive" onClick={() => setConfirming(skill.id)}>
-                          <Trash2Icon className="size-3.5" />
-                          {t("skills.uninstall")}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </>
+                  <p
+                    className="line-clamp-2 min-h-[2lh] text-xs leading-relaxed text-muted-foreground"
+                    title={cleanDescription(skill.description) || skill.path}
+                  >
+                    {cleanDescription(skill.description) || skill.path}
+                  </p>
                 )}
               </div>
             ))}
@@ -273,19 +278,27 @@ export function SkillsSection() {
           title={t("skills.systemGroup")}
           desc={t("settings.cardSkillsSystemDesc", { count: systemSkills.length })}
         >
-          <div className="divide-border divide-y">
+          <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
             {systemSkills.map((skill) => (
-              <div key={skill.id} className="flex items-center gap-3 py-2.5">
-                <PuzzleIcon className="size-4 shrink-0 text-muted-foreground/60" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm text-muted-foreground">{skill.name.replace(/^"|"$/g, "")}</p>
-                  <p className="truncate text-xs text-muted-foreground/70" title={cleanDescription(skill.description)}>
-                    {cleanDescription(skill.description)}
+              <div
+                key={skill.id}
+                className="flex flex-col gap-1 rounded-lg border border-border/50 px-3 py-2"
+              >
+                <div className="flex items-center gap-2">
+                  <PuzzleIcon className="size-4 shrink-0 text-muted-foreground/60" />
+                  <p className="min-w-0 flex-1 truncate text-sm text-muted-foreground" title={skill.name}>
+                    {skill.name.replace(/^"|"$/g, "")}
                   </p>
+                  <Badge variant="secondary" className="shrink-0">
+                    {t("skills.builtIn")}
+                  </Badge>
                 </div>
-                <Badge variant="secondary" className="shrink-0">
-                  {t("skills.builtIn")}
-                </Badge>
+                <p
+                  className="line-clamp-2 min-h-[2lh] text-xs leading-relaxed text-muted-foreground/70"
+                  title={cleanDescription(skill.description)}
+                >
+                  {cleanDescription(skill.description)}
+                </p>
               </div>
             ))}
           </div>

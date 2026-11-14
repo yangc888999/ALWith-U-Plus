@@ -1,7 +1,7 @@
 {
   "name": "alwith-u",
   "private": true,
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "An independent desktop client for the OpenAI Codex CLI",
   "license": "Apache-2.0",
   "type": "module",
@@ -176,6 +176,7 @@
   "patchedDependencies": {
     "@alwith/module-chat@0.5.3": "patches/@alwith__module-chat@0.5.3.patch",
     "vite@8.3.5": "patches/vite@8.3.5.patch",
-    "@nyssance/codex-acp-v2@0.7.39": "patches/@nyssance%2Fcodex-acp-v2@0.7.39.patch"
+    "@nyssance/codex-acp-v2@0.7.39": "patches/@nyssance%2Fcodex-acp-v2@0.7.39.patch",
+    "@alwith/module-drive@0.1.4": "patches/@alwith%2Fmodule-drive@0.1.4.patch"
   }
 }

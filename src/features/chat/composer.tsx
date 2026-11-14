@@ -10,19 +10,24 @@ import { toast } from "sonner"
 import { useStore } from "zustand"
 
 import { observeVoiceTurn } from "@/core/voice-turn"
-import { ChatContextMenu, type ContextMenuTarget, contextMenuText } from "@/features/chat/chat-context-menu"
+import {
+  ChatContextMenu,
+  type ContextMenuTarget,
+  contextMenuText,
+  selectionRectOf
+} from "@/features/chat/chat-context-menu"
 import { RealtimeVoiceButton } from "@/features/voice/realtime-voice-button"
 import type { VoiceResume } from "@/features/voice/use-voice-handoff"
 import { VoiceButton } from "@/features/voice/voice-button"
 import { ActivePreviewChip } from "@/features/workspace/active-preview-chip"
 import { client } from "@/lib/client"
-import { isTemporaryChatDir } from "@/lib/quick-chat"
 import { groupByDirectory } from "@/lib/groups"
+import { isTemporaryChatDir } from "@/lib/quick-chat"
 import { useHandoffBusy } from "@/lib/use-surface-operation"
 
 import { AccountModelRecovery } from "./composer/account-model-recovery"
-import { chatModelMenu } from "./composer/model-catalog"
 import { withoutWaitingForTurn } from "./composer/detach-submit"
+import { chatModelMenu } from "./composer/model-catalog"
 import { nativeAttachmentPolicy, NativeFileDrop } from "./composer/native-file-drop"
 import { OrchestrationControl } from "./composer/orchestration-control"
 import { PendingModelChip } from "./composer/pending-model-chip"
@@ -89,12 +94,13 @@ function ComposerResizeHandle({ shellRef }: { shellRef: React.RefObject<HTMLDivE
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
     >
-      <span className="bg-border group-hover:bg-muted-foreground/60 h-1 w-10 rounded-full opacity-0 transition-opacity group-hover:opacity-100" />
+      <span className="h-1 w-10 rounded-full bg-border opacity-0 transition-opacity group-hover:bg-muted-foreground/60 group-hover:opacity-100" />
     </div>
   )
 }
 
-function ComposerVoice({ voiceResume }: { voiceResume?: VoiceResume }) {  const composer = useComposer()
+function ComposerVoice({ voiceResume }: { voiceResume?: VoiceResume }) {
+  const composer = useComposer()
   const { observeReceipts, session } = composer
   const [realtimeActive, setRealtimeActive] = useState(false)
   const observe = useCallback(
@@ -144,11 +150,7 @@ function ComposerVoice({ voiceResume }: { voiceResume?: VoiceResume }) {  const 
   )
 }
 
-function ComposerFileDrop({
-  restoreRef
-}: {
-  restoreRef: { current: ((content: acp.ContentBlock[]) => void) | null }
-}) {
+function ComposerFileDrop({ restoreRef }: { restoreRef: { current: ((content: acp.ContentBlock[]) => void) | null } }) {
   const composer = useComposer()
   const attachments = usePromptInputAttachments()
   const group = groupByDirectory(composer.session.cwd)
@@ -284,7 +286,8 @@ export function ChatComposer({
       x: event.clientX,
       y: event.clientY,
       text: contextMenuText(target),
-      editable: true
+      editable: true,
+      selectionRect: selectionRectOf()
     })
   }
   // Nothing here asks the engine about the model list. A model the provider withdraws is dropped
@@ -330,16 +333,10 @@ export function ChatComposer({
               }
             >
               {project === null ? null : <TurnProgressBar session={props.session} />}
-              <div
-                className={
-                  project === null
-                    ? "contents"
-                    : "flex w-full min-w-0 items-center justify-between gap-2"
-                }
-              >
+              <div className={project === null ? "contents" : "flex w-full min-w-0 items-center justify-between gap-2"}>
                 {/* A quoted document's name is a reference, not the subject: it never takes more
                     than a third of the row, and the rest goes to the model controls. */}
-                <div className="flex min-w-0 max-w-[33%] shrink-0 items-center gap-2 overflow-hidden">
+                <div className="flex max-w-[33%] min-w-0 shrink-0 items-center gap-2 overflow-hidden">
                   <ActivePreviewChip />
                   <QueuedPromptChip session={props.session} />
                 </div>

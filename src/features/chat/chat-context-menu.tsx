@@ -18,6 +18,9 @@ export interface ContextMenuTarget {
   text: string
   /** True when the pointer was over an editable region — cut and paste only apply there. */
   editable: boolean
+  /** The on-screen box of the selection the menu acts on, when one exists. The menu then sits
+   *  beside the word like the native menu, instead of hanging off the pointer. */
+  selectionRect?: { left: number; top: number; right: number; bottom: number } | null
 }
 
 const WIDTH = 148
@@ -28,6 +31,15 @@ export function contextMenuText(node: EventTarget | null): string {
   if (selection !== "") return selection
   if (!(node instanceof HTMLElement)) return ""
   return (node.textContent ?? "").trim()
+}
+
+/** The on-screen box of the current selection, when the menu text came from one. */
+export function selectionRectOf(): { left: number; top: number; right: number; bottom: number } | null {
+  const selection = window.getSelection()
+  if (selection === null || selection.isCollapsed || selection.rangeCount === 0) return null
+  const rect = selection.getRangeAt(0).getBoundingClientRect()
+  if (rect.width === 0 && rect.height === 0) return null
+  return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
 }
 
 /** True when the event came from an editable region, where cut and paste apply. */
@@ -104,8 +116,25 @@ export function ChatContextMenu({
       return
     }
     const rect = node.getBoundingClientRect()
-    const left = Math.max(8, Math.min(target.x, window.innerWidth - rect.width - 8))
-    const top = Math.max(8, Math.min(target.y, window.innerHeight - rect.height - 8))
+    // With a selection the menu sits beside the word (native-menu placement); without one it
+    // hangs off the pointer. Each fallback keeps the box inside the window.
+    const box = target.selectionRect ?? null
+    let left: number
+    let top: number
+    if (box !== null) {
+      left = box.right + 6
+      top = box.top
+      if (left + rect.width > window.innerWidth - 8) left = box.left - rect.width - 6
+      if (left < 8) {
+        left = Math.max(8, box.left)
+        top = box.bottom + 6
+      }
+    } else {
+      left = target.x
+      top = target.y
+    }
+    left = Math.max(8, Math.min(left, window.innerWidth - rect.width - 8))
+    top = Math.max(8, Math.min(top, window.innerHeight - rect.height - 8))
     setPosition((current) =>
       current !== null && current.left === left && current.top === top ? current : { left, top }
     )

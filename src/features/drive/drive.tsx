@@ -38,6 +38,7 @@ import { driveFileSystem, drivePathExists } from "./filesystem"
 import { DriveIntegrations } from "./integrations"
 import { saveDrivePins, useDrivePins } from "./pinned"
 import { useDriveVisible } from "./use-drive-visible"
+import { watchDriveRootDefaults } from "./root-defaults"
 import { useYupDriveEnabled } from "./yup-drive-preference"
 
 export function useDriveConnection(start = true): void {
@@ -57,6 +58,8 @@ export function useDriveConnection(start = true): void {
           await drive.request({ type: "start" })
           await drive.request({ type: "refreshClientConfig" })
         }
+        // First snapshot decides the default selection (only 02_用户经营 stays pinned).
+        watchDriveRootDefaults()
       })
       .catch((error: unknown) => {
         // A background sync that the reader did not ask for keeps its details in the log; putting

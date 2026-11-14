@@ -1,22 +1,34 @@
 import type { Session } from "@alwith/api"
 import { ConversationView } from "@alwith/module-chat/conversation"
-import { type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
-import { isTemporaryChatDir } from "@/lib/quick-chat"
+import { info } from "@tauri-apps/plugin-log"
+import { ChevronUpIcon, Loader2Icon } from "lucide-react"
+import {
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 import { useStore } from "zustand"
-import { ChevronUpIcon, Loader2Icon } from "lucide-react"
-import { info } from "@tauri-apps/plugin-log"
 
 import type { SessionSummary } from "@/agent/client"
 import { CollectionPicker } from "@/features/collection/collection-menu"
 import { SessionPreview } from "@/features/computer/session-preview"
+import { GroupDiscussionBar } from "@/features/groups/group-bar"
+import { useGroupDiscussion } from "@/features/groups/use-group-discussion"
 import type { VoiceResume } from "@/features/voice/use-voice-handoff"
-import { client } from "@/lib/client"
 import { getConversationDetail, subscribeChatDisplayPreferences } from "@/lib/chat-display-preferences"
+import { client } from "@/lib/client"
 import { groupByDirectory } from "@/lib/groups"
 import { snapshotProjectMemory } from "@/lib/project-memory"
-
+import { isTemporaryChatDir } from "@/lib/quick-chat"
 
 import { ChatActionsMenu } from "./chat-actions-menu"
 import { ChatBranchProvider } from "./chat-branches"
@@ -24,20 +36,19 @@ import {
   ChatContextMenu,
   type ContextMenuTarget,
   contextMenuText,
-  isEditableTarget
+  isEditableTarget,
+  selectionRectOf
 } from "./chat-context-menu"
-import { appendQuote, SelectionMenu } from "./selection-menu"
 import { ChatEdgeActions } from "./chat-edge-actions"
 import { ChatHeader } from "./chat-header"
 import { useChatHost, useTimelineSlots } from "./chat-host"
 import { ChatComposer } from "./composer"
 import { ChatSearch } from "./dialogs/chat-search"
-import { GroupDiscussionBar } from "@/features/groups/group-bar"
-import { useGroupDiscussion } from "@/features/groups/use-group-discussion"
 import { FilePreviewModal } from "./dialogs/file-preview-modal"
-import { useOrchestrationProviderWarning } from "./use-orchestration-provider-warning"
 import { ImageLightbox } from "./dialogs/image-lightbox"
 import { ChatDirectoryContext, ChatOpenSessionContext } from "./file-actions"
+import { appendQuote, SelectionMenu } from "./selection-menu"
+import { useOrchestrationProviderWarning } from "./use-orchestration-provider-warning"
 
 type ChatViewProps = {
   session: Session
@@ -167,7 +178,10 @@ function Conversation({
     setRenderedSession(liveSession.current)
   }, [session.items.length, session.restoring])
   const shownSession = session.restoring ? renderedSession : session
-  const windowedItems = useMemo(() => sliceLastTurns(shownSession.items, visibleTurns), [shownSession.items, visibleTurns])
+  const windowedItems = useMemo(
+    () => sliceLastTurns(shownSession.items, visibleTurns),
+    [shownSession.items, visibleTurns]
+  )
   const windowedSession = useMemo(() => ({ ...shownSession, items: windowedItems }), [shownSession, windowedItems])
   const hasMoreHistory = windowedItems.length < shownSession.items.length
 
@@ -207,7 +221,9 @@ function Conversation({
     if (openStartRef.current == null || firstItemRef.current || !session.restoring || session.items.length === 0) return
     firstItemRef.current = true
     if (session.items.length >= PERF_MIN_ITEMS) {
-      perf(`[PERF] firstItem id=${session.id} items=${session.items.length} ${Math.round(performance.now() - openStartRef.current)}ms`)
+      perf(
+        `[PERF] firstItem id=${session.id} items=${session.items.length} ${Math.round(performance.now() - openStartRef.current)}ms`
+      )
     }
   }, [session.items.length, session.restoring, session.id])
   // Phase: the replay ends — every history item is in the store and the window is exact.
@@ -215,7 +231,9 @@ function Conversation({
     if (openStartRef.current == null || replayDoneRef.current || session.restoring) return
     replayDoneRef.current = true
     if (session.items.length >= PERF_MIN_ITEMS) {
-      perf(`[PERF] replayDone id=${session.id} totalItems=${session.items.length} ${Math.round(performance.now() - openStartRef.current)}ms`)
+      perf(
+        `[PERF] replayDone id=${session.id} totalItems=${session.items.length} ${Math.round(performance.now() - openStartRef.current)}ms`
+      )
     }
   }, [session.restoring, session.items.length, session.id])
   // Phase: the transcript has been quiet for a moment — the view settled after the last batch.
@@ -227,7 +245,9 @@ function Conversation({
     if (settleTimerRef.current) clearTimeout(settleTimerRef.current)
     settleTimerRef.current = setTimeout(() => {
       if (length >= PERF_MIN_ITEMS) {
-        perf(`[PERF] settled id=${session.id} totalItems=${length} ${Math.round(performance.now() - (openStartRef.current ?? 0))}ms`)
+        perf(
+          `[PERF] settled id=${session.id} totalItems=${length} ${Math.round(performance.now() - (openStartRef.current ?? 0))}ms`
+        )
       }
       settleTimerRef.current = null
     }, 200)
@@ -237,7 +257,9 @@ function Conversation({
     if (windowedItems.length > 0) {
       firstPaintRef.current = true
       if (windowedItems.length >= PERF_MIN_ITEMS) {
-        perf(`[PERF] firstPaint id=${session.id} visibleItems=${windowedItems.length} ${Math.round(performance.now() - openStartRef.current)}ms`)
+        perf(
+          `[PERF] firstPaint id=${session.id} visibleItems=${windowedItems.length} ${Math.round(performance.now() - openStartRef.current)}ms`
+        )
       }
     }
   }, [windowedItems.length, session.id])
@@ -259,13 +281,13 @@ function Conversation({
           <div className="ms-1 flex shrink-0 items-center gap-1">
             <CollectionPicker sessionId={session.id} favorite />
             <ChatActionsMenu
-            surface={headerTarget === undefined ? "main" : "floating"}
-            onOpenWindow={onOpenWindow}
-            onReturnToMain={onReturnToMain}
-            session={session}
-            cwd={session.cwd}
-            onNewChat={onNewChat}
-            onNewProject={onNewProject}
+              surface={headerTarget === undefined ? "main" : "floating"}
+              onOpenWindow={onOpenWindow}
+              onReturnToMain={onReturnToMain}
+              session={session}
+              cwd={session.cwd}
+              onNewChat={onNewChat}
+              onNewProject={onNewProject}
               onDeleted={onDeleted}
             />
           </div>
@@ -356,7 +378,9 @@ export function ChatView(props: ChatViewProps) {
       // Prefer a conversation root that actually contains the click: `querySelector` can pick a
       // hidden panel's root instead, and a missing root used to mean "no menu at all".
       const root =
-        rootRef.current ?? [...document.querySelectorAll("[data-chat-drop-zone]")].find((node) => node.contains(target)) ?? null
+        rootRef.current ??
+        [...document.querySelectorAll("[data-chat-drop-zone]")].find((node) => node.contains(target)) ??
+        null
       // This listener sits on the window in the capture phase, so without a containment check it
       // also swallowed every right-click in the chrome: the session list, the left navigation and
       // the file tree all opened the transcript's text menu, and their own menus never ran. Only
@@ -365,7 +389,7 @@ export function ChatView(props: ChatViewProps) {
       const inConversation =
         (root?.contains(target) ?? false) ||
         (headerRef.current?.contains(target) ?? false) ||
-        (element?.closest("[data-chat-drop-zone]") !== null)
+        element?.closest("[data-chat-drop-zone]") !== null
       // Fallback for the case the module never binds a conversation root: everything that is
       // visibly app chrome opts out by selector, and only genuinely unknown surfaces keep the old
       // "open anywhere" behaviour.
@@ -381,7 +405,8 @@ export function ChatView(props: ChatViewProps) {
           x: event.clientX,
           y: event.clientY,
           text: contextMenuText(target),
-          editable: isEditableTarget(target)
+          editable: isEditableTarget(target),
+          selectionRect: selectionRectOf()
         })
       } catch {
         // A measurement edge case must never cost the menu.
@@ -422,7 +447,8 @@ export function ChatView(props: ChatViewProps) {
       x: event.clientX,
       y: event.clientY,
       text: contextMenuText(target),
-      editable: isEditableTarget(target)
+      editable: isEditableTarget(target),
+      selectionRect: selectionRectOf()
     })
   }
   return (
@@ -446,41 +472,39 @@ export function ChatView(props: ChatViewProps) {
             <Conversation {...props} rootRef={rootRef} />
             {/* Temporary chats have no project memory: read/compress/clear do not apply. */}
             {isTemporaryChatDir(session.cwd) ? null : (
-            <ChatEdgeActions
-              sessionId={session.id}
-              onClearContext={
-                onClearContext
-                  ? () => {
-                      // Carry the current model/effort into the next conversation instead of
-                      // dropping back to the provider default.
-                      client.rememberCurrentForNextChat(session.id)
-                      onClearContext(session.cwd)
-                    }
-                  : undefined
-              }
-              // Archive first, compress second: a failed archive must abort the compression so
-              // the pre-compression text is never destroyed without a copy in history.md.
-              onCompressMemory={
-                session.state === "idle"
-                  ? () => {
-                      void snapshotProjectMemory(session.cwd)
-                        .then(() =>
-                          client.prompt(session.id, [{ type: "text", text: t("chat.compressMemoryPrompt") }])
-                        )
-                        .catch((error: unknown) =>
-                          toast.error(error instanceof Error ? error.message : String(error))
-                        )
-                    }
-                  : undefined
-              }
-              // Only a settled session can take a prompt; a busy one would reject it, so the
-              // action falls back to filling the composer instead.
-              onSend={
-                session.state === "idle"
-                  ? (text) => client.prompt(session.id, [{ type: "text", text }])
-                  : undefined
-              }
-            />
+              <ChatEdgeActions
+                sessionId={session.id}
+                onClearContext={
+                  onClearContext
+                    ? () => {
+                        // Carry the current model/effort into the next conversation instead of
+                        // dropping back to the provider default.
+                        client.rememberCurrentForNextChat(session.id)
+                        onClearContext(session.cwd)
+                      }
+                    : undefined
+                }
+                // Archive first, compress second: a failed archive must abort the compression so
+                // the pre-compression text is never destroyed without a copy in history.md.
+                onCompressMemory={
+                  session.state === "idle"
+                    ? () => {
+                        void snapshotProjectMemory(session.cwd)
+                          .then(() =>
+                            client.prompt(session.id, [{ type: "text", text: t("chat.compressMemoryPrompt") }])
+                          )
+                          .catch((error: unknown) =>
+                            toast.error(error instanceof Error ? error.message : String(error))
+                          )
+                      }
+                    : undefined
+                }
+                // Only a settled session can take a prompt; a busy one would reject it, so the
+                // action falls back to filling the composer instead.
+                onSend={
+                  session.state === "idle" ? (text) => client.prompt(session.id, [{ type: "text", text }]) : undefined
+                }
+              />
             )}
             <ChatContextMenu
               target={menu}

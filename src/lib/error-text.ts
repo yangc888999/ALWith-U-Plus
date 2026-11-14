@@ -17,6 +17,14 @@ type Rule = {
 
 const RULES: Rule[] = [
   { match: /bridge_upstream_timeout/i, key: "error.providerConnectionTimedOut" },
+  // The native fs plugin opens a directory and macOS refuses with EPERM: the folder carries a
+  // com.apple.macl mark (created by another app), so macOS grants only its creator access. The
+  // reader can fix it in System Settings, so name that remedy instead of the raw os error line.
+  {
+    match: /open filesystem root (.+): Operation not permitted/i,
+    key: "error.folderAccessDenied",
+    values: (match) => ({ path: match[1] })
+  },
   { match: /bridge_upstream_unreachable/i, key: "error.providerUnreachable" },
   { match: /bridge_upstream_request_failed/i, key: "error.providerRequestFailed" },
   // The account-model recovery state is not a crash: the composer already shows the model picker
@@ -177,7 +185,8 @@ const RULES: Rule[] = [
     // Internal protocol assertions. The reader cannot act on "Invalid Drive snapshot", and there
     // are a dozen such sentences; one honest line beats twelve English names. Placed after the
     // specific Drive rules above so those still win.
-    match: /Invalid (?:ALWith L )?Drive|Invalid plugin|Invalid private session list|Knowledge plugin configuration must be an object|Plugin sync state must be an object|Session archival is managed by Drive|is unavailable in this permissions dialog|Pinned documents belong to the|Project browsing belongs to the|Project navigation belongs to the|Projects cannot be opened from sync status|Drive requires a workspace host/i,
+    match:
+      /Invalid (?:ALWith L )?Drive|Invalid plugin|Invalid private session list|Knowledge plugin configuration must be an object|Plugin sync state must be an object|Session archival is managed by Drive|is unavailable in this permissions dialog|Pinned documents belong to the|Project browsing belongs to the|Project navigation belongs to the|Projects cannot be opened from sync status|Drive requires a workspace host/i,
     key: "error.driveInvalidResponse"
   },
   {
@@ -251,7 +260,8 @@ const RULES: Rule[] = [
     // Quote characters differ per codex build: 0.167.0 says `Model provider 'alwith' not found`
     // (single quotes) while older ones used backticks, so matching only one shape let the raw
     // English line reach the window on 2026-11-08. Accept every quoting style.
-    match: /Model provider [`'"‘’“”]alwith[`'"‘’“”] not found|model provider [`'"‘’“”]alwith[`'"‘’“”], which is (?:no longer configured|not found)/i,
+    match:
+      /Model provider [`'"‘’“”]alwith[`'"‘’“”] not found|model provider [`'"‘’“”]alwith[`'"‘’“”], which is (?:no longer configured|not found)/i,
     key: "error.routerProviderMissing"
   },
   {
@@ -314,7 +324,8 @@ const RULES: Rule[] = [
   {
     // "The Codex app-server crashed 5 times in the last 5 min (last: it exited with code 1), so
     //  the agent stopped restarting it. Restart the agent, or try again in 116 s."
-    match: /The Codex app-server crashed (\d+) times in the last (\d+) min \(last: it exited with code (-?\d+)\).*?try again in (\d+) s/,
+    match:
+      /The Codex app-server crashed (\d+) times in the last (\d+) min \(last: it exited with code (-?\d+)\).*?try again in (\d+) s/,
     key: "error.engineCrashLoop",
     values: (match) => ({ count: match[1], minutes: match[2], code: match[3], seconds: match[4] })
   },

@@ -229,6 +229,15 @@ export const DEFAULT_PRICES: ModelPrice[] = [
     weekdaysOnly: true,
     note: `对应 DeepSeek-V4.1-Flash-1017；${DEEPSEEK_NOTE}`
   }),
+  // The ledger records the marketing id (`deepseek-V4.1-flash`) while the price page lists the
+  // table id (`deepseek-flash`); matching is exact, so the V4.1 name needs its own row quoting
+  // the same flash-tier numbers or every V4.1 session lands in the "unpriced" list.
+  entry("DeepSeek", "deepseek-v4.1-flash", 2, 0.04, 8, {
+    offPeak: { input: 1, cached: 0.02, output: 4 },
+    peakWindows: DEEPSEEK_PEAK,
+    weekdaysOnly: true,
+    note: `与 deepseek-flash 同价（V4.1 系列；页面表 id 是 deepseek-flash）；${DEEPSEEK_NOTE}`
+  }),
 
   // 千问 Qwen — RMB, implicit cache-hit price.
   entry("千问 Qwen", "qwen4-max-preview", 12, 0, 36, { note: "预览版按 qwen3.8-max 同档暂计；官方价格页未单列，发布后点「更新」校准" }),
@@ -605,9 +614,16 @@ export function migratePriceState(persisted: unknown): PriceState {
   // second "Qwen" card next to "千问 Qwen", with no price source). The user's numbers survive;
   // only the grouping and the source map's keys move.
   const folded = mergeVendorAliases(state.prices ?? DEFAULT_PRICES, DEFAULT_VENDOR_SOURCES)
+  // Migration v7: append default rows the persisted table is missing. The curated snapshot gains
+  // rows over time (e.g. the `deepseek-v4.1-flash` marketing-id alias); without this merge an
+  // upgraded install never sees them, because its persisted table replaced the defaults wholesale.
+  // Custom edits survive: a persisted model key always wins over a default row with the same key.
+  const known = new Set(folded.prices.map((price) => modelMatchKey(price.model)))
+  const additions = DEFAULT_PRICES.filter((price) => !known.has(modelMatchKey(price.model)))
+  const prices = additions.length > 0 ? [...folded.prices, ...additions] : folded.prices
   return {
     ...state,
-    prices: folded.prices,
+    prices,
     usdToCny: state.usdToCny ?? DEFAULT_USD_TO_CNY,
     utcOffset: state.utcOffset ?? DEFAULT_UTC_OFFSET,
     vendorSources: folded.sources,

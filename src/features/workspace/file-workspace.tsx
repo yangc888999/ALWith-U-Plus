@@ -26,7 +26,6 @@ import {
 } from "@alwith/module-file-tree"
 import { containsPath, createFileSystem, dirname, type FileSystem, normalizePath } from "@alwith/module-fs"
 import { createTauriAdapter } from "@alwith/module-fs/tauri"
-import { createWatchRelay } from "./watch-relay"
 import { writeText } from "@tauri-apps/plugin-clipboard-manager"
 import { confirm } from "@tauri-apps/plugin-dialog"
 import { Effect } from "effect"
@@ -34,22 +33,24 @@ import { Effect } from "effect"
 import { ContextMenuItem } from "@/components/ui/context-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { openFilePreview } from "@/features/chat/dialogs/file-preview-modal"
+import { DRAFT_SESSION_ID } from "@/features/chat/draft-chat"
+import { appendQuote, focusComposer, SelectionMenu } from "@/features/chat/selection-menu"
 import { collaborationOwner, useCollaborationOwner } from "@/features/drive/collaboration-owners"
 import { DriveDocumentSurface, useDriveContentHost } from "@/features/drive/content-host"
 import { driveControls, driveDialogClassName } from "@/features/drive/controls"
 import { useDriveDeepLinks } from "@/features/drive/deep-links"
 import { drive, DriveSharingDialog } from "@/features/drive/drive"
-import { useDriveVisible } from "@/features/drive/use-drive-visible"
-import { ExtensionMount } from "@/features/extensions/extension-view"
 import { prepareWorkspaceFile } from "@/features/drive/files"
 import { driveFileSystem } from "@/features/drive/filesystem"
-import { describeError } from "@/lib/error-text"
 import { rebaseDrivePins } from "@/features/drive/pinned"
 import { DriveTreeActions } from "@/features/drive/tree-actions"
-import { appendQuote, focusComposer, SelectionMenu } from "@/features/chat/selection-menu"
-import { DRAFT_SESSION_ID } from "@/features/chat/draft-chat"
+import { useDriveVisible } from "@/features/drive/use-drive-visible"
+import { ExtensionMount } from "@/features/extensions/extension-view"
 import { setActivePreview } from "@/lib/active-preview"
+import { describeError } from "@/lib/error-text"
 import { openExternal } from "@/lib/open"
+
+import { createWatchRelay } from "./watch-relay"
 import "@alwith/module-file-tree/styles.css"
 import "@alwith/module-editor/styles.css"
 import { invoke, isTauri } from "@tauri-apps/api/core"
@@ -57,7 +58,7 @@ import { listen } from "@tauri-apps/api/event"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
 import { revealItemsInDir } from "@tauri-apps/plugin-opener"
-import { ChartColumn, FolderTree, FolderOpen, MessageSquare, RefreshCw } from "lucide-react"
+import { ChartColumn, FolderOpen, FolderTree, MessageSquare, RefreshCw } from "lucide-react"
 import {
   lazy,
   type MouseEvent as ReactMouseEvent,
@@ -71,37 +72,33 @@ import {
   useState,
   useSyncExternalStore
 } from "react"
-import { isTemporaryChatDir } from "@/lib/quick-chat"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import { Button } from "@/components/alwith-ui/button"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import {
-  ChatContextMenu,
-  type ContextMenuTarget
-} from "@/features/chat/chat-context-menu"
 import { WindowsWorkspaceControlsContext } from "@/components/alwith-ui/windows-main-window-shell"
 import { useTheme } from "@/components/theme-provider"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { ChatContextMenu, type ContextMenuTarget, selectionRectOf } from "@/features/chat/chat-context-menu"
 import { ChatDirectoryContext } from "@/features/chat/file-actions"
 import { CanvasContext } from "@/features/layout/lib/canvas-context"
+import { isTemporaryChatDir } from "@/lib/quick-chat"
 
 import { type FilePosition, WorkspaceContext, WorkspaceHeaderContext } from "./context"
 import { useHostDialog } from "./host-dialog"
-import type { PanelControls } from "./panel-controls-context"
 import {
+  getOnlineBiEmbedSrc,
   ONLINE_BI_URL,
   ONLINE_BI_VIEW_ID,
-  getOnlineBiEmbedSrc,
   saveOnlineBiPath,
   stripOnlineBiToken
 } from "./online-bi"
 import { OnlineBiNativeView } from "./online-bi-embed"
-import { PreviewSurface } from "./preview-surface"
-
-import { applyStoredCommentsVisibility, commentsHidden, setCommentsHidden } from "./preview-resources"
+import type { PanelControls } from "./panel-controls-context"
 import { usePreviewExtension } from "./preview-extension"
+import { applyStoredCommentsVisibility, commentsHidden, setCommentsHidden } from "./preview-resources"
+import { PreviewSurface } from "./preview-surface"
 import { WorkspaceButton } from "./workspace-button"
 import { WorkspaceEditor } from "./workspace-editor"
 import { WorkspacePanels } from "./workspace-panels"
@@ -109,14 +106,11 @@ import "./workspace.css"
 import { routeHistory, routeReplace } from "./editor-shortcuts"
 import { createHtmlPreviewHost } from "./html-preview"
 import { createWysiwygHtmlIntegration, freezeHtmlSourceDuringEditing, HTML_EDITING_ATTRIBUTE } from "./html-wysiwyg"
-import { createWysiwygMarkdownIntegration } from "./markdown-wysiwyg"
-import type { WysiwygLabels } from "./wysiwyg-types"
 import { localPreviewProviders } from "./local-previews"
+import { createWysiwygMarkdownIntegration } from "./markdown-wysiwyg"
 import { MoveToDialog } from "./move-to-dialog"
 import { moveWorkspaceFiles, type WorkspaceMoveOutcome } from "./move-workspace-files"
 import { resolvePreviewResource } from "./preview-resources"
-import { createTreeOpener } from "./tree-opener"
-import { useTreeVisiblePreference } from "./tree-visible-preference"
 import {
   DRAFT_DIRECTORY_KEY,
   projectDirectoryAttempt,
@@ -124,8 +118,10 @@ import {
   type ProjectDirectoryReason,
   type WorkspaceEmptyReason
 } from "./project-directory"
-import { WorkspaceEmptyState } from "./workspace-empty-state"
+import { createTreeOpener } from "./tree-opener"
+import { useTreeVisiblePreference } from "./tree-visible-preference"
 import { useEditorPreferences } from "./use-editor-preferences"
+import { WorkspaceEmptyState } from "./workspace-empty-state"
 import { openWorkspaceScope, workspaceTask } from "./workspace-lifecycle"
 import {
   createWorkspaceSessionStore,
@@ -133,6 +129,7 @@ import {
   type IconTheme,
   type WorkspaceState
 } from "./workspace-state"
+import type { WysiwygLabels } from "./wysiwyg-types"
 import "@alwith/module-editor/previews/styles.css"
 
 const loadMonaco = () => import("./monaco-editor")
@@ -613,9 +610,14 @@ export function FileWorkspace({
   // iframe the document never sees, so it is handled by the message listener below.
   useEffect(() => {
     const handler = (event: MessageEvent): void => {
-      const data = event.data as
-        | { source?: unknown; type?: unknown; text?: unknown; x?: unknown; y?: unknown; rect?: unknown }
-        | null
+      const data = event.data as {
+        source?: unknown
+        type?: unknown
+        text?: unknown
+        x?: unknown
+        y?: unknown
+        rect?: unknown
+      } | null
       if (data === null || data.source !== "alwith-preview") return
       if (data.type === "selection") {
         const text = typeof data.text === "string" ? data.text.trim() : ""
@@ -637,7 +639,10 @@ export function FileWorkspace({
         // Account for iframe zoom: rect is in the iframe's own coordinate space, so scale by the
         // ratio of the on-screen box width to the frame's intrinsic offsetWidth.
         const a = box.width / (frame ? frame.offsetWidth || box.width : box.width)
-        const left = Math.max(8, Math.min(box.left + (Number(rect.left ?? 0) + Number(rect.width ?? 0) / 2) * a - 98, window.innerWidth - 204))
+        const left = Math.max(
+          8,
+          Math.min(box.left + (Number(rect.left ?? 0) + Number(rect.width ?? 0) / 2) * a - 98, window.innerWidth - 204)
+        )
         const top = box.top + Number(rect.bottom ?? 0) * a + 8
         setPreviewSelection({ left, top, text: text.slice(0, 20_000) })
         return
@@ -690,7 +695,13 @@ export function FileWorkspace({
     // Only the selected text: a preview's `textContent` is the whole document, and copying that on
     // a right-click without a selection would be a surprise.
     const selection = window.getSelection()?.toString().trim() ?? ""
-    setPreviewMenu({ x: event.clientX, y: event.clientY, text: selection, editable: false })
+    setPreviewMenu({
+      x: event.clientX,
+      y: event.clientY,
+      text: selection,
+      editable: false,
+      selectionRect: selectionRectOf()
+    })
   }
   const activeCollaborationOwner = useCollaborationOwner(activeDocument?.path)
   const driveVisible = useDriveVisible()
@@ -702,9 +713,7 @@ export function FileWorkspace({
       ? driveState?.roots.find((root) => containsPath(root.localPath, activeDocument.path))
       : null
   const driveFile =
-    driveVisible && activeDocument
-      ? driveState?.files.find((file) => file.localPath === activeDocument.path)
-      : null
+    driveVisible && activeDocument ? driveState?.files.find((file) => file.localPath === activeDocument.path) : null
   const driveReadOnly =
     Boolean(
       driveRoot &&
@@ -773,7 +782,11 @@ export function FileWorkspace({
     const providers = localPreviewProviders({
       ...driveIntegrations,
       createMarkdownIntegration: (document, context) =>
-        createWysiwygMarkdownIntegration(driveIntegrations.createMarkdownIntegration?.(document, context), context, wysiwygLabels),
+        createWysiwygMarkdownIntegration(
+          driveIntegrations.createMarkdownIntegration?.(document, context),
+          context,
+          wysiwygLabels
+        ),
       htmlIntegration: createWysiwygHtmlIntegration(driveIntegrations.htmlIntegration, {
         fs: workspace.fs,
         controller: workspace.editor,
@@ -1496,7 +1509,9 @@ export function FileWorkspace({
   // project. All three 文件栏 entries funnel through `showProjectTree`.
   const emptyStateNode: ReactNode =
     emptyReason === null ? (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">{t("workspace.loading")}</div>
+      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+        {t("workspace.loading")}
+      </div>
     ) : (
       <WorkspaceEmptyState
         reason={emptyReason}
@@ -1512,11 +1527,7 @@ export function FileWorkspace({
     )
   return (
     <WorkspaceContext.Provider value={context}>
-      <ChatContextMenu
-        target={previewMenu}
-        onClose={() => setPreviewMenu(null)}
-        onAddToChat={addSelectionToChat}
-      />
+      <ChatContextMenu target={previewMenu} onClose={() => setPreviewMenu(null)} onAddToChat={addSelectionToChat} />
       {/* HTML frames and in-document previews both quote into the conversation's composer. */}
       <SelectionMenu
         containerRef={noSelectionRoot}
@@ -1567,11 +1578,11 @@ export function FileWorkspace({
                     size="icon-xs"
                     className="workspace-explorer-toggle"
                     data-testid="header-tree-toggle"
-                    aria-label={t(treeVisible && visible && workspace !== null ? "workspace.hideTree" : "workspace.showTree")}
+                    aria-label={t(
+                      treeVisible && visible && workspace !== null ? "workspace.hideTree" : "workspace.showTree"
+                    )}
                     aria-expanded={visible && workspace !== null && treeVisible}
-                    onClick={() =>
-                      visible && workspace !== null ? setTreeVisible(!treeVisible) : showProjectTree()
-                    }
+                    onClick={() => (visible && workspace !== null ? setTreeVisible(!treeVisible) : showProjectTree())}
                   >
                     <FolderTree />
                   </Button>
@@ -1635,137 +1646,137 @@ export function FileWorkspace({
               }}
               tree={
                 hasWorkspace ? (
-                <FileTree
-                  controller={workspace.tree}
-                  collapsed={!treeVisible}
-                  explorerControl={
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      className="workspace-explorer-toggle"
-                      data-testid="tree-toggle"
-                      aria-label={t(treeVisible ? "workspace.hideTree" : "workspace.showTree")}
-                      title={t(treeVisible ? "workspace.hideTree" : "workspace.showTree")}
-                      shortcut="CmdOrCtrl+Shift+E"
-                      aria-expanded={treeVisible}
-                      onClick={() => setTreeVisible(!treeVisible)}
-                    >
-                      <FolderTree />
-                    </Button>
-                  }
-                  isDark={resolvedTheme === "dark"}
-                  iconTheme={iconTheme ?? workspace.iconTheme}
-                  activePath={activeDocument ? activeDocument.path : null}
-                  labels={treeLabels}
-                  onError={report}
-                  onOpenFile={(path) => {
-                    closePreviewExtension()
-                    // The tree has no promise slot of its own: report a failed open here instead of
-                    // letting it land in the window's unhandled-rejection handler.
-                    void workspace.treeOpener.open(path).catch(report)
-                  }}
-                  renderActions={(paths) => {
-                    const path = paths[0]
-                    if (
-                      paths.length > 1 &&
-                      driveState?.running &&
-                      paths.every((path) => {
-                        const hit = resolveDriveRoot(path, driveState.roots)
-                        return hit !== null && hit.root.canWrite && path !== hit.base
-                      })
-                    )
-                      return (
-                        <ContextMenuItem onClick={() => setPublishSources({ owner: workspace, paths })}>
-                          {t("workspace.publishTo")}
-                        </ContextMenuItem>
+                  <FileTree
+                    controller={workspace.tree}
+                    collapsed={!treeVisible}
+                    explorerControl={
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="workspace-explorer-toggle"
+                        data-testid="tree-toggle"
+                        aria-label={t(treeVisible ? "workspace.hideTree" : "workspace.showTree")}
+                        title={t(treeVisible ? "workspace.hideTree" : "workspace.showTree")}
+                        shortcut="CmdOrCtrl+Shift+E"
+                        aria-expanded={treeVisible}
+                        onClick={() => setTreeVisible(!treeVisible)}
+                      >
+                        <FolderTree />
+                      </Button>
+                    }
+                    isDark={resolvedTheme === "dark"}
+                    iconTheme={iconTheme ?? workspace.iconTheme}
+                    activePath={activeDocument ? activeDocument.path : null}
+                    labels={treeLabels}
+                    onError={report}
+                    onOpenFile={(path) => {
+                      closePreviewExtension()
+                      // The tree has no promise slot of its own: report a failed open here instead of
+                      // letting it land in the window's unhandled-rejection handler.
+                      void workspace.treeOpener.open(path).catch(report)
+                    }}
+                    renderActions={(paths) => {
+                      const path = paths[0]
+                      if (
+                        paths.length > 1 &&
+                        driveState?.running &&
+                        paths.every((path) => {
+                          const hit = resolveDriveRoot(path, driveState.roots)
+                          return hit !== null && hit.root.canWrite && path !== hit.base
+                        })
                       )
-                    return paths.length === 1 &&
-                      path !== undefined &&
-                      driveState?.running &&
-                      driveState.roots.some((root) => containsPath(root.localPath, path)) ? (
-                      <DriveTreeActions
-                        path={path}
-                        isDirectory={workspace.tree
-                          .getSnapshot()
-                          .rows.some((row) => row.path === path && row.kind === "directory")}
-                        onSharing={setSharingPath}
-                        onCondense={(scope) => {
-                          setCondenseJob(undefined)
-                          setCondenseScope(scope)
-                        }}
-                        onMove={(path, kind) => setMoveTarget({ path, kind })}
-                        onPublish={(path) => setPublishSources({ owner: workspace, paths: [path] })}
-                        saveDocument={saveDriveDocument}
+                        return (
+                          <ContextMenuItem onClick={() => setPublishSources({ owner: workspace, paths })}>
+                            {t("workspace.publishTo")}
+                          </ContextMenuItem>
+                        )
+                      return paths.length === 1 &&
+                        path !== undefined &&
+                        driveState?.running &&
+                        driveState.roots.some((root) => containsPath(root.localPath, path)) ? (
+                        <DriveTreeActions
+                          path={path}
+                          isDirectory={workspace.tree
+                            .getSnapshot()
+                            .rows.some((row) => row.path === path && row.kind === "directory")}
+                          onSharing={setSharingPath}
+                          onCondense={(scope) => {
+                            setCondenseJob(undefined)
+                            setCondenseScope(scope)
+                          }}
+                          onMove={(path, kind) => setMoveTarget({ path, kind })}
+                          onPublish={(path) => setPublishSources({ owner: workspace, paths: [path] })}
+                          saveDocument={saveDriveDocument}
+                        />
+                      ) : null
+                    }}
+                    renderDecoration={(row) => (
+                      <DriveBadge
+                        controller={drive}
+                        path={row.path}
+                        isDirectory={row.kind === "directory"}
+                        locale={i18n.language.startsWith("zh") ? "zh-CN" : "en"}
                       />
-                    ) : null
-                  }}
-                  renderDecoration={(row) => (
-                    <DriveBadge
-                      controller={drive}
-                      path={row.path}
-                      isDirectory={row.kind === "directory"}
-                      locale={i18n.language.startsWith("zh") ? "zh-CN" : "en"}
-                    />
-                  )}
-                  onPinFile={(path) => void workspace.treeOpener.open(path, true).catch(report)}
-                  onOpenExternal={openExternal}
-                  onReveal={(path) => revealItemsInDir(path)}
-                  onCopyPath={writeText}
-                  onMove={(paths) => {
-                    return Promise.try(() => {
-                      setMoveSources({ owner: workspace, paths })
-                    })
-                  }}
-                  onImport={async (destination, directory) => {
-                    const paths = await openDialog({
-                      directory,
-                      multiple: true,
-                      title: t(directory ? "workspace.importFolder" : "workspace.importFiles")
-                    })
-                    if (paths === null) return
-                    await invoke("workspace_import", { root: workspace.root, destination, paths })
-                    await workspace.tree.refresh()
-                  }}
-                  explorerLabels={{
-                    explorer: t("workspace.explorer"),
-                    search: t("workspace.search"),
-                    collapse: t("workspace.collapse"),
-                    more: t("workspace.more"),
-                    ignored: t("workspace.ignored"),
-                    newMarkdown: t("workspace.newMarkdown"),
-                    copyPath: t("workspace.copyPath"),
-                    copyRelativePath: t("workspace.copyRelativePath"),
-                    moveTo: t("workspace.moveTo"),
-                    reveal: t("workspace.reveal"),
-                    importFiles: t("workspace.importFiles"),
-                    importFolder: t("workspace.importFolder"),
-                    open: t("workspace.open"),
-                    closeSearch: t("workspace.closeSearch"),
-                    previousMatch: t("workspace.previousMatch"),
-                    nextMatch: t("workspace.nextMatch")
-                  }}
-                  requestName={(action, current) =>
-                    ask({
-                      title: t(
-                        action === "rename"
-                          ? "workspace.rename"
-                          : action === "file"
-                            ? "workspace.newFile"
-                            : "workspace.newFolder"
-                      ),
-                      detail: workspace.root,
-                      initial: current,
-                      choices: [{ label: t("workspace.confirm"), value: "confirm" }]
-                    })
-                  }
-                  confirmDelete={async (paths) =>
-                    (await ask({
-                      title: t("workspace.remove"),
-                      detail: paths.join("\n"),
-                      choices: [{ label: t("workspace.remove"), value: "delete" }]
-                    })) === "delete"
-                  }
-                />
+                    )}
+                    onPinFile={(path) => void workspace.treeOpener.open(path, true).catch(report)}
+                    onOpenExternal={openExternal}
+                    onReveal={(path) => revealItemsInDir(path)}
+                    onCopyPath={writeText}
+                    onMove={(paths) => {
+                      return Promise.try(() => {
+                        setMoveSources({ owner: workspace, paths })
+                      })
+                    }}
+                    onImport={async (destination, directory) => {
+                      const paths = await openDialog({
+                        directory,
+                        multiple: true,
+                        title: t(directory ? "workspace.importFolder" : "workspace.importFiles")
+                      })
+                      if (paths === null) return
+                      await invoke("workspace_import", { root: workspace.root, destination, paths })
+                      await workspace.tree.refresh()
+                    }}
+                    explorerLabels={{
+                      explorer: t("workspace.explorer"),
+                      search: t("workspace.search"),
+                      collapse: t("workspace.collapse"),
+                      more: t("workspace.more"),
+                      ignored: t("workspace.ignored"),
+                      newMarkdown: t("workspace.newMarkdown"),
+                      copyPath: t("workspace.copyPath"),
+                      copyRelativePath: t("workspace.copyRelativePath"),
+                      moveTo: t("workspace.moveTo"),
+                      reveal: t("workspace.reveal"),
+                      importFiles: t("workspace.importFiles"),
+                      importFolder: t("workspace.importFolder"),
+                      open: t("workspace.open"),
+                      closeSearch: t("workspace.closeSearch"),
+                      previousMatch: t("workspace.previousMatch"),
+                      nextMatch: t("workspace.nextMatch")
+                    }}
+                    requestName={(action, current) =>
+                      ask({
+                        title: t(
+                          action === "rename"
+                            ? "workspace.rename"
+                            : action === "file"
+                              ? "workspace.newFile"
+                              : "workspace.newFolder"
+                        ),
+                        detail: workspace.root,
+                        initial: current,
+                        choices: [{ label: t("workspace.confirm"), value: "confirm" }]
+                      })
+                    }
+                    confirmDelete={async (paths) =>
+                      (await ask({
+                        title: t("workspace.remove"),
+                        detail: paths.join("\n"),
+                        choices: [{ label: t("workspace.remove"), value: "delete" }]
+                      })) === "delete"
+                    }
+                  />
                 ) : (
                   emptyStateNode
                 )
@@ -1833,59 +1844,61 @@ export function FileWorkspace({
                   </div>
                 ) : (
                   <DriveDocumentSurface host={previewHost} path={activeDocument?.path ?? null}>
-                  <ChatDirectoryContext.Provider value={workspace.root}>
-                    <div className="contents" onContextMenu={previewContextMenu}>
-                      <WorkspaceEditor
-                      tabs={workspace.tabs}
-                      leading={leading}
-                      trailing={trailing}
-                      iconTheme={iconTheme ?? workspace.iconTheme}
-                      isDark={resolvedTheme === "dark"}
-                      readOnly={driveReadOnly}
-                      sourceReadOnly={driveFile?.state === "collab" || activeCollaborationOwner !== undefined}
-                      controller={workspace.editor}
-                      labels={editorLabels}
-                      compactToolbar
-                      rootPath={navigator.platform.includes("Win") ? normalizePath(workspace.root) : workspace.root}
-                      onRevealPath={(path) => workspace.tree.reveal(path)}
-                      onReveal={(document) => revealItemsInDir(document.path)}
-                      onCopyPath={(document) => writeText(document.path)}
-                      tabLabels={{
-                        closeOthers: t("workspace.closeOthers"),
-                        closeRight: t("workspace.closeRight"),
-                        closeSaved: t("workspace.closeSaved"),
-                        closeAll: t("workspace.closeAll"),
-                        copyPath: t("workspace.copyPath"),
-                        reveal: t("workspace.reveal")
-                      }}
-                      actionsLabel={t("workspace.more")}
-                      onError={report}
-                      onOpenExternal={(document) => openExternal(document.path)}
-                      previews={previews}
-                      requestSaveAs={async (document) =>
-                        ask({
-                          title: t("workspace.saveAs"),
-                          detail: workspace.root,
-                          initial: document.path,
-                          choices: [{ label: t("workspace.save"), value: "save" }]
-                        })
-                      }
-                      renderTextEditor={(props) => (
-                        <Suspense
-                          fallback={<div className="p-6 text-sm text-muted-foreground">{t("workspace.loading")}</div>}
-                        >
-                          <CodeEditor
-                            {...props}
-                            controller={workspace.editor}
-                            settings={settings}
-                            onError={report}
-                            position={navigation?.path === props.document.path ? navigation.position : undefined}
-                          />
-                        </Suspense>
-                      )}
-                    />
-                    </div>
-                  </ChatDirectoryContext.Provider>
+                    <ChatDirectoryContext.Provider value={workspace.root}>
+                      <div className="contents" onContextMenu={previewContextMenu}>
+                        <WorkspaceEditor
+                          tabs={workspace.tabs}
+                          leading={leading}
+                          trailing={trailing}
+                          iconTheme={iconTheme ?? workspace.iconTheme}
+                          isDark={resolvedTheme === "dark"}
+                          readOnly={driveReadOnly}
+                          sourceReadOnly={driveFile?.state === "collab" || activeCollaborationOwner !== undefined}
+                          controller={workspace.editor}
+                          labels={editorLabels}
+                          compactToolbar
+                          rootPath={navigator.platform.includes("Win") ? normalizePath(workspace.root) : workspace.root}
+                          onRevealPath={(path) => workspace.tree.reveal(path)}
+                          onReveal={(document) => revealItemsInDir(document.path)}
+                          onCopyPath={(document) => writeText(document.path)}
+                          tabLabels={{
+                            closeOthers: t("workspace.closeOthers"),
+                            closeRight: t("workspace.closeRight"),
+                            closeSaved: t("workspace.closeSaved"),
+                            closeAll: t("workspace.closeAll"),
+                            copyPath: t("workspace.copyPath"),
+                            reveal: t("workspace.reveal")
+                          }}
+                          actionsLabel={t("workspace.more")}
+                          onError={report}
+                          onOpenExternal={(document) => openExternal(document.path)}
+                          previews={previews}
+                          requestSaveAs={async (document) =>
+                            ask({
+                              title: t("workspace.saveAs"),
+                              detail: workspace.root,
+                              initial: document.path,
+                              choices: [{ label: t("workspace.save"), value: "save" }]
+                            })
+                          }
+                          renderTextEditor={(props) => (
+                            <Suspense
+                              fallback={
+                                <div className="p-6 text-sm text-muted-foreground">{t("workspace.loading")}</div>
+                              }
+                            >
+                              <CodeEditor
+                                {...props}
+                                controller={workspace.editor}
+                                settings={settings}
+                                onError={report}
+                                position={navigation?.path === props.document.path ? navigation.position : undefined}
+                              />
+                            </Suspense>
+                          )}
+                        />
+                      </div>
+                    </ChatDirectoryContext.Provider>
                   </DriveDocumentSurface>
                 )
               }}

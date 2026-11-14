@@ -81,17 +81,20 @@ test("Windows settings retains native window decorations", async () => {
   expect(host.create.mock.calls[0]?.[1]?.decorations).not.toBe(false)
 })
 
-test("macOS settings retains its overlay title bar and starts hidden for native attachment", async () => {
+test("macOS settings keeps the overlay title bar and opens as an independent window", async () => {
   host.mac = true
   await openSettingsWindow()
   expect(host.create).toHaveBeenCalledWith(
     "settings",
     expect.objectContaining({
       hiddenTitle: true,
-      titleBarStyle: "overlay",
-      visible: false
+      titleBarStyle: "overlay"
     })
   )
+  // Independent window: no child-window attachment (the attached path made edge-resize janky),
+  // and no start-hidden flag — the created handler shows it.
+  expect(host.create.mock.calls[0]?.[1]?.visible).not.toBe(false)
+  expect(host.attach).not.toHaveBeenCalled()
 })
 
 test("reopening hidden Windows settings reuses the window and selects the requested tab", async () => {
@@ -108,10 +111,10 @@ test("reopening hidden macOS settings always shows and focuses the existing wind
   host.existing = true
   await openSettingsWindow("computer")
   await openSettingsWindow("computer")
-  expect(host.attach).toHaveBeenCalledTimes(2)
   expect(host.show).toHaveBeenCalledTimes(2)
   expect(host.focus).toHaveBeenCalledTimes(2)
   expect(host.create).not.toHaveBeenCalled()
+  expect(host.attach).not.toHaveBeenCalled()
 })
 
 test("OpenRouter target is encoded in new settings windows", async () => {

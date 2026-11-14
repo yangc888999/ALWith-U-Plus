@@ -38,7 +38,7 @@ import { hydrateZoom } from "@/lib/zoom"
 import { startZoomViewport } from "@/lib/zoom-viewport"
 import "./index.css"
 import { primeQuickChatRoot } from "@/lib/quick-chat"
-
+import { clampWindowToScreen } from "@/lib/window-fit"
 // Install before anything can toast: early startup rejections were the last raw-English path.
 installToastErrorLocalization()
 // 引擎第一次 ready 之前的一切失败都不上屏（只进日志）。顺序很重要：必须在第一个 await 之前开启，
@@ -151,6 +151,11 @@ window.addEventListener("error", (event) => {
 })
 
 async function bootstrap(): Promise<void> {
+  if (isTauri()) {
+    // A window taller than its screen loses macOS's rounded corners and clips its bottom rows;
+    // clamp it back into the visible frame (also re-runs after drags).
+    void clampWindowToScreen()
+  }
   if (isTauri() && platform() === "windows") {
     document.documentElement.dataset.windowBackdrop = "acrylic"
   }

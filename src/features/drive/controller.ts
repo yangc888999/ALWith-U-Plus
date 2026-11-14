@@ -70,7 +70,18 @@ async function withDeadline<T>(promise: Promise<T>, ms: number, label: string): 
 
 async function invokeDrive(request: DriveRequest): Promise<DriveResponse> {
   const budget = driveRequestTimeoutMs(request)
+  // TEMP DEBUG latency probe; removed after verification.
+  const started = Date.now()
   const pending = invoke<DriveResponse>("drive_request", { request })
+  void (async () => {
+    try {
+      await pending
+      const ms = Date.now() - started
+      if (ms > 200) void info(`[drive-latency] ${request.type} took ${ms}ms`)
+    } catch {
+      // deadline errors already logged below
+    }
+  })()
   if (budget === null) return pending
   try {
     return await withDeadline(pending, budget, request.type)

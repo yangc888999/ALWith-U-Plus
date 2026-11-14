@@ -7,7 +7,9 @@
 
 import {
   HoverInfoAction,
+  isQuickChatDirectory,
   NavigationStack,
+  QUICK_CHATS_GROUP,
   SessionList,
   type SessionListExpansion,
   SessionRow
@@ -23,21 +25,27 @@ import {
   ChevronRightIcon,
   CirclePlusIcon,
   CloudIcon,
+  FolderIcon,
   FolderMinusIcon,
+  type LucideIcon,
+  MessagesSquareIcon,
   PuzzleIcon,
-  UsersIcon,
   SearchIcon,
-  SparklesIcon
+  SettingsIcon,
+  SparklesIcon,
+  UsersIcon
 } from "lucide-react"
 import type { ReactNode } from "react"
-import { useEffect, useRef, useState, useSyncExternalStore } from "react"
+import { useContext, useEffect, useRef, useState, useSyncExternalStore } from "react"
+import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 
-import { ONLINE_BI_VIEW_ID } from "@/features/workspace/online-bi"
 import type { SessionSummary } from "@/agent/client"
 import { Pane } from "@/components/alwith-ui/pane"
 import { ShortcutHint } from "@/components/alwith-ui/shortcut-hint"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
 import { Separator } from "@/components/ui/separator"
 import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader } from "@/components/ui/sidebar"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -48,24 +56,28 @@ import { dispatchCollection, reportCollection } from "@/features/collection/stor
 import { DriveArchiveAction } from "@/features/drive/archive-action"
 import { useDriveVisible } from "@/features/drive/use-drive-visible"
 import { useYupDriveEnabled } from "@/features/drive/yup-drive-preference"
-import { usePreviewExtension } from "@/features/workspace/preview-extension"
+import { GroupPanel } from "@/features/groups/group-panel"
 import { GuideButton } from "@/features/guide/guide-button"
-import type { MainScreen } from "@/features/layout/components/main-sidebar-layout"
+import {
+  type MainScreen,
+  SidebarRailContext,
+  SidebarToggleContext
+} from "@/features/layout/components/main-sidebar-layout"
 import { UpdateStatusButton } from "@/features/updater/components/update-status-button"
-import { isQuickChatDirectory, QUICK_CHATS_GROUP } from "@alwith/module-chat/session-list"
-
-import { useApp } from "@/lib/client"
+import { ONLINE_BI_VIEW_ID } from "@/features/workspace/online-bi"
+import { usePreviewExtension } from "@/features/workspace/preview-extension"
 import { automationSessionRows, automationTitleOf, subscribeAutomationSessionRows } from "@/lib/automation-sessions"
+import { useApp } from "@/lib/client"
 import { cn } from "@/lib/utils"
+import { openSettingsWindow, toggleSettingsWindow } from "@/lib/window-manager"
 
 import { ActivityPanel } from "./activity-panel"
-import { openSettingsWindow } from "@/lib/window-manager"
-import { GroupPanel } from "@/features/groups/group-panel"
 import { SessionListHostProvider } from "./session-list-host"
 import { SidebarAccountMenu } from "./sidebar-account-menu"
+import { useDisplayProfile } from "@/features/profile/use-display-profile"
 import { SidebarMenuRow } from "./sidebar-menu-row"
-import { useActivityNotification } from "./use-activity-notification"
 import { useSessionsUiStore } from "./store"
+import { useActivityNotification } from "./use-activity-notification"
 
 /** U's own hover-card actions on a session row: collections, then drive. */
 function SessionRowActions({ sessionRow, collectionId }: { sessionRow: SessionSummary; collectionId?: string }) {
@@ -124,9 +136,7 @@ function AutomationRuns({
         className="flex w-full items-center gap-1 rounded-md px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground hover:text-foreground"
       >
         <ChevronRightIcon className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")} />
-        <span className="min-w-0 flex-1 truncate text-start">
-          {`${t("sidebar.automationRuns")} (${rows.length})`}
-        </span>
+        <span className="min-w-0 flex-1 truncate text-start">{`${t("sidebar.automationRuns")} (${rows.length})`}</span>
       </button>
       {open && (
         <div>
@@ -145,6 +155,126 @@ function AutomationRuns({
         </div>
       )}
     </div>
+  )
+}
+
+/** One icon button in the collapsed-sidebar rail: the header menu rows, reduced to icons. */
+type RailDestination = {
+  id: string
+  label: string
+  icon: LucideIcon
+  onSelect: () => void
+  active?: boolean
+}
+
+type SidebarRailItem = {
+  id: string
+  label: string
+  icon: LucideIcon
+  active?: boolean
+  muted?: boolean
+  hint?: string
+  onSelect: () => void
+  /** Sub-entries surfaced in a hover card instead of a plain tooltip; the icon itself still
+   *  performs its own (default) action on click. */
+  destinations?: RailDestination[]
+}
+
+/** The rail's account entry: the user's avatar, clicking straight into 设置 → 账户. */
+function RailAvatarButton({ onSelect }: { onSelect: () => void }) {
+  const { t } = useTranslation()
+  const profile = useDisplayProfile()
+  // Avatar.Root context is required even when signed out: the fallback lives inside it.
+  const avatar = (
+    <Avatar className="size-6 after:border-0">
+      {profile?.avatarUrl && <AvatarImage src={profile.avatarUrl} alt="" />}
+      <AvatarFallback className="bg-primary text-xs text-primary-foreground">
+        {profile?.initials ?? "?"}
+      </AvatarFallback>
+    </Avatar>
+  )
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={profile?.displayName ?? "account"}
+            onClick={onSelect}
+            className="size-9 justify-center rounded-[10px] p-0 text-muted-foreground hover:text-foreground [&_svg]:size-5"
+          />
+        }
+      >
+        {avatar}
+      </TooltipTrigger>
+      <TooltipContent side="inline-end">{profile?.displayName ?? t("sidebar.settings.account")}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+function SidebarRailButton({
+  label,
+  icon: Icon,
+  active,
+  muted,
+  hint,
+  onSelect,
+  destinations
+}: SidebarRailItem) {
+  const trigger = (
+    <Button
+      variant="ghost"
+      size="icon"
+      aria-label={hint ?? label}
+      aria-current={active ? "page" : undefined}
+      aria-disabled={muted || undefined}
+      onClick={() => onSelect()}
+      className={cn(
+        "size-9 rounded-[10px] text-muted-foreground hover:text-foreground aria-[current=page]:bg-foreground/5 aria-[current=page]:text-foreground",
+        muted && "opacity-55"
+      )}
+    >
+      <Icon aria-hidden="true" className="size-[18px]" />
+    </Button>
+  )
+  // Multi-destination entries (工具箱) trade the plain tooltip for a hover card listing the
+  // sub-entries; the icon click keeps its own default destination.
+  if (destinations !== undefined && destinations.length > 0) {
+    return (
+      <HoverCard>
+        {/* A near-instant 120ms dwell: the card must feel attached to the pointer, and the
+            close delay keeps it alive across the seam onto the menu itself. */}
+        <HoverCardTrigger render={trigger} delay={120} closeDelay={150} />
+        <HoverCardContent side="inline-end" sideOffset={10} className="w-auto min-w-36 p-1.5">
+          <div className="flex flex-col gap-0.5">
+            {destinations.map((destination) => {
+              const DestinationIcon = destination.icon
+              return (
+                <button
+                  key={destination.id}
+                  type="button"
+                  onClick={destination.onSelect}
+                  className={cn(
+                    "flex items-center gap-2 rounded-md px-2 py-1.5 text-start text-xs hover:bg-foreground/5",
+                    destination.active ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <DestinationIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                  <span className="truncate">{destination.label}</span>
+                </button>
+              )
+            })}
+          </div>
+        </HoverCardContent>
+      </HoverCard>
+    )
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger render={trigger} />
+      <TooltipContent side="inline-end">{hint ?? label}</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -237,7 +367,10 @@ function SidebarPanels({
     else if (view === "drive") setDriveVisited(true)
   }, [driveVisible, view, setView])
   const [viewport, setViewport] = useState<HTMLDivElement | null>(null)
-
+  // The collapsed sidebar leaves a one-column icon rail on the leading edge (hosted by the
+  // layout); the same header actions run from it, so nothing is unreachable while collapsed.
+  const railNode = useContext(SidebarRailContext)
+  const sidebarToggle = useContext(SidebarToggleContext)
   // Projects are all visible by default; "展开显示" only appears after a collapse.
   const [allProjectsShown, setAllProjectsShown] = useState(true)
   // 会话 previews three rows; a project lists its recent conversations, with the rest behind its
@@ -296,9 +429,8 @@ function SidebarPanels({
   // the list's own ordering, and the list re-renders without this component (StrictMode renders
   // it twice), so "first call wins" state cannot survive. Every project group therefore carries
   // the label and the stylesheet shows only the first one (see index.css).
-  const projectCount = new Set(
-    sessions.filter((row) => !isQuickChatDirectory(row.cwd ?? "")).map((row) => row.cwd)
-  ).size
+  const projectCount = new Set(sessions.filter((row) => !isQuickChatDirectory(row.cwd ?? "")).map((row) => row.cwd))
+    .size
 
   const renderRow = (
     sessionRow: SessionSummary,
@@ -315,212 +447,340 @@ function SidebarPanels({
     />
   )
 
+  // View-based destinations live inside the panel itself. While the panel is collapsed they
+  // also bring it back, otherwise the view would switch behind an invisible column.
+  const openWithSidebar = (next: "sessions" | "drive" | "groups"): void => {
+    setView(next)
+    if (sidebarToggle?.docked !== true) sidebarToggle?.toggle()
+  }
+
+  const railItems: SidebarRailItem[] = [
+    { id: "new-task", label: t("sidebar.newTask"), icon: CirclePlusIcon, onSelect: onNewChat },
+    {
+      id: "toolbox",
+      label: t("sidebar.toolbox"),
+      icon: BoxesIcon,
+      // Skills is the default destination: the icon click lands there directly; the hover
+      // card lists 插件 / 扩展 / 技能 for the other two.
+      onSelect: onOpenSkills ?? onOpenPlugins,
+      destinations: [
+        {
+          id: "plugins",
+          label: t("sidebar.plugins"),
+          icon: PuzzleIcon,
+          onSelect: onOpenPlugins,
+          active: screen === "leading" && leadingPage === "plugins"
+        },
+        {
+          id: "extensions",
+          label: t("sidebar.extensions"),
+          icon: BlocksIcon,
+          onSelect: onOpenExtensions,
+          active: screen === "leading" && leadingPage === "extensions"
+        },
+        {
+          id: "skills",
+          label: t("settings.skills"),
+          icon: SparklesIcon,
+          onSelect: () => onOpenSkills?.(),
+          active: screen === "leading" && leadingPage !== "plugins" && leadingPage !== "extensions"
+        }
+      ]
+    },
+    {
+      id: "automation",
+      label: t("settings.automation"),
+      icon: CalendarClockIcon,
+      active: screen === "leading" && leadingPage === "automation",
+      onSelect: () => (screen === "leading" && leadingPage === "automation" ? onSwitchScreen() : onOpenAutomation())
+    },
+    ...(driveEnabled
+      ? [
+          {
+            id: "drive",
+            label: t("sidebar.driveLibrary"),
+            icon: CloudIcon,
+            active: view === "drive",
+            muted: !driveVisible,
+            hint: driveVisible ? undefined : t("sidebar.driveNeedsAccount"),
+            onSelect: () => {
+              if (!driveVisible) {
+                void openSettingsWindow("account")
+                return
+              }
+              closePreviewExtension()
+              openWithSidebar(view === "drive" ? "sessions" : "drive")
+            }
+          }
+        ]
+      : []),
+    {
+      id: "online-bi",
+      label: t("sidebar.onlineBi"),
+      icon: ChartColumnIcon,
+      active: previewExtension === ONLINE_BI_VIEW_ID,
+      onSelect: () => {
+        setView("sessions")
+        if (previewExtension === ONLINE_BI_VIEW_ID) closePreviewExtension()
+        else openPreviewExtension(ONLINE_BI_VIEW_ID)
+      }
+    },
+    {
+      id: "groups",
+      label: t("sidebar.groups"),
+      icon: UsersIcon,
+      active: view === "groups",
+      onSelect: () => openWithSidebar(view === "groups" ? "sessions" : "groups")
+    },
+    // 聊天 and 项目 are sections of the session list, not separate views: the rail entries
+    // bring the panel back with the list showing, mirroring the two headings they name.
+    {
+      id: "chats",
+      label: t("sidebar.quickChats"),
+      icon: MessagesSquareIcon,
+      onSelect: () => openWithSidebar("sessions")
+    },
+    {
+      id: "projects",
+      label: t("sidebar.projects"),
+      icon: FolderIcon,
+      onSelect: () => openWithSidebar("sessions")
+    }
+  ]
+
   return (
-    <Sidebar
-      collapsible="none"
-      // Keep spacing aligned with the panel's pixel gutters when WebKit clamps rem-based fonts at low zoom.
-      className="h-full min-h-0 shrink-0 bg-transparent [--navigation-row-height:30px] [--spacing:4px]"
-    >
-      <SidebarHeader className="shrink-0 gap-1 p-1 px-2" data-tauri-drag-region>
-        <div className="flex h-8 items-center gap-0.5 px-1" data-tauri-drag-region>
-          <span className="min-w-0 flex-1 truncate text-sm font-semibold" data-tauri-drag-region>
-            {t("app.name")}
-          </span>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button variant="ghost" size="icon-sm" aria-label={t("sidebar.search")} onClick={onSearch}>
-                  <SearchIcon />
-                </Button>
+    <>
+      {railNode !== null &&
+        createPortal(
+          <>
+            {/* Rail items pin to the top; the account entry pins to the bottom, mirroring the
+                expanded panel's footer (account + settings live at the bottom there too). */}
+            <div className="flex w-full flex-col items-center gap-2 pt-2">
+              {railItems.map((item) => (
+                <SidebarRailButton key={item.id} {...item} />
+              ))}
+            </div>
+            <div className="mt-auto flex w-full flex-col items-center gap-1 pb-1">
+              {/* Avatar and gear toggle Settings: a second click hides the window again. */}
+              <RailAvatarButton onSelect={() => void toggleSettingsWindow("account")} />
+              <SidebarRailButton
+                id="rail-settings"
+                label={t("sidebar.settings")}
+                icon={SettingsIcon}
+                onSelect={() => void toggleSettingsWindow("general")}
+              />
+            </div>
+          </>,
+          railNode
+        )}
+      <Sidebar
+        collapsible="none"
+        // Keep spacing aligned with the panel's pixel gutters when WebKit clamps rem-based fonts at low zoom.
+        className="h-full min-h-0 shrink-0 bg-transparent [--navigation-row-height:30px] [--spacing:4px]"
+      >
+        <SidebarHeader className="shrink-0 gap-1 p-1 px-2" data-tauri-drag-region>
+          <div className="flex h-8 items-center gap-0.5 px-1" data-tauri-drag-region>
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold" data-tauri-drag-region>
+              {t("app.name")}
+            </span>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button variant="ghost" size="icon-sm" aria-label={t("sidebar.search")} onClick={onSearch}>
+                    <SearchIcon />
+                  </Button>
+                }
+              />
+              <TooltipContent>
+                <ShortcutHint label={t("sidebar.search")} shortcut="CmdOrCtrl+K" />
+              </TooltipContent>
+            </Tooltip>
+          </div>
+          <div className="flex flex-col gap-1">
+            <SidebarMenuRow label={t("sidebar.newTask")} icon={CirclePlusIcon} onPrimary={onNewChat} />
+            <SidebarMenuRow
+              label={t("sidebar.toolbox")}
+              icon={BoxesIcon}
+              active={screen === "leading" && (leadingPage === "plugins" || leadingPage === "extensions")}
+              onPrimary={onOpenSkills ?? onOpenPlugins}
+              destinations={[
+                {
+                  id: "plugins",
+                  label: t("sidebar.plugins"),
+                  icon: PuzzleIcon,
+                  onSelect: onOpenPlugins,
+                  active: screen === "leading" && leadingPage === "plugins"
+                },
+                {
+                  id: "extensions",
+                  label: t("sidebar.extensions"),
+                  icon: BlocksIcon,
+                  onSelect: onOpenExtensions,
+                  active: screen === "leading" && leadingPage === "extensions"
+                },
+                {
+                  id: "skills",
+                  label: t("settings.skills"),
+                  icon: SparklesIcon,
+                  onSelect: () => onOpenSkills?.()
+                }
+              ]}
+            />
+            {/* 定时任务：主窗口内的一页，像 WorkBuddy 一样就地展开，不再跳设置窗口。 */}
+            <SidebarMenuRow
+              label={t("settings.automation")}
+              icon={CalendarClockIcon}
+              active={screen === "leading" && leadingPage === "automation"}
+              onPrimary={() =>
+                screen === "leading" && leadingPage === "automation" ? onSwitchScreen() : onOpenAutomation()
               }
             />
-            <TooltipContent>
-              <ShortcutHint label={t("sidebar.search")} shortcut="CmdOrCtrl+K" />
-            </TooltipContent>
-          </Tooltip>
-        </div>
-        <div className="flex flex-col gap-1">
-          <SidebarMenuRow
-            label={t("sidebar.newTask")}
-            icon={CirclePlusIcon}
-            onPrimary={onNewChat}
-          />
-          <SidebarMenuRow
-            label={t("sidebar.toolbox")}
-            icon={BoxesIcon}
-            active={screen === "leading" && (leadingPage === "plugins" || leadingPage === "extensions")}
-            onPrimary={onOpenPlugins}
-            destinations={[
-              {
-                id: "plugins",
-                label: t("sidebar.plugins"),
-                icon: PuzzleIcon,
-                onSelect: onOpenPlugins,
-                active: screen === "leading" && leadingPage === "plugins"
-              },
-              {
-                id: "extensions",
-                label: t("sidebar.extensions"),
-                icon: BlocksIcon,
-                onSelect: onOpenExtensions,
-                active: screen === "leading" && leadingPage === "extensions"
-              },
-              {
-                id: "skills",
-                label: t("settings.skills"),
-                icon: SparklesIcon,
-                onSelect: () => onOpenSkills?.()
-              }
-            ]}
-          />
-          {/* 定时任务：主窗口内的一页，像 WorkBuddy 一样就地展开，不再跳设置窗口。 */}
-          <SidebarMenuRow
-            label={t("settings.automation")}
-            icon={CalendarClockIcon}
-            active={screen === "leading" && leadingPage === "automation"}
-            onPrimary={() => (screen === "leading" && leadingPage === "automation" ? onSwitchScreen() : onOpenAutomation())}
-          />
-          {/* Kept in place without an account: hiding it made a working destination look broken.
+            {/* Kept in place without an account: hiding it made a working destination look broken.
               Dimmed, with the reason on hover, and a click lands on the page that can fix it —
               opening the panel itself would only show a wall of failed requests. */}
-          {driveEnabled && (
-            <SidebarMenuRow
-              label={t("sidebar.driveLibrary")}
-              icon={CloudIcon}
-              active={view === "drive"}
-              muted={!driveVisible}
-              hint={driveVisible ? undefined : t("sidebar.driveNeedsAccount")}
-              onPrimary={() => {
-                if (!driveVisible) {
-                  void openSettingsWindow("account")
-                  return
-                }
-                closePreviewExtension()
-                setView(view === "drive" ? "sessions" : "drive")
-              }}
-            />
-          )}
-          {/* 在线 BI replaced the BI 指标 extension entry. It opens in the preview column; the
+            {driveEnabled && (
+              <SidebarMenuRow
+                label={t("sidebar.driveLibrary")}
+                icon={CloudIcon}
+                active={view === "drive"}
+                muted={!driveVisible}
+                hint={driveVisible ? undefined : t("sidebar.driveNeedsAccount")}
+                onPrimary={() => {
+                  if (!driveVisible) {
+                    void openSettingsWindow("account")
+                    return
+                  }
+                  closePreviewExtension()
+                  setView(view === "drive" ? "sessions" : "drive")
+                }}
+              />
+            )}
+            {/* 在线 BI replaced the BI 指标 extension entry. It opens in the preview column; the
               frame gets its session from the token in 设置 → 在线 BI, because a cross-site frame
               never receives the sign-in cookie. */}
-          {/* 群 is its own destination: a discussion has its own project, its own document and
+            {/* 群 is its own destination: a discussion has its own project, its own document and
               its own roster, so it gets a panel instead of a folder in the session list. */}
-          <SidebarMenuRow
-            label={t("sidebar.onlineBi")}
-            icon={ChartColumnIcon}
-            active={previewExtension === ONLINE_BI_VIEW_ID}
-            onPrimary={() => {
-              setView("sessions")
-              if (previewExtension === ONLINE_BI_VIEW_ID) closePreviewExtension()
-              else openPreviewExtension(ONLINE_BI_VIEW_ID)
-            }}
-          />
-          <SidebarMenuRow
-            label={t("sidebar.groups")}
-            icon={UsersIcon}
-            active={view === "groups"}
-            onPrimary={() => setView(view === "groups" ? "sessions" : "groups")}
-          />
-        </div>
-        {extensionNavigation}
-      </SidebarHeader>
-      <SidebarContent className="session-list-content gap-0 overflow-hidden px-0 py-1">
-        {driveVisible && (driveVisited || view === "drive") && (
+            <SidebarMenuRow
+              label={t("sidebar.onlineBi")}
+              icon={ChartColumnIcon}
+              active={previewExtension === ONLINE_BI_VIEW_ID}
+              onPrimary={() => {
+                setView("sessions")
+                if (previewExtension === ONLINE_BI_VIEW_ID) closePreviewExtension()
+                else openPreviewExtension(ONLINE_BI_VIEW_ID)
+              }}
+            />
+            <SidebarMenuRow
+              label={t("sidebar.groups")}
+              icon={UsersIcon}
+              active={view === "groups"}
+              onPrimary={() => setView(view === "groups" ? "sessions" : "groups")}
+            />
+          </div>
+          {extensionNavigation}
+        </SidebarHeader>
+        <SidebarContent className="session-list-content gap-0 overflow-hidden px-0 py-1">
+          {driveVisible && (driveVisited || view === "drive") && (
+            <div
+              hidden={view !== "drive"}
+              className={cn("mx-2 min-h-0 flex-1 flex-col", view === "drive" ? "flex" : "hidden")}
+            >
+              {drivePanel}
+            </div>
+          )}
           <div
-            hidden={view !== "drive"}
-            className={cn("mx-2 min-h-0 flex-1 flex-col", view === "drive" ? "flex" : "hidden")}
+            className="contents select-none"
+            // Session rows are chrome, not document text: suppress WebKit's native
+            // "Look Up / Translate / Copy / Services" menu on right click. Inputs keep their menu.
+            onContextMenu={(event) => {
+              const target = event.target as HTMLElement | null
+              if (!target?.closest("input, textarea, [contenteditable='true']")) event.preventDefault()
+            }}
           >
-            {drivePanel}
-          </div>
-        )}
-        <div
-          className="contents select-none"
-          // Session rows are chrome, not document text: suppress WebKit's native
-          // "Look Up / Translate / Copy / Services" menu on right click. Inputs keep their menu.
-          onContextMenu={(event) => {
-            const target = event.target as HTMLElement | null
-            if (!target?.closest("input, textarea, [contenteditable='true']")) event.preventDefault()
-          }}
-        >
-        {view === "drive" ? null : view === "groups" ? (
-          <GroupPanel
-            onSelect={onSelect}
-            onNewChat={(cwd, groupId) => onNewProjectChat(cwd, undefined, groupId ?? null)}
-            onViewFiles={onViewFiles}
-          />
-        ) : view === "collections" ? (
-          <CollectionPanel renderRow={renderRow} onSelect={onSelect} onNewChat={(id) => onNewProjectChat(null, id)} />
-        ) : view === "activity" ? (
-          <ActivityPanel selectedId={selectedId} onSelect={onSelect} />
-        ) : (
-          <Pane className="session-list-scroll" viewportRef={setViewport} viewportClassName="ps-2 pe-0 pb-1">
-            {/* Observe content height as groups expand, collapse or reveal more rows. */}
-            <ScrollArea.Content render={<NavigationStack />} style={{ minWidth: 0 }}>
-              <SessionList
-                selectedId={selectedId}
+            {view === "drive" ? null : view === "groups" ? (
+              <GroupPanel
                 onSelect={onSelect}
-                viewport={viewport}
-                expansion={expansion}
-                wrapGroupHeader={(cwd, header) => {
-                  // Quick chats already carry their own "会话" heading; the first project group
-                  // gets a matching "项目" section label so the sidebar reads as two sections.
-                  // A group's conversations are not projects and never reach this list (the client
-                  // diverts them to the 群聊 panel), so every folder here is a real project.
-                  const label =
-                    cwd !== null ? (
-                      <div
-                        data-project-label=""
-                        className="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground"
-                      >
-                        {`${t("sidebar.projects")} (${projectCount})`}
-                      </div>
-                    ) : null
-                  return (
-                    <>
-                      {label}
-                      <ProjectSessionPopover
-                        cwd={cwd}
-                        trigger={header}
-                        onSelect={onSelect}
-                        onNewChat={() => onNewProjectChat(cwd)}
-                      />
-                    </>
-                  )
-                }}
-                rowActions={(sessionRow) => <SessionRowActions sessionRow={sessionRow} />}
+                onNewChat={(cwd, groupId) => onNewProjectChat(cwd, undefined, groupId ?? null)}
+                onViewFiles={onViewFiles}
               />
-              <AutomationRuns rows={automationRows} selectedId={selectedId} renderRow={renderRow} />
-            </ScrollArea.Content>
-          </Pane>
-        )}
-        </div>
-      </SidebarContent>
-      <SidebarFooter className="shrink-0 gap-1 p-1 px-2">
-        <UpdateStatusButton />
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            className={cn(
-              "h-8 min-w-0 flex-1 rounded-[10px] px-2 [corner-shape:superellipse(1.5)] hover:bg-foreground/5",
-              screen === "main" ? "justify-start" : "justify-end"
+            ) : view === "collections" ? (
+              <CollectionPanel
+                renderRow={renderRow}
+                onSelect={onSelect}
+                onNewChat={(id) => onNewProjectChat(null, id)}
+              />
+            ) : view === "activity" ? (
+              <ActivityPanel selectedId={selectedId} onSelect={onSelect} />
+            ) : (
+              <Pane className="session-list-scroll" viewportRef={setViewport} viewportClassName="ps-2 pe-0 pb-1">
+                {/* Observe content height as groups expand, collapse or reveal more rows. */}
+                <ScrollArea.Content render={<NavigationStack />} style={{ minWidth: 0 }}>
+                  <SessionList
+                    selectedId={selectedId}
+                    onSelect={onSelect}
+                    viewport={viewport}
+                    expansion={expansion}
+                    wrapGroupHeader={(cwd, header) => {
+                      // Quick chats already carry their own "会话" heading; the first project group
+                      // gets a matching "项目" section label so the sidebar reads as two sections.
+                      // A group's conversations are not projects and never reach this list (the client
+                      // diverts them to the 群聊 panel), so every folder here is a real project.
+                      const label =
+                        cwd !== null ? (
+                          <div
+                            data-project-label=""
+                            className="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground"
+                          >
+                            {`${t("sidebar.projects")} (${projectCount})`}
+                          </div>
+                        ) : null
+                      return (
+                        <>
+                          {label}
+                          <ProjectSessionPopover
+                            cwd={cwd}
+                            trigger={header}
+                            onSelect={onSelect}
+                            onNewChat={() => onNewProjectChat(cwd)}
+                          />
+                        </>
+                      )
+                    }}
+                    rowActions={(sessionRow) => <SessionRowActions sessionRow={sessionRow} />}
+                  />
+                  <AutomationRuns rows={automationRows} selectedId={selectedId} renderRow={renderRow} />
+                </ScrollArea.Content>
+              </Pane>
             )}
-            aria-label={t(screen === "main" ? "sidebar.openLeading" : "sidebar.backToMain")}
-            title={t(screen === "main" ? "sidebar.openLeading" : "sidebar.backToMain")}
-            onClick={onSwitchScreen}
-          >
-            {screen === "main" ? <ArrowLeftIcon /> : <ArrowRightIcon />}
-          </Button>
-        </div>
-        {/* Hairline between the navigation rows above and the account block: identity is not
-            another destination in the list. */}
-        <Separator className="mx-1 my-1" />
-        <div className="flex h-8 items-center gap-1">
-          <div className="min-w-0 flex-1">
-            <SidebarAccountMenu onOpenSettings={onOpenSettings} onEditProfile={onEditProfile} />
           </div>
-          <GuideButton />
-        </div>
-      </SidebarFooter>
-    </Sidebar>
+        </SidebarContent>
+        <SidebarFooter className="shrink-0 gap-1 p-1 px-2">
+          <UpdateStatusButton />
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              className={cn(
+                "h-8 min-w-0 flex-1 rounded-[10px] px-2 [corner-shape:superellipse(1.5)] hover:bg-foreground/5",
+                screen === "main" ? "justify-start" : "justify-end"
+              )}
+              aria-label={t(screen === "main" ? "sidebar.openLeading" : "sidebar.backToMain")}
+              title={t(screen === "main" ? "sidebar.openLeading" : "sidebar.backToMain")}
+              onClick={onSwitchScreen}
+            >
+              {screen === "main" ? <ArrowLeftIcon /> : <ArrowRightIcon />}
+            </Button>
+          </div>
+          {/* Hairline between the navigation rows above and the account block: identity is not
+            another destination in the list. */}
+          <Separator className="mx-1 my-1" />
+          <div className="flex h-8 items-center gap-1">
+            <div className="min-w-0 flex-1">
+              <SidebarAccountMenu onOpenSettings={onOpenSettings} onEditProfile={onEditProfile} />
+            </div>
+            <GuideButton />
+          </div>
+        </SidebarFooter>
+      </Sidebar>
+    </>
   )
 }
