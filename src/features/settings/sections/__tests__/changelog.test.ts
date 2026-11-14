@@ -15,7 +15,7 @@ test("every released version in CHANGELOG.md reaches the update-log dialog", () 
   }
   // Bullets keep their text but lose the list punctuation the changelog uses.
   const newest = groups[0]
-  expect(newest.items[0]).toContain("常驻图标")
+  expect(newest.items[0]).toContain("主题色")
   expect(versions).toContain("0.4.2")
 })
 
