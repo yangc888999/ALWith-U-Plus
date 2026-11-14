@@ -300,6 +300,9 @@ test("Drive + WYSIWYG double wrapping keeps the Drive surface, frontmatter and t
     createWysiwygMarkdownIntegration(base, context, wysiwygLabels)
   const view = render(<Workbench props={props} />)
   await screen.findByRole("heading", { name: "Drive" }, { timeout: 5000 })
+  // Preview is read-only; the publish path only runs after the reader opts into editing.
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }))
+  await waitFor(() => expect(screen.getByRole("button", { name: "Bold" })).not.toBeDisabled())
   expect(screen.getByText("Drive comments")).toBeInTheDocument()
   expect(view.container.querySelector(".alwith-wysiwyg-toolbar")).not.toBeNull()
   expect(screen.getByRole("button", { name: "Underline" })).toBeInTheDocument()

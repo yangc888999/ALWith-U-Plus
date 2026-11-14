@@ -72,10 +72,70 @@ fn slug_of(name: &str) -> String {
     }
 }
 
-fn starter_document(name: &str) -> String {
-    format!(
-        "# {name}\n\n## 这个群聊要解决的问题\n\n（写清楚背景、目标和边界。群聊里的每个角色都会读到这一段。）\n\n## 约束\n\n- \n\n## 参与者\n\n（由设置里的角色定义补充。）\n\n## 目录约定\n\n- `资料/` — 这次讨论要用的原始数据、口径、截图。\n- `产出/` — 讨论收敛后的方案、报告、SQL。\n\n## 群聊怎么用\n\n- 成员按设置里的顺序轮流发言，每人一次算一轮；总共跑「默认循环」设定的轮数。\n- 主持人（moderator）在每轮结束时按「讨论总结模板」输出结论，下一轮在结论上继续。\n- 用户随时可以直接发消息插话：已完成的发言保留，群聊从第 1 轮重新开始，跑完剩余轮次。\n- 成员只读本文件和 `资料/`，产出写到 `产出/`，不要改动别人的文件。\n"
-    )
+/// The starter `group.md`.
+///
+/// The create dialog collects the question the room must answer and the analysis direction, so
+/// they belong in the document every member reads — not only in the UI's saved config. Empty
+/// fields keep the explanatory placeholder; a filled direction gets its own section.
+fn starter_document(name: &str, topic: Option<&str>, focus: Option<&str>) -> String {
+    let topic = topic.map(str::trim).filter(|value| !value.is_empty());
+    let focus = focus.map(str::trim).filter(|value| !value.is_empty());
+    let mut document = format!(
+        "# {name}\n\n## 这个群聊要解决的问题\n\n{}\n\n",
+        topic.unwrap_or("（写清楚背景、目标和边界。群聊里的每个角色都会读到这一段。）")
+    );
+    if let Some(focus) = focus {
+        document.push_str(&format!("## 分析方向\n\n{focus}\n\n"));
+    }
+    document.push_str("## 约束\n\n- \n\n## 参与者\n\n（由设置里的角色定义补充。）\n\n## 目录约定\n\n- `资料/` — 这次讨论要用的原始数据、口径、截图。\n- `产出/` — 讨论收敛后的方案、报告、SQL。\n\n## 群聊怎么用\n\n- 成员按设置里的顺序轮流发言，每人一次算一轮；总共跑「默认循环」设定的轮数。\n- 主持人（moderator）在每轮结束时按「讨论总结模板」输出结论，下一轮在结论上继续。\n- 用户随时可以直接发消息插话：已完成的发言保留，群聊从第 1 轮重新开始，跑完剩余轮次。\n- 成员只读本文件和 `资料/`，产出写到 `产出/`，不要改动别人的文件。\n");
+    document
+}
+
+/// Replaces the body of a `## heading` section, preserving everything before and after it.
+/// Returns `None` when the heading is absent.
+fn replace_section(document: &str, heading: &str, body: &str) -> Option<String> {
+    let marker = format!("## {heading}");
+    let start = document.find(&marker)?;
+    let after_marker = start + marker.len();
+    let rest = &document[after_marker..];
+    let end = rest
+        .find("\n## ")
+        .map(|offset| after_marker + offset)
+        .unwrap_or(document.len());
+    let mut next = String::with_capacity(document.len() + body.len());
+    next.push_str(&document[..start]);
+    next.push_str(&marker);
+    next.push_str("\n\n");
+    next.push_str(body.trim());
+    next.push('\n');
+    next.push_str(&document[end..]);
+    Some(next)
+}
+
+/// Inserts a `## heading` section before `## 约束` (or at the end when the template changed).
+fn insert_section(document: &str, heading: &str, body: &str) -> String {
+    let section = format!("## {heading}\n\n{}\n\n", body.trim());
+    match document.find("## 约束") {
+        Some(index) => format!("{}{}{}", &document[..index], section, &document[index..]),
+        None => format!("{document}\n\n{section}"),
+    }
+}
+
+/// Applies the dialog's topic/focus to an existing `group.md` without touching any other section.
+///
+/// Re-creating a meeting whose folder already exists used to leave the old starter text in place:
+/// the directory command only wrote `group.md` when it was missing. The topic and direction the
+/// reader just typed must land in the document in that case too, or the members never see them.
+fn apply_topic_and_focus(document: &str, topic: Option<&str>, focus: Option<&str>) -> String {
+    let mut next = document.to_string();
+    if let Some(topic) = topic.map(str::trim).filter(|value| !value.is_empty()) {
+        next = replace_section(&next, "这个群聊要解决的问题", topic).unwrap_or(next);
+    }
+    if let Some(focus) = focus.map(str::trim).filter(|value| !value.is_empty()) {
+        next = replace_section(&next, "分析方向", focus)
+            .unwrap_or_else(|| insert_section(&next, "分析方向", focus));
+    }
+    next
 }
 
 /// Creates (or reuses) the group's folder and writes the starter document into it.
@@ -84,7 +144,12 @@ fn starter_document(name: &str) -> String {
 /// the meeting first and choosing the parent second still lands in a subfolder named after the
 /// meeting — never directly inside the picked folder. Omitted = the default `~/Documents/ALWith/groups`.
 #[tauri3_specta::command]
-pub fn group_directory_create(name: String, parent: Option<String>) -> Result<GroupDirectory, String> {
+pub fn group_directory_create(
+    name: String,
+    parent: Option<String>,
+    topic: Option<String>,
+    focus: Option<String>,
+) -> Result<GroupDirectory, String> {
     let root = match parent {
         Some(path) if !path.trim().is_empty() => expand_home(path.trim()),
         _ => groups_root()?,
@@ -101,8 +166,16 @@ pub fn group_directory_create(name: String, parent: Option<String>) -> Result<Gr
         fs::create_dir_all(directory.join(folder)).map_err(|error| error.to_string())?;
     }
     let document = directory.join("group.md");
-    if !document.exists() {
-        fs::write(&document, starter_document(name.trim()))
+    if document.exists() {
+        // An existing meeting keeps its document, but the topic/direction just submitted must be
+        // reflected in the sections that drive the discussion.
+        let current = fs::read_to_string(&document).map_err(|error| error.to_string())?;
+        let updated = apply_topic_and_focus(&current, topic.as_deref(), focus.as_deref());
+        if updated != current {
+            fs::write(&document, updated).map_err(|error| error.to_string())?;
+        }
+    } else {
+        fs::write(&document, starter_document(name.trim(), topic.as_deref(), focus.as_deref()))
             .map_err(|error| error.to_string())?;
     }
     Ok(GroupDirectory {
@@ -137,7 +210,9 @@ pub fn group_directory_heal(name: String, directory: String) -> Result<Option<Gr
     }
     let document = child.join("group.md");
     if !document.exists() {
-        fs::write(&document, starter_document(name.trim())).map_err(|error| error.to_string())?;
+        // The heal path only repairs a mis-pinned folder; it has no topic/focus in hand.
+        fs::write(&document, starter_document(name.trim(), None, None))
+            .map_err(|error| error.to_string())?;
     }
     Ok(Some(GroupDirectory {
         directory: child.to_string_lossy().to_string(),
@@ -666,21 +741,78 @@ mod tests {
     #[test]
     fn directory_create_lands_in_a_named_subfolder_of_the_chosen_parent() {
         let parent = std::env::temp_dir().join(format!("alwith-group-parent-{}", std::process::id()));
-        let created = group_directory_create("交易北极星指标".into(), Some(parent.to_string_lossy().to_string())).unwrap();
+        let created = group_directory_create(
+            "交易北极星指标".into(),
+            Some(parent.to_string_lossy().to_string()),
+            None,
+            None,
+        )
+        .unwrap();
         let directory = PathBuf::from(&created.directory);
         assert_eq!(directory.parent().unwrap(), parent.as_path());
         assert_eq!(directory.file_name().unwrap().to_string_lossy(), "交易北极星指标");
         assert!(directory.join("group.md").is_file());
         assert!(directory.join("资料").is_dir());
         // Re-creating with the same name reuses the folder instead of erroring or suffixing.
-        let again = group_directory_create("交易北极星指标".into(), Some(parent.to_string_lossy().to_string())).unwrap();
+        let again = group_directory_create(
+            "交易北极星指标".into(),
+            Some(parent.to_string_lossy().to_string()),
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(again.directory, created.directory);
         let _ = fs::remove_dir_all(&parent);
     }
 
     #[test]
     fn directory_create_rejects_a_relative_parent() {
-        assert!(group_directory_create("会".into(), Some("relative/path".into())).is_err());
+        assert!(group_directory_create("会".into(), Some("relative/path".into()), None, None).is_err());
+    }
+
+    #[test]
+    fn directory_create_writes_topic_and_focus_into_the_document() {
+        let parent = std::env::temp_dir().join(format!("alwith-group-topic-{}", std::process::id()));
+        let created = group_directory_create(
+            "定价会".into(),
+            Some(parent.to_string_lossy().to_string()),
+            Some("余额下滑到底是谁的锅？".into()),
+            Some("看补贴退坡后的毛利弹性，重点评估 BNPL 渗透率。".into()),
+        )
+        .unwrap();
+        let text = fs::read_to_string(&created.document).unwrap();
+        assert!(text.contains("余额下滑到底是谁的锅？"));
+        assert!(text.contains("## 分析方向"));
+        assert!(text.contains("看补贴退坡后的毛利弹性，重点评估 BNPL 渗透率。"));
+        assert!(!text.contains("（写清楚背景、目标和边界"));
+        let _ = fs::remove_dir_all(&parent);
+    }
+
+    #[test]
+    fn re_creating_with_a_new_topic_updates_the_existing_document() {
+        let parent = std::env::temp_dir().join(format!("alwith-group-retopic-{}", std::process::id()));
+        group_directory_create(
+            "续会".into(),
+            Some(parent.to_string_lossy().to_string()),
+            Some("旧议题".into()),
+            None,
+        )
+        .unwrap();
+        let again = group_directory_create(
+            "续会".into(),
+            Some(parent.to_string_lossy().to_string()),
+            Some("新议题".into()),
+            Some("新方向".into()),
+        )
+        .unwrap();
+        let text = fs::read_to_string(&again.document).unwrap();
+        assert!(text.contains("新议题"));
+        assert!(!text.contains("旧议题"));
+        assert!(text.contains("## 分析方向"));
+        assert!(text.contains("新方向"));
+        // Sections the dialog does not own survive the targeted update.
+        assert!(text.contains("## 群聊怎么用"));
+        let _ = fs::remove_dir_all(&parent);
     }
 
     #[test]

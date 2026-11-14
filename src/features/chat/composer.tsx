@@ -25,7 +25,11 @@ import { groupByDirectory } from "@/lib/groups"
 import { isTemporaryChatDir } from "@/lib/quick-chat"
 import { useHandoffBusy } from "@/lib/use-surface-operation"
 
-import { AccountModelRecovery } from "./composer/account-model-recovery"
+import {
+  AccountModelRecovery,
+  RecoveryModelSelector,
+  useAccountModelRecovery
+} from "./composer/account-model-recovery"
 import { withoutWaitingForTurn } from "./composer/detach-submit"
 import { chatModelMenu } from "./composer/model-catalog"
 import { nativeAttachmentPolicy, NativeFileDrop } from "./composer/native-file-drop"
@@ -207,6 +211,9 @@ export function ChatComposer({
   // holds the session) with a 重试 button that cannot help — mark the surface so CSS hides that
   // banner while the recovery card is up. Other read-only causes keep the banner.
   const recoveryReadOnly = accountRecovery && props.session.readOnly
+  // One recovery state for both surfaces: the notice above the composer and the single picker
+  // that the composer renders in its bottom-right toolbar. Never a second model entry.
+  const recovery = useAccountModelRecovery(props.session)
   // A chat lives in the quick-chat folder; anything else is a project. `groupByDirectory` looked
   // right but only matches directories the reader registered as a group, so a normal project
   // folder fell through and lost its 分工 entry (2026-11-08).
@@ -305,7 +312,7 @@ export function ChatComposer({
       onContextMenu={openMenu}
     >
       <ComposerResizeHandle shellRef={shellRef} />
-      {accountRecovery && <AccountModelRecovery key={props.session.id} session={props.session} />}
+      {accountRecovery && <AccountModelRecovery key={props.session.id} state={recovery} />}
       <Composer
         modelMenu={chatModelMenu}
         {...props}
@@ -317,7 +324,7 @@ export function ChatComposer({
         // every other model selector on non-recovery surfaces are untouched. The recovery card
         // above is now the single, clearly clickable "选择模型" and still resumes through
         // `client.resumeAccountModel`.
-        modelSelector={accountRecovery ? <></> : props.modelSelector}
+        modelSelector={accountRecovery ? <RecoveryModelSelector state={recovery} /> : props.modelSelector}
         onSubmit={submit}
         onHandOff={handOff}
         disabled={props.disabled === true || handoffBusy}

@@ -40,6 +40,18 @@ import { RosterEditor } from "./roster-editor"
 
 type MaterialState = { path: string; status: "checking" | "ok" | "empty" | "missing" }
 
+/**
+ * One frame for every editable field. The old per-field borders were `border-border/70` on
+ * `bg-background`, which is the same colour as the popover in both themes — the boxes vanished and
+ * the form read as loose text (the reported "框体不对"). A full-strength border, a subtle shadow
+ * and one focus ring give every control the same, visible frame.
+ */
+const FIELD_CLASS =
+  // `block` + `border-box` keeps the field's border on the label's left edge; an inline-block
+  // input with content-box sizing let the padding push the box outside the text column. The ring
+  // is inset so focus never draws outside the field and fakes a wider box.
+  "block w-full box-border appearance-none rounded-md border border-border bg-background px-2.5 shadow-xs outline-none transition-[border-color,box-shadow] placeholder:text-muted-foreground/70 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/25"
+
 /** Mirrors Rust `slug_of`: alphanumerics (CJK included) survive, everything else is one dash. */
 function slugOf(name: string): string {
   return name
@@ -94,8 +106,6 @@ export function CreateMeetingDialog({
   const [submitting, setSubmitting] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
   const [collision, setCollision] = useState<GroupConfig | null>(null)
-  // Create mode keeps the dialog open after success (the user closes it); edit mode closes as before.
-  const [created, setCreated] = useState(false)
   // Header drag / edge-and-corner resize: once used, the dialog is positioned and sized
   // explicitly. Inline styles win over the shared base classes deterministically — the base
   // `sm:max-w-md` capped the dialog at 448px and its translate utility did not survive composition.
@@ -117,7 +127,6 @@ export function CreateMeetingDialog({
     setFailure(null)
     setCollision(null)
     setSubmitting(false)
-    setCreated(false)
     setPosition(null)
     setSize(null)
     if (group !== null) {
@@ -245,8 +254,8 @@ export function CreateMeetingDialog({
       const move = (moveEvent: PointerEvent): void => {
         const dx = moveEvent.clientX - start.x
         const dy = moveEvent.clientY - start.y
-        const minW = Math.min(420, Math.max(240, window.innerWidth - 16))
-        const minH = Math.min(360, Math.max(200, window.innerHeight - 16))
+        const minW = Math.min(560, Math.max(320, window.innerWidth - 16))
+        const minH = Math.min(420, Math.max(260, window.innerHeight - 16))
         let { left, top, right, bottom } = start
         // Opposite edges stay anchored; a corner moves one horizontal and one vertical edge,
         // so each clamp below always reads the untouched opposite side.
@@ -300,28 +309,36 @@ export function CreateMeetingDialog({
   // base `fixed` and parked the dialog off-screen; Tailwind v4's -translate-x/y-1/2 compile to
   // the `translate` property (not `transform`), so both are neutralized; maxWidth:none defeats
   // the base sm:max-w-md 448px cap. After a drag/resize we switch to explicit left/top.
+  // Explicit geometry in both states. The old centered branch relied on `inset: 0; margin: auto`
+  // while the shared popup still carried `start-1/2` / `-translate-*`; the two centering models
+  // fought, which is how a dragged box ended up off-centre or past the window edge (the reported
+  // "框体不对"). Setting left/top + translate directly is immune to those base classes, and the
+  // 32px inset guarantees the frame — including the footer — always fits the window.
   const dialogStyle: React.CSSProperties = {
     position: "fixed",
-    // Tailwind v4 translate utilities use the `translate` property, not `transform` —
-    // both must be neutralized or the base -50%/-50% shift parks the box off-center.
-    translate: "none",
     transform: "none",
     maxWidth: "none",
     ...(position === null
       ? {
-          inset: 0,
-          margin: "auto",
-          width: "min(1040px, 96vw)",
+          inset: "auto",
+          left: "50%",
+          top: "50%",
+          translate: "-50% -50%",
+          margin: 0,
+          width: "min(880px, calc(100vw - 32px))",
           height: "fit-content",
-          maxHeight: "92vh"
+          maxHeight: "calc(100vh - 32px)"
         }
       : {
           inset: "auto",
           left: position.x,
           top: position.y,
+          translate: "none",
           margin: 0,
-          width: size?.w ?? "min(1040px, 96vw)",
-          ...(size !== null ? { height: size.h, maxHeight: "none" } : { height: "fit-content", maxHeight: "92vh" })
+          width: size?.w ?? "min(880px, calc(100vw - 32px))",
+          ...(size !== null
+            ? { height: size.h, maxHeight: "none" }
+            : { height: "fit-content", maxHeight: "calc(100vh - 32px)" })
         })
   }
 
@@ -346,7 +363,14 @@ export function CreateMeetingDialog({
       const created =
         group !== null && group.directory !== ""
           ? { directory: group.directory, document: group.document }
-          : await commands.groupDirectoryCreate({ name: trimmedName, parent: parentDirectory })
+          : await commands.groupDirectoryCreate({
+              name: trimmedName,
+              parent: parentDirectory,
+              // The starter group.md is what every member reads; the question and direction
+              // typed here must land in it, not only in the saved config.
+              topic: topic.trim() || null,
+              focus: focus.trim() || null
+            })
       const record: GroupConfig = {
         id: group?.id ?? newGroupId(),
         name: trimmedName,
@@ -362,10 +386,10 @@ export function CreateMeetingDialog({
       }
       setGroup(record)
       onCreated(record, created.directory)
-      // Create mode keeps the dialog open: the reader confirms the folder and topic & rules
-      // landed, then closes it by hand. Edit mode closes right away, as it always did.
-      if (editing) onClose()
-      else setCreated(true)
+      // Creation is the start of the meeting, not a preview of it: the parent already enters the
+      // new conversation, so the dialog must step out of the way instead of sitting on top of it
+      // with a "已创建" confirmation. Edit mode closes for the same reason.
+      onClose()
     } catch (error: unknown) {
       setFailure(error instanceof Error ? error.message : String(error))
     } finally {
@@ -376,9 +400,9 @@ export function CreateMeetingDialog({
   return (
     <Dialog open={open} onOpenChange={(value) => !value && close()}>
       <DialogContent ref={popupRef} style={dialogStyle} className="flex min-h-[min(420px,92vh)] overflow-hidden">
-        <div className="flex min-h-0 w-full flex-1 flex-col gap-4">
+        <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col gap-4">
           <DialogHeader
-            className="cursor-move select-none"
+            className="cursor-move select-none pe-10"
             title={t("groups.dialogHint")}
             onPointerDown={startDrag}
             onDoubleClick={() => {
@@ -391,11 +415,11 @@ export function CreateMeetingDialog({
             <DialogDescription>{t("groups.createDesc")}</DialogDescription>
           </DialogHeader>
 
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pe-1">
+          <div className="min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto pe-1">
             <label className="block space-y-1">
               <span className="text-[11px] text-muted-foreground">{t("groups.createNameLabel")}</span>
               <input
-                className="h-8 w-full rounded-md border border-border/70 bg-background px-2 text-sm"
+                className={`h-9 text-sm ${FIELD_CLASS}`}
                 value={name}
                 placeholder={t("groups.createNamePlaceholder")}
                 onChange={(event) => {
@@ -460,7 +484,7 @@ export function CreateMeetingDialog({
             <label className="block space-y-1">
               <span className="text-[11px] text-muted-foreground">{t("groups.fieldTopic")}</span>
               <textarea
-                className="min-h-[3.5rem] w-full resize-y rounded-md border border-border/70 bg-background px-2 py-1.5 text-xs leading-relaxed"
+                className={`min-h-[3.5rem] resize-y py-1.5 text-xs leading-relaxed ${FIELD_CLASS}`}
                 placeholder={t("groups.fieldTopicPlaceholder")}
                 value={topic}
                 onChange={(event) => setTopic(event.target.value)}
@@ -470,7 +494,7 @@ export function CreateMeetingDialog({
             <label className="block space-y-1">
               <span className="text-[11px] text-muted-foreground">{t("groups.createFocusLabel")}</span>
               <textarea
-                className="min-h-[5rem] w-full resize-y rounded-md border border-border/70 bg-background px-2 py-1.5 text-xs leading-relaxed"
+                className={`min-h-[5rem] resize-y py-1.5 text-xs leading-relaxed ${FIELD_CLASS}`}
                 placeholder={t("groups.createFocusPlaceholder")}
                 value={focus}
                 onChange={(event) => setFocus(event.target.value)}
@@ -559,20 +583,13 @@ export function CreateMeetingDialog({
             )}
           </div>
 
-          {created && (
-            <p className="rounded-md border border-emerald-500/40 bg-emerald-500/5 px-2.5 py-1.5 text-[11px] text-emerald-700 dark:text-emerald-300">
-              {t("groups.createDone")}
-            </p>
-          )}
-          <DialogFooter>
+          <DialogFooter className="shrink-0 border-t border-border/60 pt-4">
             <Button variant="outline" onClick={close} disabled={submitting}>
-              {created ? t("groups.createClose") : t("actions.cancel")}
+              {t("actions.cancel")}
             </Button>
-            {!created && (
-              <Button onClick={submit} disabled={!canSubmit}>
-                {submitting ? t("groups.createSubmitting") : editing ? t("groups.createSave") : t("groups.createSubmit")}
-              </Button>
-            )}
+            <Button onClick={submit} disabled={!canSubmit}>
+              {submitting ? t("groups.createSubmitting") : editing ? t("groups.createSave") : t("groups.createSubmit")}
+            </Button>
           </DialogFooter>
         </div>
         {/* Native-window resize affordances: every edge and corner is a live handle with the

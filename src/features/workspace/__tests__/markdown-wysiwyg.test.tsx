@@ -97,6 +97,16 @@ function captureEditor(): { current: Editor | undefined } {
   return ref
 }
 
+/**
+ * Preview is the default; formatting tests must opt into editing through the toolbar button first.
+ * Waiting for Bold keeps the editor-ready wait in one place.
+ */
+async function enterEditMode(): Promise<void> {
+  await screen.findByRole("button", { name: "Bold" }, { timeout: 5000 })
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }))
+  await waitFor(() => expect(screen.getByRole("button", { name: "Bold" })).not.toBeDisabled())
+}
+
 /** Place the caret inside the first text block matching `needle`. */
 function caretAt(editor: Editor, needle: string): void {
   editor.action((ctx) => {
@@ -148,11 +158,29 @@ test("toolbar renders through render(), survives the outline revision, and coexi
   expect(screen.getByRole("button", { name: "Bold" })).toBeInTheDocument()
 }, 15000)
 
+test("the preview stays read-only until the reader presses Edit", async () => {
+  const props = withWysiwyg(fixture("# Preview\n"))
+  const view = render(<Workbench props={props} />)
+  await screen.findByRole("button", { name: "Edit" }, { timeout: 5000 })
+  const surface = view.container.querySelector(".ProseMirror")
+  expect(surface).not.toBeNull()
+  await waitFor(() => expect(surface).toHaveAttribute("contenteditable", "false"))
+  expect(surface).toHaveAttribute("data-alwith-markdown-editing", "false")
+  // The host re-applies `integration.editable()` after mount; that contract must stay false.
+  expect(props.host.createMarkdownIntegration).toBeDefined()
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }))
+  await waitFor(() => expect(surface).toHaveAttribute("contenteditable", "true"))
+  expect(surface).toHaveAttribute("data-alwith-markdown-editing", "true")
+  fireEvent.click(screen.getByRole("button", { name: "Done" }))
+  await waitFor(() => expect(surface).toHaveAttribute("contenteditable", "false"))
+  expect(surface).toHaveAttribute("data-alwith-markdown-editing", "false")
+})
+
 test("bold button toggles strong on the caret's word and publishes Markdown", async () => {
   const editorRef = captureEditor()
   const props = withWysiwyg(fixture("hello world\n"))
   render(<Workbench props={props} />)
-  await screen.findByRole("button", { name: "Bold" }, { timeout: 5000 })
+  await enterEditMode()
   const editor = editorRef.current
   if (!editor) throw new Error("Missing editor")
   act(() => caretAt(editor, "hello"))
@@ -173,7 +201,7 @@ test("underline button round-trips <u> through the serializer", async () => {
   const editorRef = captureEditor()
   const props = withWysiwyg(fixture("plain text\n"))
   render(<Workbench props={props} />)
-  await screen.findByRole("button", { name: "Underline" }, { timeout: 5000 })
+  await enterEditMode()
   const editor = editorRef.current
   if (!editor) throw new Error("Missing editor")
   act(() => {
@@ -191,7 +219,8 @@ test("existing <u>x</u> parses into an underline mark and re-serializes", async 
   const editorRef = captureEditor()
   const props = withWysiwyg(fixture("a <u>x</u> b\n"))
   const view = render(<Workbench props={props} />)
-  await screen.findByRole("button", { name: "Underline" }, { timeout: 5000 })
+  // Programmatic edits must not publish while the preview is read-only; opt in first.
+  await enterEditMode()
   const editor = editorRef.current
   if (!editor) throw new Error("Missing editor")
   // The underline mark exists in the schema and the document round-trips.
@@ -212,7 +241,7 @@ test("table row/column delete works from a plain caret (TextSelection), last row
   const editorRef = captureEditor()
   const props = withWysiwyg(fixture("| a | b |\n| - | - |\n| 1 | 2 |\n| 3 | 4 |\n"))
   render(<Workbench props={props} />)
-  await screen.findByRole("button", { name: "Delete row" }, { timeout: 5000 })
+  await enterEditMode()
   const editor = editorRef.current
   if (!editor) throw new Error("Missing editor")
   act(() => caretAt(editor, "1"))
@@ -242,7 +271,7 @@ test("table column delete removes the caret's column", async () => {
   const editorRef = captureEditor()
   const props = withWysiwyg(fixture("| a | b |\n| - | - |\n| 1 | 2 |\n"))
   render(<Workbench props={props} />)
-  await screen.findByRole("button", { name: "Delete column" }, { timeout: 5000 })
+  await enterEditMode()
   const editor = editorRef.current
   if (!editor) throw new Error("Missing editor")
   act(() => caretAt(editor, "1"))
@@ -257,7 +286,7 @@ test("code block button toggles a fenced block and back to text", async () => {
   const editorRef = captureEditor()
   const props = withWysiwyg(fixture("some code\n"))
   render(<Workbench props={props} />)
-  await screen.findByRole("button", { name: "Code block" }, { timeout: 5000 })
+  await enterEditMode()
   const editor = editorRef.current
   if (!editor) throw new Error("Missing editor")
   act(() => caretAt(editor, "some"))
@@ -275,7 +304,7 @@ test("blockquote button toggles a quote and back", async () => {
   const editorRef = captureEditor()
   const props = withWysiwyg(fixture("quoted line\n"))
   render(<Workbench props={props} />)
-  await screen.findByRole("button", { name: "Blockquote" }, { timeout: 5000 })
+  await enterEditMode()
   const editor = editorRef.current
   if (!editor) throw new Error("Missing editor")
   act(() => caretAt(editor, "quoted"))

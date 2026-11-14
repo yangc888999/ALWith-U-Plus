@@ -83,6 +83,23 @@ import {
 } from "./wysiwyg-types"
 
 /**
+ * Marks the live ProseMirror root while the reader is in Markdown edit mode.
+ *
+ * The selection pill and the translated right-click menu live in the workspace host, outside this
+ * integration, so they cannot read React state. A DOM attribute is the only channel that survives
+ * both the portal boundary and the editor's re-renders — the same contract HTML editing uses
+ * (`HTML_EDITING_ATTRIBUTE`). Host surfaces must treat `"true"` as "hands off, native editing".
+ */
+export const MARKDOWN_EDITING_ATTRIBUTE = "data-alwith-markdown-editing"
+
+/**
+ * The size at which the module swaps its static read-only Markdown surface for a pencil that
+ * mounts Milkdown. Mirrors `@alwith/module-editor`'s own threshold (1 MiB): reaching this path
+ * means the reader explicitly pressed "Edit Markdown", so the mounted editor starts editable.
+ */
+export const LARGE_MARKDOWN_BYTES = 1_048_576
+
+/**
  * The schema types the toolbar compares against, resolved once per editor.
  *
  * Every entry comes from `xxxSchema.type(ctx)`. NEVER read `xxxSchema.id`: `@milkdown/utils`
@@ -254,29 +271,43 @@ function MarkdownToolbar({
   store,
   editor,
   labels,
-  readOnly
+  readOnly,
+  startEditing,
+  onEditingChange
 }: {
   store: SnapshotStore<FormatState>
   editor: () => Editor | null
   labels: WysiwygLabels
   readOnly: boolean
+  startEditing: boolean
+  onEditingChange: (editing: boolean) => void
 }): ReactNode {
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
-  const [editing, setEditing] = useState(!readOnly)
+  // Preview first: markdown opens read-only and the reader opts into editing through the labelled
+  // "Edit" button. Starting editable made a preview indistinguishable from an editor and let the
+  // selection pill / context menu fire while typing. The one exception is the large-document
+  // surface, which only mounts this editor after the reader pressed its own "Edit Markdown".
+  const [editing, setEditing] = useState(startEditing && !readOnly)
 
-  // The toolbar's edit toggle is the single source of truth for Milkdown's editability; mirror it
-  // onto the live view (and onto external read-only changes) so a "read-only preview" really is.
+  // A document that turns read-only (or is replaced) must leave edit mode.
   useEffect(() => {
-    setEditing(!readOnly)
+    if (readOnly) setEditing(false)
   }, [readOnly])
   useEffect(() => {
     const instance = editor()
     if (instance === null) return
+    const editable = editing && !readOnly
+    // The host reads `integration.editable()` when it mounts and on read-only changes. Keeping
+    // that contract in sync is what stops the preview from being typable while the toolbar says
+    // "Edit" — the previous constant `true` re-enabled the view right after `ready()` pinned it.
+    onEditingChange(editable)
     instance.action((ctx) => {
       const view = ctx.get(editorViewCtx)
-      view.setProps({ editable: () => editing && !readOnly })
+      view.setProps({ editable: () => editable })
+      view.dom.setAttribute(MARKDOWN_EDITING_ATTRIBUTE, editable ? "true" : "false")
+      if (!editable) view.dom.blur()
     })
-  }, [editing, readOnly, editor])
+  }, [editing, readOnly, editor, onEditingChange])
 
   const canEdit = state.canEdit
   const formatDisabled = !editing || !canEdit
@@ -326,11 +357,22 @@ function MarkdownToolbar({
 export function createWysiwygMarkdownIntegration(
   base: MarkdownIntegration | undefined,
   context: PreviewContext,
-  labels: WysiwygLabels
+  labels: WysiwygLabels,
+  options: { startEditing?: boolean } = {}
 ): MarkdownIntegration {
+  const startEditing = options.startEditing ?? false
+  // Mirrors the toolbar's edit state for the integration's `editable()` contract, which the host
+  // samples outside React (mount, read-only changes, autosave/publish guards).
+  let editingRef = startEditing && !context.readOnly
   const store = createSnapshotStore<FormatState>(EMPTY_FORMAT_STATE, formatStateEqual)
   let editorRef: Editor | null = null
   let disposed = false
+  // Stable identities: the toolbar effect must run only when the edit state changes, not on every
+  // format-state publish (which would re-apply `editable` on each keystroke).
+  const getEditor = (): Editor | null => editorRef
+  const setEditingFlag = (active: boolean): void => {
+    editingRef = active
+  }
 
   const formatPlugin = $prose((ctx) => {
     // Resolved once when the plugin is built (after SchemaReady), not on every view update: the
@@ -366,9 +408,15 @@ export function createWysiwygMarkdownIntegration(
       if (disposed) return
       editorRef = editor
       editor.action((ctx) => {
-        const { state } = ctx.get(editorViewCtx)
+        const view = ctx.get(editorViewCtx)
+        // The base integration may have mounted editable; the preview contract is read-only until
+        // the reader presses Edit, so pin both the view and the host-visible marker now.
+        const editable = startEditing && !context.readOnly
+        editingRef = editable
+        view.setProps({ editable: () => editable })
+        view.dom.setAttribute(MARKDOWN_EDITING_ATTRIBUTE, editable ? "true" : "false")
         store.publish(
-          computeFormatState(resolveToolbarSchema(ctx), state, !context.readOnly && (base?.editable() ?? true))
+          computeFormatState(resolveToolbarSchema(ctx), view.state, !context.readOnly && (base?.editable() ?? true))
         )
       })
     },
@@ -377,7 +425,9 @@ export function createWysiwygMarkdownIntegration(
       editorRef = null
       base?.dispose()
     },
-    editable: () => base?.editable() ?? true,
+    // The host samples this when it mounts and whenever read-only changes; it must report the
+    // toolbar's real state, otherwise the preview becomes typable again right after `ready()`.
+    editable: () => (base?.editable() ?? true) && editingRef && !context.readOnly,
     serialize: (markdown) => base?.serialize(markdown) ?? markdown,
     applyExternal: (editor, next) => base?.applyExternal(editor, next) ?? false,
     render: () => (
@@ -385,9 +435,11 @@ export function createWysiwygMarkdownIntegration(
         {base?.render()}
         <MarkdownToolbar
           store={store}
-          editor={() => editorRef}
+          editor={getEditor}
           labels={labels}
           readOnly={context.readOnly}
+          startEditing={startEditing}
+          onEditingChange={setEditingFlag}
         />
       </>
     )

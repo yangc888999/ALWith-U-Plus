@@ -913,12 +913,21 @@ body > div:has(> [data-slot="dialog-overlay"]) > * {
   gap: 6px;
   font-size: 12px;
   font-weight: 500;
-  color: var(--settings-accent-ink);
-  border-color: color-mix(in oklab, var(--settings-accent) 35%, transparent);
+  /* Preview is the default. The Edit entry stays a neutral outline — same ink as the other
+     toolbar actions — so it can never read as an already-active mode. Accent appears only while
+     editing (`aria-pressed="true"`), where the button fills solid. */
+  color: var(--foreground);
+  border-color: var(--border);
   background: transparent;
 }
+/* Editing is a distinct mode, not a subtle toggle: a full-width accent rule under the toolbar
+   makes the state unmistakable while the document itself stays free of chrome. */
+.alwith-wysiwyg-toolbar:has(.alwith-toolbar-btn--primary[aria-pressed="true"]) {
+  box-shadow: inset 0 -2px 0 0 color-mix(in oklab, var(--settings-accent) 55%, transparent);
+}
 .alwith-wysiwyg-toolbar .alwith-markdown-action.alwith-toolbar-btn--primary:hover:not(:disabled) {
-  background-color: color-mix(in oklab, var(--settings-accent) 12%, transparent);
+  /* Neutral hover, identical to the format buttons; the accent fill is reserved for editing. */
+  background-color: color-mix(in oklab, currentColor 8%, transparent);
   background-image: none;
 }
 .alwith-wysiwyg-toolbar .alwith-markdown-action.alwith-toolbar-btn--primary[aria-pressed="true"] {
@@ -1411,6 +1420,18 @@ body > div:has(> [data-slot="dialog-overlay"]) > * {
   min-height: var(--composer-input-height, 2.5rem);
   max-height: var(--composer-input-height, none);
   overflow-y: auto;
+}
+
+/* Account-model recovery makes the composer read-only, but a persisted tall input height turned
+   that disabled surface into a giant empty box with the send button stranded at the bottom (the
+   reported broken frame). Pin recovery to one compact row and drop the now-useless resize grip so
+   the recovery card is the only actionable thing on screen. */
+[data-composer][data-account-recovery] .alwith-composer-textarea {
+  min-height: 2.75rem;
+  max-height: 2.75rem;
+}
+[data-composer][data-account-recovery] > [role="separator"][aria-orientation="horizontal"] {
+  display: none;
 }
 
 /* Images enlarge where they sit, and snap back when the pointer leaves. The thumbnail's own box

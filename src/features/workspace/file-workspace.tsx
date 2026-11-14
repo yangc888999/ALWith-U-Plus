@@ -107,7 +107,11 @@ import { routeHistory, routeReplace } from "./editor-shortcuts"
 import { createHtmlPreviewHost } from "./html-preview"
 import { createWysiwygHtmlIntegration, freezeHtmlSourceDuringEditing, HTML_EDITING_ATTRIBUTE } from "./html-wysiwyg"
 import { localPreviewProviders } from "./local-previews"
-import { createWysiwygMarkdownIntegration } from "./markdown-wysiwyg"
+import {
+  createWysiwygMarkdownIntegration,
+  LARGE_MARKDOWN_BYTES,
+  MARKDOWN_EDITING_ATTRIBUTE
+} from "./markdown-wysiwyg"
 import { MoveToDialog } from "./move-to-dialog"
 import { moveWorkspaceFiles, type WorkspaceMoveOutcome } from "./move-workspace-files"
 import { resolvePreviewResource } from "./preview-resources"
@@ -684,6 +688,9 @@ export function FileWorkspace({
     const target = event.target
     if (!(target instanceof Element)) return
     if (ownsItsContextMenu(target)) return
+    // Markdown/HTML edit mode owns the pointer: no translated menu, no "添加到对话". Native
+    // cut/copy/paste stays available, exactly like the HTML frame's edit mode.
+    if (target.closest(`[${MARKDOWN_EDITING_ATTRIBUTE}="true"]`) !== null) return
     if (
       target.closest(
         '[contenteditable="true"], [contenteditable=""], textarea, input, .cm-editor, .monaco-editor, [class*="tab"], [role="tablist"], [data-editor]'
@@ -714,6 +721,11 @@ export function FileWorkspace({
       : null
   const driveFile =
     driveVisible && activeDocument ? driveState?.files.find((file) => file.localPath === activeDocument.path) : null
+  // Drive preview integrations belong to documents that actually live in the drive. Handing them
+  // to a plain file (memory.md in a local folder) made the collab probe own `editable()`: it stays
+  // false while probing and only flips after the drive answers — with the drive unreachable that
+  // disabled the Markdown Edit button outright. Local files use the plain providers.
+  const activeIsDriveDocument = driveRoot !== null || driveFile !== null
   const driveReadOnly =
     Boolean(
       driveRoot &&
@@ -776,16 +788,22 @@ export function FileWorkspace({
       htmlDeleted: translateRef.current("workspace.htmlDeleted"),
       htmlUndoDelete: translateRef.current("workspace.htmlUndoDelete")
     }
-    // Drive occupies both integration extension points when visible; the WYSIWYG wrappers layer
-    // on top and forward every base hook, so collaboration/comments keep working.
-    const driveIntegrations = driveVisible ? drivePreviewIntegrations(previewHost) : {}
+    // Drive occupies both integration extension points only for drive documents; the WYSIWYG
+    // wrappers layer on top and forward every base hook, so collaboration/comments keep working.
+    // A local file must not carry the drive's probing state into its editable contract.
+    const driveIntegrations =
+      driveVisible && activeIsDriveDocument ? drivePreviewIntegrations(previewHost) : {}
     const providers = localPreviewProviders({
       ...driveIntegrations,
       createMarkdownIntegration: (document, context) =>
         createWysiwygMarkdownIntegration(
           driveIntegrations.createMarkdownIntegration?.(document, context),
           context,
-          wysiwygLabels
+          wysiwygLabels,
+          // Large documents only mount Milkdown after the static preview's own "Edit Markdown"
+          // press, so that explicit intent carries into the editor. Everything else opens in
+          // preview and waits for the toolbar's Edit button.
+          { startEditing: (document.bytes?.byteLength ?? 0) >= LARGE_MARKDOWN_BYTES }
         ),
       htmlIntegration: createWysiwygHtmlIntegration(driveIntegrations.htmlIntegration, {
         fs: workspace.fs,
@@ -838,7 +856,7 @@ export function FileWorkspace({
         provider.id === "html" ? freezeHtmlSourceDuringEditing(provider, htmlPreviewHost) : provider
       )
     ]
-  }, [workspace, i18n.language, previewHost, driveVisible])
+  }, [workspace, i18n.language, previewHost, driveVisible, activeIsDriveDocument])
   const reportedDirty = useRef(false)
   const requestGeneration = useRef(0),
     currentCwd = useRef(cwd)

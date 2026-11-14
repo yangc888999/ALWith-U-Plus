@@ -1083,11 +1083,11 @@
       "aliasHint": "为账户模型设置显示名称，模型标识保持不变。",
       "saveAlias": "保存",
       "resume": "使用所选模型继续",
+    "resumeShort": "继续",
       "reselect": "请选择模型后继续对话，历史记录仍可查看。",
       "description": "模型由当前登录的 ALwith U 账户提供。",
       "topUp": "充值",
       "selectModelPlaceholder": "选择模型",
-      "selectModelFirst": "请先在下方恢复卡中选择模型",
       "recovered": "已恢复，可以继续对话"
     },
     "connectionSettings": "连接设置",

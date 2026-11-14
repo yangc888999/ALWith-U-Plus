@@ -1,6 +1,7 @@
 /**
- * Account-model recovery: the recovery card is the *only* usable model picker on the surface, and
- * "继续" must stay disabled until a real model has been picked. A failed resume keeps the pick.
+ * Account-model recovery: exactly one model picker on the surface (the composer's bottom-right
+ * slot), and "继续" must stay disabled until a real model has been picked. A failed resume keeps
+ * the pick.
  */
 import type { Session } from "@alwith/api"
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
@@ -43,7 +44,18 @@ vi.mock("@alwith/module-chat/model-select", () => ({
   )
 }))
 
-import { AccountModelRecovery } from "../account-model-recovery"
+import { AccountModelRecovery, RecoveryModelSelector, useAccountModelRecovery } from "../account-model-recovery"
+
+/** Mirrors the composer: the notice above and the picker in the bottom-right share one state. */
+function Harness({ session }: { session: Session }) {
+  const state = useAccountModelRecovery(session)
+  return (
+    <>
+      <AccountModelRecovery state={state} />
+      <RecoveryModelSelector state={state} />
+    </>
+  )
+}
 
 const session = { id: "session-recovery" } as unknown as Session
 const MODEL = "gateway:demo:model-a"
@@ -59,10 +71,9 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-test("nothing picked shows the placeholder, the hint and a disabled resume button", () => {
-  render(<AccountModelRecovery session={session} />)
+test("nothing picked shows the placeholder and a disabled resume button", () => {
+  render(<Harness session={session} />)
   expect(screen.getByTestId("recovery-model-trigger")).toHaveTextContent("Select a model")
-  expect(screen.getByText("Choose a model in the recovery card below first")).toBeTruthy()
   expect(screen.getByText("Select a model to continue. History remains available.")).toBeTruthy()
   const resume = screen.getByRole("button", { name: "Continue with selected model" })
   expect((resume as HTMLButtonElement).disabled).toBe(true)
@@ -70,7 +81,7 @@ test("nothing picked shows the placeholder, the hint and a disabled resume butto
 })
 
 test("picking a model enables resume, echoes back and calls client.resumeAccountModel", async () => {
-  render(<AccountModelRecovery session={session} />)
+  render(<Harness session={session} />)
   fireEvent.click(screen.getByTestId("recovery-model-trigger"))
   expect(screen.getByTestId("recovery-model-trigger")).not.toHaveTextContent("Select a model")
   expect(document.querySelector("[data-recovery-model]")?.getAttribute("data-recovery-model")).toBe(MODEL)
@@ -85,7 +96,7 @@ test("picking a model enables resume, echoes back and calls client.resumeAccount
 
 test("a failed resume keeps the selected model and shows the reason", async () => {
   controls.resume.mockRejectedValueOnce(new Error("account changed again"))
-  render(<AccountModelRecovery session={session} />)
+  render(<Harness session={session} />)
   fireEvent.click(screen.getByTestId("recovery-model-trigger"))
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Continue with selected model" }))

@@ -165,7 +165,7 @@ export function SelectionMenu({
     if (element === null || !document.body.contains(element)) return hide()
     if (
       element.closest(
-        '[data-composer], .file-workspace-tree, .main-sidebar-panel, .main-window-statusbar, .main-window-titlebar, [role="tab"], [role="tablist"]'
+        '[data-composer], .file-workspace-tree, .main-sidebar-panel, .main-window-statusbar, .main-window-titlebar, [role="tab"], [role="tablist"], [data-alwith-markdown-editing="true"]'
       ) !== null
     )
       return hide()

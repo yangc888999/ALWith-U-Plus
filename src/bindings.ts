@@ -377,7 +377,7 @@ export const commands = {
    *  the meeting first and choosing the parent second still lands in a subfolder named after the
    *  meeting — never directly inside the picked folder. Omitted = the default `~/Documents/ALWith/groups`.
    */
-  groupDirectoryCreate: (args: { name: string; parent: string | null }): Promise<GroupDirectory> =>
+  groupDirectoryCreate: (args: { name: string; parent: string | null; topic: string | null; focus: string | null }): Promise<GroupDirectory> =>
     __t3Invoke<GroupDirectory>("group_directory_create", args),
   /**
    *  Heals a meeting record whose directory points at a PARENT folder instead of the meeting's own

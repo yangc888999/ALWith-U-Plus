@@ -138,6 +138,11 @@ async function mount(text: string, firstButton: string): Promise<Session> {
   const editor = captured
   if (!editor) throw new Error("Missing editor")
 
+  // Markdown opens in preview; every command test drives the formatting toolbar, so opt into
+  // editing once here instead of repeating the click in each test.
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }))
+  await waitFor(() => expect(screen.getByRole("button", { name: "Bold" })).not.toBeDisabled())
+
   const positionOf = (needle: string): number =>
     editor.action((ctx) => {
       const view = ctx.get(editorViewCtx)
@@ -203,13 +208,18 @@ afterEach(() => {
 // and mounting it must not make the document dirty.
 test("a ≥1MiB Markdown shows no toolbar until the pencil mounts the editor, and stays clean", async () => {
   const props = fixture(`# Large\n\n${"文".repeat(350_000)}`)
+  // This surface only reaches the editor after the reader pressed "Edit Markdown", so the mount
+  // carries an explicit edit intent (the same hint file-workspace passes for ≥1 MiB documents).
   props.host.createMarkdownIntegration = (_document, context) =>
-    createWysiwygMarkdownIntegration(undefined, context, labels)
+    createWysiwygMarkdownIntegration(undefined, context, labels, { startEditing: true })
   const view = render(<Workbench props={props} />)
   await screen.findByRole("heading", { name: "Large" }, { timeout: 10000 })
+  // The pencil is published into the header asynchronously; under parallel load the heading can
+  // appear first, so wait for the action instead of assuming it is already mounted.
+  const editMarkdown = await screen.findByRole("button", { name: "Edit Markdown" }, { timeout: 10000 })
   expect(view.container.querySelector(".alwith-wysiwyg-toolbar")).toBeNull()
   expect(view.container.querySelector(".ProseMirror")).toBeNull()
-  fireEvent.click(screen.getByRole("button", { name: "Edit Markdown" }))
+  fireEvent.click(editMarkdown)
   await waitFor(
     () => expect(view.container.querySelector(".ProseMirror")).toHaveAttribute("contenteditable", "true"),
     { timeout: 10000 }

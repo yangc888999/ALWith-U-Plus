@@ -10,63 +10,103 @@ import { useProviders } from "@/lib/use-providers"
 import { DraftModelSelect } from "./draft-model-select"
 
 /**
- * Shown when an account-owned model was revoked: the history stays readable while a new pick
- * resumes it. This card is the *only* model picker on the surface during recovery — the package's
- * own picker is disabled and replaced by `modelSelector` in the composer — and "继续" stays
- * unavailable until a model has actually been picked. Everything still goes through
- * `client.resumeAccountModel`: the account-consistency lock in the client is intentional.
+ * Account-model recovery: one notice, one model entry.
+ *
+ * The old surface put the picker in the recovery card *and* kept the composer's own (dead) picker
+ * next to it, so readers saw two model controls and clicked the disabled one. The state now lives
+ * at the composer level and is rendered exactly once — in the composer's bottom-right toolbar,
+ * where the normal model picker lives. The card above is explanation only.
  */
-export function AccountModelRecovery({ session }: { session: Session }) {
+export interface AccountRecoveryState {
+  model: string | null
+  setModel: (model: string | null) => void
+  busy: boolean
+  failure: string | null
+  recover: () => void
+}
+
+/** Owns the recovery pick once per composer; both surfaces below read the same state. */
+export function useAccountModelRecovery(session: Session): AccountRecoveryState {
   const { t } = useTranslation()
-  const snapshot = useProviders()
   const [busy, setBusy] = useState(false)
   const [model, setModel] = useState<string | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
-  async function recover(selected: string | null): Promise<void> {
-    if (selected === null) return
+
+  const recover = (): void => {
+    if (model === null) return
     setBusy(true)
     setFailure(null)
-    try {
-      await client.resumeAccountModel(session.id, selected)
-      toast.success(t("provider.managed.recovered"))
-    } catch (error) {
-      // Keep `model`: the reader must be able to retry the same pick or change it, not start over.
-      const reason = error instanceof Error ? error.message : String(error)
-      setFailure(reason)
-      toast.error(reason)
-    } finally {
-      setBusy(false)
-    }
+    void client
+      .resumeAccountModel(session.id, model)
+      .then(() => toast.success(t("provider.managed.recovered")))
+      .catch((error: unknown) => {
+        // Keep `model`: the reader must be able to retry the same pick or change it, not start over.
+        const reason = error instanceof Error ? error.message : String(error)
+        setFailure(reason)
+        toast.error(reason)
+      })
+      .finally(() => setBusy(false))
   }
+
+  return {
+    model,
+    setModel: (next) => {
+      setModel(next)
+      setFailure(null)
+    },
+    busy,
+    failure,
+    recover
+  }
+}
+
+/** Explanation only — the picker and the resume action belong to the composer's bottom-right. */
+export function AccountModelRecovery({ state }: { state: AccountRecoveryState }) {
+  const { t } = useTranslation()
   return (
     <div
-      className="account-model-recovery flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-4 py-2 text-sm text-muted-foreground"
+      className="account-model-recovery grid gap-1 px-4 py-2.5 text-sm text-muted-foreground"
       data-account-recovery=""
-      data-recovery-model={model ?? "none"}
-      aria-busy={busy}
+      data-recovery-model={state.model ?? "none"}
+      aria-busy={state.busy}
     >
       <span>{t("provider.managed.reselect")}</span>
-      <fieldset disabled={busy} className="flex min-w-0 items-center gap-2">
+      {state.failure !== null && (
+        <span role="alert" className="text-xs text-destructive">
+          {state.failure}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The single model entry. Rendered through `Composer`'s `modelSelector` slot, so it sits in the
+ * bottom-right toolbar next to the send button — the same place the normal picker occupies — and
+ * there is never a second "选择模型" control elsewhere on the surface.
+ */
+export function RecoveryModelSelector({ state }: { state: AccountRecoveryState }) {
+  const { t } = useTranslation()
+  const snapshot = useProviders()
+  return (
+    <div className="flex min-w-0 items-center gap-1" data-recovery-model={state.model ?? "none"}>
+      <fieldset disabled={state.busy} className="min-w-0">
         <DraftModelSelect
           snapshot={snapshot}
-          model={model}
-          onChange={(next) => {
-            setModel(next)
-            setFailure(null)
-          }}
+          model={state.model}
+          onChange={state.setModel}
           placeholder={t("provider.managed.selectModelPlaceholder")}
         />
       </fieldset>
-      {model === null && (
-        <span className="text-xs text-amber-600 dark:text-amber-400">{t("provider.managed.selectModelFirst")}</span>
-      )}
-      {failure !== null && (
-        <span role="alert" className="w-full text-xs text-destructive">
-          {failure}
-        </span>
-      )}
-      <Button size="sm" disabled={busy || model === null} onClick={() => void recover(model)}>
-        {t("provider.managed.resume")}
+      <Button
+        size="sm"
+        className="shrink-0"
+        title={t("provider.managed.resume")}
+        aria-label={t("provider.managed.resume")}
+        disabled={state.busy || state.model === null}
+        onClick={state.recover}
+      >
+        {t("provider.managed.resumeShort")}
       </Button>
     </div>
   )

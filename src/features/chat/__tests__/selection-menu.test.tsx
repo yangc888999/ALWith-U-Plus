@@ -1,12 +1,22 @@
 import { drafts, importDraft } from "@alwith/module-chat/conversation"
 import { act, cleanup, render, screen } from "@testing-library/react"
-import { afterEach, describe, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 
 import { initI18n } from "@/lib/i18n"
 
 import { SelectionMenu, appendQuote, composeQuoteText, quoteForComposer } from "../selection-menu"
 
 await initI18n("en")
+
+// jsdom has no layout: the pill's placement reads Range geometry. Empty rects are enough — the
+// assertions are about visibility, not coordinates.
+beforeEach(() => {
+  const empty = (): DOMRect => ({ x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0, toJSON: () => ({}) })
+  Range.prototype.getClientRects = function getClientRects(): DOMRectList {
+    return Object.assign([empty()], { item: (index: number) => (index === 0 ? empty() : null) }) as unknown as DOMRectList
+  }
+  Range.prototype.getBoundingClientRect = empty
+})
 
 afterEach(() => {
   cleanup()
@@ -113,6 +123,54 @@ describe("selection menu placement", () => {
       await new Promise((resolve) => setTimeout(resolve, 250))
     })
     expect(screen.queryByRole("menu")).toBeNull()
+  })
+
+  test("a selection inside a Markdown editor in edit mode never opens the copy pill", async () => {
+    render(
+      <div>
+        <div className="ProseMirror" data-alwith-markdown-editing="true">
+          <span data-testid="editor-text">正在编辑的正文</span>
+        </div>
+        <SelectionMenu containerRef={{ current: null }} sessionId="" />
+      </div>
+    )
+    const text = screen.getByTestId("editor-text")
+    const range = document.createRange()
+    range.selectNodeContents(text)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    act(() => {
+      document.dispatchEvent(new Event("selectionchange"))
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    })
+    expect(screen.queryByRole("menu")).toBeNull()
+  })
+
+  test("the same selection still offers the pill while the Markdown preview is read-only", async () => {
+    render(
+      <div>
+        <div className="ProseMirror" data-alwith-markdown-editing="false">
+          <span data-testid="preview-text">预览里的正文</span>
+        </div>
+        <SelectionMenu containerRef={{ current: null }} sessionId="" />
+      </div>
+    )
+    const text = screen.getByTestId("preview-text")
+    const range = document.createRange()
+    range.selectNodeContents(text)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    act(() => {
+      document.dispatchEvent(new Event("selectionchange"))
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    })
+    expect(screen.queryByRole("menu")).not.toBeNull()
   })
 })
 

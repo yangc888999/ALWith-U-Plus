@@ -1083,11 +1083,11 @@
       "aliasHint": "Choose display names for account models. Their original identities stay unchanged.",
       "saveAlias": "Save",
       "resume": "Continue with selected model",
+    "resumeShort": "Continue",
       "reselect": "Select a model to continue. History remains available.",
       "description": "Models supplied by your signed-in ALwith account.",
       "topUp": "Top up",
       "selectModelPlaceholder": "Select a model",
-      "selectModelFirst": "Choose a model in the recovery card below first",
       "recovered": "Recovered. You can continue the conversation."
     },
     "connectionSettings": "Connection settings",

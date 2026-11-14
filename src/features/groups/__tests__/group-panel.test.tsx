@@ -171,7 +171,12 @@ test("新开一场 on a folder-less draft materialises the directory, stores it,
   await act(async () => {
     button?.click()
   })
-  expect(native.commands.groupDirectoryCreate).toHaveBeenCalledWith({ name: "定价会", parent: null })
+  expect(native.commands.groupDirectoryCreate).toHaveBeenCalledWith({
+    name: "定价会",
+    parent: null,
+    topic: null,
+    focus: "毛利弹性"
+  })
   expect(entered).toEqual(["/Users/me/Documents/ALWith/groups/定价会"])
   // And the stored config now carries the directory, so a second click does not re-create it.
   const stored = JSON.parse(memory.get("alwith:groups") ?? "[]") as Array<{ directory: string }>

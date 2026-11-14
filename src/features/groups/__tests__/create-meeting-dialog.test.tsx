@@ -82,11 +82,14 @@ test("the happy path creates the folder, stores focus and materials, then enters
   seedRoles()
   const user = userEvent.setup()
   const created: Array<{ directory: string; focus: string; materials: number }> = []
+  let closed = 0
   render(
     <CreateMeetingDialog
       open
       group={null}
-      onClose={() => undefined}
+      onClose={() => {
+        closed += 1
+      }}
       onCreated={(record, directory) =>
         created.push({ directory, focus: record.focus, materials: record.materialFolders.length })
       }
@@ -99,12 +102,20 @@ test("the happy path creates the folder, stores focus and materials, then enters
   await waitFor(() => expect(screen.getByText("定价")).toBeTruthy())
   await user.click(screen.getByText("groups.createSubmit"))
   await waitFor(() => expect(created).toHaveLength(1))
-  expect(native.commands.groupDirectoryCreate).toHaveBeenCalledWith({ name: "Q4 定价", parent: null })
+  expect(native.commands.groupDirectoryCreate).toHaveBeenCalledWith({
+    name: "Q4 定价",
+    parent: null,
+    topic: null,
+    focus: "毛利弹性"
+  })
   expect(created[0]).toEqual({
     directory: "/Users/me/Documents/ALWith/groups/Q4",
     focus: "毛利弹性",
     materials: 1
   })
+  // Creating the meeting is the start of it: the dialog closes so the new conversation is visible,
+  // instead of parking a "已创建" confirmation on top of it.
+  await waitFor(() => expect(closed).toBe(1))
 })
 
 test("a name that collides with an existing meeting asks for confirmation before joining", async () => {
@@ -165,7 +176,12 @@ test("picking a parent folder previews <parent>/<slug> and submits with that par
   )
   await user.click(screen.getByText("groups.createSubmit"))
   await waitFor(() =>
-    expect(native.commands.groupDirectoryCreate).toHaveBeenCalledWith({ name: "Q4 定价", parent: "/Users/me/会议" })
+    expect(native.commands.groupDirectoryCreate).toHaveBeenCalledWith({
+      name: "Q4 定价",
+      parent: "/Users/me/会议",
+      topic: null,
+      focus: null
+    })
   )
 })
 

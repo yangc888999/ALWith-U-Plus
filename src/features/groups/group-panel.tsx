@@ -164,7 +164,12 @@ export function GroupPanel({
     }
     if (group.name.trim() === "") return
     void commands
-      .groupDirectoryCreate({ name: group.name.trim(), parent: null })
+      .groupDirectoryCreate({
+        name: group.name.trim(),
+        parent: null,
+        topic: group.topic.trim() || null,
+        focus: group.focus.trim() || null
+      })
       .then((created) => {
         setGroup({ ...group, directory: created.directory, document: created.document })
         enter(created.directory, group.id)

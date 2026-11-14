@@ -149,6 +149,9 @@ test("Markdown: the real provider chain mounts the toolbar and a bold edit round
   const view = render(provider.render(document, context))
   await screen.findByRole("button", { name: "Bold" }, { timeout: 5000 })
   expect(view.container.querySelector(".alwith-wysiwyg-toolbar")).not.toBeNull()
+  // Markdown opens in preview now; the toolbar only formats after the reader opts in.
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }))
+  await waitFor(() => expect(screen.getByRole("button", { name: "Bold" })).not.toBeDisabled())
   if (!editor) throw new Error("Missing editor")
   const live = editor
   // Select "hello" and bold it through the toolbar.

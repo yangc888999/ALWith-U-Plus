@@ -100,7 +100,7 @@ export function GroupDiscussionBar({ session }: { session: Session }): ReactNode
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 pb-2" data-group-bar>
-      <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-muted/30 px-2.5 py-1.5 text-xs">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-xl border border-border/60 bg-muted/30 px-2.5 py-1.5 text-xs">
         {busy && !paused ? (
           <Loader2Icon className="size-3.5 shrink-0 animate-spin text-primary" aria-hidden="true" />
         ) : paused ? (
@@ -108,31 +108,9 @@ export function GroupDiscussionBar({ session }: { session: Session }): ReactNode
         ) : (
           <UsersIcon className="size-3.5 shrink-0 text-primary" aria-hidden="true" />
         )}
-        <span className="min-w-0 truncate font-medium" data-group-status-text>
+        <span className="min-w-0 flex-1 truncate font-medium" data-group-status-text>
           {status}
         </span>
-        {members.length > 0 && (
-          <div className="hidden min-w-0 flex-1 items-center gap-1 overflow-hidden md:flex">
-            {members.map((member, index) => {
-              const speaking = discussion.speaker === member.name
-              return (
-                <span
-                  key={member.id}
-                  className={`flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] leading-none ${
-                    speaking
-                      ? "border-primary/60 bg-primary/10 text-primary"
-                      : "border-border/60 text-muted-foreground"
-                  }`}
-                  title={member.model}
-                >
-                  <span className="tabular-nums opacity-60">{index + 1}</span>
-                  <span>{member.name}</span>
-                  {member.id === summarizerId ? ` · ${t("groups.barSummarizer")}` : ""}
-                </span>
-              )
-            })}
-          </div>
-        )}
         <div className="ms-auto flex shrink-0 items-center gap-0.5">
           {busy ? (
             <>
@@ -169,6 +147,31 @@ export function GroupDiscussionBar({ session }: { session: Session }): ReactNode
             </Button>
           )}
         </div>
+        {/* The roster gets its own wrapping row. Inline chips were `shrink-0` inside an
+            `overflow-hidden` flex-1 track, so a narrow window simply clipped the tail ("3 D…").
+            A full-width wrap shows every member at every width. */}
+        {members.length > 0 && (
+          <div className="flex w-full flex-wrap items-center gap-1" data-group-members>
+            {members.map((member, index) => {
+              const speaking = discussion.speaker === member.name
+              return (
+                <span
+                  key={member.id}
+                  className={`flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] leading-none ${
+                    speaking
+                      ? "border-primary/60 bg-primary/10 text-primary"
+                      : "border-border/60 text-muted-foreground"
+                  }`}
+                  title={member.model}
+                >
+                  <span className="tabular-nums opacity-60">{index + 1}</span>
+                  <span>{member.name}</span>
+                  {member.id === summarizerId ? ` · ${t("groups.barSummarizer")}` : ""}
+                </span>
+              )
+            })}
+          </div>
+        )}
       </div>
       {!busy && (
         <div className="mt-1.5 px-1" data-group-direction>
