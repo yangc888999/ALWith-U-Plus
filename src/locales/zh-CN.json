@@ -542,8 +542,7 @@
     "effort": "推理",
     "collaboration": "协作模式",
     "fastMode": "快速模式",
-    "hint": "Enter 发送 · Shift+Enter 换行",
-    "modelMayBeUnavailable": "可能不可用"
+    "hint": "Enter 发送 · Shift+Enter 换行"
   },
   "approval": {
     "needed": "需要你的确认",

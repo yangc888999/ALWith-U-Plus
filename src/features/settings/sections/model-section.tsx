@@ -1,41 +1,26 @@
-// Default model + default effort for new conversations: the picker joins the integrated ChatGPT
-// group (answered by the main window through the settings bridge) with every configured
-// provider's gateway models, so a custom vendor and the built-in GPT are chosen the same way.
+// Default model + default effort for new conversations.
+//
+// v1.0.3：这里的 ① 默认会话模型 和 ② 分工默认模型（规划/执行）不再自己拼分组、自己取
+// 引擎目录、自己判断「可用」。两者连同 ③ 聊天输入框、④ 拉会成员，统一调用
+// `useModelOptions()` / `resolveModelOptions()` 这一个出口，渲染也复用同一个
+// `ModelOptionsSelect`，所以名称、分组、图标、排序、可用性、Effort 与加速口径完全一致。
 import { Zap } from "lucide-react"
-import { type ReactNode, useEffect, useMemo, useState } from "react"
+import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react"
 import { useTranslation } from "react-i18next"
-import { useSyncExternalStore } from "react"
 import { toast } from "sonner"
 
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue
-} from "@/components/alwith-ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/alwith-ui/select"
+import { ModelOptionsSelect } from "@/components/model-options/model-options-select"
 import { Button } from "@/components/ui/button"
-import { NATIVE_MODEL_GROUP } from "@/agent/native-models"
-import {
-  setDefaultModelChoice,
-  subscribeDefaultModel,
-  defaultModelSnapshot
-} from "@/lib/default-model"
-import {
-  modelFastModeSnapshot,
-  setModelFastMode,
-  subscribeModelFastMode
-} from "@/lib/model-fast-mode"
+import { defaultModelSnapshot, setDefaultModelChoice, subscribeDefaultModel } from "@/lib/default-model"
+import { modelFastModeSnapshot, setModelFastMode, subscribeModelFastMode } from "@/lib/model-fast-mode"
+import type { ModelOption, ModelOptionsResult } from "@/lib/model-options"
 import {
   orchestrationDefaultsSnapshot,
   setOrchestrationDefaults,
   subscribeOrchestrationDefaults
 } from "@/lib/orchestration-defaults"
-import { resolveModelConfig, type ModelConfigEntry } from "@/lib/model-config"
-import { useSettingsNativeModels } from "@/lib/settings-bridge"
-import { useProviders } from "@/lib/use-providers"
+import { useModelOptions } from "@/lib/use-model-options"
 import { cn } from "@/lib/utils"
 
 import { SettingsCard, SettingsNote } from "./shared"
@@ -43,47 +28,25 @@ import { SettingsCard, SettingsNote } from "./shared"
 /** "Follow the built-in default", sentinel for an unset choice. */
 const AUTO = "auto"
 
-function isGptEntry(entry: ModelConfigEntry | null): boolean {
-  return entry?.groupId === NATIVE_MODEL_GROUP.id
-}
-
 export function ModelSection({ onApplied }: { onApplied?: (model: string | null) => void } = {}): ReactNode {
   const { t } = useTranslation()
-  const snapshot = useProviders()
-  const native = useSettingsNativeModels()
+  // 唯一出口：候选集来自「供应商与可用模型」的 enabled shortlist + 各供应商分组，
+  // 引擎目录只补能力元数据，绝不裁剪。新增/启用一个模型，四处同时拿到它。
+  const result = useModelOptions()
   const choice = useSyncExternalStore(subscribeDefaultModel, defaultModelSnapshot, defaultModelSnapshot)
   const savedDefaults = useSyncExternalStore(
     subscribeOrchestrationDefaults,
     orchestrationDefaultsSnapshot,
     orchestrationDefaultsSnapshot
   )
-  // One read-only answer for every consumer of the engine catalog: which rows this window may show,
-  // and — only when the answer is authoritative — which saved rows the engine has withdrawn. The
-  // settings window is usually NOT authoritative (the main window's reply may be a bundled
-  // fallback), which is why `withdrawnIds` is empty here rather than a lie.
-  const config = useMemo(
-    () => resolveModelConfig({ providerSnapshot: snapshot, native }),
-    [snapshot, native]
-  )
-  const entries = config.entries
-  // Explain an empty GPT group instead of quietly replaying the last saved shortlist.
-  const catalogUnavailable = config.status === "unavailable"
-  const groups = useMemo(() => {
-    const map = new Map<string, { name: string; models: ModelConfigEntry[] }>()
-    for (const entry of entries) {
-      const group = map.get(entry.groupId) ?? { name: entry.groupName, models: [] }
-      group.models.push(entry)
-      map.set(entry.groupId, group)
-    }
-    return [...map.entries()]
-  }, [entries])
+  const entries = result.options
 
   const selected = choice?.model ?? null
   const effort = choice?.effort ?? null
   // A model without a published ladder still accepts the standard levels; an empty list used to
   // leave the Effort picker offering nothing but "follow the model default".
-  const levelsOf = (entry: ModelConfigEntry | null): string[] =>
-    entry === null ? [] : entry.efforts.length > 0 ? entry.efforts : ["low", "medium", "high", "max"]
+  const levelsOf = (option: ModelOption | null): string[] =>
+    option === null ? [] : option.efforts.length > 0 ? [...option.efforts] : ["low", "medium", "high", "max"]
 
   // Edits stay local until 「立即应用」: picking a model here used to save silently, which made
   // the selection impossible to review before it affected new chats.
@@ -93,9 +56,9 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
     setDraftModel(selected ?? AUTO)
     setDraftEffort(effort ?? AUTO)
   }, [selected, effort])
-  const draftEntry = entries.find((item) => item.id === draftModel) ?? null
+  const draftEntry = result.byId(draftModel)
   const draftEfforts = levelsOf(draftEntry)
-  const draftIsGpt = isGptEntry(draftEntry)
+  const draftIsGpt = draftEntry?.isNative === true
   // What the new chat will actually run on: an explicit pick, or the level the model publishes as
   // its own default. The ladder names alone ("xhigh", "max") say nothing about cost or latency, so
   // the pane spells out the level in use instead of leaving the user to guess.
@@ -104,11 +67,7 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
     activeEffort === null ? "" : t(`defaultModel.effortLevels.${activeEffort}`, { defaultValue: "" })
   // Acceleration is a property of the model, not a staged edit: the same switch exists on the
   // model-list row and must reach conversations without a second "apply" click.
-  const fastModes = useSyncExternalStore(
-    subscribeModelFastMode,
-    modelFastModeSnapshot,
-    modelFastModeSnapshot
-  )
+  const fastModes = useSyncExternalStore(subscribeModelFastMode, modelFastModeSnapshot, modelFastModeSnapshot)
   const draftFast = draftModel !== AUTO && fastModes[draftModel] === true
   const dirty = draftModel !== (selected ?? AUTO) || draftEffort !== (effort ?? AUTO)
 
@@ -118,28 +77,22 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
       onApplied?.(null)
       return
     }
-    const saved = draftEffort === AUTO || draftEfforts.includes(draftEffort) ? (draftEffort === AUTO ? null : draftEffort) : null
+    const saved =
+      draftEffort === AUTO || draftEfforts.includes(draftEffort) ? (draftEffort === AUTO ? null : draftEffort) : null
     setDefaultModelChoice({ model: draftModel, effort: saved })
     onApplied?.(draftModel)
   }
 
-  const effortLabel = (entry: ModelConfigEntry | null): string =>
-    entry === null || entry.defaultEffort === null
+  const effortLabel = (option: ModelOption | null): string =>
+    option === null || option.defaultEffort === null
       ? t("defaultModel.effortAuto")
-      : t("defaultModel.effortAutoWithValue", { effort: entry.defaultEffort })
+      : t("defaultModel.effortAutoWithValue", { effort: option.defaultEffort })
 
   // ── 分工默认模型 ────────────────────────────────────────────────────────────
-  const nativeEntries = entries.filter((entry) => entry.groupId === NATIVE_MODEL_GROUP.id)
-  // Defaults must be runnable. 可用模型 keeps a row the engine has revoked (`gpt-6.1-terra`), so
-  // choosing a hardcoded id off the raw list would point a fresh split at a model that cannot
-  // answer a single prompt. Only `unsupported` — the tombstone verdict, meaning the provider
-  // refused this id — is excluded: `unknown` merely says no authoritative catalog reached this
-  // window, and that must not cost a model its chance at being the default.
-  const liveNative = nativeEntries.filter((entry) => entry.status !== "unsupported")
-  const fallbackPlanner =
-    liveNative.find((entry) => entry.id === "gpt-6.1-sol") ?? liveNative[0] ?? entries[0] ?? null
-  // The worker defaults to the second live row. A hardcoded `gpt-6.1-terra` used to sit here; the
-  // provider withdrew it, and a name that changes on the provider's schedule is not a default.
+  // 候选来自统一出口，不再按「引擎目录是否 authoritative」筛掉用户已启用的 GPT 模型。
+  // 只排除 provider 明确拒绝过（tombstone）的行；`available` 的口径与另外三处完全相同。
+  const liveNative = entries.filter((option) => option.isNative && option.available)
+  const fallbackPlanner = liveNative[0] ?? entries[0] ?? null
   const fallbackWorker = liveNative[1] ?? liveNative[0] ?? entries[0] ?? null
 
   const [plannerModel, setPlannerModel] = useState<string>(
@@ -168,8 +121,8 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
     setWorkerModel((current) => current || (fallbackWorker?.id ?? ""))
   }, [savedDefaults, fallbackPlanner?.id, fallbackWorker?.id])
 
-  const plannerEntry = entries.find((entry) => entry.id === plannerModel) ?? null
-  const workerEntry = entries.find((entry) => entry.id === workerModel) ?? null
+  const plannerEntry = result.byId(plannerModel)
+  const workerEntry = result.byId(workerModel)
   // A role cannot pin an effort the model did not publish: the client rejects that combination,
   // so the division picker offers the real ladder only (the session default keeps the fallback).
   const plannerLevels = plannerEntry?.efforts ?? []
@@ -191,9 +144,9 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
         workerFast !== (savedDefaults.worker.fastMode === true)
 
   const changeDivisionModel = (role: "planner" | "worker", model: string): void => {
-    const entry = entries.find((item) => item.id === model) ?? null
-    const levels = entry?.efforts ?? []
-    const gpt = isGptEntry(entry)
+    const option = result.byId(model)
+    const levels = option?.efforts ?? []
+    const gpt = option?.isNative === true
     if (role === "planner") {
       setPlannerModel(model)
       setPlannerEffort((current) => (current !== AUTO && levels.includes(current) ? current : AUTO))
@@ -211,12 +164,12 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
       planner: {
         model: plannerEntry.id,
         effort: plannerEffort !== AUTO && plannerLevels.includes(plannerEffort) ? plannerEffort : null,
-        ...(isGptEntry(plannerEntry) && plannerFast ? { fastMode: true } : {})
+        ...(plannerEntry.isNative && plannerFast ? { fastMode: true } : {})
       },
       worker: {
         model: workerEntry.id,
         effort: workerEffort !== AUTO && workerLevels.includes(workerEffort) ? workerEffort : null,
-        ...(isGptEntry(workerEntry) && workerFast ? { fastMode: true } : {})
+        ...(workerEntry.isNative && workerFast ? { fastMode: true } : {})
       }
     })
     toast.success(t("defaultModel.divisionSaved"))
@@ -233,117 +186,89 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
         desc={t("defaultModel.description")}
         action={<ScopeTag>{t("defaultModel.scopeNewChat")}</ScopeTag>}
       >
-      {catalogUnavailable && (
-        <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-          {t("defaultModel.catalogUnavailable")}
-        </p>
-      )}
-      {/* Same four columns as 分工默认模型: 角色 | 默认模型 | 默认 Effort | 加速. The top inset comes
+        {/* Same four columns as 分工默认模型: 角色 | 默认模型 | 默认 Effort | 加速. The top inset comes
           from the card body rule, so it matches every other card. */}
-      <div className="space-y-2 pb-3">
-        <div className="hidden gap-2 px-1 text-xs font-medium text-muted-foreground sm:grid sm:grid-cols-[6.5rem_minmax(0,19rem)_9.25rem_2.5rem]">
-          <span>{t("defaultModel.divisionRole")}</span>
-          <span>{t("defaultModel.divisionModel")}</span>
-          <span>{t("defaultModel.effort")}</span>
-          <span className="text-center">{t("defaultModel.columnFast")}</span>
-        </div>
-        <div className="grid items-center gap-2 sm:grid-cols-[6.5rem_minmax(0,19rem)_9.25rem_2.5rem]">
-          <span className="text-sm">{t("defaultModel.newChat")}</span>
-          <Select
-            value={draftModel}
-            // `items` lets the trigger render the model's label instead of its raw gateway id.
-            items={[
-              { label: t("defaultModel.auto"), value: AUTO },
-              ...entries.map((entry) => ({ label: entry.label, value: entry.id }))
-            ]}
-            onValueChange={(value) => {
-              const next = value ?? AUTO
-              setDraftModel(next)
-              // Keep effort only when the new model publishes it.
-              const entry = entries.find((item) => item.id === next) ?? null
-              setDraftEffort((current) => (current !== AUTO && levelsOf(entry).includes(current) ? current : AUTO))
-            }}
-          >
-            <SelectTrigger className="w-full" aria-label={t("defaultModel.model")}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={AUTO}>{t("defaultModel.auto")}</SelectItem>
-              {groups.map(([groupId, group]) => (
-                <SelectGroup key={groupId}>
-                  <SelectLabel>{group.name}</SelectLabel>
-                  {group.models.map((entry) => (
-                    <SelectItem key={entry.id} value={entry.id}>
-                      {entry.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select
-            value={draftEffort}
-            disabled={draftModel === AUTO}
-            items={[
-              { label: effortLabel(draftEntry), value: AUTO },
-              ...draftEfforts.map((level) => ({ label: level, value: level }))
-            ]}
-            onValueChange={(value) => setDraftEffort(value ?? AUTO)}
-          >
-            <SelectTrigger className="w-full" aria-label={t("defaultModel.effort")}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={AUTO}>{effortLabel(draftEntry)}</SelectItem>
-              {draftEfforts.map((level) => (
-                <SelectItem key={level} value={level}>
-                  {level}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {draftIsGpt ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label={t("defaultModel.fastMode")}
-              aria-pressed={draftFast}
-              title={draftFast ? t("defaultModel.fastModeOnHint") : t("defaultModel.fastModeOffHint")}
-              className={cn("shrink-0", draftFast ? "text-emerald-500" : "text-muted-foreground")}
-              onClick={() => setModelFastMode(draftModel, !draftFast)}
+        <div className="space-y-2 pb-3">
+          <div className="hidden gap-2 px-1 text-xs font-medium text-muted-foreground sm:grid sm:grid-cols-[6.5rem_minmax(0,19rem)_9.25rem_2.5rem]">
+            <span>{t("defaultModel.divisionRole")}</span>
+            <span>{t("defaultModel.divisionModel")}</span>
+            <span>{t("defaultModel.effort")}</span>
+            <span className="text-center">{t("defaultModel.columnFast")}</span>
+          </div>
+          <div className="grid items-center gap-2 sm:grid-cols-[6.5rem_minmax(0,19rem)_9.25rem_2.5rem]">
+            <span className="text-sm">{t("defaultModel.newChat")}</span>
+            <ModelOptionsSelect
+              result={result}
+              value={draftModel}
+              auto={{ value: AUTO, label: t("defaultModel.auto") }}
+              ariaLabel={t("defaultModel.model")}
+              onValueChange={(next) => {
+                setDraftModel(next)
+                // Keep effort only when the new model publishes it.
+                const option = result.byId(next)
+                setDraftEffort((current) => (current !== AUTO && levelsOf(option).includes(current) ? current : AUTO))
+              }}
+            />
+            <Select
+              value={draftEffort}
+              disabled={draftModel === AUTO}
+              items={[
+                { label: effortLabel(draftEntry), value: AUTO },
+                ...draftEfforts.map((level) => ({ label: level, value: level }))
+              ]}
+              onValueChange={(value) => setDraftEffort(value ?? AUTO)}
             >
-              <Zap className="size-4" fill={draftFast ? "currentColor" : "none"} aria-hidden="true" />
-            </Button>
-          ) : (
-            <span className="text-center text-xs text-muted-foreground">-</span>
-          )}
+              <SelectTrigger className="w-full" aria-label={t("defaultModel.effort")}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={AUTO}>{effortLabel(draftEntry)}</SelectItem>
+                {draftEfforts.map((level) => (
+                  <SelectItem key={level} value={level}>
+                    {level}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {draftIsGpt ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label={t("defaultModel.fastMode")}
+                aria-pressed={draftFast}
+                title={draftFast ? t("defaultModel.fastModeOnHint") : t("defaultModel.fastModeOffHint")}
+                className={cn("shrink-0", draftFast ? "text-emerald-500" : "text-muted-foreground")}
+                onClick={() => setModelFastMode(draftModel, !draftFast)}
+              >
+                <Zap className="size-4" fill={draftFast ? "currentColor" : "none"} aria-hidden="true" />
+              </Button>
+            ) : (
+              <span className="text-center text-xs text-muted-foreground">-</span>
+            )}
+          </div>
         </div>
-      </div>
-      {dirty && (
-        <ApplyBar hint={t("defaultModel.applyHint")} onClick={apply} testId="default-model-apply" />
-      )}
-      {draftModel !== AUTO && draftEfforts.length === 0 && (
-        <SettingsNote>{t("defaultModel.effortUnavailable")}</SettingsNote>
-      )}
-      {draftModel !== AUTO && draftEfforts.length > 0 && effortMeaning !== "" && (
+        {dirty && <ApplyBar hint={t("defaultModel.applyHint")} onClick={apply} testId="default-model-apply" />}
+        {draftModel !== AUTO && draftEfforts.length === 0 && (
+          <SettingsNote>{t("defaultModel.effortUnavailable")}</SettingsNote>
+        )}
+        {draftModel !== AUTO && draftEfforts.length > 0 && effortMeaning !== "" && (
+          <SettingsNote>
+            {t("defaultModel.effortMeaning", { level: activeEffort, meaning: effortMeaning })}
+          </SettingsNote>
+        )}
         <SettingsNote>
-          {t("defaultModel.effortMeaning", { level: activeEffort, meaning: effortMeaning })}
+          {t("defaultModel.candidatesNote")}{" "}
+          <button
+            type="button"
+            className="underline underline-offset-2 hover:text-foreground"
+            onClick={() =>
+              document.getElementById("provider-config")?.scrollIntoView({ behavior: "smooth", block: "start" })
+            }
+          >
+            {t("defaultModel.manageProviders")}
+          </button>
         </SettingsNote>
-      )}
-      <SettingsNote>
-        {t("defaultModel.candidatesNote")}{" "}
-        <button
-          type="button"
-          className="underline underline-offset-2 hover:text-foreground"
-          onClick={() =>
-            document.getElementById("provider-config")?.scrollIntoView({ behavior: "smooth", block: "start" })
-          }
-        >
-          {t("defaultModel.manageProviders")}
-        </button>
-      </SettingsNote>
-
       </SettingsCard>
       <SettingsCard
         title={t("defaultModel.divisionTitle")}
@@ -360,8 +285,7 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
           </div>
           <RoleDefaultsRow
             label={t("defaultModel.planner")}
-            entries={entries}
-            groups={groups}
+            result={result}
             model={plannerModel}
             effort={plannerEffort}
             fast={plannerFast}
@@ -371,8 +295,7 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
           />
           <RoleDefaultsRow
             label={t("defaultModel.worker")}
-            entries={entries}
-            groups={groups}
+            result={result}
             model={workerModel}
             effort={workerEffort}
             fast={workerFast}
@@ -436,8 +359,7 @@ function ApplyBar({
 /** One planner/worker default row: model, effort and (GPT only) acceleration. */
 function RoleDefaultsRow({
   label,
-  entries,
-  groups,
+  result,
   model,
   effort,
   fast,
@@ -446,8 +368,7 @@ function RoleDefaultsRow({
   onFastChange
 }: {
   label: string
-  entries: ModelConfigEntry[]
-  groups: [string, { name: string; models: ModelConfigEntry[] }][]
+  result: ModelOptionsResult
   model: string
   effort: string
   fast: boolean
@@ -456,45 +377,29 @@ function RoleDefaultsRow({
   onFastChange: (fast: boolean) => void
 }) {
   const { t } = useTranslation()
-  const entry = entries.find((item) => item.id === model) ?? null
+  const option = result.byId(model)
   // Only the model's own ladder: the client rejects a pinned effort a model does not publish.
-  const levels = entry?.efforts ?? []
-  const gpt = isGptEntry(entry)
-  const effortLabel =
-    entry === null || entry.defaultEffort === null
+  const levels = option?.efforts ?? []
+  const gpt = option?.isNative === true
+  const autoLabel =
+    option === null || option.defaultEffort === null
       ? t("defaultModel.effortAuto")
-      : t("defaultModel.effortAutoWithValue", { effort: entry.defaultEffort })
+      : t("defaultModel.effortAutoWithValue", { effort: option.defaultEffort })
   return (
     <div className="grid items-center gap-2 sm:grid-cols-[6.5rem_minmax(0,19rem)_9.25rem_2.5rem]">
       <span className="text-sm">{label}</span>
-      <Select value={model} items={entries.map((item) => ({ label: item.label, value: item.id }))} onValueChange={(value) => onModelChange(value ?? "")}>
-        <SelectTrigger className="w-full" aria-label={label}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {groups.map(([groupId, group]) => (
-            <SelectGroup key={groupId}>
-              <SelectLabel>{group.name}</SelectLabel>
-              {group.models.map((item) => (
-                <SelectItem key={item.id} value={item.id}>
-                  {item.label}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          ))}
-        </SelectContent>
-      </Select>
+      <ModelOptionsSelect result={result} value={model} ariaLabel={label} onValueChange={onModelChange} />
       <Select
         value={effort}
-        disabled={entry === null || levels.length === 0}
-        items={[{ label: effortLabel, value: AUTO }, ...levels.map((level) => ({ label: level, value: level }))]}
+        disabled={option === null || levels.length === 0}
+        items={[{ label: autoLabel, value: AUTO }, ...levels.map((level) => ({ label: level, value: level }))]}
         onValueChange={(value) => onEffortChange(value ?? AUTO)}
       >
         <SelectTrigger className="w-full" aria-label={`${label} ${t("defaultModel.effort")}`}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={AUTO}>{effortLabel}</SelectItem>
+          <SelectItem value={AUTO}>{autoLabel}</SelectItem>
           {levels.map((level) => (
             <SelectItem key={level} value={level}>
               {level}

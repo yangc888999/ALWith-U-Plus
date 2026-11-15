@@ -20,7 +20,6 @@ import type {
   TestResult
 } from "@/bindings"
 import { commands, events } from "@/bindings"
-import { companyModelLabel } from "@/lib/company-display-name"
 import { DeepSeekLogo } from "@/components/icons/deepseek-logo"
 import { GrokLogo } from "@/components/icons/grok-logo"
 import { HakimiLogo } from "@/components/icons/hakimi-logo"
@@ -28,18 +27,19 @@ import { MimoLogo } from "@/components/icons/mimo-logo"
 import { OpenAILogo } from "@/components/icons/openai-logo"
 import { OpenRouterLogo } from "@/components/icons/openrouter-logo"
 import { QwenLogo } from "@/components/icons/qwen-logo"
-
-import catalog from "./provider-catalog.json"
-import { defaultModelChoice } from "./default-model"
-// The GPT catalog rules live in `model-config.ts`; the four exports below are kept for their old
-// call sites and delegate to it, so no surface can drift back to its own copy of the rule.
-import { catalogStatusOf, resolveModelConfig, type NativeCatalog } from "./model-config"
 import {
   ENTERPRISE_PROVIDER_PREFIX,
   enterpriseCatalog,
   isEnterpriseModel,
   projectEnterpriseProviders
 } from "@/features/auth/enterprise-providers"
+import { companyModelLabel } from "@/lib/company-display-name"
+
+import { defaultModelChoice } from "./default-model"
+// The GPT catalog rules live in `model-config.ts`; the four exports below are kept for their old
+// call sites and delegate to it, so no surface can drift back to its own copy of the rule.
+import { catalogStatusOf, type NativeCatalog, resolveModelConfig } from "./model-config"
+import catalog from "./provider-catalog.json"
 
 export type { CustomModel } from "@/bindings"
 export type ProviderKey = Metadata
@@ -641,9 +641,7 @@ export type NativeModelRow = {
  */
 export type NativeCatalogStatus = "ready" | "pending" | "unavailable"
 
-export function nativeCatalogStatus(
-  published: readonly NativeCatalogEntry[] | null | undefined
-): NativeCatalogStatus {
+export function nativeCatalogStatus(published: readonly NativeCatalogEntry[] | null | undefined): NativeCatalogStatus {
   return catalogStatusOf(published)
 }
 
@@ -687,29 +685,15 @@ const NO_TOMBSTONES: ReadonlySet<string> = new Set<string>()
  * caller only maps the rows into its own option shape (a `ModelEntry`, a `ChatModelOption`, a
  * `NativeModel`).
  *
- * Rules, in order:
- * 1. No saved rows → the catalog itself is the list. First run, and the settings window before the
- *    main window has published anything.
- * 2. An empty catalog with `status === "pending"` → every saved row is kept. That is a draft before
- *    `session/new` or a settings window that has not received the engine's list yet; judging against
- *    an empty list would blank the whole picker.
- * 3. An empty catalog with `status === "unavailable"` → nothing is offered. The engine failed to
- *    publish a list (its online `list_models` timed out); replaying the saved shortlist here would
- *    offer withdrawn ids as if they were live. The settings page explains why the group is empty.
- * 4. Otherwise the saved rows are the list, in the user's order, with the user's labels, minus the
- *    models this catalog does not carry. A model the provider withdraws disappears from all three
- *    surfaces at once and returns on its own when a later catalog lists it again.
+ * v1.0.3 起规则只有两条（与 `model-config.ts` / `model-options.ts` 一致）：
+ * 1. 有 saved rows → 它们就是完整列表，保持用户的顺序与名称；引擎目录只补 effort 元数据，
+ *    **不再裁掉任何一行**（会话 picker 是推荐子集，不是全量目录）。引擎发布失败
+ *    （`unavailable`）也不让已启用的模型消失。
+ * 2. 没有 saved rows（首启）→ 用引擎目录当初始清单。
  *
- * Hiding, not greying: a greyed row had to be re-checked on every menu open
- * (`session/set_config_option`, 0.1–8s, picker locked while it ran) just to learn whether it had
- * come back. The saved row is never rewritten, so a withdrawal never turns into a deletion of the
- * user's configuration — 可用模型 still shows it, marked as 已下架, and keeps it on save.
- *
- * `retired-models` is deliberately not consulted: a tombstone records a past refusal, and reading
- * it here is what made the picker and 设置 disagree in the first place.
- *
- * The rules now live in `model-config.ts` (`resolveModelConfig`); this function is the old signature
- * over it, kept so no caller had to change in the same commit.
+ * 「保存了一行但当前目录没列它」不再等于下架，所以没有「未验证」/「已下架」判断，也不需要
+ * 每次开菜单都发 `session/set_config_option` 重查。四处选择器统一走 `resolveModelOptions`；
+ * 本函数只是旧签名上的薄封装，保留供历史调用方与测试使用。
  */
 export function servedNativeRows(
   savedModels: CustomModel[] | null,
@@ -730,30 +714,21 @@ export function servedNativeRows(
 }
 
 /**
- * Saved rows the catalog does not carry: still part of 可用模型, hidden from every picker.
+ * Deprecated — 恒为空集。
  *
- * The editable table is the one place they stay visible, because that list is what gets written on
- * save — dropping a row from the screen would drop it from the user's configuration the next time
- * they press 保存模型. The table marks them 未验证 (unverified) instead of 已下架: absence from the
- * catalog is not proof of withdrawal (see codex-model-verification.md).
+ * v1.0.2 会把「saved 里有、当前目录里没有」的行标成 未验证，并在聊天选择器里追加
+ * 「· 可能不可用」。但会话 picker 是 Codex 的「推荐模型集」预设（推荐子集），拿它去 diff
+ * 用户的已保存行，会把 6.1 Terra / 6 Luna 这类可调用的模型误判成不可用 —— 这正是
+ * 默认会话模型选不到 GPT 的根因。四处选择器现在统一由 `model-options.ts` 给出
+ * 「启用即可用」的口径，此函数只保留签名，不再下任何判断。
  */
 export function unverifiedNativeRows(
   savedModels: CustomModel[] | null,
   catalog: readonly NativeCatalogEntry[]
 ): string[] {
-  // An empty catalog proves nothing, so nothing is marked unverified.
-  if (catalog.length === 0) return []
-  // Delegated: this is `resolveModelConfig(...).unverifiedIds`. A non-empty `catalog` here is the
-  // caller vouching for a real one. A caller holding a *partial* catalog (the bundled fallback)
-  // must ask `resolveModelConfig` directly, which refuses to diff against anything not authoritative.
-  return [
-    ...resolveModelConfig({
-      providerSnapshot: null,
-      native: nativeSourceOf(catalog, "ready"),
-      savedOverrides: savedModels ?? [],
-      tombstones: NO_TOMBSTONES
-    }).unverifiedIds
-  ]
+  void savedModels
+  void catalog
+  return []
 }
 
 /**
@@ -790,7 +765,9 @@ export function saveBuiltInModels(
     if (model.enabled != null) entry.enabled = model.enabled
     return entry
   })
-  return refreshProviderSnapshot(commands.providersSaveBuiltInModels({ providerId, models: serialized, expectedRevision: revision }))
+  return refreshProviderSnapshot(
+    commands.providersSaveBuiltInModels({ providerId, models: serialized, expectedRevision: revision })
+  )
 }
 
 export const PROVIDERS_CHANGED = events["providers:changed"].name

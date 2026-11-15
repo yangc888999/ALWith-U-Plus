@@ -296,11 +296,10 @@ export function ChatComposer({
       selectionRect: selectionRectOf()
     })
   }
-  // Nothing here asks the engine about the model list. A model the provider stops listing keeps its
-  // row in this picker — marked "可能不可用" — and 设置 → 可用模型 keeps it too, under 未验证;
-  // `resolveModelConfig` is the one call that decides both, from the catalog the session already
-  // carries. The old hover check cost a `session/set_config_option` round trip (0.1–8s) on every
-  // menu open and left the picker spinning for the duration, for an answer that catalog already had.
+  // Nothing here asks the engine about the model list. 四处选择器统一由 `model-options.ts` 从
+  // 「供应商与可用模型」的 enabled shortlist 取候选；引擎目录只是推荐子集，不再用来裁剪或
+  // 标注「可能不可用 / 未验证」。旧的 hover 重查会为每次开菜单发一次
+  // `session/set_config_option`（0.1–8s）并让选择器一直转圈，早已移除。
   return (
     <div
       data-composer
@@ -356,9 +355,7 @@ export function ChatComposer({
                     applies, so the control can never appear where the runtime would ignore it. */}
                 <div className="flex shrink-0 items-center gap-1">
                   <PendingModelChip session={props.session} />
-                  {orchestrationAllowedFor(props.session.cwd) ? (
-                    <OrchestrationControl session={props.session} />
-                  ) : null}
+                  {orchestrationAllowedFor(props.session.cwd) ? <OrchestrationControl session={props.session} /> : null}
                 </div>
               </div>
             </div>

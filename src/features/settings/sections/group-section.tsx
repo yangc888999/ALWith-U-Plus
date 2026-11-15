@@ -22,21 +22,9 @@ import { useEffect, useId, useState, useSyncExternalStore } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
+import { ModelOptionsSelect } from "@/components/model-options/model-options-select"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { cn } from "@/lib/utils"
-import {
-  ensureDefaultGroupRoles,
-  groupRoleFor,
-  groupRoles,
-  importBuiltinBots,
-  newRoleId,
-  removeGroupRole,
-  roleBot,
-  setGroupRole,
-  type BuiltinBot,
-  type GroupRole
-} from "@/lib/group-roles"
 import {
   DEFAULT_SUMMARY_TEMPLATE,
   groupPreferences,
@@ -45,12 +33,23 @@ import {
   SUMMARY_MODES,
   type SummaryMode
 } from "@/lib/group-preferences"
-import { NATIVE_MODEL_GROUP } from "@/agent/client"
-import { useProviders } from "@/lib/use-providers"
+import {
+  type BuiltinBot,
+  ensureDefaultGroupRoles,
+  type GroupRole,
+  groupRoleFor,
+  groupRoles,
+  importBuiltinBots,
+  newRoleId,
+  removeGroupRole,
+  roleBot,
+  setGroupRole
+} from "@/lib/group-roles"
+import type { ModelOptionsResult } from "@/lib/model-options"
+import { useModelOptions } from "@/lib/use-model-options"
+import { cn } from "@/lib/utils"
 
 import { SettingsCard, SettingsNote } from "./shared"
-import { resolveModelConfig, type ModelConfigEntry } from "@/lib/model-config"
-import { useSettingsNativeModels } from "@/lib/settings-bridge"
 
 interface SkillEntry {
   id: string
@@ -60,11 +59,11 @@ interface SkillEntry {
 
 export function GroupSection() {
   const { t } = useTranslation()
-  const snapshot = useProviders()
-  const native = useSettingsNativeModels()
-  // The same read-only answer 设置 → 默认模型 shows: 分工 must not be able to pick a model the
-  // engine no longer serves, nor hide one it still does.
-  const models = resolveModelConfig({ providerSnapshot: snapshot, native }).entries
+  // ④ 拉会成员「模型与推理」与 ①② 设置页、③ 聊天输入框共用同一个出口。旧版本这里用原生
+  // <select> 直接渲染 resolveModelConfig().entries 的 label，于是运行时脏 label（`6.1 Sol *`、
+  // `5.6 Terra*`）被原样展示成扁平列表，还缺分组 / 图标 / 排序。现在统一走同一份标准化结果。
+  const result = useModelOptions()
+  const models = result.options
   // A fresh install is seeded with the personas the app bundles into ~/.codex/rob_models;
   // afterwards the stored list is the only source of truth (deleting them all sticks).
   const [roles, setRoles] = useState<GroupRole[]>(() => ensureDefaultGroupRoles())
@@ -105,9 +104,7 @@ export function GroupSection() {
           toast.info(t("groups.importBotsNone", { count: result.skipped.length }))
           return
         }
-        toast.success(
-          t("groups.importBotsDone", { count: result.added.length, skipped: result.skipped.length })
-        )
+        toast.success(t("groups.importBotsDone", { count: result.added.length, skipped: result.skipped.length }))
       })
       .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))
       .finally(() => setImporting(false))
@@ -203,9 +200,7 @@ export function GroupSection() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() =>
-                setExpandedRoles(allExpanded ? new Set() : new Set(roles.map((role) => role.id)))
-              }
+              onClick={() => setExpandedRoles(allExpanded ? new Set() : new Set(roles.map((role) => role.id)))}
             >
               <ChevronDownIcon className={cn("size-3.5 transition-transform", allExpanded && "rotate-180")} />
               {allExpanded ? t("groups.collapseAll") : t("groups.expandAll")}
@@ -221,12 +216,14 @@ export function GroupSection() {
           <SettingsNote>{t("groups.noRoles")}</SettingsNote>
         ) : (
           <div className="grid grid-cols-1 items-start gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            <p className="text-[11px] text-muted-foreground sm:col-span-2 xl:col-span-3">{t("groups.roleExpandHint")}</p>
+            <p className="text-[11px] text-muted-foreground sm:col-span-2 xl:col-span-3">
+              {t("groups.roleExpandHint")}
+            </p>
             {roles.map((role) => (
               <RoleCard
                 key={role.id}
                 role={role}
-                models={models}
+                result={result}
                 skills={skills}
                 expanded={expandedRoles.has(role.id)}
                 onToggle={() => toggleRole(role.id)}
@@ -361,7 +358,7 @@ function avatarTone(seed: string): string {
  */
 function RoleCard({
   role,
-  models,
+  result,
   skills,
   expanded,
   onToggle,
@@ -369,7 +366,7 @@ function RoleCard({
   onRemove
 }: {
   role: GroupRole
-  models: ModelConfigEntry[]
+  result: ModelOptionsResult
   skills: SkillEntry[]
   expanded: boolean
   onToggle: () => void
@@ -378,10 +375,11 @@ function RoleCard({
 }) {
   const { t } = useTranslation()
   const nameId = useId()
-  const modelLabel = models.find((model) => model.id === role.model)?.label ?? role.model
+  // 统一出口的显示名已清洗掉星号别名与「可能不可用」提示。
+  const modelLabel = result.byId(role.model)?.label ?? role.model
   const personaLabel =
     role.persona.kind === "file"
-      ? (role.persona.path.split(/[\\/]/).pop() || role.persona.path)
+      ? role.persona.path.split(/[\\/]/).pop() || role.persona.path
       : t("groups.personaInline")
 
   return (
@@ -395,7 +393,10 @@ function RoleCard({
     >
       <div className="flex items-center gap-2.5 px-3 py-2.5">
         <span
-          className={cn("grid size-9 shrink-0 place-items-center rounded-full text-sm font-semibold", avatarTone(role.id))}
+          className={cn(
+            "grid size-9 shrink-0 place-items-center rounded-full text-sm font-semibold",
+            avatarTone(role.id)
+          )}
           aria-hidden="true"
         >
           {role.name.trim().charAt(0).toUpperCase() || "?"}
@@ -405,7 +406,7 @@ function RoleCard({
             <input
               id={nameId}
               aria-label={t("groups.fieldName")}
-              className="min-w-0 max-w-[14rem] flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-sm font-medium outline-none hover:border-border/60 focus:border-primary/50 focus:bg-background"
+              className="max-w-[14rem] min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-sm font-medium outline-none hover:border-border/60 focus:border-primary/50 focus:bg-background"
               value={role.name}
               onChange={(event) => onChange({ name: event.target.value })}
             />
@@ -446,7 +447,7 @@ function RoleCard({
       </div>
       {expanded && (
         <div className="border-t border-border/50 bg-muted/10 px-3 py-3">
-          <RoleEditor role={role} models={models} skills={skills} onChange={onChange} />
+          <RoleEditor role={role} result={result} skills={skills} onChange={onChange} />
         </div>
       )}
     </div>
@@ -455,25 +456,26 @@ function RoleCard({
 
 function RoleEditor({
   role,
-  models,
+  result,
   skills,
   onChange
 }: {
   role: GroupRole
-  models: ModelConfigEntry[]
+  result: ModelOptionsResult
   skills: SkillEntry[]
   onChange: (patch: Partial<GroupRole>) => void
 }) {
   const { t } = useTranslation()
-  const modelId = useId()
   const effortId = useId()
   const personaId = useId()
   const skillId = useId()
   const [draftText, setDraftText] = useState(role.persona.kind === "inline" ? role.persona.text : "")
-  const entry = models.find((model) => model.id === role.model)
+  const entry = result.byId(role.model)
   const efforts = entry?.efforts ?? []
-  // Only the integrated (GPT) group publishes acceleration; a gateway model has none.
-  const fastCapable = entry?.groupId === NATIVE_MODEL_GROUP.id
+  // GPT 家族才支持加速（与另外三处同一口径：按 groupId / id 判定，非静态白名单）。
+  const fastCapable = entry?.fastCapable === true
+  // 一个角色保存了当前候选集里已不存在的模型时，给一个明确的空占位，避免触发器空白。
+  const missingModel = result.byId(role.model) === null
   const fieldClass = "h-8 w-full min-w-0 rounded-md border border-border/70 bg-background px-2 text-xs"
   const sectionClass = "text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/75"
   const titleId = useId()
@@ -496,25 +498,17 @@ function RoleEditor({
       <section>
         <h4 className={`${sectionClass} mb-2`}>{t("groups.roleSectionModel")}</h4>
         <div className="grid gap-2 sm:grid-cols-2">
-          <label className="block min-w-0" htmlFor={modelId}>
+          <div className="block min-w-0">
             <span className="mb-1 block text-[11px] text-muted-foreground">{t("groups.fieldModel")}</span>
-            <select
-              id={modelId}
-              className={fieldClass}
+            <ModelOptionsSelect
+              result={result}
               value={role.model}
-              onChange={(event) => onChange({ model: event.target.value, effort: null })}
-            >
-              {models.length === 0 && <option value="">{t("groups.noModels")}</option>}
-              {models.length > 0 && !models.some((model) => model.id === role.model) && (
-                <option value="">{t("groups.noModels")}</option>
-              )}
-              {models.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              auto={missingModel ? { value: "", label: t("groups.noModels") } : null}
+              emptyLabel={t("groups.noModels")}
+              ariaLabel={t("groups.fieldModel")}
+              onValueChange={(next) => onChange({ model: next, effort: null })}
+            />
+          </div>
           <label className="block min-w-0" htmlFor={effortId}>
             <span className="mb-1 block text-[11px] text-muted-foreground">{t("groups.fieldEffort")}</span>
             <select
@@ -568,11 +562,7 @@ function RoleEditor({
                 .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))
             }}
           >
-            {role.persona.kind === "inline" ? (
-              <FileTextIcon className="size-3" />
-            ) : (
-              <PenLineIcon className="size-3" />
-            )}
+            {role.persona.kind === "inline" ? <FileTextIcon className="size-3" /> : <PenLineIcon className="size-3" />}
             {role.persona.kind === "inline" ? t("groups.personaFile") : t("groups.personaInline")}
           </Button>
         </div>

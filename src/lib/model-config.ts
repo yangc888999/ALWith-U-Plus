@@ -1,30 +1,25 @@
 /**
  * The one read-only answer to "which models does this app offer right now, and what are they?".
  *
- * Before this module the rule lived in four places — `providerGroups`, `servedNativeRows`,
- * `unverifiedNativeRows` and the chat picker's own `trimNativeGroup` — and they disagreed. The worst
- * disagreement: `unverifiedNativeRows` computed "saved rows minus the current catalog" from whatever
- * catalog it was handed, including catalogs that are **not** authoritative. A settings window that
- * had not received the engine's list yet (`native === undefined`, status `pending`) or a window with
- * no active session (the main process falls back to `codex_bundled_models`, a partial list) made a
- * perfectly callable model read 「已下架」.
+ * v1.0.3 根因修复后的规则（详见 `model-options.ts` 与 memory.md）：
  *
- * The fix is one rule, applied in one place:
+ *   「供应商与可用模型」里用户维护的 enabled shortlist 是**唯一权威候选集**。
  *
- *   only a **live session's own picker** counts as authority.
+ * 引擎目录（live session picker / `codex_bundled_models` bundled fallback / published list）只用来
+ * 补充能力元数据（effort 档位、defaultEffort、contextWindow），**绝不用来裁剪候选集**；只有
+ * shortlist 为空（首次运行、用户还没维护过可用模型）时才把引擎目录当作初始清单。
  *
- * `authoritative = sourceKind === "session" && status === "ready"`. Everything else reports
- * `unknown` and produces **no** `withdrawnIds`. Absence of evidence is never evidence of removal.
+ * 旧实现把 `sourceKind === "session" && status === "ready"` 判为 authoritative，并用
+ * `saved.filter(model => live.has(model.api_id))` 让 shortlist 与会话 picker 求交集。会话 picker
+ * 是 Codex 的「推荐模型集」预设（推荐子集，通常只有 Astra / Sol），不是全量目录；主窗口
+ * `app.tsx` 有 live session 时发布给设置窗口的正是这个子集，于是已启用但不在该预设里的
+ * 6.1 Terra / 6 Luna 被从「默认会话模型 / 分工默认模型 / 拉会成员」里抹掉 —— 这就是
+ * v1.0.2 默认会话模型只能选到 2 个 GPT 的根因。引擎临时没发布目录（list_models 超时、
+ * unavailable）也不能让用户启用的模型消失。
  *
- * Three verdicts, kept deliberately separate:
- *   * `unverifiedIds` — a saved row the authoritative catalog does not list. Absence from the
- *     catalog is NOT treated as withdrawal: the engine's picker may simply not surface every
- *     callable id, so these rows are "unverified", never "withdrawn" (see codex-model-verification.md).
- *   * `withdrawnIds` — reserved for positive-evidence withdrawal (e.g. a served-model mismatch from
- *     codex-model-verification.md). Empty until that check lands.
- *   * `retired`/`tombstones` — the provider actually refused this id (`retired-models.ts`, 7-day
- *     TTL). A tombstone is evidence of a refusal, not of a withdrawal, and is never folded into
- *     `unverifiedIds`.
+ * 因此 `unverifiedIds` / `withdrawnIds` 恒为空：不在某个推荐子集里不代表不可调用，四处选择器
+ * 统一由 `model-options.ts` 给出「启用即可用」的口径。唯一还在表达的负证据是
+ * `retired`/`tombstones` —— provider **明确拒绝过**该 id（`retired-models.ts`，7 天 TTL）。
  *
  * This module is **pure and read-only**: it never writes localStorage, never syncs overrides and
  * never sends `session/set_config_option`. Opening a menu must not cost a request (0.4.4 removed
@@ -36,8 +31,8 @@
  * have finished evaluating, so there is no temporal-dead-zone read.
  */
 
-import { isGroupedSelect, isSelectOption } from "@alwith/api"
 import type * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable"
+import { isGroupedSelect, isSelectOption } from "@alwith/api"
 
 import { NATIVE_MODEL_GROUP } from "@/agent/native-models"
 import type { CustomModel } from "@/bindings"
@@ -63,15 +58,15 @@ export type ModelCatalogStatus = "ready" | "partial" | "pending" | "unavailable"
  */
 export type ModelAvailability = "available" | "withdrawn" | "unknown" | "unsupported"
 
-/** Where a surface's model list came from. Only `session` may be authoritative. */
+/** Where a surface's model list came from. Kept for diagnostics only; it no longer crops rows. */
 export type ModelConfigSourceKind = "session" | "bundled" | "saved" | "none"
 
 /**
  * The engine's GPT group as a surface publishes it.
  *
- * `sourceKind` is what makes the misjudgement impossible: the main window publishes `session` for a
- * live session's own picker and `bundled` for the `codex_bundled_models` fallback, which is a
- * partial list and must never be read as "everything else was withdrawn".
+ * `sourceKind` only describes provenance (a live session's picker vs the `codex_bundled_models`
+ * fallback). Both are **recommended subsets**, not the full catalog, so neither may be used to
+ * decide which saved rows still exist. It is used for `status` reporting and metadata only.
  */
 export interface NativeCatalog {
   name?: string
@@ -111,10 +106,9 @@ export interface ModelConfigEntry {
 export interface ModelConfigResult {
   status: ModelCatalogStatus
   entries: ModelConfigEntry[]
-  /** Tombstoned ids. Empty whenever the answer is not authoritative — see the note below. */
+  /** Tombstoned ids, published only for an authoritative surface (kept for legacy callers). */
   retiredIds: readonly string[]
-  /** Saved ids an authoritative catalog no longer lists. Absence is NOT withdrawal — these are merely
-   *  unverified (the picker may not surface every callable id). Never populated unless authoritative. */
+  /** Deprecated: always empty. A recommended subset never proves a saved row is unavailable. */
   unverifiedIds: readonly string[]
   /** Reserved for positive-evidence withdrawal (served-model mismatch). Empty until that check lands. */
   withdrawnIds: readonly string[]
@@ -132,9 +126,7 @@ export interface ModelConfigResult {
  * `undefined` means the question was never answered (a draft before `session/new`, or the settings
  * window before the main window replies). `null` and `[]` both mean the engine published nothing.
  */
-export function catalogStatusOf(
-  published: readonly unknown[] | null | undefined
-): "ready" | "pending" | "unavailable" {
+export function catalogStatusOf(published: readonly unknown[] | null | undefined): "ready" | "pending" | "unavailable" {
   if (published === undefined) return "pending"
   if (published === null || published.length === 0) return "unavailable"
   return "ready"
@@ -187,14 +179,12 @@ export function sessionModelGroups(
   const option = options.find((entry) => entry.category === "model" && entry.type === "select")
   if (option === undefined || !isSelectOption(option) || !isGroupedSelect(option.options)) return []
   const groups = [...option.options].sort(
-    (left, right) =>
-      Number(right.groupId === NATIVE_MODEL_GROUP.id) - Number(left.groupId === NATIVE_MODEL_GROUP.id)
+    (left, right) => Number(right.groupId === NATIVE_MODEL_GROUP.id) - Number(left.groupId === NATIVE_MODEL_GROUP.id)
   )
   return groups.map((group) => {
     // An unnamed group keeps its id, except the integrated one: 「ChatGPT」 is what every surface
     // already shows for it, and the adapter may publish the group without a name.
-    const name =
-      group.name ?? (group.groupId === NATIVE_MODEL_GROUP.id ? NATIVE_MODEL_GROUP.name : group.groupId)
+    const name = group.name ?? (group.groupId === NATIVE_MODEL_GROUP.id ? NATIVE_MODEL_GROUP.name : group.groupId)
     return {
       id: group.groupId,
       name,
@@ -210,9 +200,7 @@ export function sessionModelGroups(
 }
 
 /** Every model a session's picker offers, in catalog order. Raw and unfiltered. */
-export function sessionModelEntries(
-  options: readonly acp.SessionConfigOption[] | null | undefined
-): SessionModel[] {
+export function sessionModelEntries(options: readonly acp.SessionConfigOption[] | null | undefined): SessionModel[] {
   return sessionModelGroups(options).flatMap((group) => group.models)
 }
 
@@ -243,10 +231,7 @@ function mergeSaved(
   }
 }
 
-function catalogRows(
-  catalog: NativeCatalog["models"],
-  saved: CustomModel[]
-): NativeRow[] {
+function catalogRows(catalog: NativeCatalog["models"], saved: CustomModel[]): NativeRow[] {
   const byId = new Map(saved.map((model) => [model.api_id, model]))
   return catalog.map((entry) => {
     const model = byId.get(entry.id)
@@ -266,17 +251,22 @@ function catalogRows(
  *
  * The decision table (rows = what the surface holds, columns = what may be said):
  *
- * | catalog                              | status      | entries                       | withdrawn |
- * |--------------------------------------|-------------|-------------------------------|-----------|
- * | live session picker                  | ready       | shortlist ∩ catalog           | yes       |
- * | published list, no session behind it | ready       | shortlist ∩ catalog           | yes       |
- * | `codex_bundled_models` fallback      | partial     | shortlist (nothing hidden)    | no        |
- * | not answered yet                     | pending     | shortlist                     | no        |
- * | answered nothing                     | unavailable | none                          | no        |
+ * | catalog                              | status      | entries      | withdrawn |
+ * |--------------------------------------|-------------|--------------|-----------|
+ * | live session picker                  | ready       | shortlist    | no        |
+ * | published list, no session behind it | ready       | shortlist    | no        |
+ * | `codex_bundled_models` fallback      | partial     | shortlist    | no        |
+ * | not answered yet                     | pending     | shortlist    | no        |
+ * | answered nothing                     | unavailable | shortlist    | no        |
+ * | no shortlist yet (first run)         | any         | catalog      | no        |
  *
- * `partial` deliberately shows the **whole** shortlist instead of intersecting it with a list known
- * to be incomplete: subtracting an incomplete list is how a callable model got hidden and marked
- * 「已下架」.
+ * v1.0.3: 「供应商与可用模型」维护的 enabled shortlist 是**唯一权威候选集**。引擎目录（live
+ * session picker / bundled fallback / published list）只用来补充能力元数据（effort 档位、
+ * defaultEffort、contextWindow），**绝不用来裁剪候选集**。原因见 `model-options.ts` 与
+ * memory.md：会话 picker 是 Codex 的「推荐模型集」预设，是推荐子集而非全量目录；拿它与
+ * shortlist 求交集，会把 6.1 Terra / 6 Luna 这类已启用、只是不在当前预设里的模型从
+ * 「默认会话模型 / 分工默认模型 / 拉会成员」里抹掉 —— 这正是 v1.0.2 的默认会话模型
+ * 只能选到 2 个 GPT 的根因。引擎临时没发布目录（list_models 超时）也不能让用户启用的模型消失。
  */
 export function resolveModelConfig(source: ModelConfigSource): ModelConfigResult {
   const saved = savedRows(source.savedOverrides ?? nativeModelOverrides() ?? [])
@@ -330,37 +320,36 @@ export function resolveModelConfig(source: ModelConfigSource): ModelConfigResult
   }
 
   const authoritative = sourceKind === "session" && status === "ready"
-  const live = new Set(catalog.map((entry) => entry.id))
 
+  // v1.0.3 根因修复：候选集的唯一权威是「供应商与可用模型」维护的 enabled shortlist（saved）。
+  // 引擎目录（live session picker / bundled fallback / published list）只用于**补充能力元数据**
+  // （effort 档位、defaultEffort、contextWindow），绝不用于裁剪候选集。
+  //
+  // 旧逻辑在这里用 `saved.filter(model => live.has(model.api_id))` 把 shortlist 与会话 picker
+  // 求交集。会话 picker 是 Codex 的「推荐模型集」预设，是推荐子集而非全量目录；主窗口
+  // `app.tsx` 有 live session 时发布的正是这个子集（sourceKind: "session"），于是已启用但
+  // 不在当前预设里的 6.1 Terra / 6 Luna 被从「默认会话模型 / 分工默认模型 / 拉会成员」
+  // 里抹掉 —— 这就是默认会话模型只出 2 个 GPT 的根因。引擎临时没发布目录（list_models
+  // 超时、unavailable）也不能让用户启用的模型消失。
+  //
+  // 只有 shortlist 为空（首次运行、用户还没维护过可用模型）时，才把引擎目录当作初始清单。
   let rows: NativeRow[] = []
-  if (status === "unavailable") {
-    // The engine answered "nothing". Replaying the shortlist here is what put withdrawn ids back
-    // into every picker on 2026-11-05, so the group stays empty and 设置 explains why.
+  if (saved.length > 0) {
+    rows = saved.map((model) =>
+      mergeSaved(
+        model,
+        catalog.find((entry) => entry.id === model.api_id)
+      )
+    )
+  } else if (status === "unavailable") {
     rows = []
-  } else if (authoritative) {
-    rows =
-      saved.length === 0
-        ? catalogRows(catalog, saved)
-        : saved
-            .filter((model) => live.has(model.api_id))
-            .map((model) => mergeSaved(model, catalog.find((entry) => entry.id === model.api_id)))
   } else {
-    // pending / partial / saved: show every saved row (never subtract a list known to be
-    // incomplete) and claim nothing about the ones it does not carry.
-    rows =
-      saved.length === 0
-        ? catalogRows(catalog, saved)
-        : saved.map((model) => mergeSaved(model, catalog.find((entry) => entry.id === model.api_id)))
+    rows = catalogRows(catalog, saved)
   }
 
-  // Absence from the live catalog is NOT proof of withdrawal (see codex-model-verification.md): the
-  // engine's picker may simply not surface every callable id. Such rows are "unverified" — we cannot
-  // confirm they are live, but must not claim they were removed. Genuine withdrawal (positive
-  // evidence, e.g. a served-model mismatch) is deferred to the served-model check (post-B).
-  const unverified = new Set(
-    authoritative ? saved.filter((model) => !live.has(model.api_id)).map((model) => model.api_id) : []
-  )
-  const unverifiedIds = [...unverified]
+  // 「未验证 / 可能不可用」这类基于目录子集的私有判断已废弃：不在某个推荐子集里，不代表
+  // 模型不可调用。四处选择器统一由 `model-options.ts` 给出「启用即可用」的口径。
+  const unverifiedIds: readonly string[] = []
   // Reserved for positive-evidence withdrawal (post-B served-model verification). Empty pre-B.
   const withdrawnIds: readonly string[] = []
 
@@ -407,7 +396,9 @@ export function resolveModelConfig(source: ModelConfigSource): ModelConfigResult
     for (const group of pickerProviderGroups(snapshot)) {
       // Effort ladders and context windows live on the persisted model records, not on the
       // picker's flat labels.
-      const custom = snapshot.customProviders.find((provider) => provider.id === group.id)
+      // A snapshot can cross a window boundary (or be a test fixture) without every collection;
+      // read each field defensively instead of trusting the declared shape.
+      const custom = snapshot.customProviders?.find((provider) => provider.id === group.id)
       const overridden = providerBuiltInModels(snapshot, group.id)
       for (const model of group.models) {
         const id = gatewayModelId(group.id, model.id)

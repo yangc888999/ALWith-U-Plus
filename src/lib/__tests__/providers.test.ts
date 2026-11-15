@@ -1,25 +1,25 @@
 import { expect, test } from "vitest"
 
 import {
+  baseUrlLooksLikeEndpoint,
   DEFAULT_MODEL_ID,
   DEFAULT_PROVIDER_ID,
-  baseUrlLooksLikeEndpoint,
   defaultModelFallback,
   displayModelLabel,
-  normalizeProviderBaseUrl,
   gatewayModelId,
   isAccountModel,
-  nativeCatalogStatus,
   mergeDiscoveredModels,
+  nativeCatalogStatus,
+  normalizeProviderBaseUrl,
   parseCustomModels,
   providerGroups,
   PROVIDERS,
   type ProviderSnapshot,
   rememberNativeOverrides,
   resolveSessionModel,
-  unverifiedNativeRows,
   servedNativeRows,
-  setProviderSnapshot
+  setProviderSnapshot,
+  unverifiedNativeRows
 } from "../providers"
 
 test("displayModelLabel resolves a renamed gateway model from the saved overrides", () => {
@@ -73,7 +73,8 @@ test("every built-in provider is offered, and a new chat starts on the bundled Q
     error: null,
     providers: { qwen: { configured: true, disabled: false, region: "plan", base_url: null, protocol: "responses" } },
     customProviders: [],
-    builtInModels: {}, managedProviders: []
+    builtInModels: {},
+    managedProviders: []
   }
   expect(resolveSessionModel(null, snapshot)).toBe(gatewayModelId(DEFAULT_PROVIDER_ID, DEFAULT_MODEL_ID))
 })
@@ -89,7 +90,8 @@ test("a closed DeepSeek never becomes the fallback for a new chat", () => {
       qwen: { configured: true, disabled: false, region: "plan", base_url: null, protocol: "responses" }
     },
     customProviders: [],
-    builtInModels: {}, managedProviders: []
+    builtInModels: {},
+    managedProviders: []
   }
   expect(resolveSessionModel(null, snapshot)).toBe(gatewayModelId("qwen", "qwen4-max-preview"))
   expect(resolveSessionModel("gateway:deepseek:deepseek-flash", snapshot)).toBe(
@@ -105,7 +107,8 @@ test("Desktop defaults prefer configured providers and leave native defaults to 
     error: null,
     providers: {},
     customProviders: [],
-    builtInModels: {}, managedProviders: []
+    builtInModels: {},
+    managedProviders: []
   }
   expect(resolveSessionModel(null, snapshot)).toBeNull()
   expect(resolveSessionModel("gateway:removed:model", snapshot)).toBeNull()
@@ -171,7 +174,8 @@ test("configured custom providers become independent model groups", () => {
     status: "applied",
     error: null,
     providers: {},
-    builtInModels: {}, managedProviders: [],
+    builtInModels: {},
+    managedProviders: [],
     customProviders: [
       {
         id: "custom_private",
@@ -198,7 +202,8 @@ test("a configured built-in surfaces in the model picker", () => {
     error: null,
     providers: { deepseek: { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" } },
     customProviders: [],
-    builtInModels: {}, managedProviders: []
+    builtInModels: {},
+    managedProviders: []
   }
   expect(providerGroups(snapshot).map((group) => group.id)).toEqual(["deepseek"])
   // With a configured provider and nothing saved, the default lands on that provider's model.
@@ -213,7 +218,8 @@ test("an unconfigured built-in never surfaces in the model picker", () => {
     error: null,
     providers: {},
     customProviders: [],
-    builtInModels: {}, managedProviders: []
+    builtInModels: {},
+    managedProviders: []
   }
   expect(providerGroups(snapshot)).toEqual([])
   expect(resolveSessionModel(null, snapshot)).toBeNull()
@@ -304,7 +310,8 @@ test("a configured default replaces the built-in fallback only while it still re
       hakimi: { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" }
     },
     customProviders: [],
-    builtInModels: {}, managedProviders: []
+    builtInModels: {},
+    managedProviders: []
   }
   const configured = gatewayModelId("hakimi", "claude-sonnet-5-5")
 
@@ -331,13 +338,16 @@ test("a configured default replaces the built-in fallback only while it still re
 const savedSol = { api_id: "gpt-6.1-sol", label: "", reasoningLevels: ["low", "high"] }
 const savedTerra = { api_id: "gpt-6.1-terra", label: "Terra (mine)", enabled: true }
 
-test("the shared resolver keeps the user's order and labels, and drops what the engine stopped serving", () => {
-  const rows = servedNativeRows([savedSol, savedTerra], [
-    { id: "gpt-6.1-sol", label: "GPT-6.1-Sol", efforts: ["low", "medium"], defaultEffort: "medium" }
-  ], "ready")
+test("the shared resolver keeps every enabled row in the user's order and with the user's labels", () => {
+  const rows = servedNativeRows(
+    [savedSol, savedTerra],
+    [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", efforts: ["low", "medium"], defaultEffort: "medium" }],
+    "ready"
+  )
 
-  // One row out: the withdrawn one never reaches a picker.
-  expect(rows.map((row) => row.id)).toEqual(["gpt-6.1-sol"])
+  // v1.0.3：目录只是推荐子集，没列出 Terra 不等于它下架，两行都要在。
+  expect(rows.map((row) => row.id)).toEqual(["gpt-6.1-sol", "gpt-6.1-terra"])
+  expect(rows[1].label).toBe("Terra (mine)")
   // A blank saved label falls back to the catalog; a saved effort ladder wins over the catalog's.
   expect(rows[0]).toMatchObject({
     label: "GPT-6.1-Sol",
@@ -347,10 +357,14 @@ test("the shared resolver keeps the user's order and labels, and drops what the 
 })
 
 test("the same rows come back the moment the catalog lists them again", () => {
-  const rows = servedNativeRows([savedSol, savedTerra], [
-    { id: "gpt-6.1-sol", label: "GPT-6.1-Sol" },
-    { id: "gpt-6.1-terra", label: "GPT-6.1-Terra" }
-  ], "ready")
+  const rows = servedNativeRows(
+    [savedSol, savedTerra],
+    [
+      { id: "gpt-6.1-sol", label: "GPT-6.1-Sol" },
+      { id: "gpt-6.1-terra", label: "GPT-6.1-Terra" }
+    ],
+    "ready"
+  )
 
   expect(rows.map((row) => row.id)).toEqual(["gpt-6.1-sol", "gpt-6.1-terra"])
   // The user's own label is kept over the catalog's.
@@ -366,15 +380,18 @@ test("a surface with no catalog yet hides nothing", () => {
 })
 
 test("no saved list means the catalog is the list", () => {
-  const rows = servedNativeRows(null, [
-    { id: "gpt-6-sol", label: "GPT-6-Sol", efforts: ["low"], defaultEffort: "low" }
-  ], "ready")
+  const rows = servedNativeRows(
+    null,
+    [{ id: "gpt-6-sol", label: "GPT-6-Sol", efforts: ["low"], defaultEffort: "low" }],
+    "ready"
+  )
   expect(rows).toEqual([{ id: "gpt-6-sol", label: "GPT-6-Sol", efforts: ["low"], defaultEffort: "low" }])
 })
 
-test("an engine that published no catalog does not resurrect withdrawn models", () => {
-  // 2026-11-05: the engine's online list_models timed out 14 times. Treating that like a startup
-  // gap put the withdrawn gpt-6.1-terra back into every picker all day.
+test("an engine that published no catalog cannot hide the enabled shortlist", () => {
+  // 2026-11-05: 引擎在线 list_models 超时 14 次。旧实现把「引擎没发布」读成「模型全下架」，
+  // 让 可用模型 里已启用的模型在四个选择器里集体消失。现在目录缺失只影响能力元数据，
+  // 不影响候选集。
   expect(nativeCatalogStatus(undefined)).toBe("pending")
   expect(nativeCatalogStatus(null)).toBe("unavailable")
   expect(nativeCatalogStatus([])).toBe("unavailable")
@@ -384,17 +401,20 @@ test("an engine that published no catalog does not resurrect withdrawn models", 
     "gpt-6.1-sol",
     "gpt-6.1-terra"
   ])
-  expect(servedNativeRows([savedSol, savedTerra], [], "unavailable")).toEqual([])
-  // A real catalog always wins, whatever status the caller passed.
-  expect(
-    servedNativeRows([savedSol, savedTerra], [{ id: "gpt-6.1-sol" }], "unavailable").map((row) => row.id)
-  ).toEqual(["gpt-6.1-sol"])
+  expect(servedNativeRows([savedSol, savedTerra], [], "unavailable").map((row) => row.id)).toEqual([
+    "gpt-6.1-sol",
+    "gpt-6.1-terra"
+  ])
+  // 真实目录只补 effort 元数据，绝不裁掉 shortlist 里的行。
+  expect(servedNativeRows([savedSol, savedTerra], [{ id: "gpt-6.1-sol" }], "unavailable").map((row) => row.id)).toEqual(
+    ["gpt-6.1-sol", "gpt-6.1-terra"]
+  )
 })
 
-test("the unverified ids are reported separately, for the one table that still shows them", () => {
+test("the deprecated unverified verdict is always empty", () => {
+  // 「未验证」是拿推荐子集去 diff 已保存行得出来的伪判断，v1.0.3 起彻底废弃。
   const catalog = [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol" }]
-  expect(unverifiedNativeRows([savedSol, savedTerra], catalog)).toEqual(["gpt-6.1-terra"])
-  // An empty catalog proves nothing, so nothing is marked unverified.
+  expect(unverifiedNativeRows([savedSol, savedTerra], catalog)).toEqual([])
   expect(unverifiedNativeRows([savedSol, savedTerra], [])).toEqual([])
 })
 
@@ -404,12 +424,8 @@ test("a pasted endpoint is normalized back to the Responses API root", () => {
   // This is the URL users paste from a curl example; saving it verbatim produced
   // `/chat/completions/responses` and a 404 on every turn.
   expect(baseUrlLooksLikeEndpoint("https://openrouter.ai/api/v1/chat/completions")).toBe(true)
-  expect(normalizeProviderBaseUrl("https://openrouter.ai/api/v1/chat/completions")).toBe(
-    "https://openrouter.ai/api/v1"
-  )
-  expect(normalizeProviderBaseUrl("https://openrouter.ai/api/v1/responses/")).toBe(
-    "https://openrouter.ai/api/v1"
-  )
+  expect(normalizeProviderBaseUrl("https://openrouter.ai/api/v1/chat/completions")).toBe("https://openrouter.ai/api/v1")
+  expect(normalizeProviderBaseUrl("https://openrouter.ai/api/v1/responses/")).toBe("https://openrouter.ai/api/v1")
   expect(normalizeProviderBaseUrl("https://api.deepseek.com/")).toBe("https://api.deepseek.com")
   expect(baseUrlLooksLikeEndpoint("https://api.deepseek.com/")).toBe(false)
   expect(normalizeProviderBaseUrl("")).toBe("")
@@ -447,10 +463,17 @@ test.each(["gateway:litellm:old", "gateway:finture-enterprise:old"])(
       error: null,
       providers: {},
       customProviders: [],
-      builtInModels: {}, managedProviders: []
+      builtInModels: {},
+      managedProviders: []
     }
     expect(resolveSessionModel(model, snapshot, "draft")).toBeNull()
-    snapshot.providers.deepseek = { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" }
+    snapshot.providers.deepseek = {
+      configured: true,
+      disabled: false,
+      region: null,
+      base_url: null,
+      protocol: "responses"
+    }
     expect(resolveSessionModel(model, snapshot, "draft")).toBe(
       gatewayModelId("deepseek", PROVIDERS.find((provider) => provider.id === "deepseek")!.models[0]!.id)
     )

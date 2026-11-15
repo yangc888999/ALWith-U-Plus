@@ -30,43 +30,83 @@ vi.mock("@/bindings", () => ({
     }
   })
 }))
-// The dialog only needs the resolved rows, not the settings bridge's IPC subscriptions.
-vi.mock("@/lib/model-config", () => ({
-  resolveModelConfig: () => ({
-    status: "ready",
-    authoritative: true,
-    withdrawnIds: [],
-    retiredIds: [],
-    entries: [
-      {
-        id: "gpt-6.1-sol",
-        label: "GPT 6.1 Sol",
-        // The real catalog names the ChatGPT group `chatgpt`; that id is what enables fast mode.
-        groupId: "chatgpt",
-        groupName: "ChatGPT",
-        efforts: ["low", "medium", "high"],
-        defaultEffort: "medium",
-        fastMode: false,
-        contextWindow: null,
-        status: "available",
-        retired: false,
-        sourceKind: "session"
-      },
-      {
-        id: "gateway:qwen:qwen-flash",
-        label: "Qwen Flash",
-        groupId: "qwen",
-        groupName: "Qwen",
-        efforts: [],
-        defaultEffort: null,
-        fastMode: false,
-        contextWindow: null,
-        status: "available",
-        retired: false,
-        sourceKind: "session"
-      }
-    ]
-  })
+// 与 ① ② ③ ④ 同一个出口：弹窗只消费 `useModelOptions()` 的分组与候选，不再自带第二份目录。
+// 这里的 label 是出口清洗后的结果（不带星号别名 / 「可能不可用」）。
+vi.mock("@/lib/use-model-options", () => ({
+  useModelOptions: () => {
+    const sol = {
+      id: "gpt-6.1-sol",
+      label: "GPT 6.1 Sol",
+      shortLabel: null,
+      groupId: "chatgpt",
+      groupName: "ChatGPT",
+      enabled: true,
+      available: true,
+      efforts: ["low", "medium", "high"],
+      defaultEffort: "medium",
+      effortSupported: true,
+      fastCapable: true,
+      fastMode: false,
+      contextWindow: null,
+      icon: "chatgpt",
+      order: 0,
+      selected: false,
+      isNative: true
+    }
+    const qwen = {
+      id: "gateway:qwen:qwen-flash",
+      label: "Qwen Flash",
+      shortLabel: null,
+      groupId: "qwen",
+      groupName: "Qwen",
+      enabled: true,
+      available: true,
+      efforts: [],
+      defaultEffort: null,
+      effortSupported: false,
+      fastCapable: false,
+      fastMode: false,
+      contextWindow: null,
+      icon: "provider:qwen",
+      order: 1,
+      selected: false,
+      isNative: false
+    }
+    const retired = {
+      id: "gpt-6.1-terra",
+      label: "6.1 Terra",
+      shortLabel: null,
+      groupId: "chatgpt",
+      groupName: "ChatGPT",
+      enabled: true,
+      available: false,
+      efforts: ["low", "medium"],
+      defaultEffort: "medium",
+      effortSupported: true,
+      fastCapable: true,
+      fastMode: false,
+      contextWindow: null,
+      icon: "chatgpt",
+      order: 1,
+      selected: false,
+      isNative: true
+    }
+    const options = [sol, retired, qwen]
+    return {
+      status: "ready",
+      shortlistConfigured: true,
+      groups: [
+        { id: "chatgpt", name: "ChatGPT", icon: "chatgpt", order: 0, options: [sol, retired] },
+        { id: "qwen", name: "Qwen", icon: "provider:qwen", order: 1, options: [qwen] }
+      ],
+      options,
+      byId: (id: string) => options.find((option) => option.id === id) ?? null,
+      effortFor: (id: string) => options.find((option) => option.id === id)?.efforts ?? [],
+      fastModeFor: () => false,
+      isFastCapable: (id: string) => options.find((option) => option.id === id)?.fastCapable ?? false,
+      signature: "test-model-options"
+    }
+  }
 }))
 
 import { DEFAULT_TASK_DRAFT, NewTaskDialog } from "../new-task-dialog"
@@ -114,9 +154,7 @@ const SIGNED_IN = {
 
 function renderDialog(onSubmit = vi.fn(), task: ScheduledTask | null = null) {
   const onOpenChange = vi.fn()
-  const view = render(
-    <NewTaskDialog open onOpenChange={onOpenChange} task={task} onSubmit={onSubmit} />
-  )
+  const view = render(<NewTaskDialog open onOpenChange={onOpenChange} task={task} onSubmit={onSubmit} />)
   return { view, onSubmit, onOpenChange }
 }
 
@@ -136,9 +174,7 @@ test("a custom workspace is picked through the folder dialog, not typed in", asy
     fireEvent.click(picker)
   })
 
-  expect(openFolder).toHaveBeenCalledWith(
-    expect.objectContaining({ directory: true, multiple: false })
-  )
+  expect(openFolder).toHaveBeenCalledWith(expect.objectContaining({ directory: true, multiple: false }))
   expect(screen.getByText("/Users/flyme/Documents/YUP/部门")).toBeTruthy()
 
   // A task can pin the model it runs on; the options come from the shared model catalog.
@@ -254,9 +290,9 @@ test("a new task pushes to Lark by default, addressed to the signed-in user", as
 
   // 默认开：不用点任何东西，收件人就是授权人本人。
   await waitFor(() =>
-    expect(
-      screen.getByRole("switch", { name: "Send the result to Lark (default)" }).getAttribute("aria-checked")
-    ).toBe("true")
+    expect(screen.getByRole("switch", { name: "Send the result to Lark (default)" }).getAttribute("aria-checked")).toBe(
+      "true"
+    )
   )
   expect(screen.getByLabelText("Send as")).toBeTruthy()
   // 收件人是异步补进来的（读 CLI 登录态 → 自动填本人），提交前等 chip 出现，别在两次更新之间点。
@@ -329,9 +365,9 @@ test("the recipient list stays folded until 添加对象 is clicked, and each op
   renderDialog()
 
   await waitFor(() =>
-    expect(
-      screen.getByRole("switch", { name: "Send the result to Lark (default)" }).getAttribute("aria-checked")
-    ).toBe("true")
+    expect(screen.getByRole("switch", { name: "Send the result to Lark (default)" }).getAttribute("aria-checked")).toBe(
+      "true"
+    )
   )
   // 折叠态：只有已选目标 + 添加对象这一个按钮，没有 tab / 搜索框，也还没去问 CLI 要群列表。
   expect(screen.queryByText("Chats")).toBeNull()
@@ -353,4 +389,25 @@ test("the recipient list stays folded until 添加对象 is clicked, and each op
     fireEvent.click(screen.getByRole("button", { name: /add recipient/i }))
   })
   await waitFor(() => expect(larkApi.targets).toHaveBeenCalledTimes(2))
+})
+
+test("运行模型下拉复用统一出口的分组 / 清洗名 / 可用性，不再自建清单", () => {
+  renderDialog()
+  const select = screen.getByLabelText("Model") as HTMLSelectElement
+  // 分组名与顺序直接来自 `useModelOptions().groups`，弹窗不再按 groupId 自建一份。
+  const groupLabels = [...select.querySelectorAll("optgroup")].map((node) => node.label)
+  expect(groupLabels).toEqual(["ChatGPT", "Qwen"])
+
+  const rows = [...select.querySelectorAll("option")]
+  const labels = rows.map((node) => node.textContent ?? "")
+  expect(labels).toContain("GPT 6.1 Sol")
+  expect(labels).toContain("6.1 Terra")
+  expect(labels).toContain("Qwen Flash")
+  // 出口已清洗：没有星号别名，也没有「可能不可用 / 未验证」。
+  expect(labels.join(" ")).not.toContain("*")
+  expect(labels.join(" ")).not.toContain("may be unavailable")
+
+  // 可用性只认出口的 `available` 正证据，不在这里另做猜测。
+  expect(rows.find((node) => node.value === "gpt-6.1-terra")?.disabled).toBe(true)
+  expect(rows.find((node) => node.value === "gpt-6.1-sol")?.disabled).toBe(false)
 })

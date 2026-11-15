@@ -3,8 +3,8 @@ import { createSession } from "@alwith/api"
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeAll, expect, test, vi } from "vitest"
 
-import { initI18n } from "@/lib/i18n"
 import { removeGroup, setGroup } from "@/lib/groups"
+import { initI18n } from "@/lib/i18n"
 import { nativeModelOverrides } from "@/lib/providers"
 import { orchestrationFor, setOrchestration } from "@/lib/session-orchestration"
 
@@ -94,7 +94,9 @@ test("a chat whose model left the catalog disables the split and clears a stored
 
   fireEvent.click(view.getByRole("button"))
   expect(view.getByRole("switch")).toHaveAttribute("aria-disabled", "true")
-  expect(view.getByText("The current chat's model is not in the model list, so the split cannot be enabled.")).toBeVisible()
+  expect(
+    view.getByText("The current chat's model is not in the model list, so the split cannot be enabled.")
+  ).toBeVisible()
 })
 
 test("every catalog model is offered and a ladder-less role hides its effort selector", () => {
@@ -138,12 +140,10 @@ test("the 可用模型 shortlist owns the GPT group; gateways are never pruned b
   expect(values).toContain(NATIVE_B)
 })
 
-test("a saved GPT row the engine no longer advertises is not offered", () => {
-  // The engine drops models on its own schedule: `gpt-6.1-terra` was in the catalog at 07:01 and
-  // gone by 07:25 while 可用模型 kept the row. All three surfaces read the session's catalog
-  // through `servedNativeRows`, so the row disappears here at the same moment it disappears
-  // from 设置 and the chat picker — and comes back when the catalog lists it again. Nothing is
-  // written back to the saved list, so a withdrawal never turns into a deletion.
+test("an enabled GPT row the recommended subset omitted is still offered", () => {
+  // v1.0.3 根因修复：会话 picker 是 Codex 的「推荐模型集」预设（推荐子集），里面没有
+  // gpt-6.1-terra 不代表它下架了。四处选择器统一以「供应商与可用模型」的 enabled shortlist
+  // 为候选集，所以这个已启用、只是不在当前预设里的模型必须照样可选，且名称干净。
   vi.mocked(nativeModelOverrides).mockReturnValue([
     { api_id: NATIVE_A, label: "6 Astra", enabled: true },
     {
@@ -161,8 +161,8 @@ test("a saved GPT row the engine no longer advertises is not offered", () => {
 
   const planner = view.getByLabelText("Planner (expensive)") as HTMLSelectElement
   const values = [...planner.options].map((option) => option.value)
-  expect(values).not.toContain("gpt-6.1-terra")
-  expect(within(planner).queryByRole("option", { name: "6.1 Terra" })).toBeNull()
+  expect(values).toContain("gpt-6.1-terra")
+  expect(within(planner).getByRole("option", { name: "6.1 Terra" })).toBeInTheDocument()
 })
 
 test("a group conversation renders no split control: the roster owns that session's models", () => {

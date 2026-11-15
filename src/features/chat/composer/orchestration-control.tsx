@@ -5,30 +5,26 @@ import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
-
 import {
   hasUsableEffortCatalog,
   NATIVE_MODEL_GROUP,
+  type NativeModel,
   nativeModelCatalog,
-  selectedModelId,
-  type NativeModel
+  selectedModelId
 } from "@/agent/native-models"
 import { Switch } from "@/components/ui/switch"
 import { RemoteChatClient } from "@/lib/chat-window-client"
 import { client } from "@/lib/client"
 import { describeError } from "@/lib/error-text"
-import {
-  orchestrationDefaultsSnapshot,
-  subscribeOrchestrationDefaults
-} from "@/lib/orchestration-defaults"
+import { resolveModelOptions } from "@/lib/model-options"
+import { orchestrationDefaultsSnapshot, subscribeOrchestrationDefaults } from "@/lib/orchestration-defaults"
 import { pendingPlanFor, subscribePendingPlan } from "@/lib/pending-plan"
-import { resolveModelConfig } from "@/lib/model-config"
 import {
   orchestrationAllowedFor,
   orchestrationFor,
+  type OrchestrationRoleConfig,
   setOrchestration,
-  subscribeOrchestration,
-  type OrchestrationRoleConfig
+  subscribeOrchestration
 } from "@/lib/session-orchestration"
 import { cn } from "@/lib/utils"
 
@@ -88,31 +84,23 @@ export function OrchestrationControl({ session }: { session: Session }): ReactNo
   const reportedIssue = useRef<string | null>(null)
 
   const nativeModels = nativeModelCatalog(session.configOptions)
-  // Same rows as 设置 → 默认模型 and the chat picker: one call, `resolveModelConfig`, decides which
-  // saved rows count, what they are called and how deep their effort ladder is. Gateway groups have
-  // no saved list of their own, so they always come from the session catalog.
-  //
-  // A row the provider has stopped serving is dropped from all three surfaces instead of sitting
-  // here greyed out: nothing is asked of the engine to keep them in step, and the row reappears by
-  // itself when the catalog carries it again.
+  // 与 ① ② ③ ④ 同一个出口：`resolveModelOptions` 用「供应商与可用模型」的 enabled shortlist
+  // 给出完整 GPT 候选（已清洗名称、统一 effort 档位）。会话 picker 只是推荐子集，不再拿它
+  // 裁掉 6.1 Terra / 6 Luna。网关组没有自己的 shortlist，仍由会话目录按请求解析。
   const engineGpt = nativeModels.filter((model) => model.groupId === NATIVE_MODEL_GROUP.id)
-  // No model option at all means a draft that has not run `session/new` yet; a model option with
-  // no integrated group means the engine really published none. Only the latter hides the saved
-  // shortlist, so a timed-out `list_models` cannot put withdrawn ids back into the split picker —
-  // a distinction `resolveModelConfig` makes once, for every surface.
-  const gptChoices: NativeModel[] = resolveModelConfig({
+  const gptChoices: NativeModel[] = resolveModelOptions({
     providerSnapshot: null,
-    // No bridge list here: this surface holds the session itself, so `sessionOptions` is the catalog.
-    native: undefined,
+    // 首启还没有 shortlist 时，统一出口允许用会话目录做初始清单；一旦用户维护过
+    // 「供应商与可用模型」，会话推荐子集就被出口自动挡在裁决之外。
     sessionOptions: session.configOptions
   })
-    .entries.filter((entry) => entry.groupId === NATIVE_MODEL_GROUP.id)
-    .map((entry) => ({
-      id: entry.id,
-      label: entry.label,
-      groupId: entry.groupId,
-      efforts: entry.efforts,
-      defaultEffort: entry.defaultEffort
+    .options.filter((option) => option.isNative)
+    .map((option) => ({
+      id: option.id,
+      label: option.label,
+      groupId: option.groupId,
+      efforts: [...option.efforts],
+      defaultEffort: option.defaultEffort
     }))
   const gatewayChoices = nativeModels.filter((model) => model.groupId !== NATIVE_MODEL_GROUP.id)
   const offered = [...gptChoices, ...gatewayChoices]
@@ -123,7 +111,9 @@ export function OrchestrationControl({ session }: { session: Session }): ReactNo
       ? offered
       : (() => {
           const keep = new Set([orchestration.planner.model, orchestration.worker.model])
-          const missing = nativeModels.filter((model) => keep.has(model.id) && !offered.some((entry) => entry.id === model.id))
+          const missing = nativeModels.filter(
+            (model) => keep.has(model.id) && !offered.some((entry) => entry.id === model.id)
+          )
           return [...offered, ...missing]
         })()
   const savedDefaults = useSyncExternalStore(
@@ -140,8 +130,7 @@ export function OrchestrationControl({ session }: { session: Session }): ReactNo
   // fresh split's worker on one whose first prompt would be refused.
   const defaultModelId = (preferred: string, fallbackIndex: number): string => {
     const live = (id: string): boolean => engineGpt.some((entry) => entry.id === id)
-    if (choices.some((entry) => entry.id === preferred) && (engineGpt.length === 0 || live(preferred)))
-      return preferred
+    if (choices.some((entry) => entry.id === preferred) && (engineGpt.length === 0 || live(preferred))) return preferred
     return (
       engineGpt[fallbackIndex]?.id ??
       gptChoices[fallbackIndex]?.id ??
@@ -163,10 +152,7 @@ export function OrchestrationControl({ session }: { session: Session }): ReactNo
         }
     }
     return {
-      model: defaultModelId(
-        role === "planner" ? DEFAULT_PLANNER_MODEL : (engineGpt[1]?.id ?? ""),
-        fallbackIndex
-      ),
+      model: defaultModelId(role === "planner" ? DEFAULT_PLANNER_MODEL : (engineGpt[1]?.id ?? ""), fallbackIndex),
       effort: null
     }
   }
@@ -315,7 +301,8 @@ export function OrchestrationControl({ session }: { session: Session }): ReactNo
           aria-hidden="true"
         />
       </button>
-      {open && placement !== null &&
+      {open &&
+        placement !== null &&
         createPortal(
           <>
             <div className="fixed inset-0 z-40" aria-hidden onClick={() => setOpen(false)} />
@@ -335,7 +322,10 @@ export function OrchestrationControl({ session }: { session: Session }): ReactNo
                 />
               </div>
               {enabled && (
-                <p className="mt-1 truncate text-[11px] font-medium text-emerald-700 dark:text-emerald-400" title={summary}>
+                <p
+                  className="mt-1 truncate text-[11px] font-medium text-emerald-700 dark:text-emerald-400"
+                  title={summary}
+                >
                   {summary}
                 </p>
               )}
@@ -391,7 +381,7 @@ export function OrchestrationControl({ session }: { session: Session }): ReactNo
                 </div>
                 <div className="grid grid-cols-[minmax(0,1fr)_6.5rem] gap-2">
                   <select
-                    className="h-8 w-full min-w-0 rounded-lg border border-border bg-background px-2 text-[11.5px] text-foreground outline-none transition-colors focus-visible:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-70"
+                    className="h-8 w-full min-w-0 rounded-lg border border-border bg-background px-2 text-[11.5px] text-foreground transition-colors outline-none focus-visible:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-70"
                     aria-label={t("chat.orchestrationPlanner")}
                     value={planner.model}
                     disabled={!enabled}
@@ -405,13 +395,16 @@ export function OrchestrationControl({ session }: { session: Session }): ReactNo
                   </select>
                   {plannerEfforts.length > 0 && (
                     <select
-                      className="h-8 w-full min-w-0 rounded-lg border border-border bg-background px-2 text-[11.5px] text-foreground outline-none transition-colors focus-visible:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-70"
+                      className="h-8 w-full min-w-0 rounded-lg border border-border bg-background px-2 text-[11.5px] text-foreground transition-colors outline-none focus-visible:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-70"
                       aria-label={t("chat.orchestrationPlannerEffort")}
                       value={planner.effort ?? ""}
                       disabled={!enabled}
                       onChange={(event) =>
                         setOrchestration(session.id, {
-                          planner: { model: planner.model, effort: event.target.value === "" ? null : event.target.value },
+                          planner: {
+                            model: planner.model,
+                            effort: event.target.value === "" ? null : event.target.value
+                          },
                           worker
                         })
                       }
@@ -477,7 +470,7 @@ export function OrchestrationControl({ session }: { session: Session }): ReactNo
                 </div>
                 <div className="grid grid-cols-[minmax(0,1fr)_6.5rem] gap-2">
                   <select
-                    className="h-8 w-full min-w-0 rounded-lg border border-border bg-background px-2 text-[11.5px] text-foreground outline-none transition-colors focus-visible:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-70"
+                    className="h-8 w-full min-w-0 rounded-lg border border-border bg-background px-2 text-[11.5px] text-foreground transition-colors outline-none focus-visible:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-70"
                     aria-label={t("chat.orchestrationWorker")}
                     value={worker.model}
                     disabled={!enabled}
@@ -491,7 +484,7 @@ export function OrchestrationControl({ session }: { session: Session }): ReactNo
                   </select>
                   {workerEfforts.length > 0 && (
                     <select
-                      className="h-8 w-full min-w-0 rounded-lg border border-border bg-background px-2 text-[11.5px] text-foreground outline-none transition-colors focus-visible:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-70"
+                      className="h-8 w-full min-w-0 rounded-lg border border-border bg-background px-2 text-[11.5px] text-foreground transition-colors outline-none focus-visible:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-70"
                       aria-label={t("chat.orchestrationWorkerEffort")}
                       value={worker.effort ?? ""}
                       disabled={!enabled}

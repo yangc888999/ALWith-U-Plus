@@ -1,21 +1,19 @@
-// QA probe: the 4-state × saved-row matrix of `resolveModelConfig`, run independently of the
-// implementation's own suite.
+// QA probe：v1.0.3 的四处选择器统一契约，覆盖 6 种引擎目录状态 × 有无 shortlist 的矩阵。
 //
-// The claim under test: **a non-authoritative surface never produces 已下架 and never says anything
-// about a row's availability**, in any of the four catalog states, with or without a saved
-// shortlist. This file states that as a loop over the matrix instead of one example per state, and
-// keeps the tombstone verdict in a separate assertion so the two can never contaminate silently.
+// v1.0.2 的根因是「把 live session picker（Codex 的『推荐模型集』预设，是推荐子集而非全量
+// 目录）当权威」，用它和「供应商与可用模型」的 enabled shortlist 求交集，把 6.1 Terra / 6 Luna
+// 从默认会话模型 / 分工默认模型 / 拉会成员里抹掉。v1.0.3 的契约：
 //
-// It also pins two things the implementation's tests do not state:
-//   * a malformed bridge payload (an object with no `models`) is "answered nothing", never
-//     "everything withdrawn";
-//   * whether the "every entry is `unknown`" invariant really holds for gateway rows.
+//   * shortlist 非空 ⇒ 它就是完整候选集，任何引擎目录状态都不得裁掉一行；
+//   * `unverifiedIds` / `withdrawnIds` 恒为空 —— 不在推荐子集里不代表不可调用；
+//   * 唯一的负证据是 tombstone（provider 明确拒绝过），且它也只标「不可用」，不删行；
+//   * shortlist 为空（首启）时引擎目录才作为初始清单；畸形桥载荷读作「没回答」，不是「全下架」。
 
 import type * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { beforeEach, expect, test } from "vitest"
 
-import { resolveModelConfig, type ModelConfigSource } from "../model-config"
-import { gatewayModelId, type CustomModel, type ProviderSnapshot } from "../providers"
+import { type ModelConfigSource, resolveModelConfig } from "../model-config"
+import { type CustomModel, gatewayModelId, type ProviderSnapshot } from "../providers"
 
 const SOL = "gpt-6.1-sol"
 const TERRA = "gpt-6.1-terra"
@@ -51,66 +49,71 @@ function snapshot(): ProviderSnapshot {
     error: null,
     providers: {},
     builtInModels: {},
-    customProviders: [
-      { id: "custom_vendor", name: "Vendor", models: [saved("vendor-large", { label: "Large" })] }
-    ],
+    customProviders: [{ id: "custom_vendor", name: "Vendor", models: [saved("vendor-large", { label: "Large" })] }],
     managedProviders: []
   } as unknown as ProviderSnapshot
 }
 
-/** Every state a surface can be in, with the exact inputs that produce it. */
-const STATES: Array<{ name: string; authoritative: boolean; config: Partial<ModelConfigSource> }> = [
-  {
-    name: "ready/session (authoritative)",
-    authoritative: true,
-    config: { sessionOptions: modelSelect([SOL, "gpt-6-astra"]) }
-  },
+/** 一个窗口可能持有的全部引擎目录状态。 */
+const STATES: Array<{ name: string; config: Partial<ModelConfigSource> }> = [
+  { name: "ready/session", config: { sessionOptions: modelSelect([SOL, "gpt-6-astra"]) } },
   {
     name: "ready/published-session",
-    authoritative: true,
     config: { native: { sourceKind: "session", name: "ChatGPT", models: [{ id: SOL, label: "Sol" }] } }
   },
   {
     name: "partial/bundled",
-    authoritative: false,
     config: { native: { sourceKind: "bundled", name: "ChatGPT", models: [{ id: SOL, label: "Sol" }] } }
   },
-  { name: "pending", authoritative: false, config: { native: undefined } },
-  { name: "unavailable/null", authoritative: false, config: { native: null } },
-  { name: "unavailable/empty", authoritative: false, config: { native: { name: "ChatGPT", models: [] } } }
+  { name: "pending", config: { native: undefined } },
+  { name: "unavailable/null", config: { native: null } },
+  { name: "unavailable/empty", config: { native: { name: "ChatGPT", models: [] } } }
 ]
 
 beforeEach(() => {
   localStorage.clear()
 })
 
-test("non-authoritative never withdraws and never judges, with or without a saved shortlist", () => {
+test("the enabled shortlist survives every catalog state, with no unverified or withdrawn verdict", () => {
   for (const state of STATES) {
-    for (const savedRows of [[], [saved(SOL), saved(TERRA)]]) {
-      const result = resolveModelConfig({
-        providerSnapshot: null,
-        savedOverrides: savedRows,
-        tombstones: new Set<string>(),
-        ...state.config
-      })
-      const label = `${state.name} / saved=${savedRows.length}`
+    const result = resolveModelConfig({
+      providerSnapshot: null,
+      savedOverrides: [saved(SOL), saved(TERRA, { label: "6.1 Terra" })],
+      tombstones: new Set<string>(),
+      ...state.config
+    })
+    const label = state.name
 
-      expect(result.authoritative, label).toBe(state.authoritative)
-      if (state.authoritative) {
-        // Absence from the catalog is now "unverified", not a 已下架 verdict.
-        expect(result.unverifiedIds, label).toEqual(savedRows.length === 0 ? [] : [TERRA])
-        expect(result.withdrawnIds, label).toEqual([])
-      } else {
-        expect(result.withdrawnIds, label).toEqual([])
-        expect(result.retiredIds, label).toEqual([])
-        // No row may carry the withdrawn verdict either — the status is the second way to say it.
-        expect(result.entries.filter((entry) => entry.status === "withdrawn"), label).toEqual([])
-        // …and every GPT row states nothing about availability.
-        for (const entry of result.entries.filter((row) => row.groupId === "chatgpt")) {
-          expect(entry.status, `${label} / ${entry.id}`).toBe("unknown")
-        }
-      }
-    }
+    // 这就是默认会话模型能选到全部 4 个 GPT 的根因保证。
+    expect(
+      result.entries.map((entry) => entry.id),
+      label
+    ).toEqual([SOL, TERRA])
+    expect(result.byId(TERRA)?.label, label).toBe("6.1 Terra")
+    expect(result.unverifiedIds, label).toEqual([])
+    expect(result.withdrawnIds, label).toEqual([])
+    expect(
+      result.entries.some((entry) => entry.status === "withdrawn"),
+      label
+    ).toBe(false)
+  }
+})
+
+test("no catalog state produces a verdict when there is no shortlist yet", () => {
+  for (const state of STATES) {
+    const result = resolveModelConfig({
+      providerSnapshot: null,
+      savedOverrides: [],
+      tombstones: new Set<string>(),
+      ...state.config
+    })
+    const label = state.name
+    expect(result.unverifiedIds, label).toEqual([])
+    expect(result.withdrawnIds, label).toEqual([])
+    expect(
+      result.entries.every((entry) => entry.status !== "withdrawn"),
+      label
+    ).toBe(true)
   }
 })
 
@@ -124,13 +127,12 @@ test("a tombstone never becomes 已下架, in any state — and never hides a ro
     })
     const label = state.name
 
-    // Being refused is not being unverified either: the two stay separate.
-    if (state.authoritative) expect(result.unverifiedIds, label).toEqual([TERRA])
-    else expect(result.unverifiedIds, label).toEqual([])
-    // A tombstoned row that the catalog still lists is never 已下架 either.
-    expect(result.withdrawnIds, label).not.toContain(`${SOL}`)
-    // `retired` on the row itself stays truthful whenever the row is shown at all, so a surface
-    // that needs the raw refusal is never blocked by the "verdicts are for authorities" rule.
+    expect(
+      result.entries.map((entry) => entry.id),
+      label
+    ).toEqual([SOL, TERRA])
+    expect(result.unverifiedIds, label).toEqual([])
+    expect(result.withdrawnIds, label).toEqual([])
     for (const entry of result.entries) {
       if (entry.id === TERRA) expect(entry.retired, label).toBe(true)
       if (entry.id === SOL) expect(entry.retired, label).toBe(false)
@@ -138,31 +140,9 @@ test("a tombstone never becomes 已下架, in any state — and never hides a ro
   }
 })
 
-test("a tombstoned row the catalog still lists reads unsupported only when authoritative", () => {
-  const authoritative = resolveModelConfig({
-    providerSnapshot: null,
-    sessionOptions: modelSelect([SOL]),
-    savedOverrides: [saved(SOL)],
-    tombstones: new Set<string>([SOL])
-  })
-  expect(authoritative.byId(SOL)?.status).toBe("unsupported")
-  expect(authoritative.retiredIds).toEqual([SOL])
-
-  const pending = resolveModelConfig({
-    providerSnapshot: null,
-    native: undefined,
-    savedOverrides: [saved(SOL)],
-    tombstones: new Set<string>([SOL])
-  })
-  // Nothing is claimed, not even the refusal — but the flag survives for the callers that ask.
-  expect(pending.byId(SOL)?.status).toBe("unknown")
-  expect(pending.byId(SOL)?.retired).toBe(true)
-  expect(pending.retiredIds).toEqual([])
-})
-
 test("a payload that crossed the bridge without a models array is 'answered nothing'", () => {
-  // The settings bridge serialises this object; a shape the type forbids is still possible on the
-  // wire. Reading it as "everything was withdrawn" is the bug this module exists to prevent.
+  // 桥上序列化后可能缺 `models`。旧实现会读成「所有模型都下架」并清空选择器；现在只是
+  // 「引擎没回答」，已启用模型一行都不能少。
   const result = resolveModelConfig({
     providerSnapshot: null,
     native: { name: "ChatGPT" } as unknown as { name: string; models: [] },
@@ -170,14 +150,18 @@ test("a payload that crossed the bridge without a models array is 'answered noth
     tombstones: new Set<string>()
   })
   expect(result.status).toBe("unavailable")
-  expect(result.authoritative).toBe(false)
+  expect(result.entries.map((entry) => entry.id)).toEqual([SOL, TERRA])
   expect(result.withdrawnIds).toEqual([])
-  // An unavailable catalog shows nothing rather than replaying the shortlist.
-  expect(result.entries).toEqual([])
+  expect(result.unverifiedIds).toEqual([])
 })
 
 test("an unpublished catalog and an empty one are different answers", () => {
-  const pending = resolveModelConfig({ providerSnapshot: null, native: undefined, savedOverrides: [], tombstones: new Set() })
+  const pending = resolveModelConfig({
+    providerSnapshot: null,
+    native: undefined,
+    savedOverrides: [],
+    tombstones: new Set()
+  })
   const empty = resolveModelConfig({ providerSnapshot: null, native: null, savedOverrides: [], tombstones: new Set() })
   expect(pending.status).toBe("pending")
   expect(empty.status).toBe("unavailable")
@@ -186,9 +170,6 @@ test("an unpublished catalog and an empty one are different answers", () => {
 })
 
 test("gateway rows are this app's own list: they stay available and are never withdrawn", () => {
-  // CHARACTERIZATION, reported to the implementer as a deviation from the "every entry is unknown
-  // when not authoritative" wording: rows that come from the provider snapshot keep status
-  // `available` and sourceKind `session` even when the GPT catalog is only a bundled fallback.
   const result = resolveModelConfig({
     providerSnapshot: snapshot(),
     native: { sourceKind: "bundled", name: "ChatGPT", models: [{ id: SOL, label: "Sol" }] },
@@ -199,7 +180,6 @@ test("gateway rows are this app's own list: they stay available and are never wi
   expect(gateway).not.toBeNull()
   expect(gateway?.status).toBe("available")
   expect(gateway?.sourceKind).toBe("session")
-  // The GPT row in the same answer is still undecided, which is the part that matters.
-  expect(result.byId(SOL)?.status).toBe("unknown")
   expect(result.withdrawnIds).toEqual([])
+  expect(result.unverifiedIds).toEqual([])
 })

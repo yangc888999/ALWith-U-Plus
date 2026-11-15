@@ -1,24 +1,16 @@
-// The one model catalog every picker calls.
+// 兼容层：保留旧的 `modelEntries` 签名，但真正的唯一出口是 `model-options.ts`。
 //
-// 设置 → 大模型（默认会话模型 / 分工默认模型）、拉会机器人、自动化任务、聊天框都从这里取模型。
-// 裁决只有一处：`model-config.ts` 的 `resolveModelConfig`（GPT 行走引擎目录、网关行走
-// `pickerProviderGroups`；legacy litellm 别名只用于解析旧 id，绝不进选择器——它曾让「企业内部模型」
-// 在每个下拉里出现两次）。
-//
-// 新界面要列模型 = 调 `modelEntries`（或直接调 `resolveModelConfig`），不要再自己拼 providerGroups。
+// v1.0.3 之前这里自称「The one model catalog every picker calls」，却同时自己做了一次
+// 「引擎目录没发布 → native 行全标 available=false」的私有可用性判断，和聊天框、分工各说各话。
+// 现在四处选择器统一调用 `resolveModelOptions`，本文件只是把统一出口的 `ModelOption` 映射回
+// 旧 `ModelEntry` 形状，不再有任何清单、白名单或可用性推断。新增模型只需在「供应商与可用模型」
+// 维护一次。
 
-import { NATIVE_MODEL_GROUP } from "@/agent/native-models"
-
-import { resolveModelConfig } from "./model-config"
+import { cleanModelLabel, type ModelOptionsNative, resolveModelOptions } from "./model-options"
 import type { ProviderSnapshot } from "./providers"
 
-/** The native group as the main window publishes it over the settings bridge. */
-export interface NativeCatalog {
-  name?: string
-  /** `session` = a live session's own picker, `bundled` = the `codex_bundled_models` fallback. */
-  sourceKind?: "session" | "bundled"
-  models: Array<{ id: string; label: string; efforts?: string[]; defaultEffort?: string | null }>
-}
+/** @deprecated 直接用 `ModelOptionsNative`（= `model-config.ts` 的 `NativeCatalog`）。 */
+export type NativeCatalog = ModelOptionsNative
 
 export interface ModelEntry {
   id: string
@@ -27,40 +19,25 @@ export interface ModelEntry {
   groupName: string
   efforts: string[]
   defaultEffort: string | null
-  /**
-   * Whether this session's engine still lists the model.
-   *
-   * A row the engine has revoked never reaches this list — it is dropped upstream, in
-   * `servedNativeRows` — so every row here is live whenever a catalog is known. The flag still
-   * matters in the settings window before the main window publishes its catalog: there nothing is
-   * listed, every row reads `false`, and the role defaults below fall back to plain order instead
-   * of claiming a model the engine may not serve.
-   */
+  /** 只反映 provider 明确拒绝过的 tombstone；引擎目录是否发布与可用性无关。 */
   available: boolean
 }
 
-/** Every model a picker offers: integrated group first, then each gateway. */
+/**
+ * 旧签名上的薄封装。候选集、名称、分组、排序、可用性全部由 `resolveModelOptions` 决定；
+ * `native` 只是可选的引擎能力元数据（shortlist 非空时不参与裁决）。
+ */
 export function modelEntries(
   snapshot: ProviderSnapshot | null,
   native: NativeCatalog | null | undefined
 ): ModelEntry[] {
-  // One call decides which GPT rows this picker shows, what they are called, and whether anything
-  // may be called 已下架 — the same call the chat picker and 分工 make. A row the engine has
-  // withdrawn is already gone from this list; the editable 可用模型 table keeps showing it (marked
-  // 已下架) so a save cannot silently drop it.
-  const catalogKnown = (native?.models.length ?? 0) > 0
-  return resolveModelConfig({ providerSnapshot: snapshot, native }).entries.map((entry) => ({
-    id: entry.id,
-    label: entry.label,
-    // The settings bridge may name the group differently; the ChatGPT group is the GPT one
-    // everywhere else, and this id drives the acceleration switch.
-    groupId: entry.groupId,
-    groupName: entry.groupName,
-    efforts: entry.efforts,
-    defaultEffort: entry.defaultEffort,
-    // A catalog that has not arrived yet says nothing about availability; every GPT row then reads
-    // false and the role defaults below fall back to plain order. Gateway groups come from the
-    // provider snapshot, which is this app's own list — the engine resolves them per request.
-    available: entry.groupId === NATIVE_MODEL_GROUP.id ? catalogKnown : true
+  return resolveModelOptions({ providerSnapshot: snapshot, native }).options.map((option) => ({
+    id: option.id,
+    label: cleanModelLabel(option.label),
+    groupId: option.groupId,
+    groupName: option.groupName,
+    efforts: [...option.efforts],
+    defaultEffort: option.defaultEffort,
+    available: option.available
   }))
 }

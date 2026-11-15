@@ -629,16 +629,36 @@ html[data-window-backdrop="acrylic"]
   opacity: 1;
   transform: none;
 }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(1) { transition-delay: 0ms; }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(2) { transition-delay: 20ms; }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(3) { transition-delay: 40ms; }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(4) { transition-delay: 60ms; }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(5) { transition-delay: 80ms; }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(6) { transition-delay: 100ms; }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(7) { transition-delay: 120ms; }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(8) { transition-delay: 140ms; }
-[data-rail-show] .main-sidebar-rail > .mt-auto > button:nth-child(1) { transition-delay: 160ms; }
-[data-rail-show] .main-sidebar-rail > .mt-auto > button:nth-child(2) { transition-delay: 180ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(1) {
+  transition-delay: 0ms;
+}
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(2) {
+  transition-delay: 20ms;
+}
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(3) {
+  transition-delay: 40ms;
+}
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(4) {
+  transition-delay: 60ms;
+}
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(5) {
+  transition-delay: 80ms;
+}
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(6) {
+  transition-delay: 100ms;
+}
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(7) {
+  transition-delay: 120ms;
+}
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(8) {
+  transition-delay: 140ms;
+}
+[data-rail-show] .main-sidebar-rail > .mt-auto > button:nth-child(1) {
+  transition-delay: 160ms;
+}
+[data-rail-show] .main-sidebar-rail > .mt-auto > button:nth-child(2) {
+  transition-delay: 180ms;
+}
 @keyframes activity-notification-pulse {
   0%,
   100% {
@@ -698,9 +718,13 @@ html[data-window-backdrop="acrylic"]
 /* Application controls use a hover overlay; conversations keep their own presentation. */
 @media (hover: hover) {
   /* Hover is opt-in for chrome controls; do not paint switches, selects, extensions or content actions. */
-  :is(.chrome-hover, .navigation-item, .toolbar-button, .card-action, .main-window-statusbar button:not(.canvas-dots button)):not(:disabled):not([aria-disabled="true"]):not(
-      [data-disabled]
-    ):not(
+  :is(
+      .chrome-hover,
+      .navigation-item,
+      .toolbar-button,
+      .card-action,
+      .main-window-statusbar button:not(.canvas-dots button)
+    ):not(:disabled):not([aria-disabled="true"]):not([data-disabled]):not(
       :where(
         .codex-timeline-content *,
         .timeline-user-message-navigation *,
@@ -714,7 +738,9 @@ html[data-window-backdrop="acrylic"]
       color-mix(in oklab, currentColor 8%, transparent),
       color-mix(in oklab, currentColor 8%, transparent)
     );
-    transition: background-color 140ms ease, background-image 140ms ease;
+    transition:
+      background-color 140ms ease,
+      background-image 140ms ease;
   }
 }
 
@@ -1283,7 +1309,8 @@ body > div:has(> [data-slot="dialog-overlay"]) > * {
   font-weight: 600;
   line-height: 1rem;
   letter-spacing: 0.025em;
-  text-transform: uppercase;
+  /* v1.0.3：四处分组名统一由 `modelGroupLabel()` 给出（"ChatGPT" 而非 "CHATGPT"）。
+     这里不再做大写变换，避免聊天框与设置页 / 拉会成员的分组标题样式不一致。 */
   white-space: nowrap;
 }
 [data-model-menu-list] [role="menuitemradio"][aria-checked="true"] .model-picker-icon {
@@ -1346,13 +1373,13 @@ body > div:has(> [data-slot="dialog-overlay"]) > * {
      浅色此前完全没有标尺：所有引用 --accent-surface/edge/strong/active 的消费点取值落空，
      徽标、选中描边、hover 环在浅色下整体失效，只剩 2.2% 的整窗底色——读起来就是“没有主题色”。
      白底比深底更容易把彩度冲淡，所以浅色各档取值比深色低一档，而不是照抄深色。 */
-  --accent-wash: 4%;         /* 整窗常驻底色 */
-  --accent-wash-top: 11%;    /* 顶部光带 */
-  --accent-surface: 12%;     /* 徽标 / 选中项 / 卡片底色 */
+  --accent-wash: 4%; /* 整窗常驻底色 */
+  --accent-wash-top: 11%; /* 顶部光带 */
+  --accent-surface: 12%; /* 徽标 / 选中项 / 卡片底色 */
   --accent-surface-hover: 16%;
-  --accent-edge: 28%;        /* 描边 */
-  --accent-strong: 40%;      /* hover 描边 / 焦点环 */
-  --accent-active: 12%;      /* 侧栏选中项 */
+  --accent-edge: 28%; /* 描边 */
+  --accent-strong: 40%; /* hover 描边 / 焦点环 */
+  --accent-active: 12%; /* 侧栏选中项 */
 }
 
 /* ── 深色主题色强度标尺 ────────────────────────────────────────────────────────

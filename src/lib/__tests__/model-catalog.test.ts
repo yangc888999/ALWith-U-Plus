@@ -52,14 +52,22 @@ test("native rows come from the published catalog with their effort ladder", () 
     models: [{ id: "gpt-6.1-sol", label: "6.1 Sol", efforts: ["low", "high"], defaultEffort: "high" }]
   })
   const sol = entries.find((entry) => entry.id === "gpt-6.1-sol")
-  expect(sol).toMatchObject({ groupId: "chatgpt", groupName: "ChatGPT", efforts: ["low", "high"], defaultEffort: "high", available: true })
+  expect(sol).toMatchObject({
+    groupId: "chatgpt",
+    groupName: "ChatGPT",
+    efforts: ["low", "high"],
+    defaultEffort: "high",
+    available: true
+  })
 })
 
-test("an unanswered native catalog keeps the saved shortlist; a failed one offers nothing", () => {
+test("an unanswered or failed native catalog never hides the enabled shortlist", () => {
   localStorage.setItem("alwith:native-model-overrides", JSON.stringify([{ api_id: "gpt-6.1-sol", label: "6.1 Sol" }]))
-  // undefined = the main window has not answered yet: the saved row survives, marked unavailable.
+  // undefined = 主窗口还没回答；null = 引擎发布失败。两者都只是「引擎目录缺失」，
+  // 不能把「供应商与可用模型」里已启用的模型标成不可用或干脆隐藏（v1.0.2 的 bug）。
   const pending = modelEntries(snapshot(), undefined).find((entry) => entry.id === "gpt-6.1-sol")
-  expect(pending?.available).toBe(false)
-  // null = the engine failed to publish: no withdrawn ids are replayed.
-  expect(modelEntries(snapshot(), null).some((entry) => entry.id === "gpt-6.1-sol")).toBe(false)
+  expect(pending?.available).toBe(true)
+  const failed = modelEntries(snapshot(), null).find((entry) => entry.id === "gpt-6.1-sol")
+  expect(failed?.available).toBe(true)
+  expect(failed?.label).toBe("6.1 Sol")
 })

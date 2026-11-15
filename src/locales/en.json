@@ -542,8 +542,7 @@
     "effort": "Reasoning",
     "collaboration": "Collaboration",
     "fastMode": "Fast mode",
-    "hint": "Enter to send · Shift+Enter for a new line",
-    "modelMayBeUnavailable": "may be unavailable"
+    "hint": "Enter to send · Shift+Enter for a new line"
   },
   "approval": {
     "needed": "Your input is needed",

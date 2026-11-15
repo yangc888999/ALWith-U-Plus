@@ -5,16 +5,11 @@
 import { isTauri } from "@tauri-apps/api/core"
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
 import { FolderOpenIcon, ShieldCheckIcon } from "lucide-react"
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
-import { resolveModelConfig, type ModelConfigEntry } from "@/lib/model-config"
-import { NATIVE_MODEL_GROUP } from "@/agent/native-models"
 import { commands } from "@/bindings"
-import { defaultModelChoice } from "@/lib/default-model"
-import { useSettingsNativeModels } from "@/lib/settings-bridge"
-import { useProviders } from "@/lib/use-providers"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -27,19 +22,22 @@ import {
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { defaultModelChoice } from "@/lib/default-model"
 import { describeError } from "@/lib/error-text"
+import type { ModelOption } from "@/lib/model-options"
+import { useModelOptions } from "@/lib/use-model-options"
 import { cn } from "@/lib/utils"
 import { openSettingsWindow } from "@/lib/window-manager"
 
+import { LarkTargetPicker } from "./lark-target-picker"
 import {
-  REPEAT_RULES,
   isRepeatRule,
   type LarkTarget,
+  REPEAT_RULES,
+  type RepeatRule,
   type ScheduledTask,
-  type TaskDraft,
-  type RepeatRule
+  type TaskDraft
 } from "./types"
-import { LarkTargetPicker } from "./lark-target-picker"
 
 /** 新建一个任务时的默认字段（时间 08:05 对应参考图的卡片示例）。 */
 export const DEFAULT_TASK_DRAFT: TaskDraft = {
@@ -90,22 +88,12 @@ function ControlField({
 }
 
 /** 一组字段的标题：把弹窗读成「任务 → 调度 → 执行 → 推送」四段，而不是一长串控件。 */
-function FormSection({
-  title,
-  description,
-  children
-}: {
-  title: string
-  description?: string
-  children: ReactNode
-}) {
+function FormSection({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return (
     <section className="space-y-3">
       <div className="space-y-0.5">
         <h3 className="text-sm font-medium text-foreground">{title}</h3>
-        {description !== undefined && (
-          <p className="text-xs leading-5 text-muted-foreground">{description}</p>
-        )}
+        {description !== undefined && <p className="text-xs leading-5 text-muted-foreground">{description}</p>}
       </div>
       {children}
     </section>
@@ -146,10 +134,10 @@ export function NewTaskDialog({
   onSubmit: (draft: TaskDraft) => void
 }) {
   const { t } = useTranslation()
-  // The same catalog as 设置 → 默认模型 and the chat picker: engine-listed GPT rows plus every
-  // configured gateway model. A hand-built list here would offer ids the run cannot resolve.
-  const providerSnapshot = useProviders()
-  const nativeModels = useSettingsNativeModels()
+  // 与 ① ② ③ ④ 同一个出口：候选集、分组名、显示名（已清洗星号别名 / 「可能不可用」）、
+  // Effort 档位、可用性与 GPT 家族判定全部由 `useModelOptions()` 提供。定时任务无人值守，
+  // 更不能在这里自建第二份清单去猜哪些 id 能跑。
+  const modelOptions = useModelOptions()
   const [form, setForm] = useState<TaskDraft>(() => draftFromTask(task))
   const [workspaceCustom, setWorkspaceCustom] = useState(() => Boolean(task?.cwd))
   const [validityMode, setValidityMode] = useState<"forever" | "until">(() => (task?.validUntil ? "until" : "forever"))
@@ -233,9 +221,7 @@ export function NewTaskDialog({
       return
     }
     autoFilledSelf.current = true
-    setForm((previous) =>
-      previous.larkTargets.length > 0 ? previous : { ...previous, larkTargets: [selfTarget] }
-    )
+    setForm((previous) => (previous.larkTargets.length > 0 ? previous : { ...previous, larkTargets: [selfTarget] }))
   }, [open, form.larkNotify, form.larkTargets.length, selfTarget])
 
   // 「推送结果到飞书」对**新建任务**默认打开，收件人就是授权人本人（2026-11-08 用户要求：
@@ -253,41 +239,29 @@ export function NewTaskDialog({
   }, [open, task, selfTarget, authChecked])
 
   const patch = (next: Partial<TaskDraft>): void => setForm((previous) => ({ ...previous, ...next }))
-  const entries = useMemo(
-    // 定时任务 runs unattended hours later, so it must show exactly the rows the rest of the app
-    // considers servable — same read-only answer, no second opinion about 已下架.
-    () => (open ? resolveModelConfig({ providerSnapshot, native: nativeModels }).entries : []),
-    [open, providerSnapshot, nativeModels]
-  )
-  const modelGroups = useMemo(() => {
-    const groups: Array<{ id: string; name: string; entries: ModelConfigEntry[] }> = []
-    for (const entry of entries) {
-      let group = groups.find((candidate) => candidate.id === entry.groupId)
-      if (group === undefined) {
-        group = { id: entry.groupId, name: entry.groupName, entries: [] }
-        groups.push(group)
-      }
-      group.entries.push(entry)
-    }
-    return groups
-  }, [entries])
+  // 分组也直接取统一出口的 `groups`，不再按 groupId 自建一份：分组名、顺序、图标口径
+  // 与设置页 / 聊天框 / 拉会成员完全一致。
+  const options: readonly ModelOption[] = open ? modelOptions.options : []
+  const modelGroups = open ? modelOptions.groups : []
   // An edited task may name a model the engine has since withdrawn. Keep it visible instead of
   // rendering a blank select that looks like "follow default" while actually saving the old id.
-  const modelMissing = form.model !== "" && !entries.some((entry) => entry.id === form.model)
-  // 选中的模型条目决定 Effort 档位与「加速」是否可用：档位来自引擎/供应商目录，不在这里另造。
-  const selectedEntry = entries.find((entry) => entry.id === form.model)
+  const modelMissing = form.model !== "" && !options.some((entry) => entry.id === form.model)
+  // 选中的模型条目决定 Effort 档位与「加速」是否可用：档位来自统一出口，不在这里另造。
+  const selectedEntry = options.find((entry) => entry.id === form.model)
   const effortOptions = selectedEntry?.efforts ?? []
-  // 「加速」（fast mode）只有 GPT 组认；给其它厂商显示这个开关只会造出一个无效配置。
-  const canFast = selectedEntry?.groupId === NATIVE_MODEL_GROUP.id
+  // 「加速」（fast mode）只有 GPT 家族认；用出口的 `isNative` 判定，与四处口径一致。
+  const canFast = selectedEntry?.isNative === true
   // 只读摘要：任务没指定模型/档位时，把「设置 → 默认模型」里真正会生效的值显示出来，
   // 而不是让「跟随默认」变成一句看不出内容的空话。
-  const defaultEntry = entries.find((entry) => entry.id === (defaultChoice?.model ?? ""))
+  const defaultEntry = options.find((entry) => entry.id === (defaultChoice?.model ?? ""))
   const pinned = form.model !== ""
   const summaryModel = pinned
     ? (selectedEntry?.label ?? form.model)
     : (defaultEntry?.label ?? defaultChoice?.model ?? t("automation.modelBuiltinDefault"))
   const summaryEffort = pinned
-    ? (form.effort !== "" ? form.effort : (selectedEntry?.defaultEffort ?? t("automation.effortDefaultShort")))
+    ? form.effort !== ""
+      ? form.effort
+      : (selectedEntry?.defaultEffort ?? t("automation.effortDefaultShort"))
     : (defaultChoice?.effort ?? defaultEntry?.defaultEffort ?? t("automation.effortDefaultShort"))
   // 选中模型后，Effort / 加速仍按所选模型来；留空时才显示全局默认。
   const effortDisabled = !pinned || effortOptions.length === 0
@@ -331,7 +305,7 @@ export function NewTaskDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[90vh] min-h-0 flex-col overflow-hidden border-border/70 bg-background p-0 shadow-2xl sm:max-w-2xl">
-        <DialogHeader className="shrink-0 border-b border-border/60 px-4 pb-4 pt-5 sm:px-6 sm:pt-6">
+        <DialogHeader className="shrink-0 border-b border-border/60 px-4 pt-5 pb-4 sm:px-6 sm:pt-6">
           <DialogTitle className="text-base">
             {t(task === null ? "automation.newTitle" : "automation.editTitle")}
           </DialogTitle>
@@ -458,9 +432,7 @@ export function NewTaskDialog({
                     type="number"
                     min={1}
                     value={form.intervalMinutes}
-                    onChange={(event) =>
-                      patch({ intervalMinutes: Math.max(1, Number(event.target.value) || 1) })
-                    }
+                    onChange={(event) => patch({ intervalMinutes: Math.max(1, Number(event.target.value) || 1) })}
                   />
                 ) : (
                   <Input
@@ -525,9 +497,9 @@ export function NewTaskDialog({
                   <option value="">{t("automation.modelDefaultWith", { value: summaryModel })}</option>
                   {modelGroups.map((group) => (
                     <optgroup key={group.id} label={group.name}>
-                      {group.entries.map((entry) => (
-                        <option key={entry.id} value={entry.id}>
-                          {entry.label}
+                      {group.options.map((option) => (
+                        <option key={option.id} value={option.id} disabled={!option.available}>
+                          {option.label}
                         </option>
                       ))}
                     </optgroup>
@@ -572,17 +544,12 @@ export function NewTaskDialog({
             </div>
           </FormSection>
 
-          <FormSection
-            title={t("automation.sectionDelivery")}
-            description={t("automation.sectionAdvancedHint")}
-          >
+          <FormSection title={t("automation.sectionDelivery")} description={t("automation.sectionAdvancedHint")}>
             <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <span className="text-sm font-medium text-foreground">{t("automation.fieldLark")}</span>
-                  <p className="mt-0.5 text-xs leading-4 text-muted-foreground">
-                    {t("automation.larkOffHint")}
-                  </p>
+                  <p className="mt-0.5 text-xs leading-4 text-muted-foreground">{t("automation.larkOffHint")}</p>
                 </div>
                 <Switch
                   id="automation-lark-push"
@@ -653,9 +620,7 @@ export function NewTaskDialog({
                         <div className="truncate text-xs font-medium text-foreground">
                           {t("automation.larkSelfTarget", { name: selfTarget.name })}
                         </div>
-                        <div className="truncate font-mono text-[10px] text-muted-foreground">
-                          {selfTarget.id}
-                        </div>
+                        <div className="truncate font-mono text-[10px] text-muted-foreground">{selfTarget.id}</div>
                       </div>
                       {/* 默认收件人已经在列表里了就不再摆一个灰掉的按钮。 */}
                       {!form.larkTargets.some((entry) => entry.id === selfTarget.id) && (
@@ -679,9 +644,7 @@ export function NewTaskDialog({
                     </div>
                   )}
                   <div className="flex flex-col gap-1.5">
-                    <span className="text-xs font-medium text-foreground/80">
-                      {t("automation.fieldLarkTargets")}
-                    </span>
+                    <span className="text-xs font-medium text-foreground/80">{t("automation.fieldLarkTargets")}</span>
                     <LarkTargetPicker
                       targets={form.larkTargets}
                       onChange={(next) => patch({ larkTargets: next })}
@@ -695,13 +658,17 @@ export function NewTaskDialog({
               )}
             </div>
           </FormSection>
-
         </form>
         <DialogFooter className="shrink-0 gap-2 border-t border-border/60 bg-muted/10 px-4 py-3 sm:px-6 sm:py-4">
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             {t("actions.cancel")}
           </Button>
-          <Button type="submit" form="automation-task-form" disabled={!canSubmit} className={cn(!canSubmit && "opacity-50")}>
+          <Button
+            type="submit"
+            form="automation-task-form"
+            disabled={!canSubmit}
+            className={cn(!canSubmit && "opacity-50")}
+          >
             {t("actions.confirm")}
           </Button>
         </DialogFooter>

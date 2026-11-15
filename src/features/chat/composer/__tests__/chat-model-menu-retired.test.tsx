@@ -53,12 +53,7 @@ function renderMenu(served: string[]): void {
   const host = { t: (key: string) => key, reportError: vi.fn() }
   render(
     <ConversationProvider host={host as never} client={client as never}>
-      <ModelMenu
-        {...chatModelMenu}
-        sessionId="s1"
-        options={sessionOptions(served) as never}
-        disabled={false}
-      />
+      <ModelMenu {...chatModelMenu} sessionId="s1" options={sessionOptions(served) as never} disabled={false} />
     </ConversationProvider>
   )
 }
@@ -66,21 +61,41 @@ function renderMenu(served: string[]): void {
 /** Rows the open menu actually renders, in order. */
 async function offeredRows(): Promise<string[]> {
   await userEvent.click(screen.getByTestId("model-trigger"))
-  await waitFor(() => expect(document.querySelectorAll("[data-slot='dropdown-menu-radio-item']").length).toBeGreaterThan(0))
+  await waitFor(() =>
+    expect(document.querySelectorAll("[data-slot='dropdown-menu-radio-item']").length).toBeGreaterThan(0)
+  )
   return [...document.querySelectorAll("[data-slot='dropdown-menu-radio-item']")].map(
     (item) => item.textContent?.trim() ?? ""
   )
 }
 
-test("the dialog's model menu keeps a saved model the engine stopped serving, with a hint", async () => {
+test("the dialog's model menu keeps an enabled model the recommended subset omitted, with no hint", async () => {
   saved.rows = [row("gpt-6.1-sol", "6.1 Sol"), row("gpt-6.1-terra", "6.1 Terra")]
   renderMenu(["gpt-6.1-sol"])
 
-  // Still one request-free list; the row is present and labelled as possibly unavailable.
+  // v1.0.3：会话 picker 只是推荐子集，没列出 Terra 不代表不可用。四处统一由
+  // 「供应商与可用模型」shortlist 给出候选，且不再有「可能不可用 / 星号别名」这类私有标记。
   const rows = await offeredRows()
   expect(rows[0]).toBe("6.1 Sol")
-  expect(rows[1]).toContain("6.1 Terra")
-  expect(rows[1]).toContain("may be unavailable")
+  expect(rows[1]).toBe("6.1 Terra")
+  expect(rows.join(" ")).not.toContain("may be unavailable")
+  expect(rows.join(" ")).not.toContain("*")
+})
+
+test("回归：4 个已启用 GPT 在推荐子集只列 2 个时，聊天下拉仍全部可选且无提示", async () => {
+  const four = [
+    row("gpt-6-astra", "6 Astra"),
+    row("gpt-6.1-sol", "6.1 Sol"),
+    row("gpt-6.1-terra", "6.1 Terra"),
+    row("gpt-6-luna", "6 Luna")
+  ]
+  saved.rows = four
+  renderMenu(["gpt-6-astra", "gpt-6.1-sol"])
+
+  const rows = await offeredRows()
+  expect(rows).toEqual(["6 Astra", "6.1 Sol", "6.1 Terra", "6 Luna"])
+  expect(rows.join(" ")).not.toContain("may be unavailable")
+  expect(rows.join(" ")).not.toContain("*")
 })
 
 test("the same row returns as soon as the engine lists it again", async () => {

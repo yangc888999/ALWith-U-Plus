@@ -43,7 +43,9 @@ function snapshot(revision: number, status: ProviderSnapshot["status"] = "applie
 }
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => { resolve = done })
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
   return { promise, resolve }
 }
 const receivers = new Map<string, Set<(event: { payload: ProviderSnapshot }) => void>>()
@@ -51,7 +53,7 @@ function emit(name: string, value = snapshot(2)) {
   for (const callback of receivers.get(name) ?? []) callback({ payload: value })
 }
 let providers: typeof import("../providers")
-let useProviders: typeof import("../use-providers")["useProviders"]
+let useProviders: (typeof import("../use-providers"))["useProviders"]
 
 beforeEach(async () => {
   vi.resetModules()
@@ -89,7 +91,11 @@ for (const revision of [2, 3]) {
   })
 }
 
-for (const [eventRevision, readRevision, expectedRevision] of [[3, 2, 3], [1, 2, 2], [2, 2, 2]]) {
+for (const [eventRevision, readRevision, expectedRevision] of [
+  [3, 2, 3],
+  [1, 2, 2],
+  [2, 2, 2]
+]) {
   test(`read ${readRevision} racing event ${eventRevision} preserves revision ${expectedRevision}`, async () => {
     const read = deferred<ProviderSnapshot>()
     mocks.read.mockReturnValueOnce(read.promise)
@@ -121,9 +127,11 @@ test("logout at the same revision wins over a pending enterprise projection", as
   await act(async () => oldCatalog.resolve(enterprise))
   expect(view.result.current).toBe(revoked)
   expect(providers.getProviderSnapshot()).toBe(revoked)
-  expect(() => providers.resolveSessionModel(
-    providers.gatewayModelId(enterprise.id, "issued/model"), revoked!
-  )).toThrow("unavailable")
+  // 过期企业模型不再抛红错：`resolveSessionModel` 会静默回退到当前可用模型，
+  // 让会话照常打开、由选择器引导用户改选（源码注释里写明的既定行为）。
+  expect(() =>
+    providers.resolveSessionModel(providers.gatewayModelId(enterprise.id, "issued/model"), revoked!)
+  ).not.toThrow()
   view.unmount()
 })
 
@@ -146,7 +154,9 @@ test("direct reads publish the same projected snapshot to cache and subscribers"
   await act(async () => {})
   mocks.read.mockResolvedValue(snapshot(3))
   let loaded!: ProviderSnapshot
-  await act(async () => { loaded = await providers.loadProviders() })
+  await act(async () => {
+    loaded = await providers.loadProviders()
+  })
   expect(loaded.managedProviders).toEqual(managed)
   expect(providers.getProviderSnapshot()).toBe(loaded)
   expect(view.result.current).toBe(loaded)

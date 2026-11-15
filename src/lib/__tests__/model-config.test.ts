@@ -1,19 +1,19 @@
 // The one read-only answer every surface asks: which models does this app offer, and what may be
 // said about them?
 //
-// The bug that motivated this module: a surface holding a *partial* catalog (the app's bundled
-// `codex_bundled_models`, or nothing at all yet) diffed the user's saved rows against it and marked
-// a perfectly callable model 「已下架」. The rule is now stated once — only a live session's own
-// picker is authoritative — so the matrix below is the contract, not an implementation detail:
+// v1.0.2 的 bug：把 live session picker（Codex 的「推荐模型集」预设，是推荐子集而非全量目录）
+// 判为权威，与「供应商与可用模型」的 enabled shortlist 求交集，于是 6.1 Terra / 6 Luna 从
+// 默认会话模型 / 分工默认模型 / 拉会成员里消失。v1.0.3 的契约只有一条：
 //
-//   * non-authoritative  ⇒ no `withdrawnIds`, every entry `unknown`, nothing hidden;
-//   * authoritative      ⇒ the saved-minus-catalog diff, plus a separate tombstone verdict.
+//   * 只要 shortlist 非空，它就是**完整候选集**；任何引擎目录都不得裁掉一行；
+//   * `unverifiedIds` / `withdrawnIds` 恒为空；只有 provider 明确拒绝（tombstone）才表达负证据；
+//   * shortlist 为空（首启）时，引擎目录只作为初始清单。
 
 import type * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { beforeEach, expect, test } from "vitest"
 
 import { resolveModelConfig, sessionModelEntries, sessionModelGroups } from "../model-config"
-import { gatewayModelId, type CustomModel, type ProviderSnapshot } from "../providers"
+import { type CustomModel, gatewayModelId, type ProviderSnapshot } from "../providers"
 
 const SOL = "gpt-6.1-sol"
 const TERRA = "gpt-6.1-terra"
@@ -66,9 +66,7 @@ function gatewayOnlySession(): acp.SessionConfigOption[] {
       name: "Model",
       type: "select",
       currentValue: "deepseek/flash",
-      options: [
-        { groupId: "deepseek", name: "DeepSeek", options: [choice("deepseek/flash", "Flash")] }
-      ]
+      options: [{ groupId: "deepseek", name: "DeepSeek", options: [choice("deepseek/flash", "Flash")] }]
     } as unknown as acp.SessionConfigOption
   ]
 }
@@ -100,9 +98,10 @@ beforeEach(() => {
 
 // ── ready (authoritative) ────────────────────────────────────────────────────
 
-test("a live session's picker is authoritative: saved rows minus what it stopped listing", () => {
+test("a live session's recommended subset never removes an enabled model", () => {
   const result = resolveModelConfig({
     providerSnapshot: null,
+    // The engine's picker lists only Sol + Astra; Terra is enabled in 可用模型 but absent here.
     sessionOptions: sessionOptions([{ id: SOL }, { id: ASTRA }]),
     savedOverrides: [saved(SOL), saved(TERRA)],
     tombstones: new Set<string>()
@@ -110,11 +109,12 @@ test("a live session's picker is authoritative: saved rows minus what it stopped
 
   expect(result.authoritative).toBe(true)
   expect(result.status).toBe("ready")
-  expect(result.entries.map((entry) => entry.id)).toEqual([SOL])
+  // v1.0.3 根因修复：会话 picker 只是推荐子集，不能拿它裁掉已启用的 Terra。
+  expect(result.entries.map((entry) => entry.id)).toEqual([SOL, TERRA])
   expect(result.entries[0]?.status).toBe("available")
   expect(result.entries[0]?.sourceKind).toBe("session")
-  // Absence from the catalog is now "unverified", not a 已下架 verdict.
-  expect(result.unverifiedIds).toEqual([TERRA])
+  // 不再有「未验证 / 可能不可用」这类基于推荐子集的判断。
+  expect(result.unverifiedIds).toEqual([])
   expect(result.withdrawnIds).toEqual([])
 })
 
@@ -137,7 +137,7 @@ test("with no saved shortlist the authoritative catalog is the list", () => {
   })
 })
 
-test("a session without the integrated group says nothing about GPT instead of withdrawing it", () => {
+test("a session without the integrated group keeps the enabled GPT rows too", () => {
   const result = resolveModelConfig({
     providerSnapshot: null,
     sessionOptions: gatewayOnlySession(),
@@ -147,9 +147,10 @@ test("a session without the integrated group says nothing about GPT instead of w
 
   expect(result.status).toBe("unavailable")
   expect(result.authoritative).toBe(false)
-  // Neither 「已下架」 nor 「可用」: the gateway rows come from the session, the GPT rows are gone.
   expect(result.withdrawnIds).toEqual([])
-  expect(result.entries.some((entry) => entry.id === SOL)).toBe(false)
+  // 引擎这个会话没有发布 ChatGPT 组，只说明「它对 GPT 无话可说」，不能让 可用模型 里的行消失。
+  expect(result.entries.some((entry) => entry.id === SOL)).toBe(true)
+  expect(result.entries.some((entry) => entry.id === TERRA)).toBe(true)
   expect(result.entries.some((entry) => entry.id === "deepseek/flash")).toBe(true)
 })
 
@@ -222,7 +223,7 @@ test("a pending catalog with no saved shortlist offers nothing", () => {
 
 // ── unavailable ─────────────────────────────────────────────────────────────
 
-test("an engine that answered nothing does not resurrect the shortlist", () => {
+test("an engine that answered nothing cannot hide the enabled shortlist", () => {
   for (const native of [null, catalog([])]) {
     const result = resolveModelConfig({
       providerSnapshot: null,
@@ -232,7 +233,8 @@ test("an engine that answered nothing does not resurrect the shortlist", () => {
     })
 
     expect(result.status).toBe("unavailable")
-    expect(result.entries).toEqual([])
+    // list_models 超时 / 引擎没发布目录，不等于用户启用的模型下架了。
+    expect(result.entries.map((entry) => entry.id)).toEqual([SOL, TERRA])
     expect(result.withdrawnIds).toEqual([])
   }
 })
@@ -257,7 +259,7 @@ test("an empty catalog with no saved shortlist has nothing to say", () => {
 
 // ── tombstones vs withdrawals ───────────────────────────────────────────────
 
-test("a tombstone is a refusal and a withdrawal is a diff — they never contaminate each other", () => {
+test("a tombstone is a refusal, not a withdrawal — and never hides a row", () => {
   const result = resolveModelConfig({
     providerSnapshot: null,
     sessionOptions: sessionOptions([{ id: SOL }, { id: ASTRA }]),
@@ -265,12 +267,14 @@ test("a tombstone is a refusal and a withdrawal is a diff — they never contami
     tombstones: new Set<string>([SOL])
   })
 
-  // The catalog still lists Sol, so it is present but refused: 不可用, not 已下架.
+  // provider 明确拒绝过 Sol：它仍在候选集里，只是不可用（唯一的负证据）。
   expect(result.byId(SOL)?.status).toBe("unsupported")
   expect(result.byId(SOL)?.retired).toBe(true)
   expect(result.retiredIds).toEqual([SOL])
-  // Terra is gone from the catalog, so it is unverified — and it carries no tombstone.
-  expect(result.unverifiedIds).toEqual([TERRA])
+  // Terra 不在推荐子集里，但已启用，所以照样在候选集里，且没有任何「未验证」标记。
+  expect(result.byId(TERRA)).not.toBeNull()
+  expect(result.entries.map((entry) => entry.id)).toEqual([SOL, TERRA])
+  expect(result.unverifiedIds).toEqual([])
   expect(result.withdrawnIds).toEqual([])
   expect(result.retiredIds).not.toContain(TERRA)
 })
