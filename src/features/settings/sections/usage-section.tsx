@@ -263,8 +263,8 @@ function Choice<T extends string>({
 }
 
 /** One-click overview windows; the longest three stay behind the Select. */
-const QUICK_RANGES: Range[] = ["1d", "3d", "7d"]
-const SELECT_RANGES: Range[] = ["30d", "90d", "1y", "6m", "12m"]
+/** 概览与明细共用的时间档位：短区间不再单独占一排按钮，全部收进右侧下拉。 */
+const SELECT_RANGES: Range[] = ["1d", "3d", "7d", "30d", "90d", "1y", "6m", "12m"]
 
 /** Quick detail windows, in days back from today; `null` is "all the history the ledger holds". */
 const DETAIL_WINDOWS = [
@@ -1036,31 +1036,8 @@ export function UsageSection() {
     <>
       <SettingsCard
         title={t("usageReport.overview")}
-        desc={t("usageReport.compareWindow", {
-          from,
-          to,
-          previousFrom,
-          previousTo: dayBefore(from)
-        })}
         action={
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
-            {/* 今日 / 近 3 天 / 近 7 天 are one click away; the Select keeps the longer windows and
-                the custom one. */}
-            {QUICK_RANGES.map((quick) => (
-              <button
-                key={quick}
-                type="button"
-                aria-pressed={range === quick}
-                onClick={() => setRange(quick)}
-                className={`h-7 rounded-md border px-2 text-xs transition-colors ${
-                  range === quick
-                    ? "border-primary/40 bg-primary/10 text-primary"
-                    : "border-input text-muted-foreground hover:bg-muted"
-                }`}
-              >
-                {t(`usageReport.range.${quick}`)}
-              </button>
-            ))}
             {/* 调用范围：默认「全部」，只区分 ALWith L 内部调用与其它客户端的外部调用。
                 设置 → 外部调用 里关掉「统计外部调用」后，外部行整体退出统计，这里只剩两项。 */}
             <Select
@@ -1090,7 +1067,7 @@ export function UsageSection() {
               value={range}
               onValueChange={(value) => setRange(value as Range)}
             >
-              <SelectTrigger size="sm" aria-label={t("usageReport.rangeLabel")} className="w-[112px]">
+              <SelectTrigger size="sm" aria-label={t("usageReport.rangeLabel")} className="w-[128px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1112,6 +1089,15 @@ export function UsageSection() {
       >
         {report !== null && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1 text-[11px] leading-4 text-muted-foreground">
+            {/* 区间说明放在这里：卡片头部右侧是操作区，长句会被挤成两行把标题撑高。 */}
+            <span data-testid="usage-compare-window">
+              {t("usageReport.compareWindow", {
+                from,
+                to,
+                previousFrom,
+                previousTo: dayBefore(from)
+              })}
+            </span>
             {pending && <span>{t("usageReport.building")}</span>}
             {syncNote !== null && !pending && (
               <span data-testid="usage-sync-note" className="text-foreground/80">{syncNote}</span>

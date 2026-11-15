@@ -207,7 +207,7 @@ export function UsageResetBlock({ refreshToken }: { refreshToken: number }) {
         <p className="text-xs text-muted-foreground">{t("usageReport.resetCreditsEmpty")}</p>
       ) : (
         <>
-          <ul className="flex flex-col gap-1.5" data-testid="usage-reset-credits">
+          <ul className="flex flex-col gap-1" data-testid="usage-reset-credits">
             {rows.map((credit) => {
               const at = credit.expiresAtUnix
               const remaining = at === null ? null : Math.floor(at - now / 1_000)
@@ -216,10 +216,10 @@ export function UsageResetBlock({ refreshToken }: { refreshToken: number }) {
               return (
                 <li
                   key={credit.id}
-                  className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border/60 px-2.5 py-1.5"
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border/60 px-2.5 py-0.5"
                 >
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{creditTitle(credit, t)}</span>
-                  <span className="text-xs tabular-nums text-muted-foreground">
+                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{creditTitle(credit, t)}</span>
+                  <span className="text-[11px] tabular-nums text-muted-foreground">
                     {remaining === null
                       ? t("usageReport.resetCreditsNoExpiry")
                       : remaining <= 0

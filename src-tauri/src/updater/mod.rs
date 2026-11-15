@@ -383,17 +383,18 @@ impl SignatureVerifier for MinisignVerifier {
     }
 }
 
-/// Automatic checks are opt-in because this fork may point at the upstream ALwith release feed.
-/// The setting is read from the native store; a missing value means disabled.
+/// Automatic checks are on unless the user turned them off: the feed now points at this fork's own
+/// GitHub releases, so there is no upstream feed to surprise anyone with. A missing value means on;
+/// an explicit `false` keeps the old manual-only behaviour.
 pub fn auto_update_enabled(app: &AppHandle) -> bool {
     use tauri::Manager;
     app.try_state::<crate::settings::SharedSettings>()
         .and_then(|settings| {
             settings.0.lock().ok().map(|store| {
-                store.values.get("updater.autoUpdate").and_then(serde_json::Value::as_bool).unwrap_or(false)
+                store.values.get("updater.autoUpdate").and_then(serde_json::Value::as_bool).unwrap_or(true)
             })
         })
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 /// Wires the service into the app: state changes reach the webview as `updater:state`; startup

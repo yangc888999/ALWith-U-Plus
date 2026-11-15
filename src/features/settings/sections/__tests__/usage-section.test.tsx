@@ -181,14 +181,24 @@ test("the pie carries a legend centred below the chart", async () => {
   expect(legend?.textContent).toContain("kimi-k2.6")
 })
 
+/** 概览的时间档位已收进右侧下拉（今日 / 近 3 天 / 近 7 天 也在其中）。 */
+async function chooseOverviewRange(label: string): Promise<void> {
+  fireEvent.click(screen.getByRole("combobox", { name: "usageReport.rangeLabel" }))
+  const option = await screen.findByRole("option", { name: label })
+  fireEvent.pointerDown(option, { pointerType: "mouse" })
+  fireEvent.click(option)
+}
+
 test("choosing 今日 restores the model / Token / pie defaults", async () => {
   render(<UsageSection />)
   await waitForStagedCards()
   // Change the chart by hand, then pick 今日: the daily-composition default comes back.
   fireEvent.click(screen.getByRole("button", { name: "usageReport.chartLine" }))
   expect(screen.getByRole("button", { name: "usageReport.chartLine" })).toHaveAttribute("aria-pressed", "true")
-  fireEvent.click(screen.getByRole("button", { name: "usageReport.range.1d" }))
-  expect(screen.getByRole("button", { name: "usageReport.chartPie" })).toHaveAttribute("aria-pressed", "true")
+  await chooseOverviewRange("usageReport.range.1d")
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "usageReport.chartPie" })).toHaveAttribute("aria-pressed", "true")
+  )
   expect(screen.getByRole("combobox", { name: "usageReport.group" })).toHaveTextContent("usageReport.byModel")
   expect(screen.getByRole("combobox", { name: "usageReport.metric" })).toHaveTextContent("usageReport.metricTokens")
 })
@@ -478,7 +488,7 @@ test("a call filed under yesterday's UTC day still counts as today, in 分析 an
   await waitForStagedCards()
 
   // 分析 reuses the overview range; on "今日" it must still have a point to draw.
-  fireEvent.click(screen.getByRole("button", { name: "usageReport.range.1d" }))
+  await chooseOverviewRange("usageReport.range.1d")
   expect(screen.getByText("usageReport.analysis")).toBeInTheDocument()
 
   // The log's own "今日" window and a custom date of today must keep the same call.
