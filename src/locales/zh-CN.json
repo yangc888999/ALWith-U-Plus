@@ -1444,7 +1444,9 @@
     "relaunchConfirmDesc": "应用将关闭并重新启动以应用更新。",
     "relaunchNow": "立即重启",
     "relaunchLater": "稍后更新",
-    "install": "重新启动以更新"
+    "install": "重新启动以更新",
+    "dismiss": "关闭更新提醒",
+    "updateHint": "点击查看并安装更新"
   },
   "plugins": {
     "error": {

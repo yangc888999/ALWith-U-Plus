@@ -505,6 +505,9 @@ function RoleEditor({
               onChange={(event) => onChange({ model: event.target.value, effort: null })}
             >
               {models.length === 0 && <option value="">{t("groups.noModels")}</option>}
+              {models.length > 0 && !models.some((model) => model.id === role.model) && (
+                <option value="">{t("groups.noModels")}</option>
+              )}
               {models.map((model) => (
                 <option key={model.id} value={model.id}>
                   {model.label}

@@ -454,6 +454,8 @@ test.each(["gateway:litellm:old", "gateway:finture-enterprise:old"])(
     expect(resolveSessionModel(model, snapshot, "draft")).toBe(
       gatewayModelId("deepseek", PROVIDERS.find((provider) => provider.id === "deepseek")!.models[0]!.id)
     )
-    expect(() => resolveSessionModel(model, snapshot)).toThrow(/unavailable/i)
+    expect(resolveSessionModel(model, snapshot)).toBe(
+      gatewayModelId("deepseek", PROVIDERS.find((provider) => provider.id === "deepseek")!.models[0]!.id)
+    )
   }
 )

@@ -43,8 +43,8 @@ test("ready card displays the version and opens the existing confirmation", asyn
   const confirm = vi.fn<() => Promise<void>>().mockResolvedValue()
   useUpdaterStore.setState({ state: { type: "ready", update }, confirmInstallAndRelaunch: confirm })
   const view = render(<UpdateStatusButton />)
-  expect(view.getByText("v0.2.5")).toBeInTheDocument()
-  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: /Relaunch to update/ }))))
+  expect(view.getByText(/v0.2.5/)).toBeInTheDocument()
+  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: /Click to review and install|Install/ }))))
   expect(confirm).toHaveBeenCalledOnce()
 })
 
@@ -55,7 +55,7 @@ test("reports installation errors", async () => {
     confirmInstallAndRelaunch: vi.fn<() => Promise<void>>().mockRejectedValue(new Error("Install failed"))
   })
   const view = render(<UpdateStatusButton />)
-  fireEvent.click(view.getByRole("button"))
+  fireEvent.click(view.getAllByRole("button").find((button) => button.textContent?.includes("v0.2.5"))!)
   await waitFor(() => expect(error).toHaveBeenCalledWith("Install failed"))
 })
 

@@ -1,8 +1,6 @@
-import { ArrowRightIcon, LoaderCircleIcon, RocketIcon } from "lucide-react"
+import { ArrowRightIcon, LoaderCircleIcon, RocketIcon, XIcon } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
-
-import { Button } from "@/components/ui/button"
 
 import { useUpdaterStore } from "../store"
 
@@ -57,24 +55,32 @@ export function UpdateStatusButton() {
 
   if (state.type !== "ready") return null
 
+  const install = () => {
+    void confirmInstallAndRelaunch().catch((error: unknown) =>
+      toast.error(error instanceof Error ? error.message : String(error))
+    )
+  }
   return (
-    <Button
-      variant="outline"
-      onClick={() => {
-        void confirmInstallAndRelaunch().catch((error: unknown) =>
-          toast.error(error instanceof Error ? error.message : String(error))
-        )
-      }}
-      className="h-12 w-full justify-start gap-2 rounded-xl bg-card p-2 shadow-lg hover:bg-card dark:bg-card dark:hover:bg-card"
-    >
-      <span className="flex size-8 shrink-0 items-center justify-center">
-        <RocketIcon className="size-6" />
-      </span>
-      <span className="min-w-0 flex-1 truncate text-start">
-        <span className="block truncate text-sm font-medium text-foreground">{t("updater.install")}</span>
-        <span className="block truncate text-xs font-normal text-muted-foreground">v{state.update.version}</span>
-      </span>
-      <ArrowRightIcon className="size-4 shrink-0 text-muted-foreground rtl:-scale-x-100" />
-    </Button>
+    <div className="relative w-full rounded-xl border border-primary/25 bg-primary/5 px-3 py-2 shadow-sm">
+      <button
+        type="button"
+        aria-label={t("updater.dismiss")}
+        className="absolute right-1 top-1 flex size-6 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+        onClick={(event) => {
+          event.stopPropagation()
+          useUpdaterStore.setState({ state: { type: "idle" } })
+        }}
+      >
+        <XIcon className="size-3.5" aria-hidden="true" />
+      </button>
+      <button type="button" className="flex w-full items-start gap-2 pr-5 text-left" onClick={install}>
+        <RocketIcon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+        <span className="min-w-0 flex-1">
+          <span className="block text-xs font-semibold text-foreground">{t("updater.install")} v{state.update.version}</span>
+          <span className="mt-0.5 block text-[11px] text-muted-foreground">{t("updater.updateHint")}</span>
+        </span>
+        <ArrowRightIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground rtl:-scale-x-100" aria-hidden="true" />
+      </button>
+    </div>
   )
 }

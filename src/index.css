@@ -1517,6 +1517,17 @@ body > div:has(> [data-slot="dialog-overlay"]) > * {
   min-height: var(--composer-input-height, 2.5rem);
   max-height: var(--composer-input-height, none);
   overflow-y: auto;
+  /* The shared textarea primitive carries a visible form border. The composer already has its
+     rounded shell; a second rectangle inside it is the large black frame seen in screenshots. */
+  border: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+[data-composer] .alwith-composer-textarea:focus-visible {
+  border: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
 }
 
 /* A revoked account model used to pin the textarea to one row and hide its resize grip here. It is

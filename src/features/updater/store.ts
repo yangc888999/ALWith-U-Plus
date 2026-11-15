@@ -1,6 +1,6 @@
 // Mirrors the Rust updater state machine into React. Checking and downloading are silent
-// (Rust downloads a hit straight away); the only prompt is the native relaunch question once
-// an update is ready, asked once per version. Ported from ALwith Desktop.
+// (Rust downloads a hit straight away). When an update is ready, the main window shows a small
+// banner; only clicking that banner opens the native relaunch question. Ported from ALwith Desktop.
 
 import { ask } from "@tauri-apps/plugin-dialog"
 import i18n from "i18next"
@@ -28,17 +28,15 @@ export interface UpdaterStore {
 }
 
 export function createUpdaterStore(io: UpdaterIo) {
-  const promptedReadyVersions = new Set<string>()
-
   async function confirmInstallAndRelaunch(): Promise<void> {
     if (!(await io.askRelaunch())) return
     await io.installAndRelaunch()
   }
 
   async function promptReadyUpdate(state: UpdaterState): Promise<void> {
-    if (state.type !== "ready" || promptedReadyVersions.has(state.update.version)) return
-    promptedReadyVersions.add(state.update.version)
-    await confirmInstallAndRelaunch()
+    // Do not force a dialog on startup. The ready state is rendered by the update banner; the
+    // dialog is opened only from its explicit click handler below.
+    if (state.type !== "ready") return
   }
 
   return create<UpdaterStore>()((set, get) => ({

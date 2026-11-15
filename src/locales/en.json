@@ -1444,7 +1444,9 @@
     "relaunchConfirmDesc": "The app will close and restart to apply the update.",
     "relaunchNow": "Relaunch now",
     "relaunchLater": "Update later",
-    "install": "Relaunch to update"
+    "install": "Relaunch to update",
+    "dismiss": "Dismiss update",
+    "updateHint": "Click to review and install"
   },
   "plugins": {
     "error": {

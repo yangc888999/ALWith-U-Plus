@@ -287,8 +287,10 @@ export function resolveSessionModel(
     if (migrated) return migrated
   }
   if (model !== null && (!model.startsWith("gateway:") || models.includes(model))) return model
-  if (isAccountModel(model) && purpose === "session")
-    throw new Error("The selected ALwith account model is unavailable. Select another model before sending.")
+  // A stale enterprise selection must not block opening the conversation or composing a new turn.
+  // The picker will let the user choose another currently available model; only return the normal
+  // fallback here instead of throwing a red error before the composer can render.
+  if (isAccountModel(model) && purpose === "session") return models[0] ?? null
   return models.find((entry) => entry === gatewayModelId(DEFAULT_PROVIDER_ID, DEFAULT_MODEL_ID)) ?? models[0] ?? null
 }
 
