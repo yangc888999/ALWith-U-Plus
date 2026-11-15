@@ -33,16 +33,10 @@ export function createUpdaterStore(io: UpdaterIo) {
     await io.installAndRelaunch()
   }
 
-  async function promptReadyUpdate(state: UpdaterState): Promise<void> {
-    // Do not force a dialog on startup. The ready state is rendered by the update banner; the
-    // dialog is opened only from its explicit click handler below.
-    if (state.type !== "ready") return
-  }
-
   return create<UpdaterStore>()((set, get) => ({
     state: { type: "uninitialized" },
     initialized: false,
-    init: async (autoPrompt = true) => {
+    init: async (_autoPrompt = true) => {
       if (get().initialized) return
       set({ initialized: true })
       let receivedEvent = false
@@ -51,7 +45,6 @@ export function createUpdaterStore(io: UpdaterIo) {
         unsubscribe = await io.onStateChange((state) => {
           receivedEvent = true
           set({ state })
-          if (autoPrompt) void promptReadyUpdate(state)
         })
         const initial = await io.getState()
         // An event arriving during the request must not be overwritten by its snapshot.
@@ -61,7 +54,6 @@ export function createUpdaterStore(io: UpdaterIo) {
         set({ initialized: false })
         throw error
       }
-      if (autoPrompt) await promptReadyUpdate(get().state)
     },
     confirmInstallAndRelaunch
   }))
