@@ -21,16 +21,13 @@ export function AutoUpdateRow({ compact = false }: { compact?: boolean }) {
       compact={compact}
       title={t("settings.autoUpdate")}
       desc={
-        <span className="inline-flex flex-wrap items-center gap-1">
-          <span>{t("settings.autoUpdateDesc")}</span>
-          <button
-            type="button"
-            className="font-medium text-primary underline underline-offset-2 hover:text-primary/80"
-            onClick={() => void openExternal(PROJECT_URL).catch(() => undefined)}
-          >
-            GitHub 项目地址
-          </button>
-        </span>
+        <button
+          type="button"
+          className="text-left text-muted-foreground transition-colors hover:text-foreground"
+          onClick={() => void openExternal(PROJECT_URL).catch(() => undefined)}
+        >
+          {t("settings.autoUpdateDesc")}
+        </button>
       }
     >
       <Switch
