@@ -32,7 +32,7 @@ function fixture() {
         return {
           type: "snapshot",
           data: {
-            version: 1,
+            version: 2,
             generation: state.generation,
             sequence: 0,
             configured: state.configured,

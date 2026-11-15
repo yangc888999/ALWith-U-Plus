@@ -63,7 +63,7 @@ dependencies = [
 name = "alwith-computer"
 version = "0.1.4"
 dependencies = [
- "alwith-native-client",
+ "alwith-native-client 0.1.0",
  "serde",
  "serde_json",
  "specta",
@@ -71,12 +71,15 @@ dependencies = [
 
 [[package]]
 name = "alwith-drive"
-version = "0.1.1"
+version = "0.6.2"
 dependencies = [
- "alwith-native-client",
+ "alwith-native-client 0.6.1",
  "serde",
  "serde_json",
  "specta",
+ "tauri",
+ "tauri-plugin",
+ "tauri3-specta",
  "tokio",
 ]
 
@@ -84,7 +87,7 @@ dependencies = [
 name = "alwith-enterprise-client"
 version = "0.6.2"
 dependencies = [
- "alwith-native-client",
+ "alwith-native-client 0.1.0",
  "serde",
  "serde_json",
  "tokio",
@@ -94,7 +97,7 @@ dependencies = [
 name = "alwith-extension"
 version = "0.1.0-rc.19"
 dependencies = [
- "alwith-native-client",
+ "alwith-native-client 0.1.0",
  "percent-encoding",
  "schemars 1.2.3",
  "serde",
@@ -112,7 +115,7 @@ dependencies = [
 name = "alwith-fs"
 version = "0.1.0-rc.7"
 dependencies = [
- "alwith-native-client",
+ "alwith-native-client 0.1.0",
  "serde",
  "serde_json",
 ]
@@ -121,7 +124,7 @@ dependencies = [
 name = "alwith-gamepad"
 version = "0.1.0-rc.3"
 dependencies = [
- "alwith-native-client",
+ "alwith-native-client 0.1.0",
  "serde",
  "serde_json",
  "specta",
@@ -131,7 +134,7 @@ dependencies = [
 name = "alwith-mobile"
 version = "0.1.0"
 dependencies = [
- "alwith-native-client",
+ "alwith-native-client 0.1.0",
  "serde",
  "serde_json",
  "specta",
@@ -163,8 +166,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "alwith-native-client"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4bc1baa4e2a7e3ee14bae81db0df0fa5c13956208f7169957acd41805b0b3fa6"
+dependencies = [
+ "libloading",
+ "serde",
+ "serde_json",
+ "specta",
+ "specta-typescript",
+ "tokio",
+]
+
+[[package]]
 name = "alwith-u"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "alwith-api",
  "alwith-browser",
@@ -176,7 +193,7 @@ dependencies = [
  "alwith-gamepad",
  "alwith-mobile",
  "alwith-module-store",
- "alwith-native-client",
+ "alwith-native-client 0.1.0",
  "alwith-voice",
  "atlas-tauri",
  "base64 0.23.1",
@@ -235,7 +252,7 @@ dependencies = [
 name = "alwith-voice"
 version = "0.1.0-rc.12"
 dependencies = [
- "alwith-native-client",
+ "alwith-native-client 0.1.0",
  "serde",
  "serde_json",
  "specta",
@@ -5603,9 +5620,9 @@ dependencies = [
 
 [[package]]
 name = "tauri3-specta"
-version = "0.1.0-alpha.3"
+version = "0.1.0-alpha.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc1614f0e15187871a6339e2241fb0e7f6d665cf84f7b34c06969ac3496b4d2d"
+checksum = "158cb5aa9f22760ca20442655164d5c1128529010899dc873c7f05d8dbe57d34"
 dependencies = [
  "heck 0.5.0",
  "serde",

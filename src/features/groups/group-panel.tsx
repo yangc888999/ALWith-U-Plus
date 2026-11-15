@@ -11,6 +11,7 @@ import {
   EllipsisIcon,
   FileTextIcon,
   FolderOpenIcon,
+  Loader2Icon,
   MessageSquarePlusIcon,
   MessagesSquareIcon,
   PlusIcon
@@ -70,6 +71,21 @@ export function GroupPanel({
   const [editing, setEditing] = useState<GroupConfig | null>(null)
   const [documentGroup, setDocumentGroup] = useState<GroupConfig | null>(null)
   const [removing, setRemoving] = useState<GroupConfig | null>(null)
+  // The meetings whose 新开一场 is still in flight, keyed by group id. Without this the folder-less
+  // branch of startNew could fire several concurrent groupDirectoryCreate calls (and several
+  // enters) from repeated clicks on the button or the sessions menu. The ref is what the click
+  // guard reads — synchronously, before the re-render lands — while the state mirrors it for the
+  // disabled/spinner UI. A Set, not a single id, so two cards can open independently without
+  // either one's `finally` unlocking the other.
+  const startingRef = useRef<Set<string>>(new Set())
+  const [startingIds, setStartingIds] = useState<ReadonlySet<string>>(startingRef.current)
+  const markStarting = (id: string, on: boolean): void => {
+    const next = new Set(startingRef.current)
+    if (on) next.add(id)
+    else next.delete(id)
+    startingRef.current = next
+    setStartingIds(next)
+  }
 
   // Heal records the retired settings-page "attach" flow left pinned to a PARENT folder (often
   // `groups/` itself): the meeting's conversations live in `<parent>/<会议名>/`, so the record must
@@ -156,13 +172,19 @@ export function GroupPanel({
   /**
    * 新开一场, from either button. A meeting whose folder was never materialised gets it created on
    * click — the primary action must not be greyed out with a hint to detour into settings.
+   *
+   * The create path is async, so both entry points lock the card (see `startingIds`): a second
+   * click while the folder is still being made used to launch a concurrent `groupDirectoryCreate`
+   * and a second enter, which raced two writers over the same meeting folder.
    */
   const startNew = (group: GroupConfig): void => {
+    if (startingRef.current.has(group.id)) return
     if (group.directory !== "") {
       enter(group.directory, group.id)
       return
     }
     if (group.name.trim() === "") return
+    markStarting(group.id, true)
     void commands
       .groupDirectoryCreate({
         name: group.name.trim(),
@@ -175,6 +197,7 @@ export function GroupPanel({
         enter(created.directory, group.id)
       })
       .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))
+      .finally(() => markStarting(group.id, false))
   }
 
   return (
@@ -205,6 +228,7 @@ export function GroupPanel({
             const sessions = sessionsOf(group)
             const latest = sessions[0]
             const members = group.roles.map((id) => groupRoleFor(id)).filter((role) => role !== null)
+            const starting = startingIds.has(group.id)
             return (
               <div key={group.id} className="rounded-lg border border-border/60 bg-muted/20 px-2 py-1.5">
                 <div className="flex items-center gap-1">
@@ -250,9 +274,13 @@ export function GroupPanel({
                           </DropdownMenuItem>
                         ))}
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => startNew(group)}>
-                          <MessageSquarePlusIcon className="size-3.5" />
-                          {t("groups.panelNew")}
+                        <DropdownMenuItem disabled={starting} onClick={() => startNew(group)}>
+                          {starting ? (
+                            <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <MessageSquarePlusIcon className="size-3.5" />
+                          )}
+                          {t(starting ? "groups.panelOpening" : "groups.panelNew")}
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => setEditing(group)}>
                           <FileTextIcon className="size-3.5" />
@@ -323,12 +351,18 @@ export function GroupPanel({
                     className="h-6 px-1.5 text-[11px]"
                     // A meeting without a folder cannot be entered; the design says the primary
                     // action is 新开一场, so the folder is materialised on click instead of the
-                    // button being greyed out with a hint to detour into settings.
-                    disabled={group.directory === "" && group.name.trim() === ""}
+                    // button being greyed out with a hint to detour into settings. While that
+                    // create is in flight the card is locked (see `startingIds`) so a second click
+                    // cannot race a concurrent create or a double enter.
+                    disabled={starting || (group.directory === "" && group.name.trim() === "")}
                     onClick={() => startNew(group)}
                   >
-                    <MessageSquarePlusIcon className="size-3" />
-                    {t("groups.panelNew")}
+                    {starting ? (
+                      <Loader2Icon className="size-3 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <MessageSquarePlusIcon className="size-3" />
+                    )}
+                    {t(starting ? "groups.panelOpening" : "groups.panelNew")}
                   </Button>
                 </div>
               </div>

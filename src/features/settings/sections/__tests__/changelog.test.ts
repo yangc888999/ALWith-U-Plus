@@ -9,13 +9,13 @@ test("every released version in CHANGELOG.md reaches the update-log dialog", () 
   const versions = groups.map((group) => group.version)
   // The newest version leads, and the history readers asked for is actually present — including
   // 0.3.7, which the locale list had already dropped.
-  expect(versions[0]).toBe("0.4.3")
+  expect(versions[0]).toBe("0.4.4")
   for (const version of ["0.3.8", "0.3.7", "0.3.6", "0.3.5", "0.3.4", "0.2.29"]) {
     expect(versions).toContain(version)
   }
   // Bullets keep their text but lose the list punctuation the changelog uses.
   const newest = groups[0]
-  expect(newest.items[0]).toContain("主题色")
+  expect(newest.items[0]).toContain("云盘")
   expect(versions).toContain("0.4.2")
 })
 

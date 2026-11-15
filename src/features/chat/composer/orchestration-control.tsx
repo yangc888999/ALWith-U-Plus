@@ -24,6 +24,7 @@ import {
 import { pendingPlanFor, subscribePendingPlan } from "@/lib/pending-plan"
 import { nativeCatalogStatus, nativeModelOverrides, servedNativeRows } from "@/lib/providers"
 import {
+  orchestrationAllowedFor,
   orchestrationFor,
   setOrchestration,
   subscribeOrchestration,
@@ -202,7 +203,12 @@ export function OrchestrationControl({ session }: { session: Session }): ReactNo
   }, [issue, orchestration, session.id])
 
   // The floating window projects the main conversation and does not own the plan/execute flow.
+  // A group discussion and a quick chat are refused for a stronger reason (see
+  // `orchestrationAllowedFor`): the composer already hides this control there, and the client's
+  // runtime gate ignores a stored split in those conversations, so rendering anything here would
+  // promise a flow the send path will not run.
   if (client instanceof RemoteChatClient || choices.length < 2) return null
+  if (!orchestrationAllowedFor(session.cwd)) return null
 
   const execute = (): void => {
     setExecuting(true)

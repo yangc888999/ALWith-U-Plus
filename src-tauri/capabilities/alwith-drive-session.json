@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "alwith-drive-session",
+  "description": "Main window only: Drive session credentials (MCP and collaboration)",
+  "windows": ["main"],
+  "permissions": ["alwith-drive:allow-session-request"]
+}

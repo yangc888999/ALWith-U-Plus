@@ -13,8 +13,8 @@ pub fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 pub fn is_closing(app: &tauri::AppHandle) -> bool {
-    // Native window notifications may arrive before setup has installed DriveState.
-    app.try_state::<crate::drive::DriveState>().is_some_and(|state| state.is_closing())
+    // Native window notifications may arrive before setup has installed the Drive plugin's state.
+    app.try_state::<alwith_drive::Drive>().is_some_and(|state| state.is_closing())
         || app.state::<crate::runtime::RuntimeState>().is_closing()
 }
 

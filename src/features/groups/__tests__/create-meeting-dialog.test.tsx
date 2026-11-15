@@ -78,6 +78,47 @@ test("submit is blocked until a name exists; opening prefills the suggested rost
   expect(screen.getByText("groups.roleSummarizerBadge")).toBeTruthy()
 })
 
+// Regression: a pure-emoji / pure-punctuation name trims to non-empty but the folder slug is
+// empty, which used to still pass canSubmit and degrade the path preview. The slug — not the raw
+// string — decides whether the submit is legal, and the field says why it is blocked.
+test("a name that slugifies to nothing blocks submit with an inline error", async () => {
+  seedRoles()
+  const user = userEvent.setup()
+  render(<CreateMeetingDialog open group={null} onClose={() => undefined} onCreated={() => undefined} />)
+  await user.type(screen.getByPlaceholderText("groups.createNamePlaceholder"), "🎉🎉✨")
+  const submit = screen.getByText("groups.createSubmit").closest("button")
+  expect(submit?.disabled).toBe(true)
+  expect(await screen.findByText("groups.createNameNoSlug")).toBeTruthy()
+  expect(native.commands.groupDirectoryCreate).not.toHaveBeenCalled()
+})
+
+test("a normal name keeps the submit path unchanged: no inline error, folder preview slugged", async () => {
+  seedRoles()
+  const user = userEvent.setup()
+  render(<CreateMeetingDialog open group={null} onClose={() => undefined} onCreated={() => undefined} />)
+  await user.type(screen.getByPlaceholderText("groups.createNamePlaceholder"), "Q4 定价")
+  expect(screen.queryByText("groups.createNameNoSlug")).toBeNull()
+  expect(screen.getByText("groups.createSubmit").closest("button")?.disabled).toBe(false)
+  // Emoji plus real characters still slug fine: the symbols drop, the letters survive, no error.
+  await user.clear(screen.getByPlaceholderText("groups.createNamePlaceholder"))
+  await user.type(screen.getByPlaceholderText("groups.createNamePlaceholder"), "🚀 冲刺")
+  expect(screen.queryByText("groups.createNameNoSlug")).toBeNull()
+  expect(screen.getByText("groups.createSubmit").closest("button")?.disabled).toBe(false)
+  expect(screen.getByText("groups.createFolderTarget", { exact: false }).textContent).toContain(
+    "~/Documents/ALWith/groups/冲刺"
+  )
+})
+
+test("an empty name keeps submit disabled without the slug error (empty is the hint's job)", async () => {
+  seedRoles()
+  const user = userEvent.setup()
+  render(<CreateMeetingDialog open group={null} onClose={() => undefined} onCreated={() => undefined} />)
+  await user.type(screen.getByPlaceholderText("groups.createNamePlaceholder"), "🎉")
+  await user.clear(screen.getByPlaceholderText("groups.createNamePlaceholder"))
+  expect(screen.queryByText("groups.createNameNoSlug")).toBeNull()
+  expect(screen.getByText("groups.createSubmit").closest("button")?.disabled).toBe(true)
+})
+
 test("the happy path creates the folder, stores focus and materials, then enters", async () => {
   seedRoles()
   const user = userEvent.setup()

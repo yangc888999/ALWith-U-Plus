@@ -10,7 +10,7 @@ afterEach(cleanup)
 test("settings connection failure can retry through progress into the login form", async () => {
   const ready = Promise.withResolvers<DriveResponse>()
   const snapshot: Snapshot = {
-    version: 1,
+    version: 2,
     generation: 1,
     sequence: 0,
     configured: false,

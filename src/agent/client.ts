@@ -83,7 +83,7 @@ import { groupByDirectory } from "@/lib/groups"
 import { isModelRetired, retireModel, reviveModel } from "@/lib/retired-models"
 import { beginQueuedPrompt, cancelQueuedPrompt, endQueuedPrompt, QueueCancelledError } from "@/lib/queued-prompt"
 import { sandboxAllows, sandboxCapabilities, sandboxMode, sandboxSettings } from "@/lib/sandbox-preference"
-import { orchestrationFor, type SessionOrchestration } from "@/lib/session-orchestration"
+import { orchestrationAllowedFor, orchestrationFor, type SessionOrchestration } from "@/lib/session-orchestration"
 
 import { forkTitle } from "./fork-title"
 import {
@@ -1771,8 +1771,18 @@ export class CodexClient extends CodexAcpClient<AppState> {
     const repair = this.ensureRunnableConfig(id)
     if (repair !== null) await repair
     const orchestration = orchestrationFor(id)
+    // 分工 and 拉会 are mutually exclusive, and this gate — not the composer — is what enforces it.
+    // A group conversation runs its roster by switching the shared session's model once per
+    // speaker; the split would switch that same model again per role inside one turn, leaving two
+    // orchestrators writing one selection with no defined outcome. A quick-chat folder renders no
+    // 分工 control at all, so a plan produced there could never be approved — the "dead plan" path.
+    // Both fall through to an ordinary prompt here: the stored record is the user's configuration
+    // and stays untouched, it is only ignored. `runGroupDiscussion` drives its roster through
+    // `promptWithTimeout` directly, so a group discussion is never blocked by this.
+    const mayOrchestrate = orchestrationAllowedFor(this.holds(id) ? this.session(id).cwd : undefined)
     if (
       orchestration !== null &&
+      mayOrchestrate &&
       !this.orchestrating.has(id) &&
       prompt.some((block) => block.type === "text" && typeof block.text === "string" && block.text.trim() !== "")
     )

@@ -12,7 +12,7 @@ vi.mock("sonner", () => ({ toast: { success: mocks.success } }))
 import { drive, driveRequestTimeoutMs } from "../controller"
 
 const snapshot: Snapshot = {
-  version: 1,
+  version: 2,
   generation: 1,
   sequence: 0,
   configured: true,

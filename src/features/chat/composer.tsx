@@ -23,6 +23,7 @@ import { ActivePreviewChip } from "@/features/workspace/active-preview-chip"
 import { client } from "@/lib/client"
 import { groupByDirectory } from "@/lib/groups"
 import { isTemporaryChatDir } from "@/lib/quick-chat"
+import { orchestrationAllowedFor } from "@/lib/session-orchestration"
 import { useHandoffBusy } from "@/lib/use-surface-operation"
 
 import {
@@ -352,11 +353,15 @@ export function ChatComposer({
                     <TurnProgressBar session={props.session} />
                   </div>
                 )}
-                {/* 分工 belongs to projects: a chat is a throwaway conversation with no plan/execute
-                    flow. `groupByDirectory` is the same test the sidebar groups use. */}
+                {/* 分工 belongs to a project conversation with a working plan → execute flow. A
+                    chat is a throwaway conversation, and a group discussion is driven by its own
+                    roster; `orchestrationAllowedFor` is the same test the client's runtime gate
+                    applies, so the control can never appear where the runtime would ignore it. */}
                 <div className="flex shrink-0 items-center gap-1">
                   <PendingModelChip session={props.session} />
-                  {project === null ? null : <OrchestrationControl session={props.session} />}
+                  {orchestrationAllowedFor(props.session.cwd) ? (
+                    <OrchestrationControl session={props.session} />
+                  ) : null}
                 </div>
               </div>
             </div>

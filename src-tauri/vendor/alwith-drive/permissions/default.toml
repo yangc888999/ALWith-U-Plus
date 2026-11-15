@@ -1,0 +1,3 @@
+[default]
+description = "Drive requests from the module's own interface. Session credentials (MCP and collaboration) are granted separately with allow-session-request."
+permissions = ["allow-request"]

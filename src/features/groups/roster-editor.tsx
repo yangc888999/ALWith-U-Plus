@@ -14,10 +14,10 @@ import {
   useSensors
 } from "@dnd-kit/core"
 import {
+  rectSortingStrategy,
   sortableKeyboardCoordinates,
   SortableContext,
-  useSortable,
-  verticalListSortingStrategy
+  useSortable
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
 import { CheckIcon, GripVerticalIcon, UserIcon, XIcon } from "lucide-react"
@@ -86,7 +86,10 @@ export function RosterEditor({
         </p>
       ) : (
         <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={onDragEnd}>
-          <SortableContext items={selected} strategy={verticalListSortingStrategy}>
+          {/* The chips wrap onto several rows (`flex flex-wrap`), so the sortable strategy must be
+              rect-based: verticalListSortingStrategy assumes one column and computes drop points
+              that land on the wrong chip once the list folds. */}
+          <SortableContext items={selected} strategy={rectSortingStrategy}>
             <div className="flex flex-wrap items-center gap-1.5">
               {selectedRoles.map((role, index) => (
                 <SortableRosterPill

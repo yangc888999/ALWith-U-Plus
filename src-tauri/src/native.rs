@@ -29,7 +29,10 @@ impl Native {
         let directory = app.path().resource_dir()?.join("native");
         let _ = app;
         alwith_native_client::configure(&directory)?;
-        for module in ["mobile", "auth", "installed-apps", "voice", "fs", "computer", "drive", "extension"] {
+        // Loading rights move to the Drive plugin: its setup runs before this one, and the 0.6
+        // client dlopens the library and verifies `contract == 2`. This 0.1 client cannot check the
+        // contract, so preloading "drive" here would turn a mis-staged dylib into a silent failure.
+        for module in ["mobile", "auth", "installed-apps", "voice", "fs", "computer", "extension"] {
             alwith_native_client::Library::module(module)?;
         }
         Ok(Self {

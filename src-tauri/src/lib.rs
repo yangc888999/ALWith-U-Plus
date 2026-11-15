@@ -102,6 +102,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(alwith_extension::plugin::init_with_paths(None, native::development_directory()))
+        .plugin(drive::plugin())
         .plugin(appearance::wallpaper::plugin())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
@@ -191,7 +192,6 @@ pub fn run() {
             // without defining it makes Codex exit 1 on launch, and the repair that runs on the
             // first request can never be reached. The port is known now, so write it here.
             providers::repair_router_provider();
-            drive::initialize(app.handle())?;
             trackpad::install(app.handle())?;
             computer::initialize(app.handle())?;
             // Ship the operator personas with the app and drop them into `$CODEX_HOME/rob_models`
@@ -404,7 +404,6 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 voice::voice_profiles,
                 voice::voice_save_credential,
                 voice::voice_delete_credential,
-                drive::drive_request,
                 drive::drive_path_exists,
                 chat_files::chat_save_file,
                 chat_files::chat_write_text_attachment,

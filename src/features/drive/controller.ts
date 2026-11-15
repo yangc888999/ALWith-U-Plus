@@ -1,13 +1,12 @@
 import {
   createDriveController,
   type DriveController,
-  type DriveEvent,
   type DriveRequest,
-  type DriveResponse
+  type DriveResponse,
+  type DriveTransport
 } from "@alwith/module-drive"
-import { createTauriDriveTransport } from "@alwith/module-drive/tauri"
-import { invoke } from "@tauri-apps/api/core"
-import { emitTo, listen } from "@tauri-apps/api/event"
+import { commands, events } from "@alwith/module-drive/commands"
+import { emitTo } from "@tauri-apps/api/event"
 import { info } from "@tauri-apps/plugin-log"
 import i18n from "i18next"
 import { toast } from "sonner"
@@ -47,11 +46,22 @@ const LONG_REQUESTS = new Set([
   "moveBetweenProjects",
   "ssoConfig"
 ])
+/** Requests that change the Drive policy the rest of the app has cached. */
+const POLICY_REQUESTS = ["login", "ssoLogin", "logout", "start", "setPreferences"]
 
 export function driveRequestTimeoutMs(request: DriveRequest): number | null {
   if (UNBOUNDED_REQUESTS.has(request.type)) return null
   if (request.type === "confirmDeletes" || request.type === "cancelDeletes") return DELETE_TIMEOUT_MS
   return LONG_REQUESTS.has(request.type) ? LONG_TIMEOUT_MS : DEFAULT_TIMEOUT_MS
+}
+
+/**
+ * Session credentials (`mcpSessionConfig`, `collabSession`) travel through Drive's separate
+ * `sessionRequest` command, which only the main window is granted; every other request uses the
+ * plugin's ordinary `request` command.
+ */
+function carriesCredentials(request: DriveRequest): boolean {
+  return request.type === "mcpSessionConfig" || request.type === "collabSession"
 }
 
 async function withDeadline<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -70,7 +80,9 @@ async function withDeadline<T>(promise: Promise<T>, ms: number, label: string): 
 
 async function invokeDrive(request: DriveRequest): Promise<DriveResponse> {
   const budget = driveRequestTimeoutMs(request)
-  const pending = invoke<DriveResponse>("drive_request", { request })
+  const pending = carriesCredentials(request)
+    ? commands.sessionRequest({ request })
+    : commands.request({ request })
   if (budget === null) return pending
   try {
     return await withDeadline(pending, budget, request.type)
@@ -82,16 +94,22 @@ async function invokeDrive(request: DriveRequest): Promise<DriveResponse> {
   }
 }
 
-export const driveTransport = createTauriDriveTransport({
-  invoke: async (request) => {
+/**
+ * The module ships `createTauriDriveTransport()`, but it hardcodes the commands and therefore
+ * loses the IPC deadline above and the `drive:policy-changed` broadcast below. Both are fixes for
+ * observed incidents, so the transport stays here.
+ */
+export const driveTransport: DriveTransport = {
+  async request(request: DriveRequest): Promise<DriveResponse> {
     const response = await invokeDrive(request)
-    if (["login", "ssoLogin", "logout", "start", "setPreferences"].includes(request.type)) {
+    if (POLICY_REQUESTS.includes(request.type)) {
       await emitTo("main", "drive:policy-changed", null)
     }
     return response
   },
-  listen: (handler) => listen<DriveEvent>("drive:event", (event) => handler(event.payload))
-})
+  subscribe: (handler) => events["drive:event"].listen((event) => handler(event.payload))
+}
+
 const controller = createDriveController(driveTransport)
 export const drive: DriveController = {
   ...controller,

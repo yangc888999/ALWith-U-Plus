@@ -1,6 +1,6 @@
 [package]
 name = "alwith-u"
-version = "0.4.3"
+version = "0.4.4"
 description = "An independent desktop client for the OpenAI Codex CLI"
 authors = ["alwith.ai"]
 license = "Apache-2.0"
@@ -28,7 +28,10 @@ alwith-computer = { path = "../node_modules/@alwith/module-computer/rust" }
 alwith-voice = { path = "../node_modules/@alwith/module-voice/rust" }
 alwith-gamepad = { path = "../node_modules/@alwith/module-gamepad/rust", features = ["desktop"] }
 open = { version = "5", features = ["shellexecute-on-windows"] }
-alwith-drive = { path = "../node_modules/@alwith/module-drive/rust" }
+# Exact pin: a caret range would fall back to 0.6.0 if the [patch.crates-io] entry below is ever
+# dropped, silently losing `setExcluded` (the per-library sync toggle). `=0.6.2` fails loudly on the
+# specta rc.28 conflict instead. See vendor/alwith-drive/PATCH.md.
+alwith-drive = "=0.6.2"
 alwith-fs = { path = "../node_modules/@alwith/module-fs/rust", default-features = false, features = ["workspace"] }
 alwith-api = { path = "../node_modules/@alwith/api/rust" }
 alwith-extension = { path = "../node_modules/@alwith/module-extension/rust", features = ["tauri", "native-http"] }
@@ -93,11 +96,14 @@ raw-window-handle = "0.6"
 # Exclude third-party adaptation snapshots from our workspace to avoid formatting them; the root package joins automatically.
 [workspace]
 resolver = "3"
-exclude = ["patches/tauri-nspanel", "patches/wry", "patches/tauri-plugin-decoration", "patches/tauri-plugin-single-instance"]
+exclude = ["patches/tauri-nspanel", "patches/wry", "patches/tauri-plugin-decoration", "patches/tauri-plugin-single-instance", "vendor/alwith-drive"]
 
 [patch.crates-io]
 # Unify module plugins with the installed Runtime SDK.
 alwith-api = { path = "../node_modules/@alwith/api/rust" }
+# 0.6.1+ 要求 specta rc.28，与 @alwith/api 的 specta-typescript 0.0.14(=rc.27) 冲突；
+# vendor 0.6.2 仅钉回 rc.27/alpha.4，其余源码与上游一致。移除条件见 vendor/alwith-drive/PATCH.md。
+alwith-drive = { path = "vendor/alwith-drive" }
 # Temporary WebKit race fix; removal is tracked in patches/wry/PATCH.md.
 wry = { path = "patches/wry" }
 tauri-plugin-single-instance = { path = "patches/tauri-plugin-single-instance" }

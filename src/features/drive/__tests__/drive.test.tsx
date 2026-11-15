@@ -37,7 +37,7 @@ const root: RootInfo = {
 }
 function snapshot(configured = true): Snapshot {
   return {
-    version: 1,
+    version: 2,
     generation: 1,
     sequence: 0,
     configured,

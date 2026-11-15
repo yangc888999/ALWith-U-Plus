@@ -8,7 +8,7 @@ import {
   DriveNotificationProvider,
   DrivePanel
 } from "@alwith/module-drive/react"
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { expect, test, vi } from "vitest"
 
 import { mockOf } from "@/test/mock-of"
@@ -58,7 +58,7 @@ function fixture(
   handle?: (request: DriveRequest) => Promise<DriveResponse>
 ): { controller: DriveController; requests: DriveRequest[]; update: (patch: Partial<Snapshot>) => void } {
   const snapshot: Snapshot = {
-    version: 1,
+    version: 2,
     generation: 1,
     sequence: 0,
     configured: true,
@@ -318,8 +318,11 @@ test("status panel exposes conflicts immediately and keeps re-check available fo
       confirm={() => Promise.resolve(true)}
     />
   )
-  expect(screen.getByText("Sync unavailable", { exact: false })).toBeVisible()
-  expect(screen.getByText("report.md", { exact: false })).toBeVisible()
+  // Module 0.6 folds the error list into a disclosure: the summary is what the panel shows up
+  // front, and the messages (including the engine's own "Sync unavailable") live inside it.
+  expect(screen.getByText("Sync issues (1)")).toBeVisible()
+  expect(screen.getByText("Sync unavailable")).toBeInTheDocument()
+  expect(within(screen.getByRole("list")).getByText("report.md", { exact: false })).toBeVisible()
   fireEvent.click(screen.getByRole("button", { name: "Reveal" }))
   await waitFor(() => expect(reveal).toHaveBeenCalledWith("/drive/report.conflict.md"))
   fireEvent.click(screen.getByRole("button", { name: "Re-check" }))
@@ -740,7 +743,9 @@ test("launcher keeps synchronization errors out of navigation while status retai
   )
   await act(async () => {})
   expect(screen.queryByText("Conflict: /drive/report.md")).not.toBeInTheDocument()
-  expect(notify.error).toHaveBeenCalledWith("Conflict: /drive/report.md")
+  // Module 0.6 keeps synchronization errors inside the panel — the launcher renders no notice and
+  // pushes nothing into the app-wide toasts — so navigation stays free of engine noise.
+  expect(notify.error).not.toHaveBeenCalled()
   view.rerender(<DrivePanel {...props} mode="status" />)
   expect(screen.getByText("Conflict: /drive/report.md")).toBeInTheDocument()
 })
@@ -871,7 +876,7 @@ test("a rejected knowledge source remains actionable inside the dialog", async (
   expect(screen.getByRole("button", { name: "重试" })).toBeEnabled()
 })
 
-test("repeated background synchronization errors produce one toast", async () => {
+test("repeated background synchronization errors cannot spam notifications", async () => {
   const f = fixture({ error: "Conflict: report.md" })
   const notify = { error: vi.fn(), success: vi.fn() }
   render(
@@ -888,6 +893,10 @@ test("repeated background synchronization errors produce one toast", async () =>
   await act(async () => {})
   act(() => f.update({ error: null }))
   act(() => f.update({ error: "Conflict: report.md" }))
-  expect(notify.error).toHaveBeenCalledTimes(1)
+  act(() => f.update({ error: null }))
+  act(() => f.update({ error: "Conflict: report.md" }))
+  // Module 0.6 stopped pushing synchronization errors through the notification provider: the
+  // launcher renders no notice at all, so a flapping engine can never duplicate a toast.
+  expect(notify.error).not.toHaveBeenCalled()
   expect(screen.queryByRole("alert")).not.toBeInTheDocument()
 })

@@ -1,10 +1,12 @@
 import type { DriveRequest, DriveResponse } from "@alwith/module-drive"
-import { invoke, isTauri } from "@tauri-apps/api/core"
+import { commands } from "@alwith/module-drive/commands"
+import { isTauri } from "@tauri-apps/api/core"
 
 import type { ClientOptions } from "@/agent/client"
 
+/** Snapshot, preferences and knowledge context are ordinary requests; no credentials involved. */
 async function request(value: DriveRequest): Promise<DriveResponse> {
-  return invoke<DriveResponse>("drive_request", { request: value })
+  return commands.request({ request: value })
 }
 
 /** Drive contributes REST-backed knowledge; optional connectors are configured independently. */

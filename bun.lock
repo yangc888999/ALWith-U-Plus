@@ -13,7 +13,7 @@
         "@alwith/module-chat": "^0.5.3",
         "@alwith/module-collection": "^0.0.3",
         "@alwith/module-computer": "^0.1.8",
-        "@alwith/module-drive": "^0.1.4",
+        "@alwith/module-drive": "0.6.5",
         "@alwith/module-editor": "^0.1.0-rc.15",
         "@alwith/module-extension": "^0.1.0-rc.19",
         "@alwith/module-file-tree": "^0.1.0-rc.23",
@@ -100,7 +100,6 @@
       "devDependencies": {
         "@alwith/native-auth": "^0.1.2",
         "@alwith/native-computer": "^0.1.4",
-        "@alwith/native-drive": "^0.1.3",
         "@alwith/native-extension": "^0.1.2",
         "@alwith/native-fs": "^0.1.2",
         "@alwith/native-gamepad": "^0.1.2",
@@ -152,7 +151,6 @@
     "@alwith/module-chat@0.5.3": "patches/@alwith__module-chat@0.5.3.patch",
     "@nyssance/codex-acp-v2@0.7.39": "patches/@nyssance%2Fcodex-acp-v2@0.7.39.patch",
     "vite@8.3.5": "patches/vite@8.3.5.patch",
-    "@alwith/module-drive@0.1.4": "patches/@alwith%2Fmodule-drive@0.1.4.patch",
   },
   "overrides": {
     "@agentclientprotocol/sdk": "2.0.2",
@@ -178,7 +176,7 @@
 
     "@alwith/module-computer": ["@alwith/module-computer@0.1.8", "", { "dependencies": { "@alwith/native-kit": "0.1.1" } }, "sha512-Ywp60E6Cx2kqIDIWpmguou0owUNNIIB/rLt3HuYNAnRvNk2r80Kvwl4KwfJ+lsasaJDc31s4zyeKVJgPbV3GHw=="],
 
-    "@alwith/module-drive": ["@alwith/module-drive@0.1.4", "", { "dependencies": { "@alwith/native-kit": "0.1.1" }, "peerDependencies": { "@alwith/module-editor": "^0.1.0-rc.14", "@milkdown/core": "^7.22.2", "@milkdown/ctx": "^7.22.2", "@milkdown/plugin-collab": "^7.22.2", "@milkdown/prose": "^7.22.2", "@milkdown/utils": "^7.22.2", "lucide-react": "^1.61.0", "react": "^19.3.1", "react-dom": "^19.3.1", "y-prosemirror": "^1.3.7", "y-protocols": "^1.0.7", "y-websocket": "^3.1.0", "yjs": "^13.6.33" }, "optionalPeers": ["@alwith/module-editor", "@milkdown/core", "@milkdown/ctx", "@milkdown/plugin-collab", "@milkdown/prose", "@milkdown/utils", "lucide-react", "y-prosemirror", "y-protocols", "y-websocket", "yjs"] }, "sha512-bZcS90qXsoW/5eqgIR5sOfs1xMYSWuHqVLGNwy9Ya6VTHs2Dgnnz2MQq5Pf/s1MK/lzNWMuyKnQKhHux4lvt9g=="],
+    "@alwith/module-drive": ["@alwith/module-drive@0.6.5", "", { "peerDependencies": { "@alwith/module-editor": "^0.6.0", "@milkdown/core": "^7.22.2", "@milkdown/ctx": "^7.22.2", "@milkdown/plugin-collab": "^7.22.2", "@milkdown/prose": "^7.22.2", "@milkdown/utils": "^7.22.2", "@tauri-apps/api": "^3.0.0-alpha.3", "lucide-react": "^1.61.0", "react": "^19.3.1", "react-dom": "^19.3.1", "y-prosemirror": "^1.3.7", "y-protocols": "^1.0.7", "y-websocket": "^3.1.0", "yjs": "^13.6.33" }, "optionalPeers": ["@alwith/module-editor", "@milkdown/core", "@milkdown/ctx", "@milkdown/plugin-collab", "@milkdown/prose", "@milkdown/utils", "lucide-react", "y-prosemirror", "y-protocols", "y-websocket", "yjs"] }, "sha512-2DrYcA//kLIC/7b6OU2lZr+YoyhGfrbPs2dH1dAUZ3KVyFcS9qvDg3wlLQw4I/Fs9XGNlgwA9PuaW4kNHgVmsQ=="],
 
     "@alwith/module-editor": ["@alwith/module-editor@0.1.0-rc.15", "", { "dependencies": { "@alwith/module-fs": "^0.1.0-rc.10", "@base-ui/react": "^1.9.0" }, "peerDependencies": { "@alwith/module-chat": "^0.1.29", "@milkdown/core": "^7.22.2", "@milkdown/plugin-history": "^7.22.2", "@milkdown/plugin-math": "^7.5.9", "@milkdown/preset-commonmark": "^7.22.2", "@milkdown/preset-gfm": "^7.22.2", "@milkdown/prose": "^7.22.2", "@milkdown/utils": "^7.22.2", "audiomotion-analyzer": "^4.5.4", "docx-preview": "^0.4.1", "dompurify": "^3.4.17", "katex": "^0.19.1", "lucide-react": "^1.61.0", "marked": "^18.1.1", "monaco-editor": "^0.57.0", "pdfjs-dist": "^6.4.299", "react": "^19.3.1", "react-dom": "^19.3.1", "react-player": "^3.4.0", "shiki": "^4.5.0", "utif": "^3.1.0", "x-data-spreadsheet": "^1.1.9", "xlsx": "^0.20.3" }, "optionalPeers": ["@alwith/module-chat", "@milkdown/core", "@milkdown/plugin-history", "@milkdown/plugin-math", "@milkdown/preset-commonmark", "@milkdown/preset-gfm", "@milkdown/prose", "@milkdown/utils", "audiomotion-analyzer", "docx-preview", "dompurify", "katex", "marked", "monaco-editor", "pdfjs-dist", "react-player", "shiki", "utif", "x-data-spreadsheet", "xlsx"] }, "sha512-+7MTx1ecaJ3g9VdhvlHteIgwNDivTLsMDTXK96eLmSU/jHfL78eIlrplGRGM6BXuFcx70w1g0b302Ykp4SPwwQ=="],
 
@@ -211,14 +209,6 @@
     "@alwith/native-computer-linux-x64": ["@alwith/native-computer-linux-x64@0.1.4", "", { "os": "linux", "cpu": "x64" }, "sha512-nHC9RKPeLgu1YEocOVurLDD01YpTfm/fhiUKcRFiiDv+6ViwA8rLJ2lwD3k6WyXdv7qVFuzbW9Edf1fJL54iEw=="],
 
     "@alwith/native-computer-win32-x64": ["@alwith/native-computer-win32-x64@0.1.4", "", { "os": "win32", "cpu": "x64" }, "sha512-VlC1EuzFC1GkY0R+bOu9Lz7PVqqz6uLJCZvAMZx+X7OYl3rEG6rQqA0e0BVm9eklRa19Y9M2ib/SQ7TvrH70+A=="],
-
-    "@alwith/native-drive": ["@alwith/native-drive@0.1.3", "", { "dependencies": { "@alwith/native-kit": "0.1.1" }, "optionalDependencies": { "@alwith/native-drive-darwin-arm64": "0.1.3", "@alwith/native-drive-linux-x64": "0.1.3", "@alwith/native-drive-win32-x64": "0.1.3" } }, "sha512-5Aa9LQbfXSWTu8rlwisgwugsftSl0IXq2eyq1xrXHYNbe5NQ3dxB/lkwtmO5UNbyFDabIpu8KPukl5YDoWeoqg=="],
-
-    "@alwith/native-drive-darwin-arm64": ["@alwith/native-drive-darwin-arm64@0.1.3", "", { "os": "darwin", "cpu": "arm64" }, "sha512-Rv7heuEmdSuxlDnRvXxgt+KDzvsc7omcd6gJ3/TWqXVcMDwl9dd5ErzxDQboR51S7kMhNtGUCtwT0DMGcMVWgg=="],
-
-    "@alwith/native-drive-linux-x64": ["@alwith/native-drive-linux-x64@0.1.3", "", { "os": "linux", "cpu": "x64" }, "sha512-iwrE19BMV640J84Dn64XzmSlxTyoNWPF80Y8/cPb2hcjowvSrBrIWY5FBMvIeQcbcPhTyv/4UIALs64E8hmQdA=="],
-
-    "@alwith/native-drive-win32-x64": ["@alwith/native-drive-win32-x64@0.1.3", "", { "os": "win32", "cpu": "x64" }, "sha512-t4EtUOzi+hx4qvS51b6blCeYbO6Mi2fTAwKdHgqqTUPVvlVOGnxrk4Iz3KZtp/ws7XSP9k9BjrW/nfNjtp4kTQ=="],
 
     "@alwith/native-enterprise": ["@alwith/native-enterprise@0.6.2", "", { "dependencies": { "@alwith/native-kit": "0.5.2" }, "optionalDependencies": { "@alwith/native-enterprise-darwin-arm64": "0.6.2", "@alwith/native-enterprise-win32-x64": "0.6.2" } }, "sha512-sv7ci0boMIigZuuU4tfTp9oYLluHNibOsT72pXLyA7w18LKJzlG5vFO2Ak376s9eGA6uiCIzsgZa4b96nk2zzQ=="],
 

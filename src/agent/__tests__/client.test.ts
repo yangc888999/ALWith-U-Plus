@@ -3336,6 +3336,131 @@ test("orchestration writes to the effort id the adapter actually exposes", async
   }
 })
 
+test("a group conversation ignores a stored split and sends an ordinary prompt", async () => {
+  // 分工 × 拉会 are mutually exclusive: the roster switches the session's model per speaker, and the
+  // split would switch it again per role inside the same turn. The runtime gate — not the composer
+  // — is what enforces this, so a record carried into a group conversation must not reach the planner.
+  const memory = new Map<string, string>()
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => memory.get(key) ?? null,
+    setItem: (key: string, value: string) => void memory.set(key, value),
+    removeItem: (key: string) => void memory.delete(key),
+    clear: () => memory.clear()
+  })
+  const models: ReasoningModelFixture[] = [
+    { id: "main-native", groupId: "chatgpt", efforts: ["low", "medium", "high"], defaultEffort: "medium" },
+    { id: "planner-native", groupId: "chatgpt", efforts: ["low", "medium", "high"], defaultEffort: "medium" },
+    { id: "worker-native", groupId: "chatgpt", efforts: ["low", "medium", "high"], defaultEffort: "medium" }
+  ]
+  const { client, fake } = await make((fake) => configureReasoningModels(fake, models, "main-native", "medium"))
+  const directory = client.projectPath("/tmp/ALWith/groups/周会")
+  setGroup({
+    id: "group-orchestration-guard",
+    name: "周会",
+    roles: [],
+    rounds: 1,
+    directory,
+    document: `${directory}/group.md`,
+    topic: "",
+    focus: "",
+    materialFolders: [],
+    sessionId: null,
+    autoDiscuss: true
+  })
+  const id = await client.newSession(directory)
+  setOrchestration(id, {
+    planner: { model: "planner-native", effort: "high" },
+    worker: { model: "worker-native", effort: "medium" }
+  })
+  try {
+    await client.prompt(id, [{ type: "text", text: "讨论一下发布节奏" }])
+    // The planner never ran, so no plan is waiting for an approval button that is not rendered here.
+    expect(fake.prompts.some((text) => text.includes("分工模式·规划"))).toBe(false)
+    expect(pendingPlanFor(id)).toBeNull()
+    // The same words went out as a plain turn, and the session stayed on the user's own model.
+    expect(fake.prompts).toContain("讨论一下发布节奏")
+    expect(
+      client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as string | undefined
+    ).toBe("main-native")
+    // The record is the user's configuration: it is ignored, never silently consumed or rewritten.
+    expect(orchestrationFor(id)).toEqual({
+      planner: { model: "planner-native", effort: "high" },
+      worker: { model: "worker-native", effort: "medium" }
+    })
+  } finally {
+    setOrchestration(id, null)
+    setPendingPlan(id, null)
+    removeGroup("group-orchestration-guard")
+    vi.unstubAllGlobals()
+  }
+})
+
+test("a quick-chat conversation ignores a stored split because it has no way to approve a plan", async () => {
+  // A chat folder renders no 分工 control, so a plan produced there could never be executed. The
+  // gate turns that into an ordinary prompt instead of leaving a plan with no button.
+  const memory = new Map<string, string>()
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => memory.get(key) ?? null,
+    setItem: (key: string, value: string) => void memory.set(key, value),
+    removeItem: (key: string) => void memory.delete(key),
+    clear: () => memory.clear()
+  })
+  const models: ReasoningModelFixture[] = [
+    { id: "main-native", groupId: "chatgpt", efforts: ["low", "medium", "high"], defaultEffort: "medium" },
+    { id: "planner-native", groupId: "chatgpt", efforts: ["low", "medium", "high"], defaultEffort: "medium" }
+  ]
+  const { client, fake } = await make((fake) => configureReasoningModels(fake, models, "main-native", "medium"))
+  // A temporary chat lives in its own folder under `<quick-chat>/Chat/<stamp>`; the folder test is
+  // what classifies it, so the path shape here is the production one.
+  const id = await client.newSession("/Users/tester/Documents/Codex/Chat/2026-01-05 09-00-00")
+  setOrchestration(id, {
+    planner: { model: "planner-native", effort: "high" },
+    worker: { model: "main-native", effort: "medium" }
+  })
+  try {
+    await client.prompt(id, [{ type: "text", text: "随便聊聊" }])
+    expect(fake.prompts.some((text) => text.includes("分工模式·规划"))).toBe(false)
+    expect(pendingPlanFor(id)).toBeNull()
+    expect(fake.prompts).toContain("随便聊聊")
+    expect(orchestrationFor(id)).not.toBeNull()
+  } finally {
+    setOrchestration(id, null)
+    setPendingPlan(id, null)
+    vi.unstubAllGlobals()
+  }
+})
+
+test("a project conversation still enters the split: the guard only excludes chat and group folders", async () => {
+  // The regression this pins: tightening the gate must not quietly disable 分工 for the ordinary
+  // project conversation that owns the control.
+  const memory = new Map<string, string>()
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => memory.get(key) ?? null,
+    setItem: (key: string, value: string) => void memory.set(key, value),
+    removeItem: (key: string) => void memory.delete(key),
+    clear: () => memory.clear()
+  })
+  const models: ReasoningModelFixture[] = [
+    { id: "main-native", groupId: "chatgpt", efforts: ["low", "medium", "high"], defaultEffort: "medium" },
+    { id: "planner-native", groupId: "chatgpt", efforts: ["low", "medium", "high"], defaultEffort: "medium" }
+  ]
+  const { client, fake } = await make((fake) => configureReasoningModels(fake, models, "main-native", "medium"))
+  const id = await client.newSession("/tmp/orchestrated-still-allowed")
+  setOrchestration(id, {
+    planner: { model: "planner-native", effort: "high" },
+    worker: { model: "main-native", effort: "medium" }
+  })
+  try {
+    await client.prompt(id, [{ type: "text", text: "build the report" }])
+    expect(fake.prompts.some((text) => text.includes("分工模式·规划"))).toBe(true)
+    expect(pendingPlanFor(id)).not.toBeNull()
+  } finally {
+    setOrchestration(id, null)
+    setPendingPlan(id, null)
+    vi.unstubAllGlobals()
+  }
+})
+
 test("switching to a model the engine dropped hops to a live sibling and says so", async () => {
   // 设置 → 可用模型 keeps `gpt-6.1-terra` after the provider stops advertising it, and the picker
   // mirrors that list, so this write is reachable. The agent does not reject an unknown id — it

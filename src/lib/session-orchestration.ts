@@ -4,6 +4,10 @@
  * Kept beside the other chat preferences so a conversation keeps its pair across restarts. The
  * client reads it when a prompt is sent; the composer renders a small control from the same store.
  */
+
+import { groupByDirectory } from "@/lib/groups"
+import { isTemporaryChatDir } from "@/lib/quick-chat"
+
 export interface SessionOrchestration {
   /** The model that only produces the plan, paired with its own effort selection. */
   planner: OrchestrationRoleConfig
@@ -98,4 +102,27 @@ export function subscribeOrchestration(listener: () => void): () => void {
 /** `useSyncExternalStore` snapshot; the stored object identity is stable until it changes. */
 export function orchestrationSnapshot(sessionId: string): SessionOrchestration | null {
   return orchestrationFor(sessionId)
+}
+
+/**
+ * Whether a conversation may run the plan → execute split at all.
+ *
+ * 分工 and 拉会 are mutually exclusive (a product decision, not a preference): a group discussion
+ * drives the same session by switching its model once per speaker, and the split would switch that
+ * same model again per role inside the turn — two orchestrators writing one selection, with no
+ * defined outcome. A quick-chat folder has no 分工 button in its composer either, so a plan started
+ * there could never be approved: the "dead plan" path.
+ *
+ * Both classifications reuse the app's existing tests — `isTemporaryChatDir` is what the composer
+ * already uses to tell a chat from a project, and `groupByDirectory` is what the sidebar, the group
+ * panel and the client's own row diversion use to recognise a group. The client checks this before
+ * entering the planner, which is the single source of truth; the composer only uses it to decide
+ * whether to render the control.
+ *
+ * A stored split is never deleted here: it is the user's configuration, and ignoring it is enough
+ * to keep the two flows apart.
+ */
+export function orchestrationAllowedFor(cwd: string | null | undefined): boolean {
+  if (isTemporaryChatDir(cwd)) return false
+  return groupByDirectory(cwd) === null
 }

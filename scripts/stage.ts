@@ -18,7 +18,6 @@ import { join, resolve } from "node:path"
 import { stageChromeBridge } from "@alwith/module-browser/stage"
 import { stageNative as stageNativeAuth } from "@alwith/native-auth/stage"
 import { stageNative as stageNativeComputer } from "@alwith/native-computer/stage"
-import { stageNative as stageNativeDrive } from "@alwith/native-drive/stage"
 import { stageNative as stageNativeExtension } from "@alwith/native-extension/stage"
 import { stageNative as stageNativeFs } from "@alwith/native-fs/stage"
 import { stageNative as stageNativeGamepad } from "@alwith/native-gamepad/stage"
@@ -32,6 +31,7 @@ import { $ } from "bun"
 import manifest from "../package.json"
 import { patchAdapter } from "./lib/adapter-patch"
 import { stageComputer } from "./lib/computer-artifact"
+import { stageDriveNative } from "./lib/drive-artifact"
 import { runtimeBuildArtifact, runtimeSource, stageTarget } from "./lib/runtime-artifact"
 import { assertVersion, BUN_PACKAGES, CODEX_WINDOWS_HELPERS, codexSidecars, toolchainVersions } from "./lib/toolchain"
 
@@ -131,7 +131,8 @@ const nativeLibraries = [
   stageNativeFs,
   stageNativeGamepad,
   stageNativeComputer,
-  stageNativeDrive,
+  (target: string, destination: string, licenseDirectory: string) =>
+    stageDriveNative(target, destination, licenseDirectory),
   stageNativeExtension,
   stageNativeEnterprise
 ].map((stage) => stage(triple, join(root, "src-tauri/resources/native"), licenses))

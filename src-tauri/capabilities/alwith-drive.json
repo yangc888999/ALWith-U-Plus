@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "alwith-drive",
+  "description": "Main and settings windows: Drive requests",
+  "windows": ["main", "settings"],
+  "permissions": ["alwith-drive:default"]
+}

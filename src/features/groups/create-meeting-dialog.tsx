@@ -1,9 +1,10 @@
 // The create/edit-meeting dialog: the sidebar's one entry into starting a discussion.
 //
 // The form reads top-to-bottom in the order a decision is actually made (name → members → folder →
-// direction → materials). It opens centered at min(1040px, 96vw) and behaves like a small window:
-// drag the header to move (double-click resets), drag any edge or corner to resize. The box is
-// clamped to the viewport on every move and on window resize, so it can never hang off-screen.
+// direction → materials). It opens centered at min(880px, 100vw - 32px) with its height capped to
+// 100vh - 32px, and behaves like a small window: drag the header to move (double-click resets),
+// drag any edge or corner to resize. The box is clamped to the viewport on every move and on
+// window resize, so it can never hang off-screen.
 //
 // Folder flow (v2): the picked folder is the PARENT. The meeting always lands in
 // `<parent>/<会议名>` — name first, pick the parent second, and the preview line shows the exact
@@ -169,7 +170,11 @@ export function CreateMeetingDialog({
   // The role shelf is read when the dialog opens; it cannot change while a modal is up.
   const knownRoles = useMemo(() => groupRoles(), [open])
   const trimmedName = name.trim()
-  const canSubmit = !submitting && trimmedName !== "" && roles.length > 0
+  // A pure-emoji / pure-punctuation name trims fine but slugifies to nothing, which would create a
+  // folder with an empty name and degrade the path preview — so the slug, not the raw string, is
+  // what must be non-empty for the submit to be legal.
+  const nameHasSlug = slugOf(trimmedName) !== ""
+  const canSubmit = !submitting && trimmedName !== "" && nameHasSlug && roles.length > 0
 
   // The exact folder the meeting will live in, shown before anything is created. Editing keeps the
   // meeting where it is; a fresh one lands in <parent>/<slug>, parent defaulting to groups/.
@@ -428,6 +433,13 @@ export function CreateMeetingDialog({
                 }}
               />
               <span className="block text-[11px] text-muted-foreground">{t("groups.createNameHint")}</span>
+              {/* Only while a name exists but leaves nothing after the slug filter (pure emoji or
+                  punctuation): the empty field already has its own disabled submit + hint. */}
+              {trimmedName !== "" && !nameHasSlug && (
+                <span className="block text-[11px] text-destructive" data-name-slug-error>
+                  {t("groups.createNameNoSlug")}
+                </span>
+              )}
             </label>
 
             <div className="space-y-1">

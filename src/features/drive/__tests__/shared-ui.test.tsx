@@ -65,7 +65,7 @@ function fixture(
   respond?: (request: DriveRequest) => Promise<DriveResponse>
 ): { controller: DriveController; host: DriveHost; requests: DriveRequest[] } {
   const snapshot: Snapshot = {
-    version: 1,
+    version: 2,
     generation: 1,
     sequence: 0,
     configured: true,

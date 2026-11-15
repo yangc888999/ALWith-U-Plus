@@ -73,17 +73,17 @@ pub async fn workspace_file(window: tauri::WebviewWindow, request: Value) -> Res
     request.root = root.clone();
     let fs = FileSystem::new([root])?;
     let app = window.app_handle().clone();
-    execute_workspace_request(
-        &fs,
-        request,
-        collaboration_owner,
-        app.state::<crate::drive::DriveState>().service()?,
-    )
-    .await
+    execute_workspace_request(&fs, request, collaboration_owner, app.state::<alwith_drive::Drive>().service()?).await
+}
+
+/// A workspace operation error as the coded error Drive transactions expect. Kept at this boundary
+/// so the command surface stays `Result<_, String>` and Drive's own errors keep their codes.
+fn drive_error(message: String) -> alwith_drive::NativeError {
+    alwith_drive::NativeError::new("failed", message)
 }
 
 async fn execute_workspace_request(
-    fs: &FileSystem, request: Request, collaboration_owner: Option<String>, drive: &alwith_drive::service::DriveService,
+    fs: &FileSystem, request: Request, collaboration_owner: Option<String>, drive: &alwith_drive::DriveService,
 ) -> Result<Value, String> {
     // Preview reads must not queue behind mutations waiting for a whole Drive sync round.
     // The filesystem still enforces the authorized root; writes keep their existing coordination.
@@ -120,9 +120,15 @@ async fn execute_workspace_request(
         && let Some(owner) = collaboration_owner
     {
         let path = fs.authorize_path(&request.path)?;
-        return drive.with_collaborative_filesystem(&path, &owner, execute(fs, request)).await;
+        return drive
+            .with_collaborative_filesystem(&path, &owner, async { execute(fs, request).await.map_err(drive_error) })
+            .await
+            .map_err(|error| error.to_string());
     }
-    drive.with_filesystem(&writes, &removed, execute(fs, request)).await
+    drive
+        .with_filesystem(&writes, &removed, async { execute(fs, request).await.map_err(drive_error) })
+        .await
+        .map_err(|error| error.to_string())
 }
 
 static WATCHERS: OnceLock<Mutex<HashMap<PathBuf, WorkspaceWatcher>>> = OnceLock::new();
@@ -269,9 +275,9 @@ pub async fn workspace_import(
         let writes = [fs.authorize_path(request.to.as_ref().ok_or("Import destination missing")?)?];
         window
             .app_handle()
-            .state::<crate::drive::DriveState>()
+            .state::<alwith_drive::Drive>()
             .service()?
-            .with_filesystem(&writes, &[], execute(&fs, request))
+            .with_filesystem(&writes, &[], async { execute(&fs, request).await.map_err(drive_error) })
             .await
             .map_err(|error| format!("Import stopped at {}: {error}", source.display()))?;
     }
@@ -284,11 +290,16 @@ mod workspace_tests {
 
     #[tokio::test]
     async fn preview_reads_do_not_wait_for_drive_or_queued_mutations() {
-        use alwith_drive::service::{DriveService, ServiceOptions};
+        use alwith_drive::{DriveService, ServiceOptions};
         use std::sync::Arc;
         use std::time::Duration;
         use tokio::time::timeout;
 
+        // The 0.6 client loads its library from the staged native directory; in tests nothing has
+        // run the plugin's setup, so point the loader at the build output the same way it would.
+        unsafe {
+            std::env::set_var("ALWITH_NATIVE_DIRECTORY", concat!(env!("CARGO_MANIFEST_DIR"), "/resources/native"))
+        }
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().canonicalize().unwrap();
         let path = root.join("note.txt");
@@ -301,7 +312,7 @@ mod workspace_tests {
             reserved_roots: vec![],
             device_name: "test".into(),
             client_version: "test".into(),
-            open_url: Arc::new(|_| Err("No browser in tests".into())),
+            open_url: Arc::new(|_| Err(alwith_drive::NativeError::new("failed", "No browser in tests"))),
         })
         .unwrap();
         let request = |operation: &str, path: &Path| {
@@ -312,7 +323,11 @@ mod workspace_tests {
             .unwrap()
         };
         // Hold the Drive coordinator as a slow sync round would, then queue a host mutation.
-        let mut sync = Box::pin(drive.with_filesystem(&[], &[], std::future::pending::<Result<(), String>>()));
+        let mut sync = Box::pin(drive.with_filesystem(
+            &[],
+            &[],
+            std::future::pending::<Result<(), alwith_drive::NativeError>>(),
+        ));
         assert!(timeout(Duration::from_millis(10), &mut sync).await.is_err());
         let mutation_guard = OPERATIONS.lock().await;
         for (operation, target) in [("stat", &path), ("readFile", &path), ("readDirectory", &root)] {

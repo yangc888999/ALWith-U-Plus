@@ -1,7 +1,7 @@
 //! Explicit Move To routing without granting the webview an additional filesystem root.
 
-use alwith_drive::ownership::canonical_target;
-use alwith_drive::sync::{ProjectKind, RootInfo};
+use alwith_drive::canonical_target;
+use alwith_drive::types::{ProjectKind, RootInfo};
 use alwith_fs::FileSystem;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -90,9 +90,9 @@ pub async fn workspace_move_to(
     let _operation = crate::workspace::OPERATIONS.lock().await;
     let source_fs = FileSystem::new([root.clone()])?;
     let directory = canonical_target(&destination)?;
-    let state = window.app_handle().state::<crate::drive::DriveState>();
+    let state = window.app_handle().state::<alwith_drive::Drive>();
     let service = state.service()?;
-    let snapshot = service.snapshot();
+    let snapshot = service.snapshot()?;
     let drive_root = canonical_target(Path::new(&snapshot.local_root))?;
     let target = drive_destination(&snapshot.roots, &directory, &drive_root)?;
     if !directory.starts_with(&root) && target.is_none() {
@@ -144,7 +144,10 @@ pub async fn workspace_move_to(
             started = true;
             for (index, ((from, to), completed)) in plan.iter().zip(&moves).enumerate() {
                 filesystem.move_between_roots(from.clone(), to.clone()).await.map_err(|error| {
-                    format!("Moved {index} of {} items; remaining items were not moved: {error}", plan.len())
+                    alwith_drive::NativeError::new(
+                        "failed",
+                        format!("Moved {index} of {} items; remaining items were not moved: {error}", plan.len()),
+                    )
                 })?;
                 completed_moves.push(completed.clone());
             }
@@ -153,8 +156,10 @@ pub async fn workspace_move_to(
         .await;
     match result {
         Ok(()) => Ok(MoveToOutcome { moves: completed_moves, cloud: false, error: None }),
-        Err(error) if started => Ok(MoveToOutcome { moves: completed_moves, cloud: false, error: Some(error) }),
-        Err(error) => Err(error),
+        Err(error) if started => {
+            Ok(MoveToOutcome { moves: completed_moves, cloud: false, error: Some(error.to_string()) })
+        }
+        Err(error) => Err(error.to_string()),
     }
 }
 

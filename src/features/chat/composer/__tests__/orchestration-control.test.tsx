@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeAll, expect, test, vi } from "vitest"
 
 import { initI18n } from "@/lib/i18n"
+import { removeGroup, setGroup } from "@/lib/groups"
 import { nativeModelOverrides } from "@/lib/providers"
 import { orchestrationFor, setOrchestration } from "@/lib/session-orchestration"
 
@@ -67,8 +68,8 @@ function options(currentValue: string): acp.SessionConfigOption[] {
   ]
 }
 
-function session(currentValue: string) {
-  return { ...createSession("orchestration-ui", "/tmp"), attached: true, configOptions: options(currentValue) }
+function session(currentValue: string, cwd = "/tmp") {
+  return { ...createSession("orchestration-ui", cwd), attached: true, configOptions: options(currentValue) }
 }
 
 beforeAll(() => initI18n("en"))
@@ -162,6 +163,40 @@ test("a saved GPT row the engine no longer advertises is not offered", () => {
   const values = [...planner.options].map((option) => option.value)
   expect(values).not.toContain("gpt-6.1-terra")
   expect(within(planner).queryByRole("option", { name: "6.1 Terra" })).toBeNull()
+})
+
+test("a group conversation renders no split control: the roster owns that session's models", () => {
+  // 分工 × 拉会 are mutually exclusive. The composer already hides the control here and the client's
+  // runtime gate ignores a stored split, so the component must not render a button either — one
+  // that would only produce a plan with no approval path of its own.
+  const directory = "/tmp/ALWith/groups/周会"
+  setGroup({
+    id: "group-ui-guard",
+    name: "周会",
+    roles: [],
+    rounds: 1,
+    directory,
+    document: `${directory}/group.md`,
+    topic: "",
+    focus: "",
+    materialFolders: [],
+    sessionId: null,
+    autoDiscuss: true
+  })
+  try {
+    const view = render(<OrchestrationControl session={session(NATIVE_A, directory)} />)
+    expect(view.container).toBeEmptyDOMElement()
+  } finally {
+    removeGroup("group-ui-guard")
+  }
+})
+
+test("a quick-chat conversation renders no split control: a plan there could never be approved", () => {
+  // The chat folder shape is the production one: each temporary chat owns `<quick-chat>/Chat/<stamp>`.
+  const view = render(
+    <OrchestrationControl session={session(NATIVE_A, "/Users/tester/Documents/Codex/Chat/2026-01-05 09-00-00")} />
+  )
+  expect(view.container).toBeEmptyDOMElement()
 })
 
 test("changing one role's model resets only that role's effort", () => {

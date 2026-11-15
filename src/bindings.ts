@@ -172,7 +172,6 @@ export const commands = {
     __t3Invoke<null>("voice_save_credential", args),
   voiceDeleteCredential: (args: { input: CredentialProvider }): Promise<null> =>
     __t3Invoke<null>("voice_delete_credential", args),
-  driveRequest: (args: { request: Value }): Promise<Value> => __t3Invoke<Value>("drive_request", args),
   drivePathExists: (args: { path: string }): Promise<boolean> => __t3Invoke<boolean>("drive_path_exists", args),
   chatSaveFile: (args: { name: string; data: string }): Promise<boolean> => __t3Invoke<boolean>("chat_save_file", args),
   chatWriteTextAttachment: (args: { name: string; text: string }): Promise<string> =>
@@ -377,8 +376,12 @@ export const commands = {
    *  the meeting first and choosing the parent second still lands in a subfolder named after the
    *  meeting — never directly inside the picked folder. Omitted = the default `~/Documents/ALWith/groups`.
    */
-  groupDirectoryCreate: (args: { name: string; parent: string | null; topic: string | null; focus: string | null }): Promise<GroupDirectory> =>
-    __t3Invoke<GroupDirectory>("group_directory_create", args),
+  groupDirectoryCreate: (args: {
+    name: string
+    parent: string | null
+    topic: string | null
+    focus: string | null
+  }): Promise<GroupDirectory> => __t3Invoke<GroupDirectory>("group_directory_create", args),
   /**
    *  Heals a meeting record whose directory points at a PARENT folder instead of the meeting's own
    *  named subfolder.
@@ -806,7 +809,6 @@ export type CommandErrors = {
   voiceProfiles: string
   voiceSaveCredential: string
   voiceDeleteCredential: string
-  driveRequest: string
   drivePathExists: string
   chatSaveFile: string
   chatWriteTextAttachment: string

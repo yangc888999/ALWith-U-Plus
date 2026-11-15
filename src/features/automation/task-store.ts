@@ -46,14 +46,27 @@ function storage(): Storage | null {
   }
 }
 
-/** 动态加载原生存储层：非 Tauri 环境完全不碰 @tauri-apps / bindings。 */
-async function remote(): Promise<typeof import("./automation-remote-store") | null> {
-  if (!IN_TAURI) return null
-  try {
-    return await import("./automation-remote-store")
-  } catch {
+/**
+ * 原生存储层只加载一次。两个调用方（订阅注册与启动 hydrate）会在同一 tick 里同时要它；
+ * 各发一次 `import()` 既浪费，也会让其中一个 promise 在测试的模块 mock 下迟迟不 settle。
+ * 记住同一个 promise 后两者共享一次加载，语义与生产构建里 ES 模块的去重一致。
+ *
+ * 失败不能永久缓存：加载失败（原生层还没就绪、chunk 暂时读不到）只说明这一次不行，缓存住
+ * 一个 null 会让整个进程内的跨窗口同步静默失效到重启为止。所以 catch 里清空缓存，下一次
+ * 调用重新尝试。`??=` 的赋值在 catch 之后才完成，此时对模块级变量赋 null 是安全的 ——
+ * 随后 return 的仍然是本次的 null，不改变本次调用的返回值。
+ */
+let remoteModule: Promise<typeof import("./automation-remote-store") | null> | null = null
+
+/** 动态加载原生存储层：非 Tauri 环境完全不碰 @tauri-apps / bindings，也不缓存。 */
+function remote(): Promise<typeof import("./automation-remote-store") | null> {
+  if (!IN_TAURI) return Promise.resolve(null)
+  remoteModule ??= import("./automation-remote-store").catch((error: unknown) => {
+    console.warn("[automation] native store unavailable; will retry on next use", error)
+    remoteModule = null
     return null
-  }
+  })
+  return remoteModule
 }
 
 function newId(): string {
@@ -268,6 +281,16 @@ const listeners = new Set<() => void>()
 /** 原生写入串行化：连续两次提交不能乱序落到 KV，否则最后一次可能被旧值覆盖。 */
 let remoteWrites: Promise<void> = Promise.resolve()
 
+/**
+ * 已排队但尚未落地的本地写入数。`applyRemote` 用它判断「手里的远端快照是否已经过时」：
+ * 只要还有本地写入在途，内存里的状态就比这次读更新，用远端整份替换只会把排期推进 / 运行
+ * 记录回滚（见 applyRemote 的注释）。归零由每条写入自己的 finally 负责，串行链保证计数准确。
+ */
+let pendingWrites = 0
+
+/** 启动那次 KV 读取的 in-flight promise；见 whenHydrated() 的注释。null = 还没开始读。 */
+let hydration: Promise<void> | null = null
+
 function persist(): void {
   const state = snapshot
   try {
@@ -275,12 +298,16 @@ function persist(): void {
   } catch {
     // 存储不可用或写满：内存副本仍服务本次会话。
   }
+  pendingWrites += 1
   remoteWrites = remoteWrites
     .then(async () => {
       const module = await remote()
       await module?.writeRemoteState(state)
     })
     .catch(() => undefined)
+    .finally(() => {
+      pendingWrites -= 1
+    })
 }
 
 function commit(next: AutomationState): void {
@@ -312,8 +339,24 @@ export function reloadFromStorage(): void {
   for (const listener of listeners) listener()
 }
 
-/** 用共享 KV 的值替换内存副本；值相同则忽略（自己写出的 store-changed 会回到这里）。 */
+/**
+ * 用共享 KV 的值替换内存副本；值相同则忽略（自己写出的 store-changed 会回到这里）。
+ *
+ * 本地写入在途时直接丢弃这份远端快照：`readRemoteState` 是在某个时刻发起的，返回时本轮可能
+ * 已经 `markTaskFired`（推进 nextRunAt）、`startAutomationRun`（写 running）并把这些写入了
+ * 队列。若此刻用读到的旧快照整份替换内存，排期会被回滚到过去 —— 下一轮 tick 该任务仍在
+ * 60s 补跑窗内，于是**重复执行一次**，运行记录的 running 也会被抹掉。
+ *
+ * 丢弃不会丢数据：本地写入是最后落地的一份，磁盘上的 KV 最终就是它。
+ *
+ * 代价说明（实测，勿臆测）：被丢弃的那份远端变更**不会**自动重投 —— `store-changed` 只在
+ * 对方窗口再次写入时才来，不是"队列保证送达"。因此两个窗口真正并发编辑时，仍按 last-write-wins
+ * 处理，一次写入可能被对方覆盖。这是「整份快照持久化」的既有局限（本文件一直是整份写、整份
+ * 替换，没有字段级合并），不是这道闸门引入的；闸门只是把"读旧后回滚"这个更严重的失效
+ * （重复执行、在途记录被抹）换成"并发编辑可能丢一侧"这个已知且更轻的失效。
+ */
 function applyRemote(value: unknown): void {
+  if (pendingWrites > 0) return
   const next = parseState(value)
   if (JSON.stringify(next) === JSON.stringify(snapshot)) return
   snapshot = next
@@ -344,6 +387,19 @@ export async function hydrateAutomation(): Promise<void> {
   }
 }
 
+/**
+ * `startAutomationSync` 发起的那一次 KV 读取的完成信号；`selfHealAutomationState` 复用它。
+ *
+ * 只允许这一次：selfHeal 是在**首轮 tick 之后**才 await 的，那时本轮已经 `markTaskFired` /
+ * `startAutomationRun`。若在那里再发一次 `readRemoteState`，读到的可能是不含这些写入的旧
+ * 快照，`applyRemote` 整份替换就把排期和 running 记录一起回滚（→ 下一轮重复执行）。
+ * 启动那次读取的发起时刻早于任何派发，复用它就没有这个窗口。
+ * 非 Tauri（单测）环境下 startAutomationSync 直接返回、hydration 保持 null，这里立即 resolve。
+ */
+export function whenHydrated(): Promise<void> {
+  return hydration ?? Promise.resolve()
+}
+
 /** 订阅跨窗口变更。主窗口和设置窗口各自调用一次，各自清理自己那条订阅。 */
 export function startAutomationSync(): () => void {
   if (!IN_TAURI) return () => {}
@@ -354,11 +410,30 @@ export function startAutomationSync(): () => void {
       if (!disposed && module !== null) unlisten = module.onRemoteStateChanged(applyRemote)
     })
     .catch(() => undefined)
-  void hydrateAutomation()
+  hydration = hydrateAutomation().catch(() => undefined)
   return () => {
     disposed = true
     unlisten?.()
   }
+}
+
+/**
+ * 主窗口启动自愈：等启动那次 hydrate 把 KV 真源合并进内存后，落定僵尸 running 记录、
+ * 清扫陈旧排期。只在主窗口调度器启动路径调用一次 —— 设置窗口也调 startAutomationSync，
+ * 若把清扫挂在 hydrate 内部，两个窗口会各自重算并回写 KV，形成双写竞态。
+ *
+ * **必须**等 `whenHydrated()` 而不是自己再 `hydrateAutomation()`：本函数在首轮 tick 之后
+ * 才跑到 await，此刻本轮已经推进过排期、写过 running 记录；再发一次读取拿到的可能是这些
+ * 写入落地前的旧快照，applyRemote 会把它们整份回滚（→ 任务下一轮重复执行）。
+ *
+ * @param startedBefore 僵尸记录的时间水位（调度器启动时刻）。必须这么传：调用方同一轮 tick
+ *   早已同步派发过到期任务、写下了真实的 running 记录；没有水位就会把这条在途运行误判成
+ *   僵尸。默认正无穷，保持"落定全部 running"的裸语义。
+ */
+export async function selfHealAutomationState(startedBefore?: number): Promise<void> {
+  await whenHydrated()
+  finalizeStaleRunningRuns(Date.now(), startedBefore)
+  sweepStaleSchedules()
 }
 
 // 同一 origin 的其它 webview 写入时尽量实时同步（best-effort，兜底用）。
@@ -477,6 +552,86 @@ export function dueTasks(now: number = Date.now()): ScheduledTask[] {
       now - task.nextRunAt <= CATCH_UP_WINDOW_MS &&
       now <= validityEnd(task.validUntil)
   )
+}
+
+// ── 陈旧状态自愈（仅主窗口调度器路径调用） ─────────────────────────────────
+
+/**
+ * 排期清扫：把「早已错过补跑窗」的启用任务的 nextRunAt 从现在重算一次。
+ *
+ * 存在的理由：nextRunAt() 只在 createTask/updateTask/setTaskEnabled/markTaskFired 时调用。
+ * App 关闭期间错过的时刻既不会被 dueTasks 补跑（超出 60s 窗），也没有任何路径推进排期，
+ * 陈旧值会永久停留在过去 —— 每日 08:05 的任务周末错过后，周一启动就「永不 due、永不推进」，
+ * 任务实际失效。清扫恢复后续排期，语义不变：错过的那一次不补跑。
+ *
+ * 幂等、可每个 tick 反复调用（引擎长时间未就绪时排期同样需要自愈）；无任务变更时不
+ * commit，避免每 30s 空写一次存储。sweep 与 due 判定互斥：sweep 只碰 now - nextRunAt >
+ * CATCH_UP_WINDOW_MS 的任务，dueTasks 只认 <= 窗口的，同一时刻不会既补跑又顺延。
+ * 仅在主窗口的调度器里调用（tick + 启动自愈），设置窗口只读展示、不重排。
+ *
+ * once 语义：nextRunAt() 对 once 只认创建当天/次日那一次，既定时刻已过恒为 null。与
+ * markTaskFired 的「once 触发即自动停用」对齐 —— 从未触发但已过期同样置 null 并停用，
+ * 不留「启用却永无排期」的僵尸任务。重复任务重算为 null（有效期已过）时保持启用，
+ * 与既有「validityEnd 之后不再 due、可改有效期恢复」的行为一致。
+ *
+ * @returns 被重算的任务数
+ */
+export function sweepStaleSchedules(now: number = Date.now()): number {
+  let swept = 0
+  const tasks = snapshot.tasks.map((task) => {
+    if (!task.enabled || task.nextRunAt === null) return task
+    if (now - task.nextRunAt <= CATCH_UP_WINDOW_MS) return task
+    const next = nextRunAt(task, now)
+    swept += 1
+    if (task.repeat === "once" && next === null) {
+      return { ...task, nextRunAt: null, enabled: false, updatedAt: now }
+    }
+    return { ...task, nextRunAt: next, updatedAt: now }
+  })
+  if (swept > 0) commit({ ...snapshot, tasks })
+  return swept
+}
+
+/**
+ * 僵尸运行记录落定：把停留在 "running" 的记录写成 failed（"应用退出中断"）。
+ *
+ * 运行记录只由主窗口写入，且执行链（executeAutomationRun / withSerialTimeout）都随主
+ * 窗口进程存亡：会话还「在跑」时 App 退出，重启后这条 running 永远等不到 finish。needsAuth
+ * 的 waiting 展示同样依赖 status === "running"，一并落定。只在启动路径调用一次 —— 运行中
+ * 新写的 running 记录是真实在途，每个 tick 调这个会把健康运行烧成 failed。
+ *
+ * `startedBefore` 是时间水位：只有「开始时间早于它」的记录才算僵尸。没有这道水位，启动自愈
+ * 会误伤本轮新起的运行 —— selfHealAutomationState 内部先 await hydrateAutomation()，而调度器
+ * 的同一轮 tick 早已同步往下跑完 sweep / canRun / startAutomationRun：等 await 返回，那条刚
+ * 写下的真实 running 记录就成了「无差别把所有 running 改成 failed」的受害者。水位取调度器
+ * 启动时刻（早于任何一次派发），上一世遗留的记录 startedAt 必然更早，仍会被正确落定。
+ *
+ * 严格小于（而非 <=）：同一毫秒内无法区分"上一世遗留"与"本轮刚起"，宁可漏掉一条僵尸
+ * （用户下一轮 tick 也看不到它，只是显示成运行中）也不能烧掉一条真实在途的运行。
+ *
+ * @param now 落定时间；记录的 finishedAt 为空时用它兜底
+ * @param startedBefore 时间水位，默认正无穷（无水位：落定全部 running）
+ * @returns 被落定的记录数
+ */
+export function finalizeStaleRunningRuns(
+  now: number = Date.now(),
+  startedBefore: number = Number.POSITIVE_INFINITY
+): number {
+  const isStale = (run: RunRecord): boolean => run.status === "running" && run.startedAt < startedBefore
+  const stale = snapshot.runs.filter(isStale).length
+  if (stale === 0) return 0
+  const runs = snapshot.runs.map((run) =>
+    isStale(run)
+      ? {
+          ...run,
+          status: "failed" as RunStatus,
+          finishedAt: run.finishedAt ?? now,
+          error: "应用退出中断"
+        }
+      : run
+  )
+  commit({ ...snapshot, runs })
+  return stale
 }
 
 // ── 运行记录 ────────────────────────────────────────────────────────────────

@@ -23,7 +23,7 @@ import { DriveStatus } from "../drive"
 import { DriveIntegrations } from "../integrations"
 
 const snapshot: Snapshot = {
-  version: 1,
+  version: 2,
   generation: 1,
   sequence: 0,
   configured: true,

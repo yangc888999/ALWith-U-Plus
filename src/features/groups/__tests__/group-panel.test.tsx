@@ -183,6 +183,117 @@ test("新开一场 on a folder-less draft materialises the directory, stores it,
   expect(stored[0]?.directory).toBe("/Users/me/Documents/ALWith/groups/定价会")
 })
 
+// Regression: 新开一场 on a folder-less meeting used to have no pending state — a second click
+// (button or sessions menu) while the first groupDirectoryCreate was still in flight launched a
+// concurrent create and a second enter, racing two writers over the same meeting folder.
+test("新开一场 locks the card while the folder create is in flight; no concurrent second create", async () => {
+  let resolveCreate!: (value: { directory: string; document: string }) => void
+  native.commands.groupDirectoryCreate.mockImplementationOnce(
+    () => new Promise((resolve) => void (resolveCreate = resolve))
+  )
+  setGroup(group({ directory: "", document: "" }))
+  const entered: string[] = []
+  render(<GroupPanel onSelect={() => undefined} onNewChat={(cwd) => entered.push(cwd)} />)
+  const button = screen.getByText("groups.panelNew").closest("button")
+  await act(async () => {
+    button?.click()
+  })
+  expect(native.commands.groupDirectoryCreate).toHaveBeenCalledTimes(1)
+  // While pending, the card shows the spinner copy on a disabled button.
+  const pending = screen.getByText("groups.panelOpening").closest("button")
+  expect(pending?.disabled).toBe(true)
+  expect(pending?.querySelector(".animate-spin")).not.toBeNull()
+  expect(entered).toEqual([])
+  // A fast second click (fireEvent dispatches even on the disabled button; the in-flight guard
+  // must swallow it) starts nothing new.
+  await act(async () => {
+    fireEvent.click(pending as HTMLElement)
+  })
+  expect(native.commands.groupDirectoryCreate).toHaveBeenCalledTimes(1)
+  // Resolving the create enters once, stores the folder, and unlocks the card again.
+  await act(async () => {
+    resolveCreate({
+      directory: "/Users/me/Documents/ALWith/groups/定价会",
+      document: "/Users/me/Documents/ALWith/groups/定价会/group.md"
+    })
+  })
+  expect(entered).toEqual(["/Users/me/Documents/ALWith/groups/定价会"])
+  const restored = screen.getByText("groups.panelNew").closest("button")
+  expect(restored?.disabled).toBeFalsy()
+})
+
+// The guard above this test's second click is the `disabled` attribute — that click lands after
+// a re-render. This one pins the other half: both clicks inside a single act() with no flush
+// between them, so only the synchronous `startingRef` short-circuit inside startNew can stop the
+// second create (dropping that ref check turns this red while every other case stays green).
+test("two same-frame clicks on 新开一场 are swallowed by the in-flight ref guard, not the disabled prop", async () => {
+  let resolveCreate!: (value: { directory: string; document: string }) => void
+  native.commands.groupDirectoryCreate.mockImplementationOnce(
+    () => new Promise((resolve) => void (resolveCreate = resolve))
+  )
+  setGroup(group({ directory: "", document: "" }))
+  const entered: string[] = []
+  render(<GroupPanel onSelect={() => undefined} onNewChat={(cwd) => entered.push(cwd)} />)
+  const button = screen.getByText("groups.panelNew").closest("button") as HTMLElement
+  await act(async () => {
+    fireEvent.click(button)
+    fireEvent.click(button)
+  })
+  expect(native.commands.groupDirectoryCreate).toHaveBeenCalledTimes(1)
+  expect(entered).toEqual([])
+  // Unlock at the end so no create promise is left dangling into the next case.
+  await act(async () => {
+    resolveCreate({
+      directory: "/Users/me/Documents/ALWith/groups/定价会",
+      document: "/Users/me/Documents/ALWith/groups/定价会/group.md"
+    })
+  })
+  expect(entered).toEqual(["/Users/me/Documents/ALWith/groups/定价会"])
+})
+
+test("with a create in flight the sessions menu 新开一场 is disabled and cannot double-fire", async () => {
+  let resolveCreate!: (value: { directory: string; document: string }) => void
+  native.commands.groupDirectoryCreate.mockImplementationOnce(
+    () => new Promise((resolve) => void (resolveCreate = resolve))
+  )
+  setGroup(group({ directory: "", document: "" }))
+  render(<GroupPanel onSelect={() => undefined} onNewChat={() => undefined} />)
+  // Start the create from the card button so the menu opens straight into the pending state.
+  await act(async () => {
+    screen.getByText("groups.panelNew").closest("button")?.click()
+  })
+  expect(native.commands.groupDirectoryCreate).toHaveBeenCalledTimes(1)
+  await act(async () => {
+    screen.getByLabelText("groups.panelSessions").click()
+  })
+  const pendingItem = await screen.findByRole("menuitem", { name: "groups.panelOpening" })
+  expect(pendingItem.hasAttribute("data-disabled")).toBe(true)
+  await act(async () => {
+    fireEvent.click(pendingItem)
+  })
+  // The menu item click bypasses nothing: still exactly one create.
+  expect(native.commands.groupDirectoryCreate).toHaveBeenCalledTimes(1)
+  await act(async () => {
+    resolveCreate({
+      directory: "/Users/me/Documents/ALWith/groups/定价会",
+      document: "/Users/me/Documents/ALWith/groups/定价会/group.md"
+    })
+  })
+  expect(await screen.findByRole("menuitem", { name: "groups.panelNew" })).toBeTruthy()
+})
+
+test("a failed create keeps the existing toast behaviour and unlocks the card for a retry", async () => {
+  native.commands.groupDirectoryCreate.mockRejectedValueOnce(new Error("disk full"))
+  setGroup(group({ directory: "", document: "" }))
+  render(<GroupPanel onSelect={() => undefined} onNewChat={() => undefined} />)
+  await act(async () => {
+    screen.getByText("groups.panelNew").closest("button")?.click()
+  })
+  // The rejection clears the pending flag, so the button is clickable again.
+  const retry = await screen.findByText("groups.panelNew")
+  expect(retry.closest("button")?.disabled).toBeFalsy()
+})
+
 test("查看会议文件 opens the meeting folder on the current surface without a new chat", async () => {
   setGroup(group())
   const onViewFiles = vi.fn()
