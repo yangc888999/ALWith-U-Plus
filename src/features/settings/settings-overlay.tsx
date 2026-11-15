@@ -160,7 +160,7 @@ export function SettingsOverlay() {
         type="button"
         aria-label={t("settings.close")}
         onClick={closeSettingsOverlay}
-        className="absolute start-3 top-2 z-20 flex size-6 items-center justify-center rounded-full bg-foreground/10 text-muted-foreground transition-colors hover:bg-foreground/20 hover:text-foreground"
+        className="absolute start-3 top-2 z-20 flex size-7 items-center justify-center rounded-full border border-border/60 bg-muted/80 text-muted-foreground shadow-sm transition-colors hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
       >
         <XIcon className="size-3.5" aria-hidden="true" />
       </button>

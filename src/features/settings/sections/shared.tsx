@@ -98,7 +98,8 @@ export function SettingRow({
   desc,
   children,
   aligned = false,
-  compact = false
+  compact = false,
+  density
 }: {
   title: string
   /** Short secondary text under the title. ReactNode so a row can render a monospace path etc. */
@@ -107,6 +108,7 @@ export function SettingRow({
   aligned?: boolean
   /** Tighter vertical rhythm for card-style pages (About). */
   compact?: boolean
+  density?: "compact" | "descriptive"
 }) {
   const id = useId()
   return (
@@ -116,6 +118,7 @@ export function SettingRow({
       aria-describedby={desc ? `${id}-description` : undefined}
       className={cn("settings-row", aligned && "settings-row-aligned")}
       data-compact={compact ? "" : undefined}
+      data-density={density}
     >
       <div className="min-w-0">
         <div id={`${id}-title`} className="text-sm leading-5 font-medium">

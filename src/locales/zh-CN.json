@@ -610,7 +610,7 @@
     },
     "updates": "更新",
     "autoUpdate": "自动下载更新",
-    "autoUpdateDesc": "更新源已切换到本项目的 GitHub 发布页，不再连接上游 ALwith 服务。",
+    "autoUpdateDesc": "更新源为 GitHub，项目地址 >> https://github.com/yangc888999/ALWith-U-Plus",
     "engine": "引擎",
     "licensesTitle": "许可",
     "title": "设置",

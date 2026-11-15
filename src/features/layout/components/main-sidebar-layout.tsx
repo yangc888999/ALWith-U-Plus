@@ -101,7 +101,10 @@ export function MainSidebarLayout({
   // No pixel ceiling: the Settings percentage has to describe the real column even on a wide
   // window. The old 460px cap turned 18% into 16% there and made the numbers look wrong.
   const navigationRatio = chatMode === true ? chatLayout.navigationRatio : layout.navigationRatio
-  const sidebarPx = resolveRatioToPixels(navigationRatio, viewportWidth, 0, viewportWidth)
+  // Clamp the restored/draggable sidebar width to the current viewport. A width saved on a wide
+  // monitor must not consume the entire chat canvas after the window is narrowed.
+  const sidebarMaxPx = Math.max(NAVIGATION_PX_MIN, Math.min(viewportWidth * 0.34, 420))
+  const sidebarPx = resolveRatioToPixels(navigationRatio, viewportWidth, NAVIGATION_PX_MIN, sidebarMaxPx)
   // A drag owns the pixel width until release; the persisted share takes over afterwards, so the
   // next launch (or the Settings number) decides the column again.
   const [dragPx, setDragPx] = useState<number | null>(null)

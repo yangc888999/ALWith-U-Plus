@@ -109,6 +109,12 @@
     0 1px 2px color-mix(in oklab, var(--foreground) 4%, transparent),
     0 6px 16px -12px color-mix(in oklab, var(--foreground) 20%, transparent);
 }
+/* Nested groups use separation, not another heavy card frame. */
+.settings-card .settings-card {
+  border-color: color-mix(in oklab, var(--border) 58%, transparent);
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  box-shadow: none;
+}
 
 .settings-card-head {
   display: flex;
@@ -286,6 +292,7 @@
   min-width: 0;
   min-height: 4.5rem;
   align-items: center;
+  /* Normal density is the default; compact/descriptive rows opt out below. */
   justify-content: space-between;
   gap: 1.5rem;
   padding-block: 1rem;
@@ -337,6 +344,19 @@
   min-height: 0;
   padding-block: 0.75rem;
   padding-inline: 1rem;
+}
+
+/* Density tiers: compact controls should not inherit the descriptive row's 72px rhythm. */
+.settings-row[data-density="compact"] {
+  min-height: 0;
+  padding-block: 0.625rem;
+}
+.settings-row[data-density="descriptive"] {
+  align-items: flex-start;
+  padding-block: 1.125rem;
+}
+.settings-row[data-density="descriptive"] .settings-row-description {
+  max-width: 48rem;
 }
 
 .settings-row[data-compact]:has(.settings-row-description) {
@@ -469,6 +489,44 @@
 .settings-content .alwith-legacy .setting-item-control > input:not([type="checkbox"]):focus-visible {
   border-color: var(--ring);
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
+}
+
+/* ---- Responsive settings layout -------------------------------------------------------------- */
+@media (max-width: 860px) {
+  .settings-window .settings-sidebar {
+    width: 13rem;
+  }
+  .settings-window .settings-content {
+    --settings-control-width: min(15rem, 48%);
+  }
+}
+
+@media (max-width: 720px) {
+  .settings-window .settings-sidebar {
+    width: 10rem;
+  }
+  .settings-window .settings-card-head {
+    padding-inline: 0.75rem;
+  }
+  .settings-window .settings-card-body {
+    padding-inline: 0.75rem;
+  }
+  .settings-window .settings-content {
+    --settings-control-width: 100%;
+    padding-inline: 1rem;
+  }
+  .settings-window .settings-row-aligned,
+  .settings-window .settings-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.625rem;
+  }
+  .settings-window .settings-row-control {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .settings-window .settings-row-control > * {
+    max-width: 100%;
+  }
 }
 
 /* ---- Word cloud (usage → what I ask about) ---------------------------------------------------

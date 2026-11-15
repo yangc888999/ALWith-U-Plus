@@ -6,6 +6,7 @@ import { NATIVE_MODEL_GROUP } from "@/agent/client";
 import openaiLogo from "@/components/icons/openai-logo.svg";
 import { ProviderMark } from "@/components/provider-mark";
 import i18n from "@/lib/i18n"
+import { companyModelLabel } from "@/lib/company-display-name"
 import modelPresentation from "@/lib/model-presentation.json"
 import { resolveModelConfig } from "@/lib/model-config"
 import {
@@ -220,7 +221,12 @@ export function presentModelCatalog(groups: ModelGroup[]): ModelGroup[] {
     ...trimmed.filter((group) => group.id !== NATIVE_MODEL_GROUP.id),
   ];
   return ordered.map((group) => {
-    const native = group.id === NATIVE_MODEL_GROUP.id;
+    const native = group.id === NATIVE_MODEL_GROUP.id
+    // 企业模型组标题来自会话启动时的旧快照；改名后这里仍会显示“企业内部模型”。
+    // 统一在最终展示层覆盖，确保底部选择器与设置页使用同一名称。
+    const groupName = group.id === "finture-enterprise" || group.id.startsWith("custom_alwith_enterprise_")
+      ? companyModelLabel(group.name)
+      : group.name;
     const provider = PROVIDERS.find((entry) => entry.id === group.id);
     // Keep the compact picker visually grouped: the first model carries its group's heading and
     // every model uses the same fixed icon box, independent of whether it is native or gateway.
@@ -246,7 +252,7 @@ export function presentModelCatalog(groups: ModelGroup[]): ModelGroup[] {
             <span
               aria-hidden="true"
               className="model-picker-icon"
-              data-model-group-title={index === 0 ? group.name : undefined}
+              data-model-group-title={index === 0 ? groupName : undefined}
             >
               {native ? (
                 <img src={openaiLogo} alt="" className="dark:invert" />

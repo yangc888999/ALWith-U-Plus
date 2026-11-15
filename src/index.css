@@ -331,6 +331,24 @@ html[data-window-backdrop="acrylic"]
 [data-sidebar-mode="pinned"] .main-screen-content > .main-chat-surface {
   margin-inline-start: 0;
 }
+/* Active navigation is intentionally stronger than a 5% tint: it must remain legible over
+   wallpaper and transparent materials, and communicate the current destination without hover. */
+.main-sidebar-panel [aria-current="page"],
+.main-sidebar-rail [aria-current="page"] {
+  position: relative;
+  background-color: color-mix(in oklab, var(--foreground) 10%, transparent);
+  color: var(--foreground);
+}
+.main-sidebar-panel [aria-current="page"]::before,
+.main-sidebar-rail [aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  inset-block: 7px;
+  inset-inline-start: 2px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--primary);
+}
 [data-sidebar-mode="pinned"] .main-screen-leading > .main-chat-surface {
   margin-inline-end: 0;
 }
@@ -413,7 +431,7 @@ html[data-window-backdrop="acrylic"]
   width: var(--active-sidebar-width);
   height: 100%;
   /* 收起/展开时外壳宽度要跟着动：只淡出不缩宽，侧栏会在 0 宽度里被瞬间裁掉，看起来闪一下。 */
-  transition: width 280ms cubic-bezier(0.32, 0.72, 0, 1);
+  transition: width 420ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 /* A drag owns the width: skip the open/close easing so the edge follows the pointer. */
 .main-sidebar-shell[data-resizing] {
@@ -480,29 +498,50 @@ html[data-window-backdrop="acrylic"]
 [data-sidebar-mode="floating"] .main-screen-track > .main-sidebar-shell {
   width: 0;
 }
-/* 收起 = 整块向左滑出（translateX(-100%)），外壳同步收窄，正文同步让位。
-   不要在 hidden 态裁切外壳：裁切会把滑出变成「从右往左被剪掉」，看起来还是硬切。 */
+/* 收起/展开都使用明确的状态终点。不要只依赖基础态 transition：从 hidden 切回 pinned 时，
+   hidden 的 visibility 延迟和基础态的 visibility:visible 会互相覆盖，导致展开像瞬移。 */
+[data-sidebar-mode="pinned"] .main-sidebar-viewport {
+  transform: translateX(0);
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition:
+    transform 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 360ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s;
+}
+/* 收起 = 短距离向左收拢（48px），外壳同步收窄，正文同步让位。
+   不再整块滑出视口，避免看起来像第二页突然被放出或整栏瞬间消失。 */
 [data-sidebar-mode="hidden"] .main-sidebar-viewport {
-  transform: translateX(-100%);
+  transform: translateX(-48px);
 }
 /* The rail owns a static 58px slot (52px column + 6px seam) in both collapsed and peeking
    states, so opening or dismissing the floating card never moves the chat frame. */
 [data-sidebar-mode="hidden"] .main-screen-content > .main-chat-surface,
 [data-sidebar-mode="floating"] .main-screen-content > .main-chat-surface {
-  margin-inline-start: calc(58px + var(--main-surface-gutter) / 2);
+  margin-inline-start: min(calc(58px + var(--main-surface-gutter) / 2), 58px);
+}
+@media (max-width: 720px) {
+  [data-sidebar-mode="hidden"] .main-screen-content > .main-chat-surface,
+  [data-sidebar-mode="floating"] .main-screen-content > .main-chat-surface {
+    margin-inline-start: 44px;
+  }
+  .main-sidebar-rail {
+    width: 40px;
+  }
 }
 /* 会话区让位与外壳同拍，否则侧栏还在滑、正文已经跳到位。 */
 .main-screen-content > .main-chat-surface {
-  transition: margin-inline-start 280ms cubic-bezier(0.32, 0.72, 0, 1);
+  transition: margin-inline-start 420ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 [data-sidebar-mode="hidden"] .main-sidebar-viewport {
   pointer-events: none;
   opacity: 0;
   visibility: hidden;
   transition:
-    transform 280ms cubic-bezier(0.32, 0.72, 0, 1),
-    opacity 240ms cubic-bezier(0.32, 0.72, 0, 1),
-    visibility 0s linear 280ms;
+    transform 360ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 300ms cubic-bezier(0.22, 1, 0.36, 1),
+    visibility 0s linear 360ms;
 }
 /* The peek is a floating card beside the rail: inset from the window edges, fully rounded,
    soft shadow, painted over the chat surface. The shell stays zero-width in flow. */
@@ -542,8 +581,8 @@ html[data-window-backdrop="acrylic"]
   pointer-events: none;
   transform: translateX(-8px);
   transition:
-    opacity 170ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 190ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
     visibility 0s;
   /* Promote to its own layer so the crossfade composites on the GPU instead of repainting the
      whole surface — this is what keeps the collapse smooth on lower-end machines. */
@@ -571,9 +610,9 @@ html[data-window-backdrop="acrylic"]
   transform: none;
   /* 等侧栏先退场再出现：两者同时淡入淡出会叠出一帧「两套侧栏」。 */
   transition:
-    opacity 160ms cubic-bezier(0.32, 0.72, 0, 1) 130ms,
-    transform 180ms cubic-bezier(0.32, 0.72, 0, 1) 130ms,
-    visibility 0s 130ms;
+    opacity 220ms cubic-bezier(0.22, 1, 0.36, 1) 300ms,
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1) 300ms,
+    visibility 0s 300ms;
 }
 /* Each icon starts tucked left and transparent; the visible state releases them in a tight
    cascade. The old 40ms-per-icon stagger ran past 400ms and read as laggy — 20ms keeps the
@@ -582,8 +621,8 @@ html[data-window-backdrop="acrylic"]
   opacity: 0;
   transform: translateX(-10px);
   transition:
-    opacity 130ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 150ms cubic-bezier(0.22, 1, 0.36, 1);
+    opacity 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
   will-change: opacity, transform;
 }
 [data-rail-show] .main-sidebar-rail button {
@@ -658,7 +697,8 @@ html[data-window-backdrop="acrylic"]
 }
 /* Application controls use a hover overlay; conversations keep their own presentation. */
 @media (hover: hover) {
-  :is(button, [role="button"], [class~="group/button"]):not(:disabled):not([aria-disabled="true"]):not(
+  /* Hover is opt-in for chrome controls; do not paint switches, selects, extensions or content actions. */
+  :is(.chrome-hover, .navigation-item, .toolbar-button, .card-action, .main-window-statusbar button:not(.canvas-dots button)):not(:disabled):not([aria-disabled="true"]):not(
       [data-disabled]
     ):not(
       :where(
@@ -674,6 +714,7 @@ html[data-window-backdrop="acrylic"]
       color-mix(in oklab, currentColor 8%, transparent),
       color-mix(in oklab, currentColor 8%, transparent)
     );
+    transition: background-color 140ms ease, background-image 140ms ease;
   }
 }
 
@@ -714,6 +755,7 @@ html[data-window-backdrop="acrylic"]
   /* The renderer updates 100vw with native page zoom; no React/IPC timing participates in compensation. */
   --window-zoom-correction: calc(100vw / var(--native-viewport-width));
   --chrome-hover-background: color-mix(in oklab, var(--foreground) 8%, transparent);
+  --chrome-focus-ring: color-mix(in oklab, var(--primary) 72%, transparent);
 }
 /* Trigger composition replaces data-slot, but preserves the shadcn button class. */
 .main-sidebar-panel :is([class~="group/button"], .chrome-hover):hover,
@@ -725,6 +767,12 @@ html[data-window-backdrop="acrylic"]
 .main-workspace-toolbar .file-workspace-toolbar button:hover,
 .main-window-statusbar button:not(.canvas-dots button):is(:hover, [aria-expanded="true"]) {
   background-color: var(--chrome-hover-background);
+}
+
+/* Keyboard focus must remain visible on transparent surfaces and wallpaper. */
+:is(button, [role="button"], input, select, textarea):focus-visible {
+  outline: 2px solid var(--chrome-focus-ring);
+  outline-offset: 2px;
 }
 
 /* Nested shortcut controls share their parent row's hover surface. */
@@ -739,6 +787,17 @@ html[data-window-backdrop="acrylic"]
 }
 
 @media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .alwith-marquee {
+    animation: none;
+  }
   .main-screen-track,
   .main-screen-leading,
   .main-screen-content,
@@ -1035,11 +1094,22 @@ body > div:has(> [data-slot="dialog-overlay"]) > * {
 [data-wallpaper="active"] [data-slot="sidebar-wrapper"] {
   background: transparent;
 }
+[data-wallpaper="active"] .wallpaper-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--background) 18%, transparent);
+}
 [data-wallpaper="active"] [data-slot="sidebar"] {
-  background: color-mix(in srgb, var(--sidebar) 80%, transparent);
+  background: color-mix(in srgb, var(--sidebar) 90%, transparent);
 }
 [data-wallpaper="active"] .main-chat-surface {
-  background: color-mix(in srgb, var(--background) 88%, transparent);
+  background: color-mix(in srgb, var(--background) 94%, transparent);
+}
+[data-wallpaper="active"] :is(.settings-card, [data-slot="popover"], [data-slot="dialog-content"]) {
+  background: color-mix(in srgb, var(--card) 96%, transparent);
 }
 
 /* ALWith L agent identity, shared with the compiled native cursor artwork. */

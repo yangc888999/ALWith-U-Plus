@@ -191,12 +191,15 @@ export function UsageResetBlock({ refreshToken }: { refreshToken: number }) {
   const hidden = available.length - rows.length
 
   return (
-    <div className="space-y-2 border-t border-border/60 pt-4" data-testid="usage-reset-block">
+    <div className="space-y-3 border-t border-border/60 pt-4" data-testid="usage-reset-block">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-sm font-medium">{t("usageReport.resetCreditsTitleCount", { count })}</span>
+        <span className="flex items-center gap-2 text-sm font-semibold">
+          <span className="size-1.5 rounded-full bg-primary" aria-hidden="true" />
+          {t("usageReport.resetCreditsTitleCount", { count })}
+        </span>
         <button
           type="button"
-          className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          className="rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           onClick={() => void openExternal(CREDITS_URL).catch(() => {})}
         >
           {t("usageReport.resetCreditsManage")}
@@ -216,18 +219,23 @@ export function UsageResetBlock({ refreshToken }: { refreshToken: number }) {
               return (
                 <li
                   key={credit.id}
-                  className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border/60 px-2.5 py-0.5"
+                  className="group grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border border-border/60 bg-background/45 px-3 py-2.5 shadow-xs transition-all hover:-translate-y-px hover:border-primary/30 hover:bg-muted/30 hover:shadow-sm"
                 >
-                  <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{creditTitle(credit, t)}</span>
-                  <span className="text-[11px] tabular-nums text-muted-foreground">
-                    {remaining === null
-                      ? t("usageReport.resetCreditsNoExpiry")
-                      : remaining <= 0
-                        ? t("usageReport.resetCreditExpired")
-                        : t("usageReport.resetCreditExpiresIn", { time: formatExpiry(remaining, t) })}
+                  <span className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-xs font-semibold tabular-nums text-primary">
+                    {rows.indexOf(credit) + 1}
                   </span>
-                  {remaining !== null && remaining > 0 && (
-                    <span className="flex shrink-0 items-center gap-1">
+                  <span className="min-w-0">
+                    <span className="block truncate text-[13px] font-semibold">{creditTitle(credit, t)}</span>
+                    <span className="mt-0.5 block truncate text-[11px] tabular-nums text-muted-foreground">
+                      {remaining === null
+                        ? t("usageReport.resetCreditsNoExpiry")
+                        : remaining <= 0
+                          ? t("usageReport.resetCreditExpired")
+                          : t("usageReport.resetCreditExpiresIn", { time: formatExpiry(remaining, t) })}
+                    </span>
+                  </span>
+                  {remaining !== null && remaining > 0 ? (
+                    <span className="flex shrink-0 items-center gap-1.5">
                       {asking && (
                         <Button variant="ghost" size="sm" disabled={busy} onClick={() => setConfirming(null)}>
                           {t("usageReport.redeemCancel")}
@@ -237,6 +245,7 @@ export function UsageResetBlock({ refreshToken }: { refreshToken: number }) {
                         variant={asking ? "destructive" : "outline"}
                         size="sm"
                         disabled={busy}
+                        className="min-w-[76px]"
                         onClick={() => {
                           if (!asking) {
                             setConfirming(credit.id)
@@ -248,6 +257,10 @@ export function UsageResetBlock({ refreshToken }: { refreshToken: number }) {
                         {busy && <RefreshCwIcon className="size-3.5 animate-spin" aria-hidden="true" />}
                         {asking ? t("usageReport.redeemConfirm") : t("usageReport.redeemNow")}
                       </Button>
+                    </span>
+                  ) : (
+                    <span className="rounded-full bg-muted px-2 py-1 text-[10px] text-muted-foreground">
+                      {t("usageReport.resetCreditExpired")}
                     </span>
                   )}
                 </li>
