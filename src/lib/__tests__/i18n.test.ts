@@ -66,12 +66,12 @@ test("the Simplified Chinese activity sidebar uses translated labels", async () 
   expect(i18n.t("sidebar.background")).toBe("后台")
 })
 
-test("supported locales use the ALWith L product name", async () => {
+test("supported locales use the ALWith U⁺ product name", async () => {
   for (const { code: language } of LANGUAGES) {
     await initI18n(language)
 
-    expect(i18n.t("app.name")).toBe("ALWith L")
-    expect(i18n.t("platformAuth.signOut")).toContain("ALWith L")
+    expect(i18n.t("app.name")).toBe("ALWith U⁺")
+    expect(i18n.t("platformAuth.signOut")).toContain("ALWith U⁺")
   }
 })
 
@@ -106,5 +106,5 @@ test("Arabic loads existing app and shared chat translations with English for mi
   expect(i18n.dir()).toBe("rtl")
   expect(i18n.t("settings.title")).toBe("الإعدادات")
   expect(i18n.t("actions.copy", { ns: "alwithChat" })).toBe(chatLocales.ar.actions.copy)
-  expect(i18n.t("app.name")).toBe("ALWith L")
+  expect(i18n.t("app.name")).toBe("ALWith U⁺")
 })

@@ -40,7 +40,7 @@ const chapters = content.split(/^## /m).map((chapter, index) => {
 const details = [
   {
     icon: BookOpenIcon,
-    summary: "A practical handbook for your everyday work with ALWith L.",
+    summary: "A practical handbook for your everyday work with ALWith U⁺.",
     group: "Overview",
     takeaway: "Choose a task below, or follow the getting-started path."
   },
@@ -105,7 +105,7 @@ function InterfaceMap({ navigate }: { navigate: (index: number) => void }) {
     <div className="guide-interface">
       <div className="guide-interface-bar">
         <img className="guide-interface-mark" src={logo} alt="" />
-        <strong>ALWith L</strong>
+        <strong>ALWith U⁺</strong>
         <span>Interface map</span>
       </div>
       <div className="guide-interface-body">
@@ -163,7 +163,7 @@ function GuideHome({ navigate }: { navigate: (index: number) => void }) {
       <section className="guide-hero">
         <div className="guide-hero-copy">
           <span className="guide-edition">
-            <BookOpenIcon /> The ALWith L handbook
+            <BookOpenIcon /> The ALWith U⁺ handbook
           </span>
           <h1>
             Turn a clear request
@@ -236,7 +236,7 @@ function GuideHome({ navigate }: { navigate: (index: number) => void }) {
         </blockquote>
       </section>
       <footer className="guide-home-footer">
-        <span>ALWith L Guide</span>
+        <span>ALWith U⁺ Guide</span>
         <span>An independent client powered by Codex CLI.</span>
       </footer>
     </div>
@@ -260,7 +260,7 @@ export function GuidePage() {
   const detail = details[selected]
   return (
     <AuxWindowShell
-      title="ALWith L Guide"
+      title="ALWith U⁺ Guide"
       showTitleBar={!navigator.platform.includes("Win")}
       sidebarClassName="guide-sidebar"
       className="guide-window"
@@ -268,7 +268,7 @@ export function GuidePage() {
         <nav aria-label="Guide chapters" className="guide-navigation">
           <div className="guide-brand">
             <img src={logo} alt="" />
-            <strong>ALWith L</strong>
+            <strong>ALWith U⁺</strong>
           </div>
           {chapters.map((item, index) => {
             const Icon = details[index].icon
@@ -292,7 +292,7 @@ export function GuidePage() {
           <div className="guide-navigation-footer">
             <CheckIcon />
             <span>
-              Bundled with ALWith L<br />
+              Bundled with ALWith U⁺<br />
               <small>English edition</small>
             </span>
           </div>

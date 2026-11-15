@@ -17,6 +17,17 @@ use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 
 // Same shape the account-owned gateway already binds with; one specta type, one wire contract.
 pub use crate::providers::managed::Account;
+/// How long a *healthy* renewal answer may be reused. `host.status` is a native round trip that
+/// every window rendering the account page pays for, yet a healthy answer cannot change meaning
+/// inside this window: the native renewal loop announces expiry and re-login through
+/// `enterprise:event`, and every publication/revocation clears the cache below. Unhealthy answers
+/// are never cached, so a failing renewal is still reported the first time it is seen.
+const STATUS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+struct CachedStatus {
+    generation: u64,
+    at: std::time::Instant,
+    value: Value,
+}
 struct Binding {
     account: Account,
     epoch: u64,
@@ -37,9 +48,16 @@ pub struct Enterprise {
     configured: Mutex<BTreeMap<String, BTreeSet<String>>>,
     applied: Mutex<BTreeMap<String, Value>>,
     configuration: Arc<AsyncMutex<()>>,
+    status_cache: Mutex<Option<CachedStatus>>,
 }
 fn error(message: impl ToString) -> Value {
     json!({"message":message.to_string()})
+}
+/// The exact shape that means "the local renewal can be trusted right now": it renews by itself,
+/// it is not asking the reader to sign in, and the native layer recorded no error. Anything else
+/// — including a missing field — is a real answer and must reach the reader immediately.
+fn healthy(status: &Value) -> bool {
+    status["automatic_renewal"] == true && status["requires_login"] == false && status["error"].is_null()
 }
 fn controls(window: &tauri::WebviewWindow) -> Result<(), Value> {
     if matches!(window.label(), "main" | "settings") {
@@ -87,6 +105,7 @@ impl Enterprise {
         }).await
     }
     fn changed(&self, app: &AppHandle) -> Result<(), Value> {
+        self.forget_status();
         app.emit("enterprise:models-changed", ()).map_err(error)?;
         let gate = self.gate.lock().unwrap();
         let sessions: Vec<_> = gate
@@ -100,13 +119,43 @@ impl Enterprise {
     async fn current(&self, generation: u64) -> Result<Arc<EnterpriseClient>, Value> {
         let binding = self.binding.lock().await;
         let Some(binding) = binding.as_ref() else {
-            return Err(error("Enterprise account is not ready"));
+            return Err(error("企业账号尚未就绪，请稍后重试"));
         };
         let gate = self.gate.lock().unwrap();
         if binding.generation != generation || binding.epoch != gate.generation || gate.account.is_none() {
-            return Err(error("ALwith account changed"));
+            return Err(error("ALwith 账号已变更，请重试"));
         }
         Ok(self.host.get().expect("prepared enterprise client").clone())
+    }
+    /// A locally healthy renewal answer is reused for `STATUS_TTL`; every other answer is passed
+    /// through and forgotten. This is the short circuit the account page needs: it reads the
+    /// status on mount and on each renewal event, and a healthy account produced an identical
+    /// native round trip every single time.
+    async fn status(&self, generation: u64) -> Result<Value, Value> {
+        {
+            let cache = self.status_cache.lock().unwrap();
+            if let Some(cached) = cache.as_ref()
+                && cached.generation == generation
+                && cached.at.elapsed() < STATUS_TTL
+            {
+                return Ok(cached.value.clone());
+            }
+        }
+        let host = self.host.get().ok_or_else(|| error("企业账号尚未就绪，请稍后重试"))?.clone();
+        let value = host.status(generation).await?;
+        let entry = healthy(&value).then(|| CachedStatus {
+            generation,
+            at: std::time::Instant::now(),
+            value: value.clone(),
+        });
+        *self.status_cache.lock().unwrap() = entry;
+        Ok(value)
+    }
+    /// Anything that moves the routing state — a new account, a published catalog, a revocation —
+    /// makes a previously healthy renewal answer unrepresentative, so it is dropped rather than
+    /// waited out.
+    fn forget_status(&self) {
+        *self.status_cache.lock().unwrap() = None;
     }
     pub async fn close(&self) -> Result<(), String> {
         self.invalidate().map_err(|reason| reason.to_string())?;
@@ -144,6 +193,7 @@ impl Enterprise {
         true
     }
     fn invalidate(&self) -> Result<(), Value> {
+        self.forget_status();
         let mut gate = self.gate.lock().unwrap();
         self.revoke_connection();
         gate.invalidate().map_err(error)
@@ -173,7 +223,7 @@ pub async fn enterprise_bind(window: tauri::WebviewWindow, account: Account) -> 
     if !matches!(account.api_base_url.as_str(), "https://api.alwith.ai/service" | "https://api-dev.alwith.ai/service")
         || account.user_uuid.trim().is_empty()
     {
-        return Err(error("Invalid ALwith account"));
+        return Err(error("ALwith 账号信息无效，请重新登录"));
     }
     let state = window.state::<Enterprise>();
     let identity = format!("{}:{}", account.api_base_url, account.user_uuid);
@@ -206,7 +256,7 @@ pub async fn enterprise_refresh(
         {
             let mut gate = state.gate.lock().unwrap();
             if gate.generation != generation || gate.account.as_ref() != Some(&identity) {
-                return Err(error("ALwith account changed"));
+                return Err(error("ALwith 账号已变更，请重试"));
             }
             state.revoke_connection();
             // Retire pending refreshes as well as the live route before any async wait.
@@ -214,13 +264,13 @@ pub async fn enterprise_refresh(
         }
         let _transition = state.transition.lock().await;
         state.clear(app, false).await?;
-        return Err(error("Missing ALwith access token"));
+        return Err(error("登录已失效，请重新登录 ALwith 账号"));
     }
     let _refresh = state.refresh.lock().await;
     let check = || {
         let gate = state.gate.lock().unwrap();
         if gate.generation != generation || gate.account.as_ref() != Some(&identity) {
-            Err(error("ALwith account changed"))
+            Err(error("ALwith 账号已变更，请重试"))
         } else {
             Ok(())
         }
@@ -255,11 +305,11 @@ pub async fn enterprise_refresh(
             .bearer_auth(access_token)
             .send()
             .await
-            .map_err(|_| error("ALwith configuration request failed"))?;
+            .map_err(|_| error("模型配置请求失败，请检查网络后重试"))?;
         if !response.status().is_success() {
-            return Err(error("ALwith configuration request rejected"));
+            return Err(error("模型配置请求被拒绝，请重新登录后重试"));
         }
-        let catalog = response.json::<Value>().await.map_err(|_| error("Invalid ALwith provider response"))?;
+        let catalog = response.json::<Value>().await.map_err(|_| error("模型配置响应格式无法识别，请稍后重试"))?;
         check()?;
         let Some(provider) = catalog::parse(catalog).map_err(error)? else { return Ok(None) };
         let status = host.ensure(native_generation).await?;
@@ -334,7 +384,8 @@ pub async fn enterprise_status(window: tauri::WebviewWindow) -> Result<Value, Va
         };
         binding.generation
     };
-    state.current(generation).await?.status(generation).await
+    state.current(generation).await?;
+    state.status(generation).await
 }
 #[tauri3_specta::command]
 pub async fn enterprise_begin(window: tauri::WebviewWindow, generation: u64) -> Result<Value, Value> {
@@ -355,9 +406,11 @@ pub async fn enterprise_update_account(
     state.current(generation).await?.update(generation, request_id, access_token.clone()).await?;
     let mut binding = state.binding.lock().await;
     let Some(binding) = binding.as_mut().filter(|binding| binding.generation == generation) else {
-        return Err(error("ALwith account changed"));
+        return Err(error("ALwith 账号已变更，请重试"));
     };
     binding.token = access_token;
+    // A rotated token invalidates the cached healthy answer: the credential it described is gone.
+    state.forget_status();
     Ok(())
 }
 #[tauri3_specta::command]
@@ -369,7 +422,7 @@ pub async fn enterprise_logout(window: tauri::WebviewWindow, generation: u64) ->
     state.current(generation).await?;
     let (base, token) = {
         let binding = state.binding.lock().await;
-        let bound = binding.as_ref().ok_or_else(|| error("ALwith account changed"))?;
+        let bound = binding.as_ref().ok_or_else(|| error("ALwith 账号已变更，请重试"))?;
         (bound.account.api_base_url.clone(), bound.token.clone())
     };
     state.clear(app, true).await?;
@@ -384,9 +437,9 @@ pub async fn enterprise_logout(window: tauri::WebviewWindow, generation: u64) ->
         .bearer_auth(token)
         .send()
         .await
-        .map_err(|_| error("Remote enterprise logout failed; local access is revoked"))?;
+        .map_err(|_| error("远端退出登录失败，本机权限已撤销"))?;
     if !response.status().is_success() {
-        return Err(error("Remote enterprise logout failed; local access is revoked"));
+        return Err(error("远端退出登录失败，本机权限已撤销"));
     }
     Ok(())
 }

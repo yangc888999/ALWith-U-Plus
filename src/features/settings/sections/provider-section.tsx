@@ -80,12 +80,13 @@ import {
   isFreeModelId,
   subscribeFreeModels
 } from "@/features/providers/free-model-watch"
+import { freeModelProfiles, type FreeModelProfile } from "@/features/providers/free-model-capability"
 import {
   overload429ReminderDisabled,
   setOverload429ReminderDisabled,
   subscribeOverload429ReminderDisabled
 } from "@/lib/overload-429-settings"
-import { useSettingsNativeModels } from "@/lib/settings-bridge"
+import { useSettingsNativeModels, type SettingsNativeModels } from "@/lib/settings-bridge"
 import { useBooleanSetting } from "@/lib/use-boolean-setting"
 import { Checkbox } from "@/components/ui/checkbox"
 import type {
@@ -106,14 +107,12 @@ import {
   faviconUrl,
   gatewayModelId,
   mergeDiscoveredModels,
-  nativeModelOverrides,
   parseCustomModels,
   type Provider,
   providerBuiltInModels,
   providerKeyUrl,
   providerRegion,
   PROVIDERS,
-  retiredNativeRows,
   removeCustomProvider,
   loadProviders,
   saveBuiltInModels,
@@ -121,6 +120,8 @@ import {
   saveProviderKey,
   testProvider,
 } from "@/lib/providers"
+import { useCompanyModelDisplayName } from "@/lib/company-display-name"
+import { resolveModelConfig } from "@/lib/model-config"
 import { LEGACY_ENTERPRISE_PROVIDER_ID } from "@/features/auth/enterprise-providers"
 import { orchestratedSessionsUsing, providerCloseBlocker } from "@/lib/provider-usage"
 import { useProviders } from "@/lib/use-providers"
@@ -129,7 +130,27 @@ import { cn } from "@/lib/utils"
 import { CodexProviderSection } from "./codex-provider-section"
 import { CompanyProviderCard, COMPANY_PROVIDER_TAB } from "./company-provider-card"
 import { ModelSection } from "./model-section"
+import { ProviderReliabilitySettings } from "./provider-reliability"
+import { ProviderUsageBlock } from "./provider-usage"
 import { SettingsCard } from "./shared"
+
+/**
+ * Whether a provider's card carries a 额度 block.
+ *
+ * Only the vendors that publish a quota endpoint today, plus every user-added provider: a custom
+ * endpoint may well be a metered gateway, and the Rust side answers `unsupported` for the ones that
+ * are not, which is a true statement rather than a guess.
+ */
+function hasProviderQuota(providerId: string): boolean {
+  return (
+    providerId === "openrouter" ||
+    // 哈基米 和 千问 都**不**在这里，是有意的：两个供应商都拿不到「还剩多少次」。
+    // 哈基米的网关对用户的套餐返回 `unlimited_quota: true`，按次不计量；千问的 Token Plan 只能在
+    // 阿里云控制台看（Bearer Key 调不了带 AccessKey 签名的 OpenAPI）。既然没有可行动的数字，
+    // 就不摆一块永远显示「查不到」的卡片 —— 空的额度栏比没有额度栏更让人以为出了故障。
+    providerId.startsWith("custom_")
+  )
+}
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -244,10 +265,33 @@ function providerIdForModel(model: string | null): string | null {
   return PROVIDERS.find((provider) => provider.native === true)?.id ?? null
 }
 
+/**
+ * 已下架 is a *verdict*, so it may only come from a config that is authoritative.
+ *
+ * The main window answers `sourceKind: "bundled"` when no session is open; a bundled catalog ships
+ * with the app and is therefore partial, and diffing the user's saved rows against it is exactly how
+ * a callable model got labelled 已下架. This returns nothing unless a live session published its own
+ * picker — the one list that can prove an id was withdrawn.
+ */
+export function unverifiedNativeModels(
+  native: SettingsNativeModels | null | undefined
+): readonly string[] {
+  // 空集是结论，不是偷懒：会话里的模型列表是**推荐子集**（Codex 的「推荐模型集」预设），
+  // 不是全量目录。6.1 Terra / 6 Sol / 6 Luna 这类模型 Codex 明明有，只是不在当前预设里，
+  // 拿「推荐子集」去 diff 用户的已保存行，就会把可调用的模型标成「未验证」——错在把
+  // 一个被过滤过的视图当权威。没有全量目录，就不下这个判断。
+  void native
+  void resolveModelConfig
+  return []
+}
+
 export function ProviderSection({ initialProviderId }: { initialProviderId?: string } = {}) {
   const { t } = useTranslation()
   const snapshot = useProviders()
   const cachedFreeModels = useSyncExternalStore(subscribeFreeModels, getCachedFreeModels, getCachedFreeModels)
+  // 免费模型的能力画像：只在目录真的换了对象时重算，否则每次渲染都会给出新 Map，把整张表
+  // 重新挂一遍。推荐位也在这一步定下来（见 `free-model-capability.ts`）。
+  const freeProfiles = useMemo(() => freeModelProfiles(cachedFreeModels), [cachedFreeModels])
   const newFreeModelIds = useSyncExternalStore(subscribeFreeModels, getNewFreeModelIds, getNewFreeModelIds)
   const pendingFreeModelIds = useSyncExternalStore(
     subscribeFreeModels,
@@ -501,6 +545,9 @@ export function ProviderSection({ initialProviderId }: { initialProviderId?: str
               {t("provider.applyNow")}
             </Button>
           )}
+          {/* Above the provider tabs: these two switches apply to every provider, so a row inside
+              one vendor's card would read as that vendor's setting. */}
+          <ProviderReliabilitySettings />
           {snapshot && (
           <>
             <ProviderTabs
@@ -548,16 +595,13 @@ export function ProviderSection({ initialProviderId }: { initialProviderId?: str
                         ).models
                       : providerRowModels(snapshot, provider, nativeModels)
                   }
-                  retired={
-                    provider.native === true
-                      ? retiredNativeRows(nativeModelOverrides(), nativeModels?.models ?? [])
-                      : []
-                  }
+                  retired={provider.native === true ? [] : []}
                   onSave={(revision, key) => save(revision, provider, key)}
                   onSaveModels={(revision, nextModels, reason) =>
                     saveBuiltIn(revision, provider, nextModels, reason)
                   }
                   freeModelIds={provider.id === "openrouter" ? cachedFreeModels.map((model) => model.id) : []}
+                  freeProfiles={provider.id === "openrouter" ? freeProfiles : undefined}
                   newModelIds={provider.id === "openrouter" ? newFreeModelIds : []}
                   pendingNewModelIds={provider.id === "openrouter" ? pendingFreeModelIds : []}
                   active={activeId === provider.id}
@@ -573,6 +617,7 @@ export function ProviderSection({ initialProviderId }: { initialProviderId?: str
                   provider={provider}
                   revision={snapshot.revision}
                   busy={busy !== null}
+                  active={activeId === provider.id}
                   testResult={testResults[provider.id]}
                   onTest={() => test(provider.id)}
                   onRemove={() => removeCustom(provider)}
@@ -642,6 +687,7 @@ export function ProviderTabs({
   onAdd: () => void
 }) {
   const { t } = useTranslation()
+  const companyDisplayName = useCompanyModelDisplayName()
   return (
     <div data-testid="provider-tabs" className="grid grid-cols-2 gap-2 pb-4 sm:grid-cols-3">
         {/* The company channel leads: it needs no key and no URL, only the account. Signed out, a
@@ -649,7 +695,7 @@ export function ProviderTabs({
         {managedProviders.length === 0 ? (
           <ProviderTab
             id={COMPANY_PROVIDER_TAB}
-            name={t("provider.companyName")}
+            name={companyDisplayName || t("provider.companyName")}
             active={activeId === COMPANY_PROVIDER_TAB}
             configured={false}
             icon={<Building2 className="size-5 shrink-0" />}
@@ -660,7 +706,7 @@ export function ProviderTabs({
             <ProviderTab
               key={provider.id}
               id={provider.id}
-              name={provider.name}
+              name={companyDisplayName || provider.name}
               active={activeId === provider.id}
               configured
               icon={<Building2 className="size-5 shrink-0" />}
@@ -1000,6 +1046,7 @@ export function ProviderRow({
   busy,
   models,
   freeModelIds = [],
+  freeProfiles,
   newModelIds = [],
   pendingNewModelIds = [],
   active = true,
@@ -1021,6 +1068,8 @@ export function ProviderRow({
   models: CustomModel[]
   /** Public OpenRouter IDs confirmed free by the catalog. */
   freeModelIds?: readonly string[]
+  /** 免费模型的能力画像（分数 / 多模态 / 推荐位），同样来自公开目录。只在 OpenRouter 卡片上有。 */
+  freeProfiles?: ReadonlyMap<string, FreeModelProfile>
   /** Models added by a later public catalog check. */
   newModelIds?: readonly string[]
   /** Unacknowledged new-model notifications. */
@@ -1114,7 +1163,7 @@ export function ProviderRow({
   const newModelIdSet = useMemo(() => new Set(newModelIds), [newModelIds])
   const filteredRows = useMemo(() => {
     const query = modelFilter.trim().toLowerCase()
-    return modelRows.filter((row) => {
+    const matched = modelRows.filter((row) => {
       const id = row.api_id.toLowerCase()
       // The suffix is authoritative even before the public catalog has been fetched; the
       // catalog-confirmed set additionally covers zero-priced models without a `:free` suffix.
@@ -1122,7 +1171,15 @@ export function ProviderRow({
       if (query === "") return true
       return row.label.toLowerCase().includes(query) || id.includes(query)
     })
-  }, [modelRows, modelFilter, freeOnly, showFreeFilter, freeModelIdSet])
+    // 「免费」视图按能力参考分排序，而不是按保存顺序：读者打开这个筛选就是想找「先用哪个」，
+    // 而保存顺序是历史上点选的次序，和模型好坏无关。推荐位（前三）因此总在顶部。
+    if (!showFreeFilter || !freeOnly || freeProfiles === undefined) return matched
+    return [...matched].sort((a, b) => {
+      const left = freeProfiles.get(a.api_id)?.score ?? -1
+      const right = freeProfiles.get(b.api_id)?.score ?? -1
+      return right - left || a.api_id.localeCompare(b.api_id)
+    })
+  }, [modelRows, modelFilter, freeOnly, showFreeFilter, freeModelIdSet, freeProfiles])
   // Reordering a filtered view would reorder hidden rows too, so the drag handle is inert while
   // a filter is active; the saved array is always what gets persisted.
   const filtering = modelFilter.trim() !== "" || (showFreeFilter && freeOnly)
@@ -1795,6 +1852,10 @@ export function ProviderRow({
         </>
       )}
       <Separator />
+      {/* 额度 sits directly above the model table: it is the same question ("what will this
+          provider give me?") answered on the other axis, and it stays off the cards whose vendor
+          publishes no quota at all. */}
+      {hasProviderQuota(provider.id) && <ProviderUsageBlock providerId={provider.id} active={active} />}
       {provider.id === "openrouter" && (
         <div className="flex flex-col gap-2 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1904,6 +1965,9 @@ export function ProviderRow({
             {t(selectionMode ? "provider.bulkModeExit" : "provider.bulkMode")}
           </Button>
         </div>
+        {freeOnly && freeProfiles !== undefined && (
+          <p className="text-[11px] leading-4 text-muted-foreground">{t("provider.freeRankNote")}</p>
+        )}
         {selectionMode && (
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-2.5 py-2">
             <Button variant="ghost" size="sm" onClick={selectAllFiltered}>
@@ -2105,6 +2169,26 @@ export function ProviderRow({
                       {newModelIdSet.has(row.api_id) && (
                         <span className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-1.5 text-[10px] leading-4 text-primary">
                           {t("provider.newModel")}
+                        </span>
+                      )}
+                      {/* 免费模型的两个标签，都来自公开目录字段：推荐=能力参考分前三，
+                          多模态=输入模态除文本外还有图片/音频/视频/文件。 */}
+                      {freeProfiles?.get(row.api_id)?.recommended === true && (
+                        <span
+                          className="shrink-0 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 text-[10px] leading-4 text-emerald-600 dark:text-emerald-400"
+                          title={t("provider.freeRecommendedHint", {
+                            score: freeProfiles.get(row.api_id)?.score ?? 0
+                          })}
+                        >
+                          {t("provider.freeRecommended")}
+                        </span>
+                      )}
+                      {freeProfiles?.get(row.api_id)?.multimodal === true && (
+                        <span
+                          className="shrink-0 rounded-full border border-sky-500/30 bg-sky-500/10 px-1.5 text-[10px] leading-4 text-sky-600 dark:text-sky-400"
+                          title={t("provider.modelMultimodalHint")}
+                        >
+                          {t("provider.modelMultimodal")}
                         </span>
                       )}
                       {retiredIds.has(row.api_id) && (
@@ -2413,6 +2497,7 @@ export function CustomProviderEditor({
   provider,
   revision,
   busy,
+  active = true,
   testResult,
   onTest,
   onRemove,
@@ -2423,6 +2508,8 @@ export function CustomProviderEditor({
   provider: CustomProvider | null
   revision: number
   busy: boolean
+  /** This card's tab is visible; only then is its quota read. */
+  active?: boolean
   testResult?: ProviderTestResult
   onTest?: () => void
   onRemove?: () => void
@@ -2662,6 +2749,11 @@ export function CustomProviderEditor({
           </InputGroup>
         </Field>
       </section>
+      {/* A saved custom endpoint gets the same 额度 block as the built-in vendors: it may well be a
+          metered gateway, and `unsupported` is a true answer for the ones that are not. */}
+      {provider !== null && hasProviderQuota(provider.id) && (
+        <ProviderUsageBlock providerId={provider.id} active={active} />
+      )}
       <Separator />
       <Collapsible open={modelsOpen} onOpenChange={changeModelsOpen} className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">

@@ -26,7 +26,7 @@ pub(super) struct Model {
 }
 
 pub(super) fn parse(value: Value) -> Result<Option<IssuedProvider>, String> {
-    let rows = value.as_array().ok_or("Invalid ALwith provider response")?;
+    let rows = value.as_array().ok_or("模型配置响应格式无法识别，请稍后重试")?;
     let mut enterprise = rows.iter().filter(|row| row["auth_type"] == "enterprise_session");
     let Some(value) = enterprise.next() else { return Ok(None) };
     if enterprise.next().is_some() {
@@ -134,7 +134,7 @@ pub(super) async fn connection(
     // after a successful provider fetch, which surfaced to the reader as an authorization error.
     let source = resources.join("alwith/models.json");
     if !source.is_file() {
-        return Err(format!("Shared ALwith model catalog missing at {}", source.display()));
+        return Err(format!("共享模型目录缺失：{}", source.display()));
     }
     let models: Vec<_> = provider
         .models
@@ -147,7 +147,7 @@ pub(super) async fn connection(
         })
         .collect();
     let catalog = host.model_catalog(generation, &source, &models).await.map_err(|reason| reason.to_string())?;
-    let router = crate::bridge::router_base_url().ok_or("Shared ALwith router unavailable")?;
+    let router = crate::bridge::router_base_url().ok_or("共享模型路由不可用，请重启应用后重试")?;
     // Keep a copy inside the app's own data directory: the engine boots with one merged catalog
     // (`providers::merged_catalog_path`), and this is where that merge looks for the enterprise
     // models. The bytes are copied untouched — compaction stays at the engine's 95% default.

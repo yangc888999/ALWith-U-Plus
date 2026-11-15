@@ -6,6 +6,7 @@ import type * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { usePromptInputAttachments } from "@alwith/module-chat/composer-context"
 import { Composer, type ComposerProps, setComposerDraft, useComposer } from "@alwith/module-chat/conversation"
 import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useRef, useState } from "react"
+import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 import { useStore } from "zustand"
 
@@ -21,16 +22,12 @@ import type { VoiceResume } from "@/features/voice/use-voice-handoff"
 import { VoiceButton } from "@/features/voice/voice-button"
 import { ActivePreviewChip } from "@/features/workspace/active-preview-chip"
 import { client } from "@/lib/client"
+import { describeError } from "@/lib/error-text"
 import { groupByDirectory } from "@/lib/groups"
 import { isTemporaryChatDir } from "@/lib/quick-chat"
 import { orchestrationAllowedFor } from "@/lib/session-orchestration"
 import { useHandoffBusy } from "@/lib/use-surface-operation"
 
-import {
-  AccountModelRecovery,
-  RecoveryModelSelector,
-  useAccountModelRecovery
-} from "./composer/account-model-recovery"
 import { withoutWaitingForTurn } from "./composer/detach-submit"
 import { chatModelMenu } from "./composer/model-catalog"
 import { nativeAttachmentPolicy, NativeFileDrop } from "./composer/native-file-drop"
@@ -205,16 +202,13 @@ export function ChatComposer({
   // Registered by the in-composer bridge, which owns the attachment tray's `add` handle.
   const restoreAttachments = useRef<((content: acp.ContentBlock[]) => void) | null>(null)
   const sessionId = props.session.id
-  // An account-owned model that was revoked parks the chat read-only until a new model resumes it.
+  const { t } = useTranslation()
+  // An account-owned model that was revoked. This is a *notice*, not a lock: the composer, the
+  // textarea and the ordinary model picker stay exactly as they are, and the reader fixes it by
+  // choosing another model from that picker — the one control they already know. The old surface
+  // parked the session read-only, replaced the picker with a second one and pinned the input to a
+  // single dead row, which is what made a model problem look like a broken input box.
   const accountRecovery = useStore(client.store, (state) => state.accountModelRecovery?.[props.session.id] ?? false)
-  // The recovery card below IS the read-only explanation for this case. The package's generic
-  // "open in another client" banner would sit above it claiming a different cause (another client
-  // holds the session) with a 重试 button that cannot help — mark the surface so CSS hides that
-  // banner while the recovery card is up. Other read-only causes keep the banner.
-  const recoveryReadOnly = accountRecovery && props.session.readOnly
-  // One recovery state for both surfaces: the notice above the composer and the single picker
-  // that the composer renders in its bottom-right toolbar. Never a second model entry.
-  const recovery = useAccountModelRecovery(props.session)
   // A chat lives in the quick-chat folder; anything else is a project. `groupByDirectory` looked
   // right but only matches directories the reader registered as a group, so a normal project
   // folder fell through and lost its 分工 entry (2026-11-08).
@@ -234,6 +228,10 @@ export function ChatComposer({
    */
   const submit = useCallback<NonNullable<ComposerProps["onSubmit"]>>(
     (content, accept) => {
+      // Sending on a revoked account model is refused by the engine. Say what to do in the reader's
+      // own words *before* dispatching, and still dispatch: the answer is what proves whether the
+      // model in the picker works now, and blocking would have made the box refuse input again.
+      if (accountRecovery) toast.info(t("provider.managed.reselect"))
       let task: Promise<unknown>
       try {
         // Only pass the receipt sink when there is one: a caller that forwards its own submit
@@ -266,10 +264,10 @@ export function ChatComposer({
           // The composer cannot take the draft back (e.g. it is busy); the toast below still tells
           // the reader the send failed.
         }
-        toast.error(error instanceof Error ? error.message : String(error))
+        toast.error(describeError(error))
       })
     },
-    [onSubmit, sessionId]
+    [accountRecovery, onSubmit, sessionId, t]
   )
   /**
    * The package decides hands-free voice from "no submit callback, or one that also handles the
@@ -298,34 +296,33 @@ export function ChatComposer({
       selectionRect: selectionRectOf()
     })
   }
-  // Nothing here asks the engine about the model list. A model the provider withdraws is dropped
-  // from 设置 → 可用模型, this picker and 分工 by `servedNativeRows`, which reads the catalog the
-  // session already carries; the row comes back when a later catalog lists it again. The old
-  // hover check cost a `session/set_config_option` round trip (0.1–8s) on every menu open and left
-  // the picker spinning for the duration, for an answer the session's own catalog already had.
+  // Nothing here asks the engine about the model list. A model the provider stops listing keeps its
+  // row in this picker — marked "可能不可用" — and 设置 → 可用模型 keeps it too, under 未验证;
+  // `resolveModelConfig` is the one call that decides both, from the catalog the session already
+  // carries. The old hover check cost a `session/set_config_option` round trip (0.1–8s) on every
+  // menu open and left the picker spinning for the duration, for an answer that catalog already had.
   return (
     <div
       data-composer
       data-composer-mode={project === null ? "chat" : "project"}
-      data-account-recovery={recoveryReadOnly ? "" : undefined}
       ref={shellRef}
       className="relative"
       onContextMenu={openMenu}
     >
       <ComposerResizeHandle shellRef={shellRef} />
-      {accountRecovery && <AccountModelRecovery key={props.session.id} state={recovery} />}
+      {/* One line, no buttons, no slot taken: it explains the refusals the reader is about to see
+          and points at the picker that already sits in the toolbar below. */}
+      {accountRecovery && (
+        <p role="status" data-model-reselect-notice="" className="px-4 pb-1 text-xs text-muted-foreground">
+          {t("provider.managed.reselect")}
+        </p>
+      )}
       <Composer
         modelMenu={chatModelMenu}
         {...props}
-        // `@alwith/module-chat`'s Composer exposes `modelSelector` and renders it *instead of* its
-        // own `ModelMenu` (see conversation/composer/composer.d.ts). During account-model recovery
-        // that built-in picker is disabled and shows "… Preview" in grey, so a second, disabled
-        // "model" control sat next to the recovery card's picker and the reader clicked the dead
-        // one. Rendering an empty fragment removes only that picker — the textarea, toolbar and
-        // every other model selector on non-recovery surfaces are untouched. The recovery card
-        // above is now the single, clearly clickable "选择模型" and still resumes through
-        // `client.resumeAccountModel`.
-        modelSelector={accountRecovery ? <RecoveryModelSelector state={recovery} /> : props.modelSelector}
+        // The picker is whatever the surface passed, recovery or not: a model problem must not
+        // replace the control the reader uses to fix it. `props.modelSelector` arrives through the
+        // spread above; nothing here overrides it.
         onSubmit={submit}
         onHandOff={handOff}
         disabled={props.disabled === true || handoffBusy}

@@ -4,19 +4,13 @@ import changelog from "../../../../../CHANGELOG.md?raw"
 
 import { parseChangeLog } from "../changelog"
 
-test("every released version in CHANGELOG.md reaches the update-log dialog", () => {
+test("the update-log dialog carries the shipped version and every bullet of it", () => {
   const groups = parseChangeLog(changelog)
-  const versions = groups.map((group) => group.version)
-  // The newest version leads, and the history readers asked for is actually present — including
-  // 0.3.7, which the locale list had already dropped.
-  expect(versions[0]).toBe("0.4.4")
-  for (const version of ["0.3.8", "0.3.7", "0.3.6", "0.3.5", "0.3.4", "0.2.29"]) {
-    expect(versions).toContain(version)
-  }
-  // Bullets keep their text but lose the list punctuation the changelog uses.
-  const newest = groups[0]
-  expect(newest.items[0]).toContain("云盘")
-  expect(versions).toContain("0.4.2")
+  // 1.0.0 是当前唯一在维护的版本：旧版本条目已从 CHANGELOG 清掉，对话框只呈现这一版。
+  expect(groups.map((group) => group.version)).toEqual(["1.0.0"])
+  expect(groups[0].items).toHaveLength(18)
+  expect(groups[0].items[0]).toContain("拉会脑暴")
+  expect(groups[0].items.at(-1)).toContain("聊天项目")
 })
 
 test("a heading that is not a bare version ends the previous group", () => {

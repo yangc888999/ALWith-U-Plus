@@ -22,6 +22,7 @@ import { ActionCard, ElicitationFormDialog } from "@/features/chat/action-card"
 import { ChatView } from "@/features/chat/chat-view"
 import { DRAFT_SESSION_ID, DraftChat } from "@/features/chat/draft-chat"
 import { newChatDirectory } from "@/features/chat/new-chat-directory"
+import { registerSessionJump } from "@/features/chat/session-jump"
 import { isQuickChatDirectory } from "@alwith/module-chat/session-list"
 import { ChatProjectMenu } from "@/features/chat/project-session-popover"
 import { useDriveArchive } from "@/features/drive/archive-runtime"
@@ -75,6 +76,7 @@ import { playCompletionSound, soundForRunState } from "@/lib/completion-sound"
 import { bumpDockBadge, clearDockBadge } from "@/lib/dock-badge"
 import { settingsStore } from "@/lib/settings-store"
 import { startFreeModelWatch } from "@/features/providers/free-model-watch"
+import { startAppearanceMode } from "@/lib/appearance-mode"
 import { startPriceRefresh } from "@/features/settings/price-refresh"
 import { installChatShortcut } from "@/lib/chat-shortcut"
 import {
@@ -112,6 +114,7 @@ import { useReadVisibleSession } from "@/lib/use-read-visible-session"
 import { useSurfaceOperation } from "@/lib/use-surface-operation"
 import { useWindowFocus } from "@/lib/window-focus"
 import { openSettingsWindow } from "@/lib/window-manager"
+import { SettingsOverlay } from "@/features/settings/settings-overlay"
 
 // Matches `lib/startup-window.ts#FALLBACK_MS`: a startup failure keeps retrying while the silent
 // window is open, and this is how long that window lasts at most before the banner may speak.
@@ -370,6 +373,12 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     },
     []
   )
+
+  // Expose this `select` to the rest of the app as the one entrance for opening a conversation
+  // (toasts, command palette, deep links). It is stable (`[]` deps), so registering on mount is enough.
+  useEffect(() => {
+    registerSessionJump(select)
+  }, [select])
 
   // Bumped when the reader picks a project folder for a new chat. The workspace opens its columns
   // once per project per run, so without this signal a project already visited would stay in two
@@ -852,7 +861,13 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       // (fresh install, all chats closed) the picker falls back to the bundled catalog.
       nativeModels: () => {
         const session = Object.values(client.state.sessions).find((entry) => entry.configOptions.length > 0)
-        if (session !== undefined) return nativeGroupModels(session.configOptions)
+        if (session !== undefined) {
+          const group = nativeGroupModels(session.configOptions)
+          // A live session's own picker is the only catalog that may be read as authoritative: it
+          // is what the engine actually offers this machine right now. `null` (this session has no
+          // integrated group) is a real answer, so it stays null rather than being padded.
+          return group === null ? null : { ...group, sourceKind: "session" as const }
+        }
         return bundledNativeModels.current
       }
     })
@@ -879,6 +894,9 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           bundledNativeModels.current = {
             id: NATIVE_MODEL_GROUP.id,
             name: NATIVE_MODEL_GROUP.name,
+            // Partial by construction: the bundled catalog ships with the app, so it lags the
+            // engine and must never be diffed against the user's saved rows.
+            sourceKind: "bundled",
             models: entries.map((entry) => ({
               id: entry.slug,
               label: entry.name,
@@ -1058,6 +1076,8 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
 
   // A Dock badge left over from the previous session has no meaning after a relaunch.
   useEffect(() => clearDockBadge(), [])
+  // 外观材质（Liquid Glass / Aero / 纯色）：启动就把存下来的模式落到 DOM 与窗口上。
+  useEffect(() => startAppearanceMode(), [])
   // App 开着就检查 OpenRouter 有没有新上架的 :free 模型（开关默认关，设置页可开）。
   useEffect(() => startFreeModelWatch(), [])
   // 用量页价格自动刷新：启动时到期就跑，之后每 6 小时一次；失败静默，不打断当前操作。
@@ -1466,6 +1486,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
         >
           <HotkeysDialog open={hotkeysOpen} onOpenChange={setHotkeysOpen} />
           {globalFormDialog}
+          <SettingsOverlay />
           <CommandPalette
             open={paletteOpen}
             onOpenChange={setPaletteOpen}

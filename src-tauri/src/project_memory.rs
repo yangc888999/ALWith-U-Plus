@@ -6,7 +6,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const HEADER: &str = "# 项目记忆\n\n> 本文件由 ALWith L 自动维护：新建项目会话时创建，每轮对话结束后追加记录。\n\n";
+const HEADER: &str = "# 项目记忆\n\n> 本文件由 ALWith U⁺ 自动维护：新建项目会话时创建，每轮对话结束后追加记录。\n\n";
 
 fn memory_path(root: &str) -> Result<PathBuf, String> {
     let directory = Path::new(root);

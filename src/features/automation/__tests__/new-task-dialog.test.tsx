@@ -30,28 +30,43 @@ vi.mock("@/bindings", () => ({
     }
   })
 }))
-vi.mock("@/lib/model-catalog", () => ({
-  modelEntries: () => [
-    {
-      id: "gpt-6.1-sol",
-      label: "GPT 6.1 Sol",
-      // The real catalog names the ChatGPT group `chatgpt`; that id is what enables fast mode.
-      groupId: "chatgpt",
-      groupName: "ChatGPT",
-      efforts: ["low", "medium", "high"],
-      defaultEffort: "medium",
-      available: true
-    },
-    {
-      id: "gateway:qwen:qwen-flash",
-      label: "Qwen Flash",
-      groupId: "qwen",
-      groupName: "Qwen",
-      efforts: [],
-      defaultEffort: null,
-      available: true
-    }
-  ]
+// The dialog only needs the resolved rows, not the settings bridge's IPC subscriptions.
+vi.mock("@/lib/model-config", () => ({
+  resolveModelConfig: () => ({
+    status: "ready",
+    authoritative: true,
+    withdrawnIds: [],
+    retiredIds: [],
+    entries: [
+      {
+        id: "gpt-6.1-sol",
+        label: "GPT 6.1 Sol",
+        // The real catalog names the ChatGPT group `chatgpt`; that id is what enables fast mode.
+        groupId: "chatgpt",
+        groupName: "ChatGPT",
+        efforts: ["low", "medium", "high"],
+        defaultEffort: "medium",
+        fastMode: false,
+        contextWindow: null,
+        status: "available",
+        retired: false,
+        sourceKind: "session"
+      },
+      {
+        id: "gateway:qwen:qwen-flash",
+        label: "Qwen Flash",
+        groupId: "qwen",
+        groupName: "Qwen",
+        efforts: [],
+        defaultEffort: null,
+        fastMode: false,
+        contextWindow: null,
+        status: "available",
+        retired: false,
+        sourceKind: "session"
+      }
+    ]
+  })
 }))
 
 import { DEFAULT_TASK_DRAFT, NewTaskDialog } from "../new-task-dialog"

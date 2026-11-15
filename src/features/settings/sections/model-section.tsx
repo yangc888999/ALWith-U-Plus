@@ -33,8 +33,7 @@ import {
   setOrchestrationDefaults,
   subscribeOrchestrationDefaults
 } from "@/lib/orchestration-defaults"
-import { nativeCatalogStatus } from "@/lib/providers"
-import { modelEntries, type ModelEntry } from "@/lib/model-catalog"
+import { resolveModelConfig, type ModelConfigEntry } from "@/lib/model-config"
 import { useSettingsNativeModels } from "@/lib/settings-bridge"
 import { useProviders } from "@/lib/use-providers"
 import { cn } from "@/lib/utils"
@@ -44,7 +43,7 @@ import { SettingsCard, SettingsNote } from "./shared"
 /** "Follow the built-in default", sentinel for an unset choice. */
 const AUTO = "auto"
 
-function isGptEntry(entry: ModelEntry | null): boolean {
+function isGptEntry(entry: ModelConfigEntry | null): boolean {
   return entry?.groupId === NATIVE_MODEL_GROUP.id
 }
 
@@ -58,11 +57,19 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
     orchestrationDefaultsSnapshot,
     orchestrationDefaultsSnapshot
   )
-  const entries = useMemo(() => modelEntries(snapshot, native), [snapshot, native])
+  // One read-only answer for every consumer of the engine catalog: which rows this window may show,
+  // and — only when the answer is authoritative — which saved rows the engine has withdrawn. The
+  // settings window is usually NOT authoritative (the main window's reply may be a bundled
+  // fallback), which is why `withdrawnIds` is empty here rather than a lie.
+  const config = useMemo(
+    () => resolveModelConfig({ providerSnapshot: snapshot, native }),
+    [snapshot, native]
+  )
+  const entries = config.entries
   // Explain an empty GPT group instead of quietly replaying the last saved shortlist.
-  const catalogUnavailable = nativeCatalogStatus(native === undefined ? undefined : native?.models ?? null) === "unavailable"
+  const catalogUnavailable = config.status === "unavailable"
   const groups = useMemo(() => {
-    const map = new Map<string, { name: string; models: ModelEntry[] }>()
+    const map = new Map<string, { name: string; models: ModelConfigEntry[] }>()
     for (const entry of entries) {
       const group = map.get(entry.groupId) ?? { name: entry.groupName, models: [] }
       group.models.push(entry)
@@ -75,7 +82,7 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
   const effort = choice?.effort ?? null
   // A model without a published ladder still accepts the standard levels; an empty list used to
   // leave the Effort picker offering nothing but "follow the model default".
-  const levelsOf = (entry: ModelEntry | null): string[] =>
+  const levelsOf = (entry: ModelConfigEntry | null): string[] =>
     entry === null ? [] : entry.efforts.length > 0 ? entry.efforts : ["low", "medium", "high", "max"]
 
   // Edits stay local until 「立即应用」: picking a model here used to save silently, which made
@@ -116,7 +123,7 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
     onApplied?.(draftModel)
   }
 
-  const effortLabel = (entry: ModelEntry | null): string =>
+  const effortLabel = (entry: ModelConfigEntry | null): string =>
     entry === null || entry.defaultEffort === null
       ? t("defaultModel.effortAuto")
       : t("defaultModel.effortAutoWithValue", { effort: entry.defaultEffort })
@@ -125,9 +132,10 @@ export function ModelSection({ onApplied }: { onApplied?: (model: string | null)
   const nativeEntries = entries.filter((entry) => entry.groupId === NATIVE_MODEL_GROUP.id)
   // Defaults must be runnable. 可用模型 keeps a row the engine has revoked (`gpt-6.1-terra`), so
   // choosing a hardcoded id off the raw list would point a fresh split at a model that cannot
-  // answer a single prompt. `liveNative` is empty before the catalog loads, which falls back to the
-  // old behaviour rather than leaving the picker blank.
-  const liveNative = nativeEntries.filter((entry) => entry.available)
+  // answer a single prompt. Only `unsupported` — the tombstone verdict, meaning the provider
+  // refused this id — is excluded: `unknown` merely says no authoritative catalog reached this
+  // window, and that must not cost a model its chance at being the default.
+  const liveNative = nativeEntries.filter((entry) => entry.status !== "unsupported")
   const fallbackPlanner =
     liveNative.find((entry) => entry.id === "gpt-6.1-sol") ?? liveNative[0] ?? entries[0] ?? null
   // The worker defaults to the second live row. A hardcoded `gpt-6.1-terra` used to sit here; the
@@ -438,8 +446,8 @@ function RoleDefaultsRow({
   onFastChange
 }: {
   label: string
-  entries: ModelEntry[]
-  groups: [string, { name: string; models: ModelEntry[] }][]
+  entries: ModelConfigEntry[]
+  groups: [string, { name: string; models: ModelConfigEntry[] }][]
   model: string
   effort: string
   fast: boolean

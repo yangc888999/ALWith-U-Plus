@@ -47,6 +47,15 @@ export interface SettingsModel {
 export interface SettingsNativeModels {
   id: string
   name: string
+  /**
+   * Which catalog this is.
+   *
+   * `session` — a live session's own picker, the only list that may be called authoritative.
+   * `bundled` — the `codex_bundled_models` fallback used while no session is open. It is the
+   * engine's built-in catalog, i.e. **partial**: a model missing from it has not been withdrawn,
+   * which is why `model-config.ts` refuses to diff saved rows against anything not authoritative.
+   */
+  sourceKind?: "session" | "bundled"
   models: SettingsModel[]
 }
 
@@ -85,15 +94,25 @@ export function serveSettingsBridge(
   events: SettingsEvents = tauriEvents()
 ): { stop: () => void; republish: () => void } {
   const { listen, emitTo } = events
+  // Settings used to be a window labelled `settings`. It now renders inside the main window as an
+  // overlay, so an emit addressed only to that label reaches nobody — the model list and the
+  // account card would stay empty. Send to both: whichever surface exists answers, and a build
+  // that still opens a standalone settings window keeps working unchanged.
+  const toSettings = (event: string, payload: unknown): Promise<void> => {
+    void emitTo("settings", event, payload)
+    return emitTo("main", event, payload)
+  }
   let lastAgent = options.agent()
   let lastNativeSignature = ""
   const nativeSignature = (models: SettingsNativeModels | null): string =>
     models === null
       ? ""
-      : `${models.id}|${models.name}|${models.models.map((m) => `${m.id}:${m.efforts.join(",")}:${m.defaultEffort ?? ""}`).join(";")}`
+      : // `sourceKind` is part of the signature: the same rows arriving from a live session instead
+        // of the bundled fallback change what the settings window may say about them (已下架).
+        `${models.id}|${models.sourceKind ?? "session"}|${models.name}|${models.models.map((m) => `${m.id}:${m.efforts.join(",")}:${m.defaultEffort ?? ""}`).join(";")}`
   const publish = () => {
     const agent = options.agent()
-    void emitTo("settings", AGENT, agent)
+    void toSettings(AGENT, agent)
     if ((lastAgent === null) !== (agent === null)) void publishAccount()
     // The native model list appears with the first session; republish it whenever it changes so
     // a settings window opened before that still receives it.
@@ -106,7 +125,7 @@ export function serveSettingsBridge(
       // tombstone written during the outage. Done here — where the catalog originates — so it
       // also happens when no settings window is open.
       if (nativeModels !== null) reviveCatalogModels(nativeModels.models.map((model) => model.id))
-      void emitTo("settings", NATIVE_MODELS, nativeModels)
+      void toSettings(NATIVE_MODELS, nativeModels)
     }
     lastAgent = agent
   }
@@ -119,20 +138,20 @@ export function serveSettingsBridge(
       const account = await options.account()
       if (disposed || current !== revision) return
       lastAccount = account
-      await emitTo("settings", ACCOUNT, lastAccount)
+      await toSettings(ACCOUNT, lastAccount)
     } catch (error) {
       if (disposed || current !== revision) return
-      await emitTo("settings", ACCOUNT_ERROR, error instanceof Error ? error.message : String(error))
+      await toSettings(ACCOUNT_ERROR, error instanceof Error ? error.message : String(error))
     }
   }
   const unsubscribe = options.subscribe(publish)
   const stopLimits = options.onRateLimits((limits) => {
     if (lastAccount === null) return
     lastAccount = { ...lastAccount, rateLimits: limits, rateLimitsCapturedAt: Date.now(), rateLimitsStale: false }
-    void emitTo("settings", ACCOUNT, lastAccount)
+    void toSettings(ACCOUNT, lastAccount)
   })
   const publishNativeModels = () => {
-    void emitTo("settings", NATIVE_MODELS, options.nativeModels())
+    void toSettings(NATIVE_MODELS, options.nativeModels())
   }
   const stops = Promise.all([
     listen(REQUEST_AGENT, publish),
@@ -156,9 +175,9 @@ export function serveSettingsBridge(
                 options.respond(request.actionId, request.answer)
                 break
             }
-            await emitTo("settings", AUTH_RESULT, { id: request.id, error: null } satisfies AuthResult)
+            await toSettings(AUTH_RESULT, { id: request.id, error: null } satisfies AuthResult)
           } catch (error) {
-            await emitTo("settings", AUTH_RESULT, {
+            await toSettings(AUTH_RESULT, {
               id: request.id,
               error: error instanceof Error ? error.message : String(error)
             } satisfies AuthResult)
@@ -313,6 +332,18 @@ export function requestSignOut(): Promise<void> {
 
 export function requestSignIn(methodId: string, extra: Record<string, unknown>): Promise<void> {
   return requestAuth({ id: crypto.randomUUID(), action: "login", methodId, extra }, tauriEvents())
+}
+
+/**
+ * Settings window: asks the main window to re-read `account/read` + `account/rateLimits/read`.
+ *
+ * The answer does not come back through this promise — it arrives on the `settings:account`
+ * channel and reaches every `useSettingsAccount` subscriber, which is what lets one click refresh
+ * both the usage page and the rate-limit reset card. Kept separate from `requestSignOut` because
+ * it carries no action and needs no correlation id.
+ */
+export function requestAccountRefresh(events: SettingsEvents = tauriEvents()): Promise<void> {
+  return events.emitTo("main", REQUEST_ACCOUNT)
 }
 
 export function requestActionResponse(

@@ -34,14 +34,15 @@ function ids(groups: ReturnType<typeof presentModelCatalog>): string[] {
   return groups[0].models.map((model) => model.api_id)
 }
 
-test("a saved model the engine no longer serves is not offered at all", () => {
+test("a saved model the engine no longer serves stays listed with a hint", () => {
   saved.rows = [row("gpt-6-astra"), row("gpt-6.1-terra")]
 
   const groups = presentModelCatalog(catalog(["gpt-6-astra"]))
 
-  // Hiding, not greying: nothing in the menu asks the engine again, so a row that cannot run has
-  // no reason to be there. The saved row itself is untouched and returns with the next catalog.
-  expect(ids(groups)).toEqual(["gpt-6-astra"])
+  // Shown, not hidden: the row carries a hint instead of disappearing (which read as data loss
+  // and disagreed with 设置). The saved row itself is untouched and loses the hint with the next
+  // catalog.
+  expect(ids(groups)).toEqual(["gpt-6-astra", "gpt-6.1-terra"])
 })
 
 test("a model the engine lists again comes back with no other change", () => {

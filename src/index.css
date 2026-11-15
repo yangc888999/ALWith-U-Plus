@@ -119,10 +119,13 @@ pre,
 }
 
 :root {
+  /* 外观透明度系数：1 = 原样，越小越透。由 `appearance-mode.ts` 写到 <html> 行内样式上。
+     只乘进底色 / 卡片 / 侧栏的 alpha，文字与边框不受影响。 */
+  --appearance-alpha: 1;
   --canvas-page-indicator: oklch(0.985 0 0);
-  --background: oklch(1 0 0);
+  --background: oklch(1 0 0 / var(--appearance-alpha, 1));
   --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
+  --card: oklch(1 0 0 / var(--appearance-alpha, 1));
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
@@ -146,7 +149,7 @@ pre,
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.625rem;
-  --sidebar: #f5f6f7;
+  --sidebar: color-mix(in srgb, #f5f6f7 calc(var(--appearance-alpha, 1) * 100%), transparent);
   --sidebar-foreground: #1a1c1f;
   --sidebar-primary: oklch(0.205 0 0);
   --sidebar-primary-foreground: oklch(0.985 0 0);
@@ -163,9 +166,9 @@ pre,
 }
 
 .dark {
-  --background: #181818;
+  --background: color-mix(in srgb, #181818 calc(var(--appearance-alpha, 1) * 100%), transparent);
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
+  --card: oklch(0.205 0 0 / var(--appearance-alpha, 1));
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
   --popover-foreground: oklch(0.985 0 0);
@@ -188,7 +191,7 @@ pre,
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: #3a3a3a;
+  --sidebar: color-mix(in srgb, #3a3a3a calc(var(--appearance-alpha, 1) * 100%), transparent);
   --sidebar-foreground: #ffffff;
   --sidebar-primary: oklch(0.488 0.243 264.376);
   --sidebar-primary-foreground: oklch(0.985 0 0);
@@ -409,6 +412,8 @@ html[data-window-backdrop="acrylic"]
   flex-shrink: 0;
   width: var(--active-sidebar-width);
   height: 100%;
+  /* 收起/展开时外壳宽度要跟着动：只淡出不缩宽，侧栏会在 0 宽度里被瞬间裁掉，看起来闪一下。 */
+  transition: width 280ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 /* A drag owns the width: skip the open/close easing so the edge follows the pointer. */
 .main-sidebar-shell[data-resizing] {
@@ -427,6 +432,15 @@ html[data-window-backdrop="acrylic"]
   overflow: clip;
   opacity: 1;
   visibility: visible;
+  /* 展开方向也要有过渡：只在 [data-sidebar-mode] 里写 transition，回到固定态时属性消失，
+     动画会瞬间归位——收起有动画、展开没有，就是「僵硬」的来源。
+     收起用「整块左移出场」而不是「原地淡出被裁切」：后者只能看到一条越来越窄的残片，
+     观感就是用户说的「傻快」。 */
+  transition:
+    transform 280ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 220ms cubic-bezier(0.32, 0.72, 0, 1),
+    visibility 0s;
+  will-change: transform, opacity;
 }
 
 .main-sidebar-panel {
@@ -466,21 +480,29 @@ html[data-window-backdrop="acrylic"]
 [data-sidebar-mode="floating"] .main-screen-track > .main-sidebar-shell {
   width: 0;
 }
+/* 收起 = 整块向左滑出（translateX(-100%)），外壳同步收窄，正文同步让位。
+   不要在 hidden 态裁切外壳：裁切会把滑出变成「从右往左被剪掉」，看起来还是硬切。 */
+[data-sidebar-mode="hidden"] .main-sidebar-viewport {
+  transform: translateX(-100%);
+}
 /* The rail owns a static 58px slot (52px column + 6px seam) in both collapsed and peeking
    states, so opening or dismissing the floating card never moves the chat frame. */
 [data-sidebar-mode="hidden"] .main-screen-content > .main-chat-surface,
 [data-sidebar-mode="floating"] .main-screen-content > .main-chat-surface {
   margin-inline-start: calc(58px + var(--main-surface-gutter) / 2);
 }
+/* 会话区让位与外壳同拍，否则侧栏还在滑、正文已经跳到位。 */
+.main-screen-content > .main-chat-surface {
+  transition: margin-inline-start 280ms cubic-bezier(0.32, 0.72, 0, 1);
+}
 [data-sidebar-mode="hidden"] .main-sidebar-viewport {
   pointer-events: none;
   opacity: 0;
   visibility: hidden;
-  transform: translateX(-12px);
   transition:
-    opacity 140ms ease,
-    transform 180ms ease,
-    visibility 0s linear 140ms;
+    transform 280ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    visibility 0s linear 280ms;
 }
 /* The peek is a floating card beside the rail: inset from the window edges, fully rounded,
    soft shadow, painted over the chat surface. The shell stays zero-width in flow. */
@@ -501,8 +523,8 @@ html[data-window-backdrop="acrylic"]
   visibility: visible;
   transform: none;
   transition:
-    opacity 160ms ease-out,
-    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1),
     visibility 0s;
 }
 /* When the sidebar is unpinned, a one-column icon rail stays on the leading edge: the header
@@ -520,9 +542,12 @@ html[data-window-backdrop="acrylic"]
   pointer-events: none;
   transform: translateX(-8px);
   transition:
-    opacity 160ms ease,
-    transform 180ms ease,
+    opacity 170ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 190ms cubic-bezier(0.22, 1, 0.36, 1),
     visibility 0s;
+  /* Promote to its own layer so the crossfade composites on the GPU instead of repainting the
+     whole surface — this is what keeps the collapse smooth on lower-end machines. */
+  will-change: opacity, transform;
   position: absolute;
   inset-block: 0;
   inset-inline-start: var(--main-surface-gutter);
@@ -544,35 +569,37 @@ html[data-window-backdrop="acrylic"]
   visibility: visible;
   pointer-events: auto;
   transform: none;
+  /* 等侧栏先退场再出现：两者同时淡入淡出会叠出一帧「两套侧栏」。 */
   transition:
-    opacity 200ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    visibility 0s;
+    opacity 160ms cubic-bezier(0.32, 0.72, 0, 1) 130ms,
+    transform 180ms cubic-bezier(0.32, 0.72, 0, 1) 130ms,
+    visibility 0s 130ms;
 }
-/* Each icon starts tucked left and transparent; the visible state releases them one after
-   another (40ms apart) for a cascade. The footer pair lands last, mirroring the panel's
-   bottom-anchored footer. */
+/* Each icon starts tucked left and transparent; the visible state releases them in a tight
+   cascade. The old 40ms-per-icon stagger ran past 400ms and read as laggy — 20ms keeps the
+   motion legible without the sluggish build-up. The footer pair lands last. */
 .main-sidebar-rail button {
   opacity: 0;
   transform: translateX(-10px);
   transition:
-    opacity 200ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+    opacity 130ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 150ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
 }
 [data-rail-show] .main-sidebar-rail button {
   opacity: 1;
   transform: none;
 }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(1) { transition-delay: 60ms; }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(2) { transition-delay: 100ms; }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(3) { transition-delay: 140ms; }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(4) { transition-delay: 180ms; }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(5) { transition-delay: 220ms; }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(6) { transition-delay: 260ms; }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(7) { transition-delay: 300ms; }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(8) { transition-delay: 340ms; }
-[data-rail-show] .main-sidebar-rail > .mt-auto > button:nth-child(1) { transition-delay: 400ms; }
-[data-rail-show] .main-sidebar-rail > .mt-auto > button:nth-child(2) { transition-delay: 440ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(1) { transition-delay: 0ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(2) { transition-delay: 20ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(3) { transition-delay: 40ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(4) { transition-delay: 60ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(5) { transition-delay: 80ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(6) { transition-delay: 100ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(7) { transition-delay: 120ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(8) { transition-delay: 140ms; }
+[data-rail-show] .main-sidebar-rail > .mt-auto > button:nth-child(1) { transition-delay: 160ms; }
+[data-rail-show] .main-sidebar-rail > .mt-auto > button:nth-child(2) { transition-delay: 180ms; }
 @keyframes activity-notification-pulse {
   0%,
   100% {
@@ -1422,17 +1449,8 @@ body > div:has(> [data-slot="dialog-overlay"]) > * {
   overflow-y: auto;
 }
 
-/* Account-model recovery makes the composer read-only, but a persisted tall input height turned
-   that disabled surface into a giant empty box with the send button stranded at the bottom (the
-   reported broken frame). Pin recovery to one compact row and drop the now-useless resize grip so
-   the recovery card is the only actionable thing on screen. */
-[data-composer][data-account-recovery] .alwith-composer-textarea {
-  min-height: 2.75rem;
-  max-height: 2.75rem;
-}
-[data-composer][data-account-recovery] > [role="separator"][aria-orientation="horizontal"] {
-  display: none;
-}
+/* A revoked account model used to pin the textarea to one row and hide its resize grip here. It is
+   a notice now, so the input keeps the height the reader chose and stays a normal input box. */
 
 /* Images enlarge where they sit, and snap back when the pointer leaves. The thumbnail's own box
    clips to 20px, so the frame is released for the duration of the hover. */
@@ -1598,4 +1616,121 @@ body::after {
    语言文案；上游改层级时这条会失效而不是隐藏错东西。 */
 .chat-composer-toolbar button.border-border {
   display: none;
+}
+
+/* ==========================================================================
+   外观材质：Liquid Glass / Aero / 纯色
+   --------------------------------------------------------------------------
+   三档全部落在 `<html data-appearance>` 上，由 `src/lib/appearance-mode.ts` 维护。
+   原生那半边（NSVisualEffectView / NSGlassEffectView）由 Rust 挂到窗口上，这里只管
+   「让 webview 让出透明度」和「chrome 跟着变半透明」。
+
+   两条规则：
+   1. 纯色一档**什么都不覆盖**——它就是升级前的样子，切回去必须一模一样。
+   2. `data-appearance-fallback="css"` 表示窗口材质没上去（非 macOS / 系统不支持）。这时把
+      透明度收回来一档：没有折射层还硬做 60% 半透明，只会把桌面透成一块脏底。厚一点，
+      但仍然是这个风格。
+
+   只改 token，不改组件：卡片读 `--card`、侧栏读 `--sidebar`、弹层读 `--popover`，所以
+   一处覆盖就够，不需要在几十个组件里加 class。
+   ========================================================================== */
+
+/* Liquid Glass · 浅色：更透、更亮，留给原生玻璃去折射；文字仍压在高对比的卡面上。 */
+html[data-appearance="liquid-glass"]:not(.dark) {
+  --background: oklch(1 0 0 / calc(0.58 * var(--appearance-alpha, 1)));
+  --card: oklch(1 0 0 / calc(0.66 * var(--appearance-alpha, 1)));
+  --popover: oklch(1 0 0 / 0.86);
+  --secondary: oklch(0.97 0 0 / 0.62);
+  --muted: oklch(0.97 0 0 / 0.55);
+  --accent: oklch(0.97 0 0 / 0.6);
+  --sidebar: oklch(0.975 0 0 / calc(0.48 * var(--appearance-alpha, 1)));
+  --border: oklch(0.922 0 0 / 0.7);
+  --input: oklch(0.922 0 0 / 0.7);
+}
+
+/* Liquid Glass · 深色：同样更透，但保留足够黑度，白字不会糊在桌面壁纸上。 */
+html[data-appearance="liquid-glass"].dark {
+  --background: oklch(0.145 0 0 / calc(0.62 * var(--appearance-alpha, 1)));
+  --card: oklch(0.205 0 0 / calc(0.62 * var(--appearance-alpha, 1)));
+  --popover: oklch(0.205 0 0 / 0.9);
+  --secondary: oklch(0.269 0 0 / 0.6);
+  --muted: oklch(0.269 0 0 / 0.55);
+  --accent: oklch(0.269 0 0 / 0.6);
+  --sidebar: oklch(0.2 0 0 / calc(0.48 * var(--appearance-alpha, 1)));
+  --border: oklch(1 0 0 / 0.14);
+  --input: oklch(1 0 0 / 0.16);
+}
+
+/* Aero：比 Liquid Glass 更「厚」、偏冷蓝，模糊弱一档——经典 Aero 的观感是雾面而不是玻璃。 */
+html[data-appearance="aero"]:not(.dark) {
+  --background: oklch(0.985 0.008 240 / calc(0.74 * var(--appearance-alpha, 1)));
+  --card: oklch(0.995 0.006 240 / calc(0.78 * var(--appearance-alpha, 1)));
+  --popover: oklch(0.995 0.006 240 / 0.92);
+  --secondary: oklch(0.96 0.012 240 / 0.72);
+  --muted: oklch(0.96 0.012 240 / 0.66);
+  --accent: oklch(0.96 0.012 240 / 0.7);
+  --sidebar: oklch(0.965 0.014 240 / calc(0.62 * var(--appearance-alpha, 1)));
+  --border: oklch(0.9 0.02 240 / 0.78);
+  --input: oklch(0.9 0.02 240 / 0.78);
+}
+
+html[data-appearance="aero"].dark {
+  --background: oklch(0.16 0.012 250 / calc(0.78 * var(--appearance-alpha, 1)));
+  --card: oklch(0.22 0.014 250 / calc(0.74 * var(--appearance-alpha, 1)));
+  --popover: oklch(0.22 0.014 250 / 0.94);
+  --secondary: oklch(0.28 0.016 250 / 0.7);
+  --muted: oklch(0.28 0.016 250 / 0.64);
+  --accent: oklch(0.28 0.016 250 / 0.7);
+  --sidebar: oklch(0.21 0.016 250 / calc(0.62 * var(--appearance-alpha, 1)));
+  --border: oklch(1 0 0 / 0.16);
+  --input: oklch(1 0 0 / 0.18);
+}
+
+/* 没有原生材质时，把透明度收回来：厚一档，但仍然读得出「玻璃 / 雾面」的区别。 */
+html[data-appearance="liquid-glass"][data-appearance-fallback="css"]:not(.dark) {
+  --background: oklch(1 0 0 / calc(0.86 * var(--appearance-alpha, 1)));
+  --card: oklch(1 0 0 / calc(0.9 * var(--appearance-alpha, 1)));
+  --sidebar: oklch(0.975 0 0 / calc(0.84 * var(--appearance-alpha, 1)));
+}
+html[data-appearance="liquid-glass"][data-appearance-fallback="css"].dark {
+  --background: oklch(0.145 0 0 / calc(0.88 * var(--appearance-alpha, 1)));
+  --card: oklch(0.205 0 0 / calc(0.9 * var(--appearance-alpha, 1)));
+  --sidebar: oklch(0.2 0 0 / calc(0.84 * var(--appearance-alpha, 1)));
+}
+html[data-appearance="aero"][data-appearance-fallback="css"]:not(.dark) {
+  --background: oklch(0.985 0.008 240 / calc(0.92 * var(--appearance-alpha, 1)));
+  --card: oklch(0.995 0.006 240 / calc(0.94 * var(--appearance-alpha, 1)));
+  --sidebar: oklch(0.965 0.014 240 / calc(0.88 * var(--appearance-alpha, 1)));
+}
+html[data-appearance="aero"][data-appearance-fallback="css"].dark {
+  --background: oklch(0.16 0.012 250 / calc(0.92 * var(--appearance-alpha, 1)));
+  --card: oklch(0.22 0.014 250 / calc(0.92 * var(--appearance-alpha, 1)));
+  --sidebar: oklch(0.21 0.016 250 / calc(0.88 * var(--appearance-alpha, 1)));
+}
+
+/* 玻璃档的两块「高光」：设置浮层与侧栏顶部的 1px 亮边 + 一层极淡的折射渐变。
+   这是原生玻璃观感的另一半——只有半透明而没有高光，看起来像半透明的塑料。 */
+html[data-appearance="liquid-glass"] [data-settings-surface]::after,
+html[data-appearance="aero"] [data-settings-surface]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(160deg, oklch(1 0 0 / 0.22), transparent 42%, oklch(1 0 0 / 0.06));
+}
+html[data-appearance="liquid-glass"].dark [data-settings-surface]::after,
+html[data-appearance="aero"].dark [data-settings-surface]::after {
+  background: linear-gradient(160deg, oklch(1 0 0 / 0.12), transparent 46%, oklch(1 0 0 / 0.04));
+}
+
+/* 玻璃档下，卡片与浮层自带一层 backdrop-filter：即使原生材质缺席（CSS fallback），
+   chrome 之间也有「隔着玻璃看下一层」的层次，而不是一堆同等透明度的方块。 */
+html[data-appearance="liquid-glass"] [data-settings-surface],
+html[data-appearance="liquid-glass"] [data-radix-popper-content-wrapper] > * {
+  backdrop-filter: blur(28px) saturate(1.7);
+}
+html[data-appearance="aero"] [data-settings-surface],
+html[data-appearance="aero"] [data-radix-popper-content-wrapper] > * {
+  backdrop-filter: blur(18px) saturate(1.35);
 }

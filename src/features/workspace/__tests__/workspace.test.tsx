@@ -882,7 +882,7 @@ test("new tabs keep the existing preview, support middle close and restore their
   const view = render(<Surface cwd="/a" />)
   fireEvent.click(screen.getByRole("button", { name: "Open preview area" }))
   expect(await screen.findByRole("tab", { name: "New tab" })).toHaveAttribute("aria-selected", "true")
-  expect(screen.getByRole("button", { name: "Discover ALWith L ALWith L Guide" })).toBeVisible()
+  expect(screen.getByRole("button", { name: "Discover ALWith U⁺ ALWith U⁺ Guide" })).toBeVisible()
   fireEvent.click(screen.getByRole("treeitem", { name: "one.txt" }))
   await screen.findByRole("tab", { name: "one.txt" })
   fireEvent.click(screen.getByRole("button", { name: "New tab" }))
@@ -906,11 +906,11 @@ test("new tabs keep the existing preview, support middle close and restore their
   expect(screen.getByRole("tab", { name: "two.txt" })).toHaveAttribute("aria-selected", "true")
 })
 
-test("the new-tab card opens the ALWith L guide", async () => {
+test("the new-tab card opens the ALWith U⁺ guide", async () => {
   vi.mocked(openGuideWindow).mockResolvedValueOnce()
   render(<Surface cwd="/a" />)
   fireEvent.click(screen.getByRole("button", { name: "Open preview area" }))
-  fireEvent.click(await screen.findByRole("button", { name: "Discover ALWith L ALWith L Guide" }))
+  fireEvent.click(await screen.findByRole("button", { name: "Discover ALWith U⁺ ALWith U⁺ Guide" }))
   await waitFor(() => expect(openGuideWindow).toHaveBeenCalledTimes(1))
   expect(screen.queryByRole("dialog")).toBeNull()
 })

@@ -20,6 +20,7 @@ import type {
   TestResult
 } from "@/bindings"
 import { commands, events } from "@/bindings"
+import { companyModelLabel } from "@/lib/company-display-name"
 import { DeepSeekLogo } from "@/components/icons/deepseek-logo"
 import { GrokLogo } from "@/components/icons/grok-logo"
 import { HakimiLogo } from "@/components/icons/hakimi-logo"
@@ -30,6 +31,9 @@ import { QwenLogo } from "@/components/icons/qwen-logo"
 
 import catalog from "./provider-catalog.json"
 import { defaultModelChoice } from "./default-model"
+// The GPT catalog rules live in `model-config.ts`; the four exports below are kept for their old
+// call sites and delegate to it, so no surface can drift back to its own copy of the rule.
+import { catalogStatusOf, resolveModelConfig, type NativeCatalog } from "./model-config"
 import {
   ENTERPRISE_PROVIDER_PREFIX,
   enterpriseCatalog,
@@ -238,7 +242,7 @@ export function providerGroups(
     // same catalog. Leaving them out made a saved managed model invisible to every picker.
     ...(snapshot.managedProviders ?? []).map((provider) => ({
       id: provider.id,
-      name: provider.name,
+      name: companyModelLabel(provider.name),
       models: provider.models.map((model) => ({
         id: model.api_id,
         label: model.label,
@@ -316,9 +320,28 @@ export function providerKeyUrl(provider: Provider, regionId: string | null | und
   return providerRegion(provider, regionId)?.keyUrl ?? provider.keyUrl ?? null
 }
 
+/**
+ * The last enterprise catalogue that actually parsed. A transient failure (gateway restarting,
+ * token rotating, a dropped VPN) must not delete the company models from every picker: the
+ * reader keeps the list they were using, and the next native event replaces it. Only an explicit
+ * "signed out" answer — a successful `null` — is allowed to empty it.
+ */
+let lastEnterpriseCatalog: CustomProvider | null = null
+let enterpriseCatalogKnown = false
+
 /** Enterprise metadata joins every snapshot; relay credentials stay in native memory. */
 async function withEnterpriseCatalog(snapshot: ProviderSnapshot): Promise<ProviderSnapshot> {
-  return projectEnterpriseProviders(snapshot, enterpriseCatalog(await commands.enterpriseCatalog()))
+  try {
+    const resolved = enterpriseCatalog(await commands.enterpriseCatalog())
+    lastEnterpriseCatalog = resolved
+    enterpriseCatalogKnown = true
+    return projectEnterpriseProviders(snapshot, resolved)
+  } catch (error) {
+    // A transient failure must never look like a sign-out. Keep the last catalogue; the next
+    // `enterprise:models-changed` event replaces it as soon as the gateway answers again.
+    if (enterpriseCatalogKnown) return projectEnterpriseProviders(snapshot, lastEnterpriseCatalog)
+    throw error
+  }
 }
 
 // All reads and notifications share ordering, including across multiple mounted hooks.
@@ -619,10 +642,37 @@ export type NativeCatalogStatus = "ready" | "pending" | "unavailable"
 export function nativeCatalogStatus(
   published: readonly NativeCatalogEntry[] | null | undefined
 ): NativeCatalogStatus {
-  if (published === undefined) return "pending"
-  if (published === null || published.length === 0) return "unavailable"
-  return "ready"
+  return catalogStatusOf(published)
 }
+
+/**
+ * A surface's catalog as `resolveModelConfig` needs to see it.
+ *
+ * `status` never overrides a real catalog: a caller passing rows plus `"unavailable"` (a status it
+ * computed before the rows arrived) still gets the rows. An **empty** list is only conclusive when
+ * the caller says the engine answered nothing; a `"pending"` or even a `"ready"` empty list means
+ * "no news", which must not hide the shortlist.
+ */
+function nativeSourceOf(
+  catalog: readonly NativeCatalogEntry[],
+  status: NativeCatalogStatus
+): NativeCatalog | null | undefined {
+  if (catalog.length > 0) {
+    return {
+      sourceKind: "session",
+      models: catalog.map((entry) => ({
+        id: entry.id,
+        label: entry.label ?? entry.id,
+        ...(entry.efforts === undefined ? {} : { efforts: [...entry.efforts] }),
+        defaultEffort: entry.defaultEffort ?? null
+      }))
+    }
+  }
+  return status === "unavailable" ? null : undefined
+}
+
+/** Tombstones are irrelevant to the rows these shims return, and reading them costs storage. */
+const NO_TOMBSTONES: ReadonlySet<string> = new Set<string>()
 
 /**
  * The single answer to "which GPT models does this app offer, and what are they called?".
@@ -655,37 +705,26 @@ export function nativeCatalogStatus(
  *
  * `retired-models` is deliberately not consulted: a tombstone records a past refusal, and reading
  * it here is what made the picker and 设置 disagree in the first place.
+ *
+ * The rules now live in `model-config.ts` (`resolveModelConfig`); this function is the old signature
+ * over it, kept so no caller had to change in the same commit.
  */
 export function servedNativeRows(
   savedModels: CustomModel[] | null,
   catalog: readonly NativeCatalogEntry[],
   status: NativeCatalogStatus
 ): NativeModelRow[] {
-  const live = new Map(catalog.map((entry) => [entry.id, entry]))
-  const saved = (savedModels ?? []).filter(
-    (model) => model.enabled !== false && model.api_id.trim() !== ""
-  )
-  // No catalog and no prospect of one right now: do not resurrect the saved shortlist. The rows
-  // stay in 可用模型 (retiredNativeRows) so a save still cannot delete the user's configuration.
-  if (live.size === 0 && status === "unavailable") return []
-  if (saved.length === 0)
-    return catalog.map((entry) => ({
-      id: entry.id,
-      label: entry.label ?? entry.id,
-      efforts: [...(entry.efforts ?? [])],
-      defaultEffort: entry.defaultEffort ?? null
-    }))
-  return saved
-    .filter((model) => live.size === 0 || live.has(model.api_id))
-    .map((model) => {
-      const entry = live.get(model.api_id)
-      return {
-        id: model.api_id,
-        label: model.label.trim() !== "" ? model.label : (entry?.label ?? model.api_id),
-        efforts: model.reasoningLevels ?? [...(entry?.efforts ?? [])],
-        defaultEffort: model.defaultReasoningLevel ?? entry?.defaultEffort ?? null
-      }
-    })
+  return resolveModelConfig({
+    providerSnapshot: null,
+    native: nativeSourceOf(catalog, status),
+    savedOverrides: savedModels ?? [],
+    tombstones: NO_TOMBSTONES
+  }).entries.map((entry) => ({
+    id: entry.id,
+    label: entry.label,
+    efforts: [...entry.efforts],
+    defaultEffort: entry.defaultEffort
+  }))
 }
 
 /**
@@ -693,17 +732,26 @@ export function servedNativeRows(
  *
  * The editable table is the one place they stay visible, because that list is what gets written on
  * save — dropping a row from the screen would drop it from the user's configuration the next time
- * they press 保存模型. The table marks them 已下架 instead.
+ * they press 保存模型. The table marks them 未验证 (unverified) instead of 已下架: absence from the
+ * catalog is not proof of withdrawal (see codex-model-verification.md).
  */
-export function retiredNativeRows(
+export function unverifiedNativeRows(
   savedModels: CustomModel[] | null,
   catalog: readonly NativeCatalogEntry[]
 ): string[] {
-  const live = new Set(catalog.map((entry) => entry.id))
-  if (live.size === 0) return []
-  return (savedModels ?? [])
-    .filter((model) => model.enabled !== false && model.api_id.trim() !== "" && !live.has(model.api_id))
-    .map((model) => model.api_id)
+  // An empty catalog proves nothing, so nothing is marked unverified.
+  if (catalog.length === 0) return []
+  // Delegated: this is `resolveModelConfig(...).unverifiedIds`. A non-empty `catalog` here is the
+  // caller vouching for a real one. A caller holding a *partial* catalog (the bundled fallback)
+  // must ask `resolveModelConfig` directly, which refuses to diff against anything not authoritative.
+  return [
+    ...resolveModelConfig({
+      providerSnapshot: null,
+      native: nativeSourceOf(catalog, "ready"),
+      savedOverrides: savedModels ?? [],
+      tombstones: NO_TOMBSTONES
+    }).unverifiedIds
+  ]
 }
 
 /**
@@ -713,12 +761,11 @@ export function retiredNativeRows(
  * need this. It remains for callers holding an id from somewhere else — a split saved before the
  * shortlist changed, a model recorded on the thread — that must know whether the engine would
  * honour it before pointing a turn at it.
+ *
+ * Re-exported from `model-config.ts`: one implementation, and the empty-set rule (an empty catalog
+ * means "unknown", never "unsupported") is stated once.
  */
-export function isEngineModel(engineIds: ReadonlySet<string>, id: string): boolean {
-  // An empty set means the catalog has not loaded yet. Reporting "unknown" as "unsupported"
-  // would flag every model during startup and, worse, auto-disable 分工 on open.
-  return engineIds.size === 0 || engineIds.has(id)
-}
+export { isEngineModel } from "./model-config"
 
 export function providerBuiltInModels(snapshot: ProviderSnapshot, providerId: string): CustomModel[] {
   return snapshot.builtInModels?.[providerId] ?? []

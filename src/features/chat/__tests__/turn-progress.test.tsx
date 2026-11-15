@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render } from "@testing-library/react"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { initI18n } from "@/lib/i18n"
+import { setAutoNudgeEnabled } from "@/lib/auto-nudge"
 import { setQueueSendMode } from "@/lib/chat-display-preferences"
 
 import { TurnProgressBar } from "../turn-progress"
@@ -334,3 +335,116 @@ test("a turn ending mid-flight keeps the hook order stable", () => {
   expect(() => view.rerender(<TurnProgressBar session={running} />)).not.toThrow()
   expect(view.container.querySelector("[data-turn-progress]")).not.toBeNull()
 })
+
+test("forty-five seconds of silence are stated inside the same line, not on a second card", () => {
+  const view = render(<TurnProgressBar session={session({ id: "turn-quiet-text", clock: Date.now() - 62_000 })} />)
+  // 「已 62s 无输出」 rides on the state line itself; the row stays one line tall.
+  const suffix = view.container.querySelector("[data-turn-quiet-for]")
+  expect(suffix).not.toBeNull()
+  expect(suffix?.textContent).toMatch(/62/)
+  expect(suffix?.textContent).toMatch(/无输出/)
+  expect(view.container.querySelectorAll("[data-turn-progress]")).toHaveLength(1)
+  // Below the threshold the row says nothing at all about silence.
+  cleanup()
+  const fresh = render(<TurnProgressBar session={session({ id: "turn-quiet-text-fresh", clock: Date.now() - 20_000 })} />)
+  expect(fresh.container.querySelector("[data-turn-quiet-for]")).toBeNull()
+})
+
+test("a silent turn is nudged automatically after ninety seconds, at most twice", () => {
+  nudgeTurn.mockClear()
+  vi.useFakeTimers()
+  try {
+    const started = Date.now() - 200_000
+    const view = render(<TurnProgressBar session={session({ id: "turn-auto-nudge", clock: started })} />)
+    // Mounting on an already-quiet turn does not nudge: the row has just started watching, and a
+    // reload must not leave a stray 「继续」 in the transcript for silence nobody saw.
+    expect(nudgeTurn).not.toHaveBeenCalled()
+
+    act(() => {
+      vi.advanceTimersByTime(89_000)
+    })
+    expect(nudgeTurn).not.toHaveBeenCalled()
+
+    act(() => {
+      vi.advanceTimersByTime(2_000)
+    })
+    expect(nudgeTurn).toHaveBeenCalledTimes(1)
+    // The row says what it did, replacing the plain silence wording.
+    expect(view.container.querySelector("[data-turn-auto-nudged]")?.textContent).toMatch(/1/)
+
+    act(() => {
+      vi.advanceTimersByTime(91_000)
+    })
+    expect(nudgeTurn).toHaveBeenCalledTimes(2)
+
+    act(() => {
+      vi.advanceTimersByTime(300_000)
+    })
+    expect(nudgeTurn).toHaveBeenCalledTimes(2)
+  } finally {
+    cleanup()
+    vi.useRealTimers()
+  }
+})
+
+test("a turn running a tool is never nudged on a stopwatch", () => {
+  nudgeTurn.mockClear()
+  vi.useFakeTimers()
+  try {
+    const started = Date.now() - 200_000
+    render(
+      <TurnProgressBar
+        session={session({ id: "turn-auto-nudge-tool", clock: started, items: [user(started), tool("t1", "in_progress", started)] })}
+      />
+    )
+    act(() => {
+      vi.advanceTimersByTime(200_000)
+    })
+    // The upstream has no request in flight while a local command runs.
+    expect(nudgeTurn).not.toHaveBeenCalled()
+  } finally {
+    cleanup()
+    vi.useRealTimers()
+  }
+})
+
+test("queued-send mode is never nudged automatically", () => {
+  // In queued mode the nudge would arrive after the turn settles and open a second turn, which is
+  // the opposite of pushing this one along.
+  nudgeTurn.mockClear()
+  setQueueSendMode("queued")
+  vi.useFakeTimers()
+  try {
+    const started = Date.now() - 200_000
+    render(<TurnProgressBar session={session({ id: "turn-auto-nudge-queued", clock: started })} />)
+    act(() => {
+      vi.advanceTimersByTime(200_000)
+    })
+    expect(nudgeTurn).not.toHaveBeenCalled()
+  } finally {
+    cleanup()
+    vi.useRealTimers()
+    act(() => setQueueSendMode("immediate"))
+  }
+})
+
+test("turning the switch off leaves the manual nudge as the only way to push a turn", () => {
+  nudgeTurn.mockClear()
+  setAutoNudgeEnabled(false)
+  vi.useFakeTimers()
+  try {
+    const started = Date.now() - 200_000
+    const view = render(<TurnProgressBar session={session({ id: "turn-auto-nudge-off", clock: started })} />)
+    act(() => {
+      vi.advanceTimersByTime(200_000)
+    })
+    expect(nudgeTurn).not.toHaveBeenCalled()
+    fireEvent.click(view.getByRole("button", { name: "催一下" }))
+    expect(nudgeTurn).toHaveBeenCalledTimes(1)
+  } finally {
+    cleanup()
+    vi.useRealTimers()
+    act(() => setAutoNudgeEnabled(true))
+  }
+})
+

@@ -46,6 +46,15 @@ import {
 } from "@/lib/chat-display-preferences"
 import { cn } from "@/lib/utils"
 import { setZoomLevel, ZOOM_LEVELS, zoomStore } from "@/lib/zoom"
+import {
+  type AppearanceMode,
+  setAppearanceMode,
+  setAppearanceTransparency,
+  useAppearanceEffect,
+  useAppearanceFailure,
+  useAppearanceMode,
+  useAppearanceTransparency
+} from "@/lib/appearance-mode"
 
 import { ACCENT_PRESETS, useAccentStore } from "../accent-store"
 import { PreviewVisibleRow } from "./preview-visible-row"
@@ -143,6 +152,54 @@ function ThemeSegmented({
   )
 }
 
+/**
+ * 外观材质三档：简洁 / Aero / Liquid Glass。
+ *
+ * 和主题正好相反的一对：主题选的是**明暗**，材质选的是**透明与折射**。两者可以任意组合，
+ * 所以这里是独立的一组按钮，而不是塞进 ThemeSegmented。
+ *
+ * 原生材质要 macOS 26+ 才有；不支持的机器上 CSS 仍按该档收紧透明度（厚玻璃），
+ * 并在下面用一行灰字说明「窗口材质没生效」——不假装有效果。
+ */
+function MaterialSegmented({
+  value,
+  onChange
+}: {
+  value: AppearanceMode
+  onChange: (mode: AppearanceMode) => void
+}) {
+  const { t } = useTranslation()
+  const options: Array<[AppearanceMode, string]> = [
+    ["solid", t("settings.materialSolid")],
+    ["aero", t("settings.materialAero")],
+    ["liquid-glass", t("settings.materialLiquidGlass")]
+  ]
+  return (
+    <div
+      role="group"
+      aria-label={t("settings.materialMode")}
+      className="grid w-[300px] grid-cols-3 gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5"
+    >
+      {options.map(([mode, label]) => (
+        <button
+          key={mode}
+          type="button"
+          aria-pressed={value === mode}
+          onClick={() => onChange(mode)}
+          className={cn(
+            "flex h-7 items-center justify-center rounded-md border px-2 text-xs font-medium transition-colors",
+            value === mode
+              ? "border-border bg-background text-foreground shadow-sm"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          )}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 /** One coloured band of the layout-share bar. Colour comes from the --layout-seg-* tokens
  *  (defined per light/dark in index.css), so the bar and its legend always agree and dark
  *  mode keeps a fixed lightness ladder that stays clear of the muted track. */
@@ -199,6 +256,11 @@ export function AppearanceSection() {
   const queueMode = useSyncExternalStore(subscribeChatDisplayPreferences, getQueueSendMode, getQueueSendMode)
   const detail = useSyncExternalStore(subscribeChatDisplayPreferences, getConversationDetail, getConversationDetail)
   const { theme, setTheme } = useTheme()
+  // 材质与主题相互独立：主题管明暗，材质管透明与折射。
+  const materialMode = useAppearanceMode()
+  const transparency = useAppearanceTransparency()
+  const materialEffect = useAppearanceEffect()
+  const materialFailure = useAppearanceFailure()
   const zoom = useStore(zoomStore, (state) => state.level)
   const accent = useAccentStore((state) => state.accent)
   const setAccent = useAccentStore((state) => state.setAccent)
@@ -267,6 +329,48 @@ export function AppearanceSection() {
         </div>
         <SettingRow compact title={t("settings.theme")} desc={t("settings.themeDesc")}>
           <ThemeSegmented value={theme} options={themeOptions} onChange={setTheme} />
+        </SettingRow>
+        <SettingRow
+          compact
+          title={t("settings.materialMode")}
+          desc={t(`settings.materialDesc.${materialMode === "solid" ? "solid" : materialMode === "aero" ? "aero" : "glass"}`)}
+        >
+          <div className="flex flex-col items-end gap-1">
+            <MaterialSegmented value={materialMode} onChange={setAppearanceMode} />
+            {materialMode !== "solid" && (materialEffect?.applied === false || materialFailure !== null) && (
+              <p className="max-w-[300px] text-end text-[11px] leading-4 text-amber-600 dark:text-amber-400">
+                {materialFailure ?? materialEffect?.detail ?? t("settings.materialUnavailable")}
+              </p>
+            )}
+          </div>
+        </SettingRow>
+        <SettingRow compact title={t("settings.transparency")} desc={t("settings.transparencyDesc")}>
+          <div className="flex w-[300px] items-center gap-3">
+            <Slider.Root
+              value={[transparency]}
+              min={0}
+              max={100}
+              step={1}
+              onValueChange={(next) =>
+                setAppearanceTransparency(Math.round(Array.isArray(next) ? Number(next[0] ?? 0) : Number(next)))
+              }
+              className="flex-1"
+            >
+              <Slider.Control className="relative flex h-5 w-full items-center">
+                <Slider.Track className="relative h-1 w-full rounded-full bg-muted">
+                  <Slider.Indicator
+                    className="absolute h-full rounded-full"
+                    style={{ background: "var(--settings-accent)" }}
+                  />
+                </Slider.Track>
+                <Slider.Thumb
+                  aria-label={t("settings.transparency")}
+                  className="size-3.5 rounded-full border border-border bg-background shadow-sm transition-shadow outline-none hover:shadow focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </Slider.Control>
+            </Slider.Root>
+            <span className="w-9 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{transparency}</span>
+          </div>
         </SettingRow>
         <SettingRow compact title={t("zoom.label")} desc={t("settings.zoomDesc")}>
           <Select

@@ -1,10 +1,13 @@
 import { Building2 } from "lucide-react"
+import { useState } from "react"
 import { useTranslation } from "react-i18next"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { useEnterpriseLogin } from "@/features/auth/use-enterprise-login"
 import type { CustomProvider } from "@/lib/providers"
 import { openSettingsWindow } from "@/lib/window-manager"
+import { companyModelLabel, setCompanyModelDisplayName, useCompanyModelDisplayName } from "@/lib/company-display-name"
 
 import { CompanyReasoningRow } from "./company-reasoning-row"
 
@@ -23,8 +26,22 @@ export const COMPANY_PROVIDER_TAB = "__company__"
 export function CompanyProviderCard({ provider }: { provider: CustomProvider | null }) {
   const { t } = useTranslation()
   const login = useEnterpriseLogin()
-  const name = provider?.name?.trim() || t("provider.companyName")
+  const displayName = useCompanyModelDisplayName()
+  /** null until the user types, so 保存 can drop back to the stored value after a save. */
+  const [draft, setDraft] = useState<string | null>(null)
+  const name = companyModelLabel(provider?.name?.trim() || t("provider.companyName"))
   const models = provider?.models ?? []
+  // The name is a form field with a button, not a live-typing broadcast: every keystroke used to
+  // rewrite the channel name in the sidebar, the picker and the model table at once. A save makes
+  // the change one deliberate act, which is also how the other cards behave (see 保存连接).
+  const pendingName = draft ?? displayName
+  const nameDirty = pendingName.trim() !== displayName
+  const saveName = (): void => {
+    if (!nameDirty) return
+    setCompanyModelDisplayName(pendingName)
+    setDraft(null)
+    toast.success(t("provider.companyDisplayNameSaved"))
+  }
 
   // A healthy local renewal is the sign-in signal. The server check is confirmation on top: when
   // it cannot be reached (off the company network) the channel is "signed in, offline" rather
@@ -101,6 +118,26 @@ export function CompanyProviderCard({ provider }: { provider: CustomProvider | n
                 </li>
               ))}
             </ul>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground" htmlFor="company-model-display-name">
+              {t("provider.companyDisplayName")}
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                id="company-model-display-name"
+                className="h-9 min-w-0 flex-1 rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                value={pendingName}
+                placeholder={t("provider.companyName")}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") saveName()
+                }}
+              />
+              <Button className="rounded-sm" disabled={!nameDirty} onClick={saveName}>
+                {t("provider.companyDisplayNameSave")}
+              </Button>
+            </div>
           </div>
           <CompanyReasoningRow />
         </>

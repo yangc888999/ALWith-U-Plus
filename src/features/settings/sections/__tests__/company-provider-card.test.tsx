@@ -20,6 +20,7 @@ vi.mock("@/features/auth/store", () => ({
 vi.mock("@/lib/window-manager", () => ({ openSettingsWindow: host.openSettings }))
 
 import { CompanyProviderCard } from "../company-provider-card"
+import { resetEnterpriseStatusCache } from "@/features/auth/use-enterprise-login"
 
 const provider = {
   id: "custom_alwith_enterprise_abc",
@@ -39,6 +40,7 @@ const authorizedServer = { enabled: true, authorization_status: "authorized", em
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetEnterpriseStatusCache()
   host.user = { user_uuid: "alice" }
   host.status.mockResolvedValue(authorizedNative)
   host.request.mockResolvedValue(authorizedServer)

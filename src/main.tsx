@@ -19,6 +19,7 @@ import { AuthGate } from "@/features/auth/auth-gate"
 import { initPlatformAuth } from "@/features/auth/store"
 import { hydrateNavigationSound } from "@/features/chat/codex/navigation-sound-store"
 import { startModelOverloadAlerts } from "@/features/chat/model-overload-alert"
+import { startModelRetryingAlerts } from "@/features/chat/model-retrying-alert"
 import { predictionPreference } from "@/features/chat/composer/prediction-preference"
 import { requestDefaultScreenCapture, restoreComputer } from "@/features/computer/operations"
 import { reportExtensionError } from "@/features/extensions/runtime"
@@ -31,6 +32,8 @@ import { installToastErrorLocalization } from "@/lib/toast-error"
 import { armStartupWindow } from "@/lib/startup-window"
 import { initI18n } from "@/lib/i18n"
 import { startPreferenceSync } from "@/lib/preference-sync"
+import { startGatewayRetrySync } from "@/lib/gateway-retry-settings"
+import { startOverload429MuteSync } from "@/lib/overload-429-settings"
 import { loadPreferences } from "@/lib/preferences"
 import { isQueueCancelled } from "@/lib/queued-prompt"
 import { bootstrapSettings } from "@/lib/settings-store"
@@ -205,6 +208,14 @@ async function bootstrap(): Promise<void> {
   await hydrateZoom(preferences.zoomLevel)
   hydrateNavigationSound({ soundMode: preferences.navigationSoundMode, instrument: preferences.navigationInstrument })
   void startPreferenceSync()
+  // The bridge keeps 「连接中断自动重试」 and 「禁用模型异常提醒」 in in-process AtomicBools that reset
+  // to their defaults on every launch, while both switches live in localStorage. Without these
+  // pushes the mirrors are only corrected when someone happens to open 设置 → 供应商 — so a user who
+  // switched either one off and then restarted got the old behaviour back while the UI still showed
+  // the saved value. Boot, not import: see the module headers. Both calls are idempotent and swallow
+  // failures, so the cost is one IPC round trip each (and none at all outside Tauri).
+  startGatewayRetrySync()
+  startOverload429MuteSync()
   const root = document.getElementById("root")
   if (!root) throw new Error("index.html has no #root")
   // Cache the quick-chat root before the first render decides what a chat is.
@@ -239,6 +250,7 @@ async function bootstrap(): Promise<void> {
     void requestDefaultScreenCapture().catch((error: unknown) => surfaceGlobalError(describe(error)))
     void startStartupImports().catch(reportExtensionError)
     void startModelOverloadAlerts().catch((error: unknown) => surfaceGlobalError(describe(error)))
+    void startModelRetryingAlerts().catch((error: unknown) => surfaceGlobalError(describe(error)))
     void useUpdaterStore
       .getState()
       .init()

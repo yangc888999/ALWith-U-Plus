@@ -3,7 +3,7 @@
     "email": "ईमेल",
     "code": "सत्यापन कोड",
     "signIn": "साइन इन",
-    "signOut": "ALWith L से साइन आउट करें"
+    "signOut": "ALWith U⁺ से साइन आउट करें"
   },
   "guide": {
     "help": "सहायता प्राप्त करें"
@@ -124,8 +124,15 @@
         "name": "पूर्ण पहुँच",
         "description": "सावधानी से उपयोग करें: Codex बिना स्वीकृति के इस कार्यस्थान के बाहर की फ़ाइलें संपादित कर सकता है और इंटरनेट एक्सेस कर सकता है"
       },
-      "heading": "ALWith L की कार्रवाइयों को कैसे अनुमति दी जाए?"
-    }
+      "heading": "ALWith U⁺ की कार्रवाइयों को कैसे अनुमति दी जाए?"
+    },
+    "turnProgress": {
+      "quietFor": "· no output for {{seconds}}s",
+      "autoNudged": "· nudged {{count}}×"
+    },
+    "retryAlertTitle": "“{{model}}” has been retried {{count}} times with no response; the system is still retrying in the background.",
+    "retryAlertJump": "Open conversation",
+    "retryAlertDescription": "Open the conversation to check progress, or switch to another model."
   },
   "composer": {
     "mode": "अनुमतियाँ",
@@ -195,7 +202,12 @@
     },
     "trackpad": "ट्रैकपैड",
     "trackpadEnabled": "ट्रैकपैड जेस्चर सक्षम करें",
-    "threeFingerSwipeDesc": "कैनवास खिसकाने के लिए तीन उंगलियों से क्षैतिज स्वाइप करें"
+    "threeFingerSwipeDesc": "कैनवास खिसकाने के लिए तीन उंगलियों से क्षैतिज स्वाइप करें",
+    "providerReliability": "Connection reliability",
+    "autoRetry": "Retry interrupted connections",
+    "autoRetryDesc": "When a provider connection times out or drops, the same request is sent again instead of ending the turn.",
+    "autoNudge": "Nudge a silent turn",
+    "autoNudgeDesc": "When a model has produced nothing for 90 seconds, one “continue” is sent automatically — at most twice per turn."
   },
   "usage": {
     "usage": "उपयोग",
@@ -207,7 +219,8 @@
     "testButton": "कनेक्शन परीक्षण",
     "customButton": "कस्टम",
     "saveButton": "सहेजें",
-    "remove": "हटाएँ"
+    "remove": "हटाएँ",
+    "companyDisplayName": "Display name"
   },
   "updater": {
     "relaunchConfirmTitle": "अपडेट के लिए फिर से लॉन्च करें?",
@@ -371,7 +384,7 @@
     "more": "और कार्रवाइयाँ"
   },
   "app": {
-    "name": "ALWith L"
+    "name": "ALWith U⁺"
   },
   "notify": {
     "needsInput": "आपके इनपुट की आवश्यकता है",
@@ -399,5 +412,50 @@
     "realtimeStart": "Codex वॉइस कॉल शुरू करें",
     "realtimeStop": "वॉइस कॉल समाप्त करें",
     "realtimeCancel": "वॉइस कनेक्शन रद्द करें"
+  },
+  "usageReport": {
+    "resetCardTitle": "कोटा रीसेट",
+    "resetCardDesc": "प्लान की उपयोग विंडो कब रीसेट होती हैं।",
+    "resetCardEmpty": "अभी कोई रीसेट समय नहीं",
+    "resetCardExpiresAt": "{{time}} पर रीसेट",
+    "resetCardRemaining": "{{time}} शेष",
+    "resetCardReset": "रीसेट समय आ गया",
+    "resetCardUse": "उपयोग करें"
+  },
+  "providerUsage": {
+    "title": "Quota",
+    "refresh": "Refresh",
+    "remaining": "Remaining",
+    "limit": "Limit {{value}}",
+    "unlimited": "unlimited",
+    "resetAt": "Resets {{time}}",
+    "expiresAt": "Valid until {{time}}",
+    "plan": "Plan {{name}}",
+    "updatedAt": "Updated {{time}}",
+    "consoleOnly": "This provider's plan usage is only visible in its own console.",
+    "openConsole": "Open console",
+    "unsupported": "This provider publishes no usage endpoint.",
+    "unsupportedDisabled": "This provider is switched off, so no quota was read.",
+    "unsupportedNoBaseUrl": "This provider has no API base URL, so there is nowhere to ask.",
+    "unauthorized": "The key is invalid or has expired.",
+    "unreachable": "Usage is unavailable right now.",
+    "stale": "cached",
+    "freeAllowance": "Free allowance today",
+    "freeLocalCalls": "Calls today on this Mac",
+    "freeRemainingUnknown": "limit {{limit}} (remaining unknown)",
+    "freeBlocked": "Today's free calls are used up",
+    "freeResetVendor": "resets in {{time}}",
+    "freeResetUtcDay": "resets in {{time}} (daily at 00:00 UTC)",
+    "freeResetUtcDayRule": "resets daily at 00:00 UTC",
+    "resetNow": "Reset time reached"
+  },
+  "error": {
+    "accountCleanupFailed": "पिछले ALwith प्रदाता की सफ़ाई विफल रही ({{code}})। थोड़ी देर बाद फिर से कोशिश करें।",
+    "accountModelRequired": "इस चैट का खाता मॉडल अब उपलब्ध नहीं है। नीचे मॉडल चयनकर्ता में एक मॉडल चुनें, फिर दोबारा भेजें।",
+    "enterpriseModelNotReady": "The enterprise model is not ready yet. Sign in to your enterprise account in Settings → Account, then try again.",
+    "accountChanged": "चलते समय ALwith खाता बदल गया। फिर से कोशिश करें।",
+    "accountModelConfigFailed": "ALwith मॉडल कॉन्फ़िगरेशन लोड नहीं हो सका। फिर से कोशिश करें या दोबारा साइन इन करें।",
+    "accountCleanupPending": "पिछले ALwith खाते की सफ़ाई अभी पूरी नहीं हुई है। थोड़ी देर बाद फिर से कोशिश करें।",
+    "enterpriseLogoutFailed": "सर्वर पर साइन आउट नहीं हो सका, लेकिन इस कंप्यूटर की पहुँच हटा दी गई है।"
   }
 }

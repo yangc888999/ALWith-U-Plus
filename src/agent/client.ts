@@ -72,14 +72,8 @@ import {
 } from "@/agent/group-turns"
 import { announceGroupSpeaker, clearGroupControl, groupControlFor, patchGroupDiscussion, setGroupPaused, subscribeGroupControl } from "@/lib/group-runtime"
 import { type SummaryMode } from "@/lib/group-preferences"
-import {
-  automationTitleOf,
-  isAutomationSessionId,
-  rememberAutomationSessionRow,
-  replaceAutomationSessionRows
-} from "@/lib/automation-sessions"
-import { rememberGroupSessionRow, replaceGroupSessionRows } from "@/lib/group-sessions"
-import { groupByDirectory } from "@/lib/groups"
+import { rememberAutomationSessionRow, replaceAutomationSessionRows } from "@/lib/automation-sessions"
+import { groupSessionKind, rememberGroupSessionRow, replaceGroupSessionRows } from "@/lib/group-sessions"
 import { isModelRetired, retireModel, reviveModel } from "@/lib/retired-models"
 import { beginQueuedPrompt, cancelQueuedPrompt, endQueuedPrompt, QueueCancelledError } from "@/lib/queued-prompt"
 import { sandboxAllows, sandboxCapabilities, sandboxMode, sandboxSettings } from "@/lib/sandbox-preference"
@@ -713,11 +707,15 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * conversations. They get their own collapsible section instead.
    */
   private divertSessionRow(summary: SessionSummary): boolean {
-    if (groupByDirectory(summary.cwd) !== null) {
+    // `groupSessionKind`, not `groupByDirectory` alone: a meeting whose group record has not been
+    // written yet — or whose folder moved / was healed / still points at the Groups root — used to
+    // fail the record match and stay in `sessionList`, where the sidebar rendered it as a project.
+    const kind = groupSessionKind(summary)
+    if (kind === "group") {
       rememberGroupSessionRow(summary)
       return true
     }
-    if (automationTitleOf(summary.title) !== null || isAutomationSessionId(summary.sessionId)) {
+    if (kind === "automation") {
       rememberAutomationSessionRow(summary)
       return true
     }
@@ -752,15 +750,11 @@ export class CodexClient extends CodexAcpClient<AppState> {
 
   private splitSessionRows(): void {
     const rows = this.state.sessionList
-    // A scheduled run is recognised either by its `codex exec` heading or by the id the scheduler
-    // recorded when it created the session — a task's first prompt has no heading.
-    const isAutomation = (row: SessionSummary): boolean =>
-      automationTitleOf(row.title) !== null || isAutomationSessionId(row.sessionId)
-    const groupRows = rows.filter((row) => groupByDirectory(row.cwd) !== null)
-    const automationRows = rows.filter(
-      (row) => groupByDirectory(row.cwd) === null && isAutomation(row)
-    )
-    const kept = rows.filter((row) => groupByDirectory(row.cwd) === null && !isAutomation(row))
+    // The same one answer `divertSessionRow` uses: a meeting is a meeting whether or not its group
+    // record exists yet, otherwise a restored history never leaves 项目.
+    const groupRows = rows.filter((row) => groupSessionKind(row) === "group")
+    const automationRows = rows.filter((row) => groupSessionKind(row) === "automation")
+    const kept = rows.filter((row) => groupSessionKind(row) === "project")
     if (groupRows.length === 0 && automationRows.length === 0) return
     if (groupRows.length > 0) replaceGroupSessionRows(groupRows)
     if (automationRows.length > 0) replaceAutomationSessionRows(automationRows)
@@ -983,6 +977,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
       // one codex accepts. The rollout's original provider goes stale after a model switch and
       // only misleads the route.
       const options = undefined
+      let currentModelFallbackAttempted = false
       for (let attempt = 0; ; attempt += 1) {
         try {
           await this.replay(id, cwd, options)
@@ -1013,6 +1008,21 @@ export class CodexClient extends CodexAcpClient<AppState> {
               }
             } catch {
               // Repair is best effort; fall through to the retry below.
+            }
+          }
+          // If the saved provider/model is gone or differs from the current picker, retry without
+          // the historical hint. This lets Codex replay through the currently configured model
+          // instead of failing solely because the conversation was recorded elsewhere.
+          if (!currentModelFallbackAttempted && (providerMismatch || /This chat uses|no longer configured|not found/i.test(text))) {
+            currentModelFallbackAttempted = true
+            try {
+              const current = this.holds(id) ? selectedModel(this.session(id).configOptions) : null
+              if (current !== null && current !== saved?.model) {
+                await this.replay(id, cwd, { meta: modelHint(current) })
+                break
+              }
+            } catch {
+              // Continue to the existing repair and guidance paths.
             }
           }
           // Second chance without a hint: the agent then reads the provider recorded in the
@@ -2740,12 +2750,15 @@ export class CodexClient extends CodexAcpClient<AppState> {
     if (!this.current(scope) || !this.holds(id)) return true
     this.accountRevocations.set(id, (this.accountRevocations.get(id) ?? 0) + 1)
     this.setApp((state) => ({ accountModelRecovery: { ...state.accountModelRecovery, [id]: true } }))
+    // Recorded, not enforced. `readOnly` used to be written here as well, and that single flag is
+    // what disabled the input box: a model problem then looked like a broken composer with a dead
+    // picker. The recovery flag above plus the stop reason below are enough to explain it in one
+    // line, and the reader fixes it with the picker that is already there.
     this.publishSession({
       ...this.session(id),
       cwd,
       attached: false,
       restoring: false,
-      readOnly: true,
       error: { stopReason: ACCOUNT_MODEL_REQUIRED, error: null, meta: null }
     })
     return true
@@ -2759,16 +2772,24 @@ export class CodexClient extends CodexAcpClient<AppState> {
     for (const id of ids) {
       this.accountRevocations.set(id, (this.accountRevocations.get(id) ?? 0) + 1)
       if (!this.holds(id)) continue
+      // Same rule as `recoverReplay`: the flag and the stop reason record the state, `readOnly`
+      // would take the input box away from the reader.
       this.publishSession({
         ...this.session(id),
         attached: false,
-        readOnly: true,
         error: { stopReason: ACCOUNT_MODEL_REQUIRED, error: null, meta: null }
       })
     }
   }
 
-  /** Explicit recovery is separate from the automatic model hints used by normal history replay. */
+  /**
+   * Explicit recovery is separate from the automatic model hints used by normal history replay.
+   *
+   * Nothing in the UI calls this any more: the account-recovery card was removed in 0.4.4 and the
+   * composer's normal model selector is the only way back. The method stays because the chat window
+   * IPC surface (`chat-window-client`) still exposes it for a future automatic hand-off — drop it
+   * together with that whitelist entry, not on its own.
+   */
   async resumeAccountModel(id: string, model: string | null): Promise<void> {
     const session = this.session(id)
     if (!this.state.accountModelRecovery[id]) throw new Error("Account model recovery is not required")
@@ -2986,15 +3007,10 @@ export class CodexClient extends CodexAcpClient<AppState> {
 
   protected override onSessionChanged(session: Session): void {
     super.onSessionChanged(session)
-    const revoked = this.accountRevocations.get(session.id)
-    if (
-      revoked !== undefined &&
-      this.accountRecoveries.get(session.id) !== revoked &&
-      (session.attached || !session.readOnly)
-    ) {
-      this.publishSession({ ...session, attached: false, readOnly: true })
-      return
-    }
+    // A pending revocation no longer re-parks the session read-only. Doing that here is what made
+    // the single flag in `recoverReplay` sticky: every later session update re-applied the lock, so
+    // the composer could never recover even after the engine was healthy again. `accountModelRecovery`
+    // is the only surface state left, and it renders one line.
     this.followModel("main", session)
     this.followModel("chat", session)
   }

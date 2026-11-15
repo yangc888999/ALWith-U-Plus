@@ -21,23 +21,9 @@
   display: none;
 }
 
-/* Account-model recovery: the composer's recovery card already explains the read-only state and
-   carries the one action that fixes it. The package's generic "open in another client" banner
-   would claim a different cause with a useless 重试 button — hide it while the recovery marker
-   is set.
-
-   The first rule kept this banner on screen: lucide v1 renders the lock icon with several aliases,
-   so `.lucide-lock` is not a reliable hook. The generic read-only banner is a direct child of
-   `[data-chat-content]` that wraps an `[data-slot="alert"]` (the reconnect/stopped banner is
-   suppressed while `readOnly` is true, and transcript error items are nested inside the timeline,
-   not direct children). Matching that structure hides the banner regardless of the icon.
-
-   Both rules are scoped to `[data-account-recovery]`, which is only set for this one cause; every
-   other read-only reason (another client holding the session) keeps its banner and 重试 button. */
-[data-account-recovery] [data-chat-content] > div:has(> [data-slot="alert"] .lucide-lock),
-[data-account-recovery] [data-chat-content] > div:has(> [data-slot="alert"]) {
-  display: none;
-}
+/* A revoked account model is no longer a read-only state (it is one line above the composer), so
+   the package's "open in another client" banner needs no suppression for it any more: when it
+   shows up now, another client really does hold the session. */
 
 .codex-turn-errors {
   display: flex;

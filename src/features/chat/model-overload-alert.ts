@@ -85,7 +85,7 @@ function choices(session: Session): Choice[] {
   return result
 }
 
-function label(session: Session, value: string): string {
+export function label(session: Session, value: string): string {
   return choices(session).find((choice) => choice.value === value)?.name ?? value
 }
 
@@ -118,7 +118,7 @@ export function matchesReportedModel(selected: string | null, reported: string):
   }
 }
 
-function runningSession(model: string): Session | null {
+export function runningSession(model: string): Session | null {
   // The bridge reports a model, never a session id. Guessing "the most recently updated one" used
   // to attach the notice to an idle-by-observation window while the real turn sat in another chat.
   // With more than one plausible target, stay silent rather than blame the wrong conversation.

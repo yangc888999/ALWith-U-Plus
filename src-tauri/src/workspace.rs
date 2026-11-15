@@ -234,7 +234,7 @@ pub async fn workspace_import(
         format!("Copy these files or folders into {}?\n{}", destination.display(), names)
     };
     let (sender, receiver) = tokio::sync::oneshot::channel();
-    window.dialog().message(message).title("ALWith L").buttons(MessageDialogButtons::OkCancel).show(move |allowed| {
+    window.dialog().message(message).title("ALWith U⁺").buttons(MessageDialogButtons::OkCancel).show(move |allowed| {
         let _ = sender.send(allowed);
     });
     if !receiver.await.map_err(|error| error.to_string())? {

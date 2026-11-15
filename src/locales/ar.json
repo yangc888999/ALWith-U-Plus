@@ -5,7 +5,7 @@
     "code": "رمز التحقق",
     "password": "كلمة المرور",
     "signIn": "تسجيل الدخول",
-    "signOut": "تسجيل الخروج من ALWith L"
+    "signOut": "تسجيل الخروج من ALWith U⁺"
   },
   "guide": {
     "help": "احصل على المساعدة"
@@ -187,8 +187,15 @@
         "name": "وصول كامل",
         "description": "استخدم بحذر: يستطيع Codex تعديل الملفات خارج مساحة العمل هذه والوصول إلى الإنترنت دون موافقة"
       },
-      "heading": "كيف تتم الموافقة على إجراءات ALWith L؟"
-    }
+      "heading": "كيف تتم الموافقة على إجراءات ALWith U⁺؟"
+    },
+    "turnProgress": {
+      "quietFor": "· no output for {{seconds}}s",
+      "autoNudged": "· nudged {{count}}×"
+    },
+    "retryAlertTitle": "“{{model}}” has been retried {{count}} times with no response; the system is still retrying in the background.",
+    "retryAlertJump": "Open conversation",
+    "retryAlertDescription": "Open the conversation to check progress, or switch to another model."
   },
   "composer": {
     "mode": "الأذونات",
@@ -258,7 +265,12 @@
     },
     "trackpad": "لوحة التتبع",
     "trackpadEnabled": "تمكين إيماءات لوحة التتبع",
-    "threeFingerSwipeDesc": "قم بتحريك اللوحة القماشية بتمريرة أفقية بثلاثة أصابع"
+    "threeFingerSwipeDesc": "قم بتحريك اللوحة القماشية بتمريرة أفقية بثلاثة أصابع",
+    "providerReliability": "Connection reliability",
+    "autoRetry": "Retry interrupted connections",
+    "autoRetryDesc": "When a provider connection times out or drops, the same request is sent again instead of ending the turn.",
+    "autoNudge": "Nudge a silent turn",
+    "autoNudgeDesc": "When a model has produced nothing for 90 seconds, one “continue” is sent automatically — at most twice per turn."
   },
   "usage": {
     "title": "حدود استخدام الخطة",
@@ -285,7 +297,8 @@
       "cn": "الصين"
     },
     "saveButton": "يحفظ",
-    "remove": "يزيل"
+    "remove": "يزيل",
+    "companyDisplayName": "Display name"
   },
   "updater": {
     "upToDate": "محدّث",
@@ -473,7 +486,7 @@
     "more": "المزيد من الإجراءات"
   },
   "app": {
-    "name": "ALWith L"
+    "name": "ALWith U⁺"
   },
   "notify": {
     "needsInput": "يلزم إدخالك",
@@ -501,5 +514,50 @@
     "realtimeStart": "بدء مكالمة صوتية مع Codex",
     "realtimeStop": "إنهاء المكالمة الصوتية",
     "realtimeCancel": "إلغاء الاتصال الصوتي"
+  },
+  "usageReport": {
+    "resetCardTitle": "إعادة ضبط الحصة",
+    "resetCardDesc": "متى تُعاد ضبط نوافذ استخدام الخطة.",
+    "resetCardEmpty": "لا يوجد وقت إعادة ضبط بعد",
+    "resetCardExpiresAt": "إعادة الضبط في {{time}}",
+    "resetCardRemaining": "المتبقي {{time}}",
+    "resetCardReset": "حان وقت إعادة الضبط",
+    "resetCardUse": "استخدام"
+  },
+  "providerUsage": {
+    "title": "Quota",
+    "refresh": "Refresh",
+    "remaining": "Remaining",
+    "limit": "Limit {{value}}",
+    "unlimited": "unlimited",
+    "resetAt": "Resets {{time}}",
+    "expiresAt": "Valid until {{time}}",
+    "plan": "Plan {{name}}",
+    "updatedAt": "Updated {{time}}",
+    "consoleOnly": "This provider's plan usage is only visible in its own console.",
+    "openConsole": "Open console",
+    "unsupported": "This provider publishes no usage endpoint.",
+    "unsupportedDisabled": "This provider is switched off, so no quota was read.",
+    "unsupportedNoBaseUrl": "This provider has no API base URL, so there is nowhere to ask.",
+    "unauthorized": "The key is invalid or has expired.",
+    "unreachable": "Usage is unavailable right now.",
+    "stale": "cached",
+    "freeAllowance": "Free allowance today",
+    "freeLocalCalls": "Calls today on this Mac",
+    "freeRemainingUnknown": "limit {{limit}} (remaining unknown)",
+    "freeBlocked": "Today's free calls are used up",
+    "freeResetVendor": "resets in {{time}}",
+    "freeResetUtcDay": "resets in {{time}} (daily at 00:00 UTC)",
+    "freeResetUtcDayRule": "resets daily at 00:00 UTC",
+    "resetNow": "Reset time reached"
+  },
+  "error": {
+    "accountCleanupFailed": "فشل تنظيف موفّر ALwith السابق ({{code}}). أعد المحاولة بعد قليل.",
+    "accountModelRequired": "لم يعد نموذج الحساب لهذه المحادثة متاحًا. اختر نموذجًا من محدّد النماذج أدناه، ثم أرسل مرة أخرى.",
+    "enterpriseModelNotReady": "The enterprise model is not ready yet. Sign in to your enterprise account in Settings → Account, then try again.",
+    "accountChanged": "تغيّر حساب ALwith أثناء التنفيذ. أعد المحاولة.",
+    "accountModelConfigFailed": "فشل تحميل إعدادات نماذج ALwith. أعد المحاولة أو سجّل الدخول مجددًا.",
+    "accountCleanupPending": "لم يكتمل تنظيف حساب ALwith السابق بعد. أعد المحاولة بعد قليل.",
+    "enterpriseLogoutFailed": "فشل تسجيل الخروج على الخادم، لكن تم إلغاء وصول هذا الجهاز."
   }
 }

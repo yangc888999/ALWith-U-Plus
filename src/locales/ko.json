@@ -3,7 +3,7 @@
     "email": "이메일",
     "code": "인증 코드",
     "signIn": "로그인",
-    "signOut": "ALWith L에서 로그아웃"
+    "signOut": "ALWith U⁺에서 로그아웃"
   },
   "guide": {
     "help": "도움 받기"
@@ -124,8 +124,15 @@
         "name": "전체 접근",
         "description": "주의해서 사용하세요: Codex는 승인 없이 작업 공간 밖의 파일을 수정하고 인터넷에 접근할 수 있습니다"
       },
-      "heading": "ALWith L의 작업을 어떻게 승인할까요?"
-    }
+      "heading": "ALWith U⁺의 작업을 어떻게 승인할까요?"
+    },
+    "turnProgress": {
+      "quietFor": "· no output for {{seconds}}s",
+      "autoNudged": "· nudged {{count}}×"
+    },
+    "retryAlertTitle": "“{{model}}” has been retried {{count}} times with no response; the system is still retrying in the background.",
+    "retryAlertJump": "Open conversation",
+    "retryAlertDescription": "Open the conversation to check progress, or switch to another model."
   },
   "composer": {
     "mode": "권한",
@@ -195,7 +202,12 @@
     },
     "trackpad": "트랙패드",
     "trackpadEnabled": "트랙패드 제스처 활성화",
-    "threeFingerSwipeDesc": "세 손가락으로 가로로 쓸어 캔버스 이동"
+    "threeFingerSwipeDesc": "세 손가락으로 가로로 쓸어 캔버스 이동",
+    "providerReliability": "Connection reliability",
+    "autoRetry": "Retry interrupted connections",
+    "autoRetryDesc": "When a provider connection times out or drops, the same request is sent again instead of ending the turn.",
+    "autoNudge": "Nudge a silent turn",
+    "autoNudgeDesc": "When a model has produced nothing for 90 seconds, one “continue” is sent automatically — at most twice per turn."
   },
   "usage": {
     "usage": "사용량",
@@ -207,7 +219,8 @@
     "testButton": "연결 테스트",
     "customButton": "커스텀",
     "saveButton": "저장",
-    "remove": "제거"
+    "remove": "제거",
+    "companyDisplayName": "Display name"
   },
   "updater": {
     "relaunchConfirmTitle": "업데이트를 위해 다시 시작할까요?",
@@ -375,7 +388,7 @@
     "more": "추가 작업"
   },
   "app": {
-    "name": "ALWith L"
+    "name": "ALWith U⁺"
   },
   "notify": {
     "needsInput": "입력이 필요합니다",
@@ -403,5 +416,50 @@
     "realtimeStart": "Codex 음성 통화 시작",
     "realtimeStop": "음성 통화 종료",
     "realtimeCancel": "음성 연결 취소"
+  },
+  "usageReport": {
+    "resetCardTitle": "할당량 초기화",
+    "resetCardDesc": "요금제 사용 기간이 언제 초기화되는지.",
+    "resetCardEmpty": "아직 초기화 시간이 없습니다",
+    "resetCardExpiresAt": "{{time}}에 초기화",
+    "resetCardRemaining": "남은 시간 {{time}}",
+    "resetCardReset": "초기화 시간이 되었습니다",
+    "resetCardUse": "사용"
+  },
+  "providerUsage": {
+    "title": "Quota",
+    "refresh": "Refresh",
+    "remaining": "Remaining",
+    "limit": "Limit {{value}}",
+    "unlimited": "unlimited",
+    "resetAt": "Resets {{time}}",
+    "expiresAt": "Valid until {{time}}",
+    "plan": "Plan {{name}}",
+    "updatedAt": "Updated {{time}}",
+    "consoleOnly": "This provider's plan usage is only visible in its own console.",
+    "openConsole": "Open console",
+    "unsupported": "This provider publishes no usage endpoint.",
+    "unsupportedDisabled": "This provider is switched off, so no quota was read.",
+    "unsupportedNoBaseUrl": "This provider has no API base URL, so there is nowhere to ask.",
+    "unauthorized": "The key is invalid or has expired.",
+    "unreachable": "Usage is unavailable right now.",
+    "stale": "cached",
+    "freeAllowance": "Free allowance today",
+    "freeLocalCalls": "Calls today on this Mac",
+    "freeRemainingUnknown": "limit {{limit}} (remaining unknown)",
+    "freeBlocked": "Today's free calls are used up",
+    "freeResetVendor": "resets in {{time}}",
+    "freeResetUtcDay": "resets in {{time}} (daily at 00:00 UTC)",
+    "freeResetUtcDayRule": "resets daily at 00:00 UTC",
+    "resetNow": "Reset time reached"
+  },
+  "error": {
+    "accountCleanupFailed": "이전 ALwith 공급자 정리에 실패했습니다({{code}}). 잠시 후 다시 시도하세요.",
+    "accountModelRequired": "이 대화의 계정 모델을 더 이상 사용할 수 없습니다. 아래 모델 선택기에서 모델을 고른 뒤 다시 보내세요.",
+    "enterpriseModelNotReady": "The enterprise model is not ready yet. Sign in to your enterprise account in Settings → Account, then try again.",
+    "accountChanged": "실행 중에 ALwith 계정이 바뀌었습니다. 다시 시도하세요.",
+    "accountModelConfigFailed": "ALwith 모델 구성을 불러오지 못했습니다. 다시 시도하거나 다시 로그인하세요.",
+    "accountCleanupPending": "이전 ALwith 계정 정리가 아직 끝나지 않았습니다. 잠시 후 다시 시도하세요.",
+    "enterpriseLogoutFailed": "서버 로그아웃에 실패했지만 이 컴퓨터의 접근 권한은 취소되었습니다."
   }
 }

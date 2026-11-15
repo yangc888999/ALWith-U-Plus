@@ -65,6 +65,48 @@ export const commands = {
    *  rather than point the user at certificates.
    */
   fetchText: (args: { url: string }): Promise<string> => __t3Invoke<string>("fetch_text", args),
+  /**
+   *  查询 ChatGPT 额度重置卡（只读）。
+   *
+   *  未登录返回 `signedOut` 而不是 `Err`；接口失败时先尝试 24 小时内的缓存（降级为 `stale`），
+   *  没有缓存则返回对应的空状态。任何情况下都不会兑换卡片。
+   */
+  chatgptResetCredits: (): Promise<ResetCredits_Serialize> =>
+    __t3Invoke<ResetCredits_Serialize>("chatgpt_reset_credits"),
+  /**
+   *  兑换一张额度重置卡。
+   *
+   *  `credit_id` 为 `None` 时由后端自己挑。每次调用生成新的 `redeem_request_id`，并且**不重试**：
+   *  一次网络抖动后的自动重试会花掉第二张卡。
+   */
+  chatgptResetCredit: (args: { creditId: string | null }): Promise<RedeemResult_Serialize> =>
+    __t3Invoke<RedeemResult_Serialize>("chatgpt_reset_credit", args),
+  /**
+   *  把当前外观模式应用到主窗口。
+   *
+   *  幂等：重复切到同一档不会叠加材质（`apply_vibrancy` 自己按 view tag 去重，
+   *  `apply_liquid_glass` 同样按 tag 查找）。
+   */
+  appearanceEffect: (args: { mode: string }): Promise<AppearanceEffect_Serialize> =>
+    __t3Invoke<AppearanceEffect_Serialize>("appearance_effect", args),
+  providerQuotaQuery: (args: { providerId: string }): Promise<ProviderQuota_Serialize> =>
+    __t3Invoke<ProviderQuota_Serialize>("provider_quota_query", args),
+  providerQuotaCached: (): Promise<ProviderQuota_Serialize[]> =>
+    __t3Invoke<ProviderQuota_Serialize[]>("provider_quota_cached"),
+  providerQuotaClear: (args: { providerId: string }): Promise<null> => __t3Invoke<null>("provider_quota_clear", args),
+  /**
+   *  Local `:free` usage; no `AppHandle`, because `bridge` needs it off the request path.
+   */
+  openrouterFreeUsage: (): Promise<FreeUsage_Serialize> => __t3Invoke<FreeUsage_Serialize>("openrouter_free_usage"),
+  /**
+   *  The UI-facing reader for the same switch. Named apart from the plain accessor above because a
+   *  tauri command and a plain function cannot share a name in one module.
+   */
+  gatewayRetryGet: (): Promise<boolean> => __t3Invoke<boolean>("gateway_retry_get"),
+  /**
+   *  The UI-facing writer for the same switch.
+   */
+  gatewayRetrySet: (args: { enabled: boolean }): Promise<null> => __t3Invoke<null>("gateway_retry_set", args),
   larkCliStatus: (): Promise<LarkCliStatus_Serialize> => __t3Invoke<LarkCliStatus_Serialize>("lark_cli_status"),
   larkCliTargets: (args: { kind: string; query: string }): Promise<LarkTarget[]> =>
     __t3Invoke<LarkTarget[]>("lark_cli_targets", args),
@@ -767,6 +809,15 @@ export type CommandErrors = {
   usageReport: string
   usageReportRefresh: string
   fetchText: string
+  chatgptResetCredits: string
+  chatgptResetCredit: string
+  appearanceEffect: string
+  providerQuotaQuery: string
+  providerQuotaCached: string
+  providerQuotaClear: string
+  openrouterFreeUsage: string
+  gatewayRetryGet: never
+  gatewayRetrySet: never
   larkCliStatus: string
   larkCliTargets: string
   larkCliSend: string
@@ -1157,6 +1208,40 @@ export type AppInfo_Serialize = {
   icon: string | null
 }
 
+/**
+ *  一次切换的结果。`applied` 只说「窗口材质确实按这个模式生效了」，
+ *  不表示 CSS 那一半也成功——那一半是纯前端的事。
+ */
+export type AppearanceEffect = AppearanceEffect_Serialize | AppearanceEffect_Deserialize
+
+/**
+ *  一次切换的结果。`applied` 只说「窗口材质确实按这个模式生效了」，
+ *  不表示 CSS 那一半也成功——那一半是纯前端的事。
+ */
+export type AppearanceEffect_Deserialize = {
+  mode: string
+  /**  真实材质已经挂到窗口上（或已彻底清除）。 */
+  applied: boolean
+  /**  生效的是哪种材质：`liquidGlass` | `vibrancy` | `none`。前端据此决定要不要叠加 CSS。 */
+  material: string
+  /**  失败/降级原因，仅用于展示与诊断，不参与判断。 */
+  detail?: string | null
+}
+
+/**
+ *  一次切换的结果。`applied` 只说「窗口材质确实按这个模式生效了」，
+ *  不表示 CSS 那一半也成功——那一半是纯前端的事。
+ */
+export type AppearanceEffect_Serialize = {
+  mode: string
+  /**  真实材质已经挂到窗口上（或已彻底清除）。 */
+  applied: boolean
+  /**  生效的是哪种材质：`liquidGlass` | `vibrancy` | `none`。前端据此决定要不要叠加 CSS。 */
+  material: string
+  /**  失败/降级原因，仅用于展示与诊断，不参与判断。 */
+  detail: string | null
+}
+
 export type AutostartStatus = {
   supported: boolean
   enabled: boolean
@@ -1474,6 +1559,57 @@ export type Frame_Serialize = {
   title: string
   appName: string
   cursor: CursorPosition | null
+}
+
+/**  Local `:free` usage for today, plus the vendor's own free-model allowance. */
+export type FreeUsage = FreeUsage_Serialize | FreeUsage_Deserialize
+
+/**  Local `:free` usage for today, plus the vendor's own free-model allowance. */
+export type FreeUsage_Deserialize = {
+  /**  Local `yyyy-mm-dd` the `calls` tally belongs to. */
+  date: string
+  /**  `:free` calls made by this machine today. */
+  calls: number
+  /**  The free-model allowance for the current day, from the vendor when it answered. */
+  limit?: number | null
+  remaining?: number | null
+  /**  Unix seconds. */
+  resetAt?: number | null
+  /**
+   *  Where `reset_at` comes from. `"utcDay"` is the 00:00 UTC rollover we compute ourselves (the
+   *  vendor's daily counter resets then but ships no timestamp); `"vendor"` is an instant the
+   *  vendor sent in `x-ratelimit-reset`; `null` when no reset is known.
+   */
+  resetSource?: string | null
+  /**
+   *  `true` only when the vendor enforced a limit and reported `remaining: 0`; a policy reading of
+   *  `remaining: 0` from the key endpoint does not set this.
+   */
+  blocked: boolean
+}
+
+/**  Local `:free` usage for today, plus the vendor's own free-model allowance. */
+export type FreeUsage_Serialize = {
+  /**  Local `yyyy-mm-dd` the `calls` tally belongs to. */
+  date: string
+  /**  `:free` calls made by this machine today. */
+  calls: number
+  /**  The free-model allowance for the current day, from the vendor when it answered. */
+  limit: number | null
+  remaining: number | null
+  /**  Unix seconds. */
+  resetAt: number | null
+  /**
+   *  Where `reset_at` comes from. `"utcDay"` is the 00:00 UTC rollover we compute ourselves (the
+   *  vendor's daily counter resets then but ships no timestamp); `"vendor"` is an instant the
+   *  vendor sent in `x-ratelimit-reset`; `null` when no reset is known.
+   */
+  resetSource: string | null
+  /**
+   *  `true` only when the vendor enforced a limit and reported `remaining: 0`; a policy reading of
+   *  `remaining: 0` from the key endpoint does not set this.
+   */
+  blocked: boolean
 }
 
 export type GroupDirectory = {
@@ -1860,6 +1996,65 @@ export type Protocol = "responses" | "chatCompletions"
 
 export type Provider = "vui" | "doubao"
 
+/**  A balance snapshot for one provider, as the settings page renders it. */
+export type ProviderQuota = ProviderQuota_Serialize | ProviderQuota_Deserialize
+
+/**  A balance snapshot for one provider, as the settings page renders it. */
+export type ProviderQuota_Deserialize = {
+  providerId: string
+  /**  `ok` | `unsupported` | `console` | `unauthorized` | `unreachable` | `error`. */
+  status: string
+  /**  `openrouter` | `newapi` | `billing` | `qwenPlan` | `none`. */
+  kind: string
+  remaining?: number | null
+  limit?: number | null
+  used?: number | null
+  /**  `usd` | `credits` | `requests` | `tokens`. */
+  unit?: string | null
+  /**  Unix seconds. */
+  resetAt?: number | null
+  /**  Unix seconds. */
+  expiresAt?: number | null
+  plan?: string | null
+  /**  The provider's own wording / our diagnostics. Never the primary label on screen. */
+  detail?: string | null
+  /**
+   *  `noApi` | `disabled` | `noBaseUrl`, and only when `status == "unsupported"`. This is what the
+   *  settings card branches on, so it never has to read `detail` prose.
+   */
+  unsupportedReason?: string | null
+  /**  Unix seconds. */
+  fetchedAt: number
+}
+
+/**  A balance snapshot for one provider, as the settings page renders it. */
+export type ProviderQuota_Serialize = {
+  providerId: string
+  /**  `ok` | `unsupported` | `console` | `unauthorized` | `unreachable` | `error`. */
+  status: string
+  /**  `openrouter` | `newapi` | `billing` | `qwenPlan` | `none`. */
+  kind: string
+  remaining: number | null
+  limit: number | null
+  used: number | null
+  /**  `usd` | `credits` | `requests` | `tokens`. */
+  unit: string | null
+  /**  Unix seconds. */
+  resetAt: number | null
+  /**  Unix seconds. */
+  expiresAt: number | null
+  plan: string | null
+  /**  The provider's own wording / our diagnostics. Never the primary label on screen. */
+  detail: string | null
+  /**
+   *  `noApi` | `disabled` | `noBaseUrl`, and only when `status == "unsupported"`. This is what the
+   *  settings card branches on, so it never has to read `detail` prose.
+   */
+  unsupportedReason: string | null
+  /**  Unix seconds. */
+  fetchedAt: number
+}
+
 export type PublicCustomProvider = PublicCustomProvider_Serialize | PublicCustomProvider_Deserialize
 
 export type PublicCustomProvider_Deserialize = {
@@ -1876,6 +2071,29 @@ export type PublicCustomProvider_Serialize = {
   models: CustomModel_Serialize[]
 }
 
+/**  一次兑换的结果。`code` 是后端的原话，翻译留给前端。 */
+export type RedeemResult = RedeemResult_Serialize | RedeemResult_Deserialize
+
+/**  一次兑换的结果。`code` 是后端的原话，翻译留给前端。 */
+export type RedeemResult_Deserialize = {
+  /**  `reset` | `nothing_to_reset` | `no_credit` | `already_redeemed` */
+  code: string
+  /**  被清零的限额窗口数量；后端没给就是 `None`。 */
+  windowsReset?: number | null
+  /**  实际被消耗的那张卡。 */
+  creditId?: string | null
+}
+
+/**  一次兑换的结果。`code` 是后端的原话，翻译留给前端。 */
+export type RedeemResult_Serialize = {
+  /**  `reset` | `nothing_to_reset` | `no_credit` | `already_redeemed` */
+  code: string
+  /**  被清零的限额窗口数量；后端没给就是 `None`。 */
+  windowsReset: number | null
+  /**  实际被消耗的那张卡。 */
+  creditId: string | null
+}
+
 export type RefreshedTokens = {
   access_token: string
   refresh_token: string
@@ -1884,6 +2102,77 @@ export type RefreshedTokens = {
 export type ReopenTab = null
 
 export type ReplaceInFile = null
+
+/**
+ *  一张额度重置卡。日期字段原样保留 RFC3339 字符串，另外附一份解析好的 unix 秒，
+ *  免得前端再解析一次、也免得时区各说各话。
+ */
+export type ResetCredit = ResetCredit_Serialize | ResetCredit_Deserialize
+
+/**
+ *  一张额度重置卡。日期字段原样保留 RFC3339 字符串，另外附一份解析好的 unix 秒，
+ *  免得前端再解析一次、也免得时区各说各话。
+ */
+export type ResetCredit_Deserialize = {
+  id: string
+  title?: string | null
+  description?: string | null
+  /**  原样 RFC3339 字符串（UTC），解析失败时为 `None`。 */
+  grantedAt?: string | null
+  /**  原样 RFC3339 字符串（UTC），解析失败时为 `None`。 */
+  expiresAt?: string | null
+  /**  `expires_at` 的 unix 秒；缺失或解析失败为 `None`。 */
+  expiresAtUnix?: number | null
+  status: string
+}
+
+/**
+ *  一张额度重置卡。日期字段原样保留 RFC3339 字符串，另外附一份解析好的 unix 秒，
+ *  免得前端再解析一次、也免得时区各说各话。
+ */
+export type ResetCredit_Serialize = {
+  id: string
+  title: string | null
+  description: string | null
+  /**  原样 RFC3339 字符串（UTC），解析失败时为 `None`。 */
+  grantedAt: string | null
+  /**  原样 RFC3339 字符串（UTC），解析失败时为 `None`。 */
+  expiresAt: string | null
+  /**  `expires_at` 的 unix 秒；缺失或解析失败为 `None`。 */
+  expiresAtUnix: number | null
+  status: string
+}
+
+/**  一次查询的结果，也是缓存文件的内容。 */
+export type ResetCredits = ResetCredits_Serialize | ResetCredits_Deserialize
+
+/**  一次查询的结果，也是缓存文件的内容。 */
+export type ResetCredits_Deserialize = {
+  /**  `ok` | `stale` | `unauthorized` | `unreachable` | `error` | `signedOut` */
+  status: string
+  /**  接口给出的权威可用张数。失败且无缓存时为 0 —— 不编造次数。 */
+  availableCount: number
+  /**  只含 `available` 的条目，按 `expires_at_unix` 升序，无日期的排最后。 */
+  credits: ResetCredit_Deserialize[]
+  /**  本次查询的 unix 秒。 */
+  fetchedAt: number
+  /**  失败原因（给日志/调试用），成功时为 `None`；`stale` 时为 `"stale"`。 */
+  detail?: string | null
+}
+
+/**  一次查询的结果，也是缓存文件的内容。 */
+export type ResetCredits_Serialize = {
+  /**  `ok` | `stale` | `unauthorized` | `unreachable` | `error` | `signedOut` */
+  status: string
+  /**  接口给出的权威可用张数。失败且无缓存时为 0 —— 不编造次数。 */
+  availableCount: number
+  /**  只含 `available` 的条目，按 `expires_at_unix` 升序，无日期的排最后。 */
+  credits: ResetCredit_Serialize[]
+  /**  本次查询的 unix 秒。 */
+  fetchedAt: number
+  /**  失败原因（给日志/调试用），成功时为 `None`；`stale` 时为 `"stale"`。 */
+  detail: string | null
+}
 
 export type Result<T, E> = ({ Ok: T } & { Err?: never }) | ({ Err: E } & { Ok?: never })
 
@@ -2193,7 +2482,37 @@ export type UpdateInfo_Serialize = {
  *  Hour granularity exists for time-of-day pricing (DeepSeek bills weekday peak and off-peak
  *  rates); charts aggregate these rows back up by day. `hour` is the UTC hour of `date`.
  */
-export type UsagePoint = {
+export type UsagePoint = UsagePoint_Serialize | UsagePoint_Deserialize
+
+/**
+ *  One row of the pre-aggregated table: an hour, a provider and a model.
+ *
+ *  Hour granularity exists for time-of-day pricing (DeepSeek bills weekday peak and off-peak
+ *  rates); charts aggregate these rows back up by day. `hour` is the UTC hour of `date`.
+ */
+export type UsagePoint_Deserialize = {
+  clientSource?: string
+  date: string
+  hour: number
+  provider: string
+  model: string
+  requests: number
+  /**  Input tokens the provider actually had to read (cached ones excluded). */
+  input: number
+  cached: number
+  output: number
+  reasoning: number
+  tokens: number
+}
+
+/**
+ *  One row of the pre-aggregated table: an hour, a provider and a model.
+ *
+ *  Hour granularity exists for time-of-day pricing (DeepSeek bills weekday peak and off-peak
+ *  rates); charts aggregate these rows back up by day. `hour` is the UTC hour of `date`.
+ */
+export type UsagePoint_Serialize = {
+  clientSource: string
   date: string
   hour: number
   provider: string
@@ -2210,8 +2529,8 @@ export type UsagePoint = {
 export type UsageReport = UsageReport_Serialize | UsageReport_Deserialize
 
 export type UsageReport_Deserialize = {
-  points: UsagePoint[]
-  recent: UsageTurn[]
+  points: UsagePoint_Deserialize[]
+  recent: UsageTurn_Deserialize[]
   /**  Session files that contributed at least one call. */
   sessions: number
   /**  Session files read, including the ones with no calls in them. */
@@ -2239,8 +2558,8 @@ export type UsageReport_Deserialize = {
 }
 
 export type UsageReport_Serialize = {
-  points: UsagePoint[]
-  recent: UsageTurn[]
+  points: UsagePoint_Serialize[]
+  recent: UsageTurn_Serialize[]
   /**  Session files that contributed at least one call. */
   sessions: number
   /**  Session files read, including the ones with no calls in them. */
@@ -2268,7 +2587,24 @@ export type UsageReport_Serialize = {
 }
 
 /**  A single model call, for the request table. */
-export type UsageTurn = {
+export type UsageTurn = UsageTurn_Serialize | UsageTurn_Deserialize
+
+/**  A single model call, for the request table. */
+export type UsageTurn_Deserialize = {
+  clientSource?: string
+  at: string
+  date: string
+  provider: string
+  model: string
+  input: number
+  cached: number
+  output: number
+  tokens: number
+}
+
+/**  A single model call, for the request table. */
+export type UsageTurn_Serialize = {
+  clientSource: string
   at: string
   date: string
   provider: string

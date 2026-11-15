@@ -1,6 +1,6 @@
 [package]
 name = "alwith-u"
-version = "0.4.4"
+version = "1.0.0"
 description = "An independent desktop client for the OpenAI Codex CLI"
 authors = ["alwith.ai"]
 license = "Apache-2.0"
@@ -86,6 +86,9 @@ objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSResponder", "NSGra
 
 objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer", "CAShapeLayer", "CATransaction", "objc2-core-foundation", "objc2-core-graphics"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGAffineTransform", "CGGeometry", "CGPath"] }
+# Window materials (NSVisualEffectView / macOS 26 NSGlassEffectView) for 外观 → Liquid Glass / Aero.
+# Same crate the Windows build already uses; macOS gets it for the vibrancy + liquid-glass entry points.
+window-vibrancy = "0.8"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tauri-plugin-decoration = "3"

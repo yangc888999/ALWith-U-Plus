@@ -39,6 +39,7 @@ vi.mock("@/features/auth/store", () => ({
   requestAccountProviderRefresh: host.refresh
 }))
 import { EnterpriseSection } from "../enterprise-section"
+import { resetEnterpriseStatusCache } from "@/features/auth/use-enterprise-login"
 
 function emit(name: string, payload: Record<string, unknown>) {
   host.handlers[name]?.({ payload })
@@ -46,6 +47,9 @@ function emit(name: string, payload: Record<string, unknown>) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // The hook reuses a server answer across mounts on purpose; a test needs a cold cache so each
+  // case starts from the answer it just mocked.
+  resetEnterpriseStatusCache()
   host.handlers = {}
   host.user = { user_uuid: "alice" }
   host.status.mockResolvedValue({ generation: 7, automatic_renewal: false, requires_login: false, error: null })
@@ -108,6 +112,43 @@ test("status is checked once on mount instead of polling every three seconds", a
   } finally {
     vi.useRealTimers()
   }
+})
+
+test("ten visits to the account page cost one request, not ten", async () => {
+  host.status.mockResolvedValue({ generation: 7, automatic_renewal: true, requires_login: false, error: null })
+  host.request.mockResolvedValue({ enabled: true, authorization_status: "authorized" })
+  // Each render is a fresh mount of the section, which is what navigating away and back does. The
+  // last one stays mounted so its event listener is still live.
+  for (let visit = 0; visit < 10; visit += 1) {
+    const view = render(<EnterpriseSection />)
+    await screen.findByRole("button", { name: "enterprise.logout" })
+    if (visit < 9) {
+      view.unmount()
+      // Unlisten resolves on a microtask, so the stale registration must be gone before the next
+      // mount claims the same event name.
+      await act(async () => {})
+    }
+  }
+  expect(host.request).toHaveBeenCalledTimes(1)
+  // A native event is itself a reason to ask again, so the cached answer is not permanent.
+  host.handlers["enterprise:models-changed"]?.({ payload: {} })
+  await waitFor(() => expect(host.request).toHaveBeenCalledTimes(2))
+})
+
+test("a healthy renewal off the company network is signed in, not signed out", async () => {
+  host.status.mockResolvedValue({
+    generation: 7,
+    automatic_renewal: true,
+    requires_login: false,
+    error: null,
+    email: "chen.yang@finture.id"
+  })
+  host.request.mockRejectedValue(new Error("offline"))
+  render(<EnterpriseSection />)
+  // The address comes from the native status, so it survives an unreachable account service.
+  await screen.findByText("chen.yang@finture.id")
+  expect(screen.getByRole("button", { name: "enterprise.logout" })).toBeInTheDocument()
+  expect(screen.queryByText("enterprise.signedOut")).not.toBeInTheDocument()
 })
 
 test("an expired token announced by the native renewal loop flips the section to signed-out", async () => {

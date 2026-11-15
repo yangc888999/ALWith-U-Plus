@@ -27,10 +27,15 @@ const RULES: Rule[] = [
   },
   { match: /bridge_upstream_unreachable/i, key: "error.providerUnreachable" },
   { match: /bridge_upstream_request_failed/i, key: "error.providerRequestFailed" },
-  // The account-model recovery state is not a crash: the composer already shows the model picker
-  // and the「使用所选模型继续」button. The engine's `Turn ended: account_model_required` is a
-  // machine code, so say the one action that resolves it instead of printing the code.
+  // The account-model recovery state is not a crash: the composer keeps its normal model picker
+  // and shows one line above it. The engine's `Turn ended: account_model_required` is a machine
+  // code, so say the one action that resolves it instead of printing the code.
   { match: /account_model_required/i, key: "error.accountModelRequired" },
+  // The company gateway answers this when it has the model catalogued but has not finished
+  // provisioning the tenant's access to it. Nothing is broken and no model switch helps: the one
+  // remedy is to sign in to the enterprise account in 设置 → 账号 and send again. Kept ahead of the
+  // generic account rules so the reader gets that remedy instead of "not signed in".
+  { match: /enterprise_model_not_ready|企业模型未就绪/i, key: "error.enterpriseModelNotReady" },
   // The company relay's own 502 body, after the bridge's silent replays are spent. The URL is a
   // loopback address the reader cannot act on — name the layer that failed and the way out.
   { match: /Enterprise gateway request failed/i, key: "error.enterpriseGatewayFailed" },
@@ -622,6 +627,64 @@ const RULES: Rule[] = [
   {
     match: /Unknown import phase/,
     key: "extensions.error.unknownImportPhase"
+  },
+  // ── Legacy account wording ──────────────────────────────────────────────────────────────────
+  // `providers/managed.rs` and `enterprise.rs` used to answer with bare English sentences, and two
+  // places can still hold them after an upgrade: the `inner.error` snapshot persisted in the
+  // settings cache (it is written once and shown again on every launch until the next successful
+  // refresh), and a second window that has not reloaded yet. They are Chinese at the source now, so
+  // these rules only ever fire on that stale wording — matching by shape means an old cache never
+  // puts an English red line above a Chinese settings page.
+  //
+  // Deliberately absent: "Provider revision exhausted", "Account generation exhausted",
+  // "ALwith account changes belong to the main window", "Use structured Runtime requests for
+  // session operations" and "Explicit model recovery requires a model". Those are internal
+  // invariants, not conditions the reader can act on, and `errors.didNotFinish` already leads them.
+  {
+    // Covers "ALwith account changed", "… changed during refresh" and "… during enterprise
+    // configuration". "ALwith account changes belong to the main window" does not match.
+    match: /ALwith account changed/i,
+    key: "error.accountChanged"
+  },
+  {
+    // Nothing can be loaded without a usable credential, so every one of these resolves to the
+    // same action: sign in to the ALwith account again.
+    match:
+      /Sign in before loading ALwith models|Missing ALwith access token|Invalid ALwith account(?: identity)?|Enterprise account is not ready/i,
+    key: "error.notSignedIn"
+  },
+  {
+    // The account issued a provider catalog this build could not read, or the fetch itself failed:
+    // one condition from the reader's side, one remedy (retry, then sign in again).
+    match:
+      /Invalid ALwith provider|Duplicate ALwith provider|Missing ALwith provider name|Invalid or duplicate ALwith model metadata|Invalid ALwith gateway URL|ALwith gateway must supply|ALwith model configuration refresh failed|ALwith (?:model )?configuration request (?:failed|rejected)|Cannot (?:save|create|read) ALwith|Shared ALwith (?:model catalog missing|router unavailable)/i,
+    key: "error.accountModelConfigFailed"
+  },
+  {
+    // The teardown names the ACP call that failed by code. The code is the only part worth keeping —
+    // it is what makes a bug report actionable — so it survives into the sentence and the English
+    // around it does not. This has to run before the general cleanup rule below, which would
+    // otherwise swallow the code along with the sentence.
+    match: /ALwith Runtime cleanup failed \(([^)]+)\)/i,
+    key: "error.accountCleanupFailed",
+    values: (match) => ({ code: match[1] })
+  },
+  {
+    // The previous account's provider or runtime is still being torn down; nothing is broken, it
+    // just has not finished. Every sentence the logout/account-switch teardown can raise lands
+    // here, with one remedy — retry in a moment.
+    //
+    // The two `… timed out` teardown sentences are deliberately absent: `/\btimed out\b/i` is
+    // declared above this rule, so it claims them first and they read as a plain timeout. That is
+    // less specific but still Chinese and still actionable, and duplicating them here would only
+    // add branches that can never run.
+    match: /cleanup is incomplete|cleanup is unconfirmed|did not settle|Runtime changed during ALwith cleanup/i,
+    key: "error.accountCleanupPending"
+  },
+  {
+    // Local access is already gone, only the server-side confirmation was missing.
+    match: /Remote enterprise logout failed/i,
+    key: "error.enterpriseLogoutFailed"
   }
 ]
 

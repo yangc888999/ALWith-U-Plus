@@ -10,7 +10,11 @@ const native = vi.hoisted(() => ({
   fetchText: vi.fn(),
   // The page reads the provider snapshot through this hook (which subscribes to native events),
   // so the fixture is served here rather than through the raw command.
-  snapshot: { value: null as unknown }
+  snapshot: { value: null as unknown },
+  // The reset card reads the main window's `account/rateLimits` over the settings bridge; the
+  // bridge itself is covered by its own tests, so this file only needs a controllable snapshot.
+  account: { value: null as unknown },
+  requestAccountRefresh: vi.fn(async () => {})
 }))
 
 vi.mock("@/bindings", () => ({
@@ -32,6 +36,10 @@ vi.mock("@/bindings", () => ({
 }))
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true }))
 vi.mock("@/lib/use-providers", () => ({ useProviders: () => native.snapshot.value }))
+vi.mock("@/lib/settings-bridge", () => ({
+  useSettingsAccount: () => native.account.value,
+  requestAccountRefresh: native.requestAccountRefresh
+}))
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, options?: Record<string, unknown>) => (options === undefined ? key : `${key}${JSON.stringify(options)}`),
@@ -97,6 +105,10 @@ beforeEach(() => {
   native.refresh.mockResolvedValue(report())
   native.providers.mockResolvedValue({ providers: {}, customProviders: [], builtInModels: {}, revision: 0 })
   native.snapshot.value = null
+  native.account.value = null
+  native.requestAccountRefresh.mockClear()
+  // 外部调用统计默认开着；某个用例关掉之后必须复位，否则会污染后面的用例。
+  localStorage.clear()
 })
 
 afterEach(() => {
@@ -107,12 +119,31 @@ afterEach(() => {
 /**
  * The page mounts charts, then the log, in later frames so the overview paints first. Tests that
  * assert on those cards have to wait for all three stages, not just for the overview's first text.
+ *
+ * The timeout is explicit and generous on purpose. `waitFor`'s 1s default is measured against a
+ * worker that is running this file alongside 290 others, and the deferred stages land through
+ * layout effects plus a chunk of chart mounting — under full-suite load the last stage has been
+ * observed arriving after the default window, which failed a test that passes in isolation. This
+ * waits on our own scheduling, not on a network or a timer we control, so a longer ceiling costs
+ * nothing when things are fast and stops the suite from failing on machine load instead of on a
+ * regression.
  */
 async function waitForStagedCards(): Promise<void> {
-  await waitFor(() => {
-    expect(screen.getByRole("combobox", { name: "usageReport.group" })).toBeInTheDocument()
-    expect(screen.getByLabelText("usageReport.detailFrom")).toBeInTheDocument()
-  })
+  await waitFor(
+    () => {
+      expect(screen.getByRole("combobox", { name: "usageReport.group" })).toBeInTheDocument()
+      expect(screen.getByLabelText("usageReport.detailFrom")).toBeInTheDocument()
+    },
+    { timeout: 5_000 }
+  )
+}
+
+/** Opens the top-level 调用范围 Select and picks one of its three options. */
+async function chooseScope(label: string): Promise<void> {
+  fireEvent.click(screen.getByRole("combobox", { name: "usageReport.scopeLabel" }))
+  const option = await screen.findByRole("option", { name: label })
+  fireEvent.pointerDown(option, { pointerType: "mouse" })
+  fireEvent.click(option)
 }
 
 test("reads the ledger once and shows the totals for the current range", async () => {
@@ -130,6 +161,7 @@ test("reads the ledger once and shows the totals for the current range", async (
 test("the range control filters in place instead of re-reading the disk", async () => {
   render(<UsageSection />)
   await screen.findByText("usageReport.tokens")
+  await waitForStagedCards()
   expect(screen.getByRole("combobox", { name: "usageReport.rangeLabel" })).toHaveTextContent("usageReport.range.30d")
   expect(screen.getByRole("combobox", { name: "usageReport.metric" })).toBeInTheDocument()
   // 模型 is the default grouping; the metric stays on Token and the chart on 饼图.
@@ -166,6 +198,169 @@ test("an empty ledger explains itself instead of showing zeros", async () => {
   render(<UsageSection />)
   expect(await screen.findByText("usageReport.empty")).toBeInTheDocument()
   expect(screen.queryByText("usageReport.tokens")).toBeNull()
+  // 「全部」视图用的是普通空态文案，外部未接入的提示不能出现在这里。
+  expect(screen.getByText("usageReport.emptyHint")).toBeInTheDocument()
+  expect(screen.queryByText("usageReport.externalNotConnected")).toBeNull()
+})
+
+test("the top filter offers exactly 全部 / 内部 / 外部 and defaults to 全部", async () => {
+  render(<UsageSection />)
+  await waitForStagedCards()
+  const trigger = screen.getByRole("combobox", { name: "usageReport.scopeLabel" })
+  expect(trigger).toHaveTextContent("usageReport.scopeAll")
+  fireEvent.click(trigger)
+  expect(await screen.findByRole("option", { name: "usageReport.scopeAll" })).toBeInTheDocument()
+  expect(screen.getByRole("option", { name: "usageReport.scopeInternal" })).toBeInTheDocument()
+  expect(screen.getByRole("option", { name: "usageReport.scopeExternal" })).toBeInTheDocument()
+  expect(screen.getAllByRole("option")).toHaveLength(3)
+  // WorkBuddy / 千问办公 / 其他 Agent 只是明细里的来源标识，不再是顶部一级筛选项。
+  expect(screen.queryByRole("option", { name: "usageReport.clientWorkbuddy" })).toBeNull()
+  expect(screen.queryByRole("option", { name: "usageReport.clientQwen" })).toBeNull()
+  expect(screen.queryByRole("option", { name: "usageReport.clientOther" })).toBeNull()
+})
+
+test("全部 / 内部 / 外部 scope filters the overview, analysis and the call log", async () => {
+  const base = report()
+  native.report.mockResolvedValue(
+    report({
+      points: [
+        // 无 clientSource 的历史行按 ALWith L 内部调用处理：900K tokens。
+        { ...base.points[0], model: "internal-model" },
+        { ...base.points[1], model: "external-model", clientSource: "workbuddy" }
+      ],
+      recent: [
+        { ...base.recent[0], model: "internal-log" },
+        { ...base.recent[0], model: "external-log", clientSource: "qwen_office", at: `${today}T11:00:00.000Z` }
+      ]
+    })
+  )
+  render(<UsageSection />)
+  await waitForStagedCards()
+
+  // 全部：900K + 600K = 1.5M，图表图例与明细里两类调用都在。
+  expect(screen.getByText("1.5M")).toBeInTheDocument()
+  expect(document.querySelector("[data-usage-legend]")?.textContent).toContain("internal-model")
+  expect(document.querySelector("[data-usage-legend]")?.textContent).toContain("external-model")
+  expect(screen.getByText("internal-log")).toBeInTheDocument()
+  expect(screen.getByText("external-log")).toBeInTheDocument()
+
+  await chooseScope("usageReport.scopeInternal")
+  await waitFor(() => expect(screen.getAllByText("900.0K").length).toBeGreaterThan(0))
+  expect(screen.getByRole("combobox", { name: "usageReport.scopeLabel" })).toHaveTextContent("usageReport.scopeInternal")
+  expect(screen.queryByText("1.5M")).toBeNull()
+  expect(document.querySelector("[data-usage-legend]")?.textContent).not.toContain("external-model")
+  expect(screen.getByText("internal-log")).toBeInTheDocument()
+  expect(screen.queryByText("external-log")).toBeNull()
+
+  await chooseScope("usageReport.scopeExternal")
+  await waitFor(() => expect(screen.getAllByText("600.0K").length).toBeGreaterThan(0))
+  expect(screen.getByRole("combobox", { name: "usageReport.scopeLabel" })).toHaveTextContent("usageReport.scopeExternal")
+  expect(screen.queryByText("900.0K")).toBeNull()
+  expect(document.querySelector("[data-usage-legend]")?.textContent).not.toContain("internal-model")
+  expect(screen.getByText("external-log")).toBeInTheDocument()
+  expect(screen.queryByText("internal-log")).toBeNull()
+
+  // 回到全部：数字与明细都恢复，切换筛选不会重新读盘。
+  await chooseScope("usageReport.scopeAll")
+  await waitFor(() => expect(screen.getByText("1.5M")).toBeInTheDocument())
+  expect(screen.getByText("internal-log")).toBeInTheDocument()
+  expect(screen.getByText("external-log")).toBeInTheDocument()
+  expect(native.report).toHaveBeenCalledOnce()
+})
+
+test("切「调用范围」时日历热力图与 24 小时热力图的单元格数值一起变", async () => {
+  const base = report()
+  native.report.mockResolvedValue(
+    report({
+      points: [
+        // 同一天、不同 UTC 小时：内部 900K / 2 次，外部 600K / 1 次。日期相同，时间窗口
+        // 无法替筛选把两行分开——只有真正按 clientSource 过滤才会让单元格数值变化。
+        { ...base.points[0], hour: 3, model: "own-model", clientSource: "alwith_l" },
+        { ...base.points[1], date: today, hour: 15, model: "wb-model", clientSource: "workbuddy" }
+      ],
+      recent: [
+        { ...base.recent[0], model: "own-log", clientSource: "alwith_l" },
+        { ...base.recent[0], model: "wb-log", clientSource: "workbuddy", at: `${today}T11:00:00.000Z` }
+      ]
+    })
+  )
+  render(<UsageSection />)
+  await waitForStagedCards()
+
+  // 日历热力图单元格 title = 「YYYY-MM-DD · tokens · 调用数」；24 小时时间带单元格 title =
+  // 「YYYY-MM-DD HH:mm · tokens · 调用数」。按数值断言单元格，而不是只断言卡片在不在。
+  const titles = (pattern: RegExp): string[] =>
+    Array.from(document.querySelectorAll("span[title]"))
+      .map((node) => node.getAttribute("title") ?? "")
+      .filter((title) => pattern.test(title))
+  const calendarTitles = (): string[] => titles(/^\d{4}-\d{2}-\d{2} · /)
+  const hourTitles = (): string[] => titles(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2} · /)
+  const has = (list: string[], value: string): boolean => list.some((title) => title.includes(value))
+
+  // 「全部」：日历格合并成 1.5M · 3；24 小时带按小时分开，两个数值都在。
+  expect(calendarTitles().length).toBeGreaterThan(0)
+  expect(hourTitles().length).toBeGreaterThan(0)
+  expect(has(calendarTitles(), "1.5M · 3")).toBe(true)
+  expect(has(calendarTitles(), "900.0K · 2")).toBe(false)
+  expect(has(calendarTitles(), "600.0K · 1")).toBe(false)
+  expect(has(hourTitles(), "900.0K · 2")).toBe(true)
+  expect(has(hourTitles(), "600.0K · 1")).toBe(true)
+
+  await chooseScope("usageReport.scopeInternal")
+  await waitFor(() => expect(has(calendarTitles(), "1.5M · 3")).toBe(false))
+  expect(has(calendarTitles(), "900.0K · 2")).toBe(true)
+  expect(has(calendarTitles(), "600.0K · 1")).toBe(false)
+  expect(has(hourTitles(), "900.0K · 2")).toBe(true)
+  expect(has(hourTitles(), "600.0K · 1")).toBe(false)
+
+  await chooseScope("usageReport.scopeExternal")
+  await waitFor(() => expect(has(calendarTitles(), "900.0K · 2")).toBe(false))
+  expect(has(calendarTitles(), "600.0K · 1")).toBe(true)
+  expect(has(calendarTitles(), "1.5M · 3")).toBe(false)
+  expect(has(hourTitles(), "600.0K · 1")).toBe(true)
+  expect(has(hourTitles(), "900.0K · 2")).toBe(false)
+})
+
+test("an empty 外部 view explains that no external client is connected yet", async () => {
+  const base = report()
+  native.report.mockResolvedValue(
+    report({
+      points: [{ ...base.points[0], model: "own-model" }],
+      recent: [{ ...base.recent[0], model: "own-log" }]
+    })
+  )
+  render(<UsageSection />)
+  // 默认「全部」有数据：既不是空态，也不该出现外部未接入提示。
+  expect(await screen.findByText("usageReport.tokens")).toBeInTheDocument()
+  expect(screen.queryByText("usageReport.emptyHint")).toBeNull()
+  expect(screen.queryByText("usageReport.externalNotConnected")).toBeNull()
+
+  await chooseScope("usageReport.scopeExternal")
+  await waitFor(() => expect(screen.getByText("usageReport.externalNotConnected")).toBeInTheDocument())
+  expect(screen.getByText("usageReport.empty")).toBeInTheDocument()
+  expect(screen.queryByText("usageReport.emptyHint")).toBeNull()
+  expect(screen.queryByText("usageReport.tokens")).toBeNull()
+
+  // 切回「内部」恢复正常数字，外部提示随之消失。
+  await chooseScope("usageReport.scopeInternal")
+  await waitFor(() => expect(screen.getByText("usageReport.tokens")).toBeInTheDocument())
+  expect(screen.queryByText("usageReport.externalNotConnected")).toBeNull()
+})
+
+test("an empty 内部 view keeps the ordinary empty hint", async () => {
+  const base = report()
+  native.report.mockResolvedValue(
+    report({
+      points: [{ ...base.points[0], model: "wb-model", clientSource: "workbuddy" }],
+      recent: [{ ...base.recent[0], model: "wb-log", clientSource: "qwen_office" }]
+    })
+  )
+  render(<UsageSection />)
+  expect(await screen.findByText("usageReport.tokens")).toBeInTheDocument()
+  await chooseScope("usageReport.scopeInternal")
+  await waitFor(() => expect(screen.getByText("usageReport.empty")).toBeInTheDocument())
+  expect(screen.getByText("usageReport.emptyHint")).toBeInTheDocument()
+  expect(screen.queryByText("usageReport.externalNotConnected")).toBeNull()
 })
 
 test("a failing read surfaces the message and offers a retry", async () => {
@@ -555,4 +750,19 @@ test("a vendor update surfaces untracked models as one-click candidates", async 
   await waitFor(() => expect(screen.getByDisplayValue("acme-beta")).toBeInTheDocument())
   expect(screen.queryByRole("button", { name: "acme-beta" })).toBeNull()
   expect(screen.getByRole("button", { name: "acme-gamma" })).toBeInTheDocument()
+})
+
+test("额度重置不再挂在用量页：它属于 ChatGPT 账户卡", async () => {
+  native.account.value = {
+    account: { account: { type: "chatgpt", email: "a@b.c", planType: "pro" }, authConfigured: true },
+    rateLimits: { primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: Math.floor(Date.now() / 1000) + 3600 }, secondary: null }
+  }
+  render(<UsageSection />)
+  await waitForStagedCards()
+
+  // Moved to `codex-provider-section.tsx`: the window it describes is the account's own, so the
+  // usage report must not repeat it a page away from the account card.
+  expect(screen.queryByText("usageReport.resetCardTitle")).toBeNull()
+  expect(screen.queryByTestId("usage-reset-windows")).toBeNull()
+  expect(screen.queryByRole("button", { name: "usageReport.resetCardRefresh" })).toBeNull()
 })

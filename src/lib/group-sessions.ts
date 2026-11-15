@@ -9,6 +9,25 @@
  */
 import type { SessionSummary } from "@alwith/api/client"
 
+import { automationTitleOf, isAutomationSessionId } from "./automation-sessions"
+import { groupByDirectory, isGroupDirectory } from "./groups"
+
+/**
+ * What a listed conversation is: a group's meeting, a scheduled run, or a real project.
+ *
+ * One answer, used by the client's row split and by both sidebars — three copies of this rule is
+ * how a meeting ended up listed under 项目 while the 群聊 panel had nothing to show. `group`
+ * accepts a saved group record *or* a path inside the Groups folder, because a meeting exists
+ * before (and independently of) its record.
+ */
+export type SessionRowKind = "group" | "automation" | "project"
+
+export function groupSessionKind(row: SessionSummary): SessionRowKind {
+  if (groupByDirectory(row.cwd) !== null || isGroupDirectory(row.cwd)) return "group"
+  if (automationTitleOf(row.title) !== null || isAutomationSessionId(row.sessionId)) return "automation"
+  return "project"
+}
+
 const listeners = new Set<() => void>()
 let rows: SessionSummary[] = []
 

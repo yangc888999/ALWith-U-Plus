@@ -12,7 +12,7 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::Read;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
@@ -143,6 +143,38 @@ pub fn overload_429_mute() -> bool {
     OVERLOAD_429_MUTE.load(Ordering::Relaxed)
 }
 
+/// Whether a gateway route may re-send a turn whose connection dropped before the first byte.
+///
+/// Default **on**. A gateway request leaves through the user's tunnel to a vendor that is often
+/// reached through a company relay, so a handshake that dies between the two is an infrastructure
+/// flake, not an answer — and the user's only manual remedy is retyping the prompt. A second and
+/// third attempt cost at most 800ms. The switch exists because a gateway the user knows to be slow
+/// should not be probed twice before the real error is reported.
+static GATEWAY_RETRY: AtomicBool = AtomicBool::new(true);
+
+/// Sets the gateway retry preference. Read per request, so a settings change applies immediately.
+pub fn set_gateway_retry(enabled: bool) {
+    GATEWAY_RETRY.store(enabled, Ordering::Relaxed);
+}
+
+/// Whether a gateway route gets the extra transport attempt.
+pub fn gateway_retry_enabled() -> bool {
+    GATEWAY_RETRY.load(Ordering::Relaxed)
+}
+
+/// The UI-facing reader for the same switch. Named apart from the plain accessor above because a
+/// tauri command and a plain function cannot share a name in one module.
+#[tauri3_specta::command]
+pub async fn gateway_retry_get() -> bool {
+    gateway_retry_enabled()
+}
+
+/// The UI-facing writer for the same switch.
+#[tauri3_specta::command]
+pub async fn gateway_retry_set(enabled: bool) {
+    set_gateway_retry(enabled);
+}
+
 /// Starts the bridge once; later calls are no-ops. Returns the bound port.
 pub fn start(app: tauri::AppHandle) -> Result<u16, String> {
     let _ = APP_HANDLE.set(app);
@@ -185,9 +217,10 @@ fn handle(request: tiny_http::Request) -> Result<(), String> {
     if runtime_id == ROUTER_ID {
         return match (method.as_str(), action) {
             ("post", "responses") => forward_routed(request),
-            ("get", "models") => {
-                respond(request, 200, "application/json", br#"{"object":"list","data":[]}"#)
-            }
+            // An outside agent discovers what it may ask for by listing models. An empty list made
+            // every alias unusable there, so answer with the aliases the user configured — and with
+            // an empty list only when there are none.
+            ("get", "models") => respond(request, 200, "application/json", &crate::external_models::model_list_json()),
             _ => respond(request, 404, "application/json", br#"{"error":{"message":"bridge: unsupported path"}}"#),
         };
     }
@@ -412,6 +445,8 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
                 false,
                 false,
                 false,
+                // A legacy per-provider route, not the shared gateway router.
+                false,
             )
         }
     };
@@ -429,6 +464,8 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
         false,
         false,
         false,
+        false,
+        // Same as above: a single vendor's own route, never the shared gateway router.
         false,
     )
 }
@@ -772,6 +809,27 @@ impl ChatResponsesStream {
     }
 }
 
+/// The answer for a routed model whose gateway is not configured.
+///
+/// A company gateway that was never published looks identical to a typo from here, but the two
+/// need different remedies: an enterprise model is reachable only after the account is signed in,
+/// and telling that user "gateway X is not configured" sends them looking for a setting that is
+/// not the problem. Everything else keeps the old 404 wording, which the engine already shows for
+/// an unknown vendor.
+fn missing_gateway_response(gateway: &str, requested: &str) -> (u16, String) {
+    let enterprise = gateway.contains("enterprise")
+        || requested.contains("enterprise/")
+        || requested.contains("enterprise:");
+    if enterprise {
+        let body = serde_json::json!({"error":{
+            "message":"enterprise_model_not_ready: 企业模型未就绪，请先在「设置 → 账号」登录企业账号，然后重试。",
+            "type":"enterprise_model_not_ready"
+        }});
+        return (409, body.to_string());
+    }
+    (404, format!(r#"{{"error":{{"message":"router: gateway {gateway} is not configured"}}}}"#))
+}
+
 /// POST /<router>/responses: pick the vendor from the model name, then forward as that vendor.
 fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
     let mut body = Vec::new();
@@ -782,22 +840,31 @@ fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
     let Ok(mut parsed) = serde_json::from_slice::<Value>(&body) else {
         return respond(request, 400, "application/json", br#"{"error":{"message":"router: body is not JSON"}}"#);
     };
-    let Some(selection) = parsed.get("model").and_then(Value::as_str).map(str::to_string) else {
+    let Some(requested) = parsed.get("model").and_then(Value::as_str).map(str::to_string) else {
         return respond(request, 400, "application/json", br#"{"error":{"message":"router: missing model"}}"#);
+    };
+    // An outside agent only ever knows the name the user published for it. Resolve that name to a
+    // real model *before* the vendor is read out of it, so an alias behaves exactly like the model
+    // it stands for — same routing, same relays, same error handling. A selection that is not an
+    // alias is used verbatim, which keeps every existing model name working unchanged.
+    let selection = match crate::external_models::resolve(&requested) {
+        Some(target) => crate::external_models::routed_target(&target),
+        None => requested.clone(),
     };
     // Model names arrive as `<gateway>/<model>`; the rest is the vendor's own identifier, which
     // may itself contain slashes, so split on the first one only. A name with no slash is one of
     // Codex's own models: those belong to the ChatGPT backend, not to any gateway.
     let Some((gateway, upstream_model)) = selection.split_once('/') else {
+        // An alias may point at one of Codex's own models as well. The backend validates the name it
+        // receives, so the resolved model has to replace the alias id here too.
+        if selection != requested {
+            parsed["model"] = Value::String(selection.clone());
+        }
         return forward_chatgpt(request, &parsed);
     };
     let Some(route) = router_routes().read().ok().and_then(|map| map.get(gateway).cloned()) else {
-        return respond(
-            request,
-            404,
-            "application/json",
-            format!(r#"{{"error":{{"message":"router: gateway {gateway} is not configured"}}}}"#).as_bytes(),
-        );
+        let (status, body) = missing_gateway_response(gateway, &requested);
+        return respond(request, status, "application/json", body.as_bytes());
     };
     parsed["model"] = Value::String(upstream_model.to_string());
     let dropped = strip_web_search_tools(&mut parsed);
@@ -833,6 +900,9 @@ fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
         gateway == "openrouter",
         chat_protocol,
         // A chat switched to another vendor replays ids and reasoning that vendor never issued.
+        true,
+        // A gateway sits behind its own tunnel, its own upstream and often a company relay; a
+        // dropped connection there is the flake the user cannot retry by hand without retyping.
         true,
     )
 }
@@ -889,6 +959,9 @@ fn forward_chatgpt(request: tiny_http::Request, parsed: &Value) -> Result<(), St
         true,
         false,
         false,
+        false,
+        // The native backend already retries a dropped handshake once in the engine's own loop;
+        // the extra gateway attempt below belongs to gateways only.
         false,
     )
 }
@@ -1070,6 +1143,44 @@ fn stall_payload(model: &str, reason: &str, retry_after: Option<u64>, attempt: u
     })
 }
 
+/// How many silent retries one request absorbs before the reader is told.
+///
+/// With the switch on, a gateway keeps retrying without a ceiling. That is what the user asked for,
+/// but it also means a turn can sit behind a dead upstream for minutes with nothing on screen to
+/// distinguish it from a slow model. Ten retries is long enough that a normal flake never trips it
+/// and short enough that a real outage is reported while the reader is still waiting.
+const RETRY_ALERT_AFTER: u32 = 10;
+
+/// Tells the UI that this request has now been retried `RETRY_ALERT_AFTER` times.
+///
+/// Emitted once per request, on the retry that crosses the line — not on every retry after it, or
+/// the reader would get a fresh toast every ten seconds for the rest of the window. The payload
+/// carries the model (the only handle the bridge has on a conversation) and the request id so the
+/// frontend can attach the notice to one turn and dedupe a repeat of the same request.
+fn publish_retrying(model: &str, retries: u32, request_id: &str) {
+    log::warn!("bridge: still retrying model={model} retries={retries} request={request_id}");
+    if let Some(app) = APP_HANDLE.get() {
+        let payload = serde_json::json!({
+            "model": model,
+            "retries": retries,
+            "requestId": request_id,
+        });
+        let _ = app.emit("model:retrying", payload);
+    }
+}
+
+/// Increments the running silent-retry tally and, the first time it crosses `RETRY_ALERT_AFTER`,
+/// tells the UI a turn has been retrying silently for a while. `alerted` makes it one notice per
+/// request: afterwards it stays true and no further event is emitted, so a dead upstream produces a
+/// single toast instead of one every few seconds for the rest of the retry window.
+fn note_retry(silent_retries: &mut u32, alerted: &mut bool, model: &str, request_id: &str) {
+    *silent_retries += 1;
+    if !*alerted && *silent_retries > RETRY_ALERT_AFTER {
+        publish_retrying(model, *silent_retries, request_id);
+        *alerted = true;
+    }
+}
+
 fn publish_stall(model: &str, reason: &str, retry_after: Option<u64>, attempt: u32, request_id: &str) {
     log::warn!("bridge: turn stalled model={model} reason={reason} retry-after={retry_after:?}s attempt={attempt} request={request_id}");
     if let Some(app) = APP_HANDLE.get() {
@@ -1219,6 +1330,9 @@ struct OverloadWatch<R> {
     acked: Arc<AtomicBool>,
     /// Set when the upstream stream ends, so the no-ack timer stops caring about a finished turn.
     closed: Arc<AtomicBool>,
+    /// Armed only on a gateway route: every byte that passes updates it, and the idle watchdog
+    /// names a stream that stopped mid-flight. `None` keeps every other route untouched.
+    activity: Option<Arc<GatewayActivity>>,
 }
 
 /// The one condition that may be reported as "the upstream is not answering": the request is still
@@ -1254,6 +1368,85 @@ fn watch_no_ack(model: &str, acked: Arc<AtomicBool>, closed: Arc<AtomicBool>, re
     });
 }
 
+/// How long a **gateway** response may stop producing bytes before the UI is told it went quiet.
+///
+/// Shorter than the native `NO_ACK_TIMEOUT` because it measures something else: not "the request
+/// was never accepted" but "bytes were flowing and then stopped". A gateway that sends its first
+/// event and then nothing is a real, observable silence, and two minutes of it is worth naming —
+/// the local tool-execution caveat does not apply mid-stream, because a tool call ends the upstream
+/// response outright.
+const GATEWAY_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Byte-flow bookkeeping shared between the streaming reader and the gateway idle watchdog.
+///
+/// One atomic millisecond stamp, so the hot read path never takes a lock and the watchdog can read
+/// the same value from its own thread.
+struct GatewayActivity {
+    start: Instant,
+    /// Milliseconds since `start` when the last byte arrived; 0 before the first one.
+    last_ms: AtomicU64,
+}
+
+impl GatewayActivity {
+    fn new() -> Self {
+        Self { start: Instant::now(), last_ms: AtomicU64::new(0) }
+    }
+
+    /// Records that a byte just arrived.
+    fn touch(&self) {
+        let elapsed = u64::try_from(self.start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.last_ms.store(elapsed, Ordering::Relaxed);
+    }
+
+    /// Time since the last observed byte (or since the request started, before the first one).
+    fn idle(&self) -> Duration {
+        let last = Duration::from_millis(self.last_ms.load(Ordering::Relaxed));
+        self.start.elapsed().saturating_sub(last)
+    }
+}
+
+/// Pure test seam: "the gateway has been silent for two minutes and the stream is still open".
+fn gateway_idle_expired(idle: Duration, closed: bool) -> bool {
+    !closed && idle >= GATEWAY_IDLE_TIMEOUT
+}
+
+/// The `model:stalled` payload for a gateway that went quiet mid-stream.
+///
+/// The reason is `no_ack` — the same one the native route uses when nothing ever came back. That is
+/// deliberate: it is the only "the upstream has stopped answering" vocabulary the notice layer
+/// accepts (`model-overload-alert.ts` ignores reasons it does not know), and an OpenRouter free
+/// model that trails off after a few tokens is exactly the case the user wants to be told about
+/// instead of watching a silent screen. The gateway-specific detail lives in the log line.
+fn gateway_idle_payload(model: &str, request_id: &str) -> Value {
+    stall_payload(model, REASON_NO_ACK, None, 0, request_id)
+}
+
+/// Reports a gateway that stopped mid-stream, once, without touching the stream itself.
+///
+/// Deliberately separate from `watch_no_ack`: that one watches the *absence* of a first byte on the
+/// native route, this one watches a stream that went quiet after it started. Neither aborts
+/// anything — the 20-minute idle clock in `StreamReader` still owns ending a dead stream, and a
+/// gateway that resumes after the report keeps streaming into the same turn.
+fn watch_gateway_idle(model: &str, activity: Arc<GatewayActivity>, closed: Arc<AtomicBool>, request_id: String) {
+    let model = model.to_string();
+    std::thread::spawn(move || loop {
+        if closed.load(Ordering::Relaxed) {
+            return;
+        }
+        if gateway_idle_expired(activity.idle(), false) {
+            log::warn!(
+                "bridge: gateway stream went quiet for {}s model={model} request={request_id}",
+                GATEWAY_IDLE_TIMEOUT.as_secs()
+            );
+            if let Some(app) = APP_HANDLE.get() {
+                let _ = app.emit("model:stalled", gateway_idle_payload(&model, &request_id));
+            }
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    });
+}
+
 impl<R: Read> Read for OverloadWatch<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let count = self.inner.read(buf)?;
@@ -1261,6 +1454,10 @@ impl<R: Read> Read for OverloadWatch<R> {
             self.closed.store(true, Ordering::Relaxed);
         } else {
             self.acked.store(true, Ordering::Relaxed);
+            // Feed the gateway idle watchdog: silence is only meaningful after a byte arrived.
+            if let Some(activity) = self.activity.as_ref() {
+                activity.touch();
+            }
         }
         if self.fired || !self.enabled {
             return Ok(count);
@@ -1341,6 +1538,192 @@ const MAX_GATEWAY_REPLAYS: u32 = 2;
 /// forwarded as-is instead of being held while we look for a capacity refusal.
 const FIRST_EVENT_CAP: usize = 16 * 1024;
 
+/// Gap between two transport attempts after the connection dropped or the header phase went
+/// silent. Deliberately short and fixed: the user is watching a spinner, and the upstream never
+/// asked for a specific wait (a `retry-after` belongs to a real answer, not to a dead socket).
+const RETRY_GAP: Duration = Duration::from_millis(400);
+
+/// Ceiling for the widening gap between gateway retries. An uncounted retry loop at a fixed 400ms
+/// would send ~9,000 requests an hour at an upstream that is already failing; backing off to 10s
+/// still retries forever, it just stops being a flood.
+const MAX_RETRY_GAP: Duration = Duration::from_secs(10);
+
+/// How long a gateway request may keep retrying transport failures while the switch is on.
+///
+/// The switch promises "keep trying until it works", so nothing counts attempts. This window is the
+/// only thing that ends the loop, and it exists because each retry pins a bridge worker out of six:
+/// an upstream that is down all afternoon must eventually hand the turn back as a visible failure
+/// instead of holding a slot until the process exits. It matches the stream's whole-request ceiling,
+/// so a request never outlives the clock the UI already reasons about.
+const GATEWAY_RETRY_WINDOW: Duration = STREAM_HARD_TIMEOUT;
+
+/// Transport attempts a **gateway** route is allowed. `None` means "no count at all — retry until
+/// the window closes".
+///
+/// On: `None`. The switch is labelled「连接中断自动重试」and the user asked for a system that keeps
+/// trying on its own; a ceiling of three gave up after roughly a second of outage, which is exactly
+/// the "it still stops by itself" behaviour the setting was meant to remove. A refused turn is
+/// cheap to retry because the request never ran anywhere.
+///
+/// Off: **exactly one** attempt. "Off" has to mean a dropped gateway connection is reported to the
+/// user untouched — not retried once behind their back. An off switch that still retries is
+/// indistinguishable from an on switch, which leaves the user no way to tell the two apart.
+///
+/// The native route is unaffected either way: its single retry predates this switch and the switch
+/// is scoped to gateway models. Kept pure so both meanings are provable without opening a socket.
+fn gateway_attempts(retry_enabled: bool) -> Option<u32> {
+    if retry_enabled { None } else { Some(1) }
+}
+
+/// Transport attempts for one upstream request. Only a gateway route is ever widened: the native
+/// ChatGPT route keeps the single retry it has always had, and the legacy per-provider routes with
+/// it.
+fn route_attempts(gateway: bool, retry_enabled: bool) -> Option<u32> {
+    if gateway {
+        gateway_attempts(retry_enabled)
+    } else {
+        Some(2)
+    }
+}
+
+/// Whether one more transport attempt is allowed. `transport_retries` is how many retries this
+/// request already spent on a dead connection, whichever kind it was.
+///
+/// A counted route allows `total - 1` retries so its `.send()` threads stay bounded. An uncounted
+/// one is bounded by time instead — checked here rather than after the sleep, so the deadline is
+/// never overshot by a whole retry cycle.
+fn may_retry_transport(transport_retries: u32, attempts: Option<u32>, deadline: Instant, now: Instant) -> bool {
+    match attempts {
+        Some(total) => transport_retries + 1 < total,
+        None => now < deadline,
+    }
+}
+
+/// The wait before retry number `retries` (0-based): 400ms, 800ms, 1.6s … capped at `MAX_RETRY_GAP`.
+///
+/// Only the first gap matches the old fixed one, so the native route's single retry behaves exactly
+/// as it did before this function existed.
+fn retry_gap(retries: u32) -> Duration {
+    let factor = 1u32 << retries.min(6);
+    RETRY_GAP.saturating_mul(factor).min(MAX_RETRY_GAP)
+}
+
+/// Whether a 502/503/504 may be replayed.
+///
+/// A gateway failure the relay itself reports is the same class of event as a dropped handshake:
+/// the turn never ran, so re-sending the identical request cannot duplicate anything. What the
+/// switch promises therefore applies here too — **on** means keep replaying until the retry window
+/// closes, **off** means surface the vendor's own error untouched, not replay twice behind the
+/// user's back. Routes outside the gateway (the native ChatGPT route and the legacy per-provider
+/// ones) keep the historical counted budget, because the switch is scoped to gateway models.
+fn may_replay_5xx(gateway: bool, retry_enabled: bool, replays: u32, deadline: Instant, now: Instant) -> bool {
+    if !gateway {
+        return replays < MAX_GATEWAY_REPLAYS;
+    }
+    if !retry_enabled {
+        return false;
+    }
+    now < deadline
+}
+
+/// The wait before 5xx replay number `replays` (0-based), capped like the transport gaps.
+fn replay_5xx_gap(replays: u32) -> Duration {
+    let factor = 1u32 << replays.min(6);
+    REPLAY_GAP.saturating_mul(factor).min(MAX_RETRY_GAP)
+}
+
+
+/// Whether today's OpenRouter **free** budget has any bearing on this request.
+///
+/// Three conditions, all necessary. `gateway`/`openrouter` keep native and other vendors out. The
+/// `:free` suffix is the one that is easy to forget and expensive to get wrong: OpenRouter's
+/// `x-ratelimit-*` frequently describes a short per-key window (a `10s` burst limit), so a **paid**
+/// model refused for a few seconds would otherwise be reported as "今日免费额度已用完" — a wrong
+/// diagnosis that also throws the turn away instead of letting the normal replay decide.
+fn free_quota_applies(gateway: bool, openrouter: bool, model: &str) -> bool {
+    gateway && openrouter && model.contains(":free")
+}
+
+/// Whether a 429 must be *answered* with the spent-free-quota refusal instead of being replayed.
+///
+/// Both inputs are already scoped: `quota_blocked` is only ever true for a model that passed
+/// `free_quota_applies`, so a paid model can never reach the refusal however the vendor's counter
+/// reads — it falls through to `should_replay_429` and, at the end of its budget, to the vendor's
+/// own 429 body.
+fn free_quota_refusal(muted: bool, quota_blocked: bool) -> bool {
+    muted && quota_blocked
+}
+
+/// Whether a 429 may be swallowed and the same request replayed.
+///
+/// The mute switch is the user's own choice, so it stays the outer condition. The free-quota
+/// ceiling is a fact about today's budget: once it is spent, replaying can only spend more of it
+/// and cannot succeed, so the refusal has to reach the user instead of looking like a stall.
+fn should_replay_429(muted: bool, replays: u32, quota_blocked: bool) -> bool {
+    muted && !quota_blocked && replays < MAX_429_REPLAYS
+}
+
+/// How the spent-quota refusal says when the budget comes back.
+///
+/// Returns a whole clause that already ends in `。`, so the message never has to guess punctuation
+/// or produce "今日额度后重置" nonsense. Relative, not a clock time: the bridge does not know the
+/// user's timezone, and "3 小时 20 分钟后" is true in every one of them.
+///
+/// Two cases must not be smoothed over: a `reset_at` that already passed — the quota module keeps a
+/// `remaining: 0` stamp that may be older than the window it describes, and a negative countdown
+/// would be a lie — and no window at all, which is the normal state on a fresh install.
+///
+/// A long clause is not a bug: the value may be the free model's next UTC-day rollover, so
+/// "23 小时后重置。" is a legitimate reading. Always a duration, never a clock time — only a
+/// duration stays true without knowing the user's timezone.
+fn quota_reset_clause_from(now_seconds: i64, reset_at: Option<i64>) -> String {
+    let Some(reset_at) = reset_at else {
+        return "重置时间未知，请稍后再试。".to_string();
+    };
+    let remaining = reset_at - now_seconds;
+    if remaining <= 0 {
+        return "即将重置。".to_string();
+    }
+    let minutes_total = (remaining + 59) / 60;
+    let hours = minutes_total / 60;
+    let minutes = minutes_total % 60;
+    match (hours, minutes) {
+        (0, minutes) => format!("{} 分钟后重置。", minutes.max(1)),
+        (hours, 0) => format!("{hours} 小时后重置。"),
+        (hours, minutes) => format!("{hours} 小时 {minutes} 分钟后重置。"),
+    }
+}
+
+fn quota_reset_clause(reset_at: Option<i64>) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0);
+    quota_reset_clause_from(now, reset_at)
+}
+
+/// The refusal returned when today's OpenRouter free quota is already spent: replaying the 429
+/// would only burn the rest of the budget, so the user gets a reason and the reset time instead.
+fn free_quota_exhausted_body(reset_at: Option<i64>) -> String {
+    let reset = quota_reset_clause(reset_at);
+    serde_json::json!({"error":{
+        "message": format!("openrouter_free_quota_exhausted: 今日免费额度已用完，{reset}"),
+        "type": "openrouter_free_quota_exhausted",
+        "resetAt": reset_at,
+    }})
+    .to_string()
+}
+
+/// Flattens response headers into owned pairs so the quota module never borrows the response the
+/// streaming hand-off still owns.
+fn header_pairs(response: &reqwest::blocking::Response) -> Vec<(String, String)> {
+    response
+        .headers()
+        .iter()
+        .map(|(name, value)| (name.as_str().to_string(), value.to_str().unwrap_or_default().to_string()))
+        .collect()
+}
+
 /// Re-sends the exact same upstream request. The engine never sees the capacity refusal, so it
 /// cannot honour `retry-after` and sleep. A non-2xx replay is reported as a failure instead of
 /// being spliced into the SSE stream.
@@ -1372,6 +1755,11 @@ fn replay_upstream(
 /// reader and the no-ack timer; see `stall_observers`. When the user has muted overload notices,
 /// `relay` swallows `server_is_overloaded` and replays the same request without a ceiling — the
 /// 60-minute whole-request timeout is the only backstop.
+///
+/// `gateway` marks the shared router's path (`forward_routed`). It enables the wider transport
+/// retry budget, the OpenRouter quota accounting and the gateway idle watchdog; every other caller
+/// passes false and keeps the behaviour it always had.
+#[allow(clippy::too_many_arguments)]
 fn relay(
     request: tiny_http::Request,
     model: &str,
@@ -1383,7 +1771,16 @@ fn relay(
     watch_openrouter_errors: bool,
     chat_protocol: bool,
     portable_fallback: bool,
+    gateway: bool,
 ) -> Result<(), String> {
+    // `forward_routed` computes this exactly once, for the one gateway that documents the
+    // 429 / error.code=10000 pair. Reusing it keeps "this route is OpenRouter" in a single place
+    // instead of threading a second near-identical flag through the signature.
+    let openrouter = watch_openrouter_errors;
+    let attempts = route_attempts(gateway, gateway_retry_enabled());
+    // Only consulted when `attempts` is `None`; computed unconditionally because a `Instant` costs
+    // nothing and threading a second optional through the loop would be worse than one unused value.
+    let retry_deadline = Instant::now() + GATEWAY_RETRY_WINDOW;
     let client = reqwest::blocking::Client::builder()
         // A route that silently swallows packets would otherwise hold the connect until the OS
         // gives up (75s on macOS), and the user reads that as "正在思考" with nothing happening.
@@ -1404,10 +1801,20 @@ fn relay(
     let mut payload = payload;
     let mut attempted_recovery = false;
     let mut attempted_portable = false;
-    let mut attempted_connect = false;
-    let mut attempted_header = false;
+    // One budget shared by both transport failures. Two separate counters would let a connect
+    // failure and a header timeout take turns and spawn more `.send()` threads than either route
+    // is allowed; this counter makes the ceiling "retries in total", which is what it means.
+    let mut transport_retries = 0u32;
     let mut replays_429 = 0u32;
     let mut replays_gateway = 0u32;
+    // Total silent retries across every category (transport / 429 / 5xx). One alert per request,
+    // fired the first time this crosses `RETRY_ALERT_AFTER`, so a turn stuck behind a dead upstream
+    // is reported without a fresh toast every few seconds for the rest of the retry window.
+    let mut silent_retries = 0u32;
+    let mut alerted_retrying = false;
+    // One id for the whole relay attempt. Shared by the stall watchers and the retry alert so the
+    // UI can tie the two together; generated up front because the retry loop needs it too.
+    let request_id = next_request_id();
     let response = loop {
         let attempt = request_builder
             .try_clone()
@@ -1417,11 +1824,21 @@ fn relay(
             HeaderWait::Response(response) => response,
             // The native ChatGPT route rides whatever tunnel/proxy the user runs; a single dropped
             // handshake there is common and used to surface as a turn that sat at 正在思考 until
-            // the watchdog fired. One quick retry covers the transient case.
-            HeaderWait::Error(error) if !attempted_connect && error.is_connect() => {
-                attempted_connect = true;
-                log::warn!("bridge: retrying after connect failure: {error}");
-                std::thread::sleep(std::time::Duration::from_millis(400));
+            // the watchdog fired. One quick retry covers the transient case. A gateway with the
+            // retry switch on is not counted at all — it keeps going until the window closes, which
+            // is what the switch promises and what an outage longer than a second requires.
+            HeaderWait::Error(error)
+                if error.is_connect()
+                    && may_retry_transport(transport_retries, attempts, retry_deadline, Instant::now()) =>
+            {
+                let gap = retry_gap(transport_retries);
+                transport_retries += 1;
+                note_retry(&mut silent_retries, &mut alerted_retrying, model, &request_id);
+                log::warn!(
+                    "bridge: retrying after connect failure (retry {transport_retries}, next in {}ms): {error}",
+                    gap.as_millis()
+                );
+                std::thread::sleep(gap);
                 continue;
             }
             // An upstream that never accepted the connection used to be only a log line: the
@@ -1437,14 +1854,18 @@ fn relay(
             // Headers never arrived. The native ChatGPT route rides whatever tunnel/proxy the user
             // runs, and a single dropped handshake there is common (the TCP connect succeeds but the
             // first response byte stalls). One quick retry covers the transient case, just like the
-            // connect-failure path below — a stalled header phase is the same class of flake.
-            HeaderWait::Timeout if !attempted_header => {
-                attempted_header = true;
+            // connect-failure path above — a stalled header phase is the same class of flake. A
+            // gateway with the switch on keeps going until the retry window closes.
+            HeaderWait::Timeout if may_retry_transport(transport_retries, attempts, retry_deadline, Instant::now()) => {
+                let gap = retry_gap(transport_retries);
+                transport_retries += 1;
+                note_retry(&mut silent_retries, &mut alerted_retrying, model, &request_id);
                 log::warn!(
-                    "bridge: retrying after header timeout ({}s)",
-                    HEADER_TIMEOUT.as_secs()
+                    "bridge: retrying after header timeout ({}s, retry {transport_retries}, next in {}ms)",
+                    HEADER_TIMEOUT.as_secs(),
+                    gap.as_millis()
                 );
-                std::thread::sleep(std::time::Duration::from_millis(400));
+                std::thread::sleep(gap);
                 continue;
             }
             // Headers never arrived after the retry too: free this worker (and one of the six
@@ -1468,7 +1889,24 @@ fn relay(
         // Only a 2xx counts as a successful upstream answer. A 1xx (e.g. 100 Continue) or any
         // other sub-400 status must not be passed through as success to the client.
         if (200..=299).contains(&status) {
+            // Count the call and capture the rate-limit headers while the response is still ours:
+            // after the hand-off to the streaming thread nobody can read them any more. Scoped to a
+            // free model because the numbers those headers carry are the free-model budget — a paid
+            // call's burst window must not overwrite it (see `free_quota_applies`).
+            if free_quota_applies(gateway, openrouter, model) {
+                crate::provider_quota::record_openrouter_headers(&header_pairs(&response));
+                crate::provider_quota::record_free_call(model);
+            }
             break response;
+        }
+        // A 429 carries `x-ratelimit-*` too (that is where "remaining: 0" actually comes from), so
+        // record them before deciding whether to replay. Without this the bridge would only learn
+        // the account is spent from a *successful* call, which by definition never happens while
+        // the budget is exhausted — it would replay its whole 8-attempt budget first and then show
+        // the vendor's raw 429. Headers must be read here: `response.bytes()` below consumes it.
+        // Same `:free` scope as above: a paid model's short burst limit is not the free budget.
+        if free_quota_applies(gateway, openrouter, model) && status == 429 {
+            crate::provider_quota::record_openrouter_headers(&header_pairs(&response));
         }
         let body = response.bytes().map_err(|error| format!("upstream body: {error}"))?;
         let text = String::from_utf8_lossy(&body);
@@ -1514,26 +1952,57 @@ fn relay(
         // `请求太频繁` toast in between. A short exponential backoff keeps a real rate limit from
         // being hammered; after `MAX_429_REPLAYS` the refusal is passed through so a genuinely
         // blocked key still ends with a reason instead of hanging.
-        if status == 429 && overload_429_mute() && replays_429 < MAX_429_REPLAYS {
-            let delay = REPLAY_GAP * u32::pow(2, replays_429.min(5));
-            replays_429 += 1;
-            log::warn!(
-                "bridge: upstream answered 429, silent replay {replays_429}/{MAX_429_REPLAYS} in {}ms",
-                delay.as_millis()
-            );
-            std::thread::sleep(delay);
-            continue;
+        //
+        // The one exception is a spent free budget: replaying cannot succeed today, so the user
+        // gets the reset time instead of a spinner that burns the rest of the allowance.
+        if status == 429 {
+            let muted = overload_429_mute();
+            // The ceiling only ever applies to a free model (see `free_quota_applies`): a paid model
+            // refused by a short burst window must fall through to the normal replay below, never be
+            // answered with「免费额度已用完」.
+            let quota_blocked = free_quota_applies(gateway, openrouter, model)
+                && crate::provider_quota::free_quota_blocked();
+            if free_quota_refusal(muted, quota_blocked) {
+                // Note what this instant is *not*: it is when the budget comes back, which
+                // `provider_quota` may have derived from the daily counter's UTC rollover rather
+                // than read from a vendor header — so it can legitimately be ~24h out. Never
+                // describe it in the UI as "the time OpenRouter told us".
+                let reset_at = crate::provider_quota::free_quota_reset_at();
+                log::warn!("bridge: 429 with the free quota spent, answering instead of replaying");
+                let body = free_quota_exhausted_body(reset_at);
+                return respond(request, 429, "application/json", body.as_bytes());
+            }
+            if should_replay_429(muted, replays_429, quota_blocked) {
+                let delay = REPLAY_GAP * u32::pow(2, replays_429.min(5));
+                replays_429 += 1;
+                note_retry(&mut silent_retries, &mut alerted_retrying, model, &request_id);
+                log::warn!(
+                    "bridge: upstream answered 429, silent replay {replays_429}/{MAX_429_REPLAYS} in {}ms",
+                    delay.as_millis()
+                );
+                std::thread::sleep(delay);
+                continue;
+            }
         }
         // A 502/503/504 from the relay means the relay itself could not reach its upstream — the
         // turn never ran, so re-sending the identical request cannot duplicate anything. The
         // company gateway's "Enterprise gateway request failed" 502 used to surface as a dead
-        // turn the user had to retype; two quick replays absorb the transient case, and a gateway
-        // that is really down still answers with its own error after ~1.2s.
-        if matches!(status, 502 | 503 | 504) && replays_gateway < MAX_GATEWAY_REPLAYS {
-            let delay = REPLAY_GAP * u32::pow(2, replays_gateway);
+        // turn the user had to retype. What happens next is the switch's call: on means keep going
+        // until the retry window closes, off means the vendor's error reaches the reader at once.
+        if matches!(status, 502 | 503 | 504)
+            && may_replay_5xx(
+                gateway,
+                gateway_retry_enabled(),
+                replays_gateway,
+                retry_deadline,
+                Instant::now(),
+            )
+        {
+            let delay = replay_5xx_gap(replays_gateway);
             replays_gateway += 1;
+            note_retry(&mut silent_retries, &mut alerted_retrying, model, &request_id);
             log::warn!(
-                "bridge: upstream answered {status}, silent replay {replays_gateway}/{MAX_GATEWAY_REPLAYS} in {}ms",
+                "bridge: upstream answered {status}, silent replay {replays_gateway} in {}ms",
                 delay.as_millis()
             );
             std::thread::sleep(delay);
@@ -1713,9 +2182,8 @@ fn relay(
     let acked = Arc::new(AtomicBool::new(false));
     let closed = Arc::new(AtomicBool::new(false));
     let (watch_overload, watch_no_ack_enabled) = stall_observers(watch_stall);
-    // One short increasing id per upstream request; both stall observers attach it so the UI can
-    // dedup `model:stalled` events instead of counting them a second time.
-    let request_id = next_request_id();
+    // `request_id` is generated up front (before the retry loop) so the stall observers and the
+    // retry alert share one id and the UI can tie a `model:stalled` to its `model:retrying`.
     // Start the no-ack clock with the request, not with the UI: only the bridge knows whether a turn
     // is waiting on the upstream or on this machine's own tool execution. Gateway routes are not
     // watched — a vendor that never answers is that vendor's business, not a ChatGPT capacity
@@ -1723,6 +2191,15 @@ fn relay(
     if watch_no_ack_enabled {
         watch_no_ack(model, acked.clone(), closed.clone(), request_id.clone());
     }
+    // A gateway route gets the quieter watchdog instead: not "never acknowledged" but "started,
+    // then went silent". It only reports; the stream keeps running under its own clocks.
+    let activity = if gateway {
+        let activity = Arc::new(GatewayActivity::new());
+        watch_gateway_idle(model, Arc::clone(&activity), closed.clone(), request_id.clone());
+        Some(activity)
+    } else {
+        None
+    };
     let watched = OverloadWatch {
         inner: StreamReader::new(rx, STREAM_IDLE_TIMEOUT, STREAM_HARD_TIMEOUT, client_gone),
         model: model.to_string(),
@@ -1732,6 +2209,7 @@ fn relay(
         enabled: watch_overload,
         acked,
         closed,
+        activity,
     };
     let response = tiny_http::Response::new(tiny_http::StatusCode(status), response_headers, watched, None, None);
     request.respond(response).map_err(|error| format!("respond: {error}"))
@@ -2250,6 +2728,7 @@ data: [DONE]
             enabled,
             acked: Arc::new(AtomicBool::new(false)),
             closed: Arc::new(AtomicBool::new(false)),
+            activity: None,
         }
     }
 
@@ -2638,6 +3117,8 @@ data: [DONE]
             false,
             false,
             false,
+            // The native route: no gateway retry, no gateway watchdog.
+            false,
         );
         set_overload_mute(previous);
         let body = client_thread.join().unwrap();
@@ -2712,6 +3193,7 @@ data: [DONE]
             &[],
             b"{}".to_vec(),
             true,
+            false,
             false,
             false,
             false,
@@ -2792,6 +3274,9 @@ data: [DONE]
             false,
             true,
             false,
+            false,
+            // Kept off so the free-quota bookkeeping of the real gateway path never leaks into the
+            // 429-replay assertion.
             false,
         );
         set_overload_429_mute(previous);
@@ -2897,6 +3382,7 @@ data: [DONE]
             false,
             false,
             true,
+            false,
         );
         let body = client_thread.join().unwrap();
         let _ = upstream_thread.join();
@@ -2912,11 +3398,23 @@ data: [DONE]
     }
 
     /// The company relay's transient 502 must be absorbed by a silent replay, and a gateway that
-    /// stays down must still surface its own error after the replay budget is spent.
-    fn gateway_502_replays_then_surfaces(start: u16, fail_times: usize, expected_hits: usize, expect_success: bool) {
+    /// stays down must surface its own error. What "absorbed" means is `retry_on`'s call: on is
+    /// uncounted, off is immediate.
+    fn gateway_502_replays_then_surfaces(
+        start: u16,
+        fail_times: usize,
+        expected_hits: usize,
+        expect_success: bool,
+        retry_on: bool,
+    ) {
         use std::io::Write;
         use std::net::{TcpListener, TcpStream};
         use std::sync::atomic::AtomicUsize;
+
+        // Held for the whole test: `relay` reads this flag itself, so it must not move under us.
+        let _switch = GATEWAY_SWITCH_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let _restore = SwitchRestore(gateway_retry_enabled());
+        set_gateway_retry(retry_on);
 
         let upstream = TcpListener::bind("127.0.0.1:0").unwrap();
         let upstream_addr = upstream.local_addr().unwrap();
@@ -2980,6 +3478,11 @@ data: [DONE]
             false,
             false,
             false,
+            // A gateway route: that is the only route the retry switch governs, and the only one
+            // whose 5xx replay is uncounted. Passing `false` here would have quietly tested the
+            // native budget instead — which is exactly how the old "stays down" test kept passing
+            // while claiming to cover a gateway.
+            true,
         );
         let body = client_thread.join().unwrap();
         let _ = upstream_thread.join();
@@ -2994,13 +3497,277 @@ data: [DONE]
         }
     }
 
-    #[test]
-    fn a_transient_gateway_502_is_replayed_silently() {
-        gateway_502_replays_then_surfaces(502, 1, 2, true);
+    /// Serialises the tests that read or write the process-wide retry switch.
+    ///
+    /// It is a plain `AtomicBool` shared by every test thread, so one test flipping it while another
+    /// relays silently changes what that relay does. With an uncounted loop the wrong value does not
+    /// fail a test — it hangs it for the whole retry window, which is a far worse failure mode.
+    static GATEWAY_SWITCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Puts the process-wide switch back even when an assertion panics the test.
+    ///
+    /// Without it a failed assertion leaves the flag flipped for every later test in the process,
+    /// which turns one real failure into a pile of confusing ones.
+    struct SwitchRestore(bool);
+
+    impl Drop for SwitchRestore {
+        fn drop(&mut self) {
+            set_gateway_retry(self.0);
+        }
     }
 
     #[test]
-    fn a_gateway_that_stays_down_surfaces_after_two_replays() {
-        gateway_502_replays_then_surfaces(502, 3, 3, false);
+    fn a_transient_gateway_502_is_replayed_silently() {
+        // Two hits: the first is refused, the replay succeeds. The switch stays on, which is what
+        // makes the replay uncounted — it terminates because the upstream recovers, not because a
+        // counter ran out.
+        gateway_502_replays_then_surfaces(502, 1, 2, true, true);
+    }
+
+    #[test]
+    fn a_gateway_that_stays_down_surfaces_at_once_when_the_switch_is_off() {
+        // This is the regression guard for "off means off": one attempt, one hit, and the vendor's
+        // own 502 reaches the reader instead of being replayed twice behind their back.
+        gateway_502_replays_then_surfaces(502, 1, 1, false, false);
+    }
+
+    #[test]
+    fn a_gateway_is_uncounted_while_the_native_route_keeps_its_single_retry() {
+        let _switch = GATEWAY_SWITCH_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        // Default: the switch is on, so a gateway is not counted at all — it retries until the
+        // window closes. A ceiling is what the user was complaining about: three attempts gave up
+        // after about a second of outage.
+        assert!(gateway_retry_enabled(), "gateway retry must default to on");
+        assert_eq!(gateway_attempts(true), None);
+        assert_eq!(route_attempts(true, true), None);
+        // Switched off, 「连接中断自动重试」 must mean **no** retry: one attempt, nothing hidden.
+        assert_eq!(gateway_attempts(false), Some(1));
+        assert_eq!(route_attempts(true, false), Some(1));
+        // The native route is never widened or narrowed, whichever way the switch is set: its single
+        // retry predates the switch, which is scoped to gateway models.
+        assert_eq!(route_attempts(false, true), Some(2));
+        assert_eq!(route_attempts(false, false), Some(2));
+    }
+
+    #[test]
+    fn the_gateway_retry_switch_round_trips() {
+        let _switch = GATEWAY_SWITCH_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let _restore = SwitchRestore(gateway_retry_enabled());
+        set_gateway_retry(false);
+        assert!(!gateway_retry_enabled());
+        assert_eq!(route_attempts(true, gateway_retry_enabled()), Some(1), "off means a single attempt");
+        set_gateway_retry(true);
+        assert!(gateway_retry_enabled());
+        assert_eq!(route_attempts(true, gateway_retry_enabled()), None, "on means no ceiling");
+    }
+
+    #[test]
+    fn the_transport_budget_counts_attempts_not_kinds_of_failure() {
+        let start = Instant::now();
+        let open = start + GATEWAY_RETRY_WINDOW;
+        let closed = start;
+        // Gateway with the switch on: time is the only ceiling, so even a large retry count passes
+        // while the window is open, and a single check past it does not.
+        for retries in [0u32, 1, 2, 7, 100, 5_000] {
+            assert!(
+                may_retry_transport(retries, route_attempts(true, true), open, start),
+                "retry {retries} must still be allowed inside the window"
+            );
+        }
+        assert!(!may_retry_transport(0, route_attempts(true, true), closed, closed));
+        // Native: the single retry it always had.
+        assert!(may_retry_transport(0, route_attempts(false, true), closed, closed));
+        assert!(!may_retry_transport(1, route_attempts(false, true), closed, closed));
+        // Switch off, gateway: one attempt, so the predicate in front of the second `.send()` is
+        // false — reading the helper, not assuming it: with one attempt budgeted there is no second.
+        assert_eq!(route_attempts(true, false), Some(1));
+        assert!(
+            !may_retry_transport(0, route_attempts(true, false), open, start),
+            "off must not re-send, even with an open window"
+        );
+        assert!(!may_retry_transport(0, gateway_attempts(false), open, start), "off must not re-send");
+    }
+
+    #[test]
+    fn the_retry_gap_widens_and_stops_at_the_ceiling() {
+        // The first gap must stay 400ms so the native route's single retry is unchanged.
+        assert_eq!(retry_gap(0), RETRY_GAP);
+        assert!(retry_gap(1) > retry_gap(0));
+        assert!(retry_gap(2) > retry_gap(1));
+        // An uncounted loop runs for an hour; an exponent that keeps doubling would overflow the
+        // multiplication, so the cap has to hold for absurd counts too.
+        assert_eq!(retry_gap(6), MAX_RETRY_GAP);
+        assert_eq!(retry_gap(u32::MAX), MAX_RETRY_GAP);
+        assert_eq!(replay_5xx_gap(u32::MAX), MAX_RETRY_GAP);
+        assert_eq!(replay_5xx_gap(0), REPLAY_GAP);
+    }
+
+    #[test]
+    fn a_502_is_replayed_only_in_the_direction_the_switch_points() {
+        let start = Instant::now();
+        let open = start + GATEWAY_RETRY_WINDOW;
+        // On: uncounted, bounded only by the window.
+        assert!(may_replay_5xx(true, true, 0, open, start));
+        assert!(may_replay_5xx(true, true, 400, open, start), "no count while the window is open");
+        assert!(!may_replay_5xx(true, true, 0, start, start), "the window closes it");
+        // Off: the vendor's own 502 reaches the reader, not a silent replay behind their back.
+        assert!(!may_replay_5xx(true, false, 0, open, start));
+        // Other routes keep the historical counted budget.
+        assert!(may_replay_5xx(false, true, MAX_GATEWAY_REPLAYS - 1, start, start));
+        assert!(!may_replay_5xx(false, true, MAX_GATEWAY_REPLAYS, start, start));
+        assert!(may_replay_5xx(false, false, 0, start, start), "the switch is scoped to gateways");
+    }
+
+    #[test]
+    fn a_spent_free_quota_stops_the_silent_429_replay() {
+        // The mute switch alone allows the replay.
+        assert!(should_replay_429(true, 0, false));
+        // A spent budget never does: replaying cannot succeed before the reset.
+        assert!(!should_replay_429(true, 0, true));
+        // Unmuted keeps the refusal visible, as before.
+        assert!(!should_replay_429(false, 0, false));
+        // The replay budget still caps an unmuted-but-unblocked route.
+        assert!(!should_replay_429(true, MAX_429_REPLAYS, false));
+        assert!(should_replay_429(true, MAX_429_REPLAYS - 1, false));
+    }
+
+    #[test]
+    fn the_quota_reset_clause_counts_down_instead_of_naming_a_clock_time() {
+        let now = 1_700_000_000i64;
+        assert_eq!(quota_reset_clause_from(now, Some(now + 3_600)), "1 小时后重置。");
+        assert_eq!(quota_reset_clause_from(now, Some(now + 3_600 + 1_200)), "1 小时 20 分钟后重置。");
+        assert_eq!(quota_reset_clause_from(now, Some(now + 90)), "2 分钟后重置。");
+        // Less than a minute still reads as one, never as "0 分钟后".
+        assert_eq!(quota_reset_clause_from(now, Some(now + 5)), "1 分钟后重置。");
+        // A stamp that already expired — the quota module can hand one back at a window boundary —
+        // must not become a negative countdown.
+        assert_eq!(quota_reset_clause_from(now, Some(now - 10)), "即将重置。");
+        assert_eq!(quota_reset_clause_from(now, Some(now)), "即将重置。");
+        // No `x-ratelimit-reset` seen yet: say so rather than invent a time.
+        assert_eq!(quota_reset_clause_from(now, None), "重置时间未知，请稍后再试。");
+    }
+
+    #[test]
+    fn the_spent_quota_refusal_carries_its_type_and_reset_time() {
+        let body = free_quota_exhausted_body(Some(0));
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["error"]["type"], "openrouter_free_quota_exhausted");
+        assert_eq!(parsed["error"]["resetAt"], 0);
+        let message = parsed["error"]["message"].as_str().unwrap();
+        // Prefix first: the frontend matches on it, so nothing may come before it.
+        assert!(message.starts_with("openrouter_free_quota_exhausted: "), "{message}");
+        assert!(message.contains("今日免费额度已用完"), "{message}");
+        // A past stamp reads as an imminent reset, not a negative countdown, and the sentence ends
+        // exactly once — the clause owns its own full stop.
+        assert!(message.ends_with("即将重置。"), "{message}");
+        // An unknown reset time is `null`, not a fabricated timestamp, and the wording says so.
+        let unknown_body = free_quota_exhausted_body(None);
+        let unknown: Value = serde_json::from_str(&unknown_body).unwrap();
+        assert!(unknown["error"]["resetAt"].is_null());
+        let unknown_message = unknown["error"]["message"].as_str().unwrap();
+        assert!(unknown_message.ends_with("重置时间未知，请稍后再试。"), "{unknown_message}");
+        assert!(!unknown_message.contains("后重置。后"), "no doubled full stop: {unknown_message}");
+    }
+
+    #[test]
+    fn an_enterprise_model_that_is_not_ready_says_so_instead_of_blaming_the_gateway() {
+        let (status, body) = missing_gateway_response("custom-enterprise-1", "custom-enterprise-1/m");
+        assert_eq!(status, 409);
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["error"]["type"], "enterprise_model_not_ready");
+        let message = parsed["error"]["message"].as_str().unwrap();
+        assert!(message.starts_with("enterprise_model_not_ready: "), "{message}");
+        assert!(message.contains("设置 → 账号"), "{message}");
+        // A self-hosted gateway whose *model* path is enterprise-scoped counts too.
+        assert_eq!(missing_gateway_response("gw", "gw/enterprise/some-model").0, 409);
+        // Every other unknown gateway keeps the existing 404 wording verbatim.
+        let (status, body) = missing_gateway_response("custom-abc", "custom-abc/m");
+        assert_eq!(status, 404);
+        assert_eq!(body, r#"{"error":{"message":"router: gateway custom-abc is not configured"}}"#);
+    }
+
+    #[test]
+    fn the_free_quota_rules_only_ever_apply_to_a_free_gateway_model() {
+        // The documented shape of a free OpenRouter model.
+        assert!(free_quota_applies(true, true, "openrouter/inclusionai/ling-1t:free"));
+        // A *paid* OpenRouter model can be refused by a short per-key burst window; treating that
+        // as "今日免费额度已用完" would both misdiagnose it and throw the turn away.
+        assert!(!free_quota_applies(true, true, "openrouter/anthropic/claude-sonnet-4"));
+        // Another vendor, and the native route, are never part of this budget.
+        assert!(!free_quota_applies(true, false, "custom-abc/m:free"));
+        assert!(!free_quota_applies(false, false, "gpt-6.1-sol"));
+        assert!(!free_quota_applies(false, true, "openrouter/x:free"));
+    }
+
+    /// Both directions of the 429 decision, composed from the same predicates `relay` uses, with the
+    /// vendor reporting `x-ratelimit-remaining: 0` and the mute switch on.
+    #[test]
+    fn a_paid_model_with_a_zero_rate_limit_counter_falls_through_instead_of_blaming_the_free_quota() {
+        // The vendor's reading. `free_quota_blocked()` is scope-agnostic by design — it says exactly
+        // this and nothing about which budget the counter describes.
+        let vendor_reports_zero = true;
+        let muted = true;
+
+        // A free model: the budget really is the one that ran out, so answer with the reset time and
+        // spend no replay on a request that cannot succeed.
+        let free_model = "openrouter/inclusionai/ling-1t:free";
+        let free_blocked = free_quota_applies(true, true, free_model) && vendor_reports_zero;
+        assert!(free_blocked);
+        assert!(free_quota_refusal(muted, free_blocked), "a spent free budget answers the turn");
+        assert!(!should_replay_429(muted, 0, free_blocked), "and does not replay into the same wall");
+
+        // A paid model: the `:free` predicate stops the verdict before it is even consulted, so the
+        // request goes down its pre-existing replay path and ends with the vendor's verbatim 429.
+        let paid_model = "openrouter/anthropic/claude-sonnet-4";
+        let paid_blocked = free_quota_applies(true, true, paid_model) && vendor_reports_zero;
+        assert!(!paid_blocked, "a paid model's burst limit is not the free budget");
+        assert!(!free_quota_refusal(muted, paid_blocked), "no free-quota diagnosis may reach a paid model");
+        assert!(should_replay_429(muted, 0, paid_blocked), "it falls through to the silent replay");
+        assert!(
+            should_replay_429(muted, MAX_429_REPLAYS - 1, paid_blocked),
+            "and keeps the whole replay budget before the vendor's own error surfaces"
+        );
+    }
+
+    #[test]
+    fn a_gateway_stream_that_goes_quiet_is_reported_after_two_minutes() {
+        assert!(!gateway_idle_expired(Duration::from_secs(119), false));
+        assert!(gateway_idle_expired(GATEWAY_IDLE_TIMEOUT, false));
+        assert!(gateway_idle_expired(Duration::from_secs(600), false));
+        // A finished stream is not a stall, however long it has been quiet.
+        assert!(!gateway_idle_expired(Duration::from_secs(600), true));
+    }
+
+    #[test]
+    fn a_quiet_gateway_reports_the_reason_the_notice_layer_understands() {
+        // `model-overload-alert.ts` drops any reason other than these two, so a gateway that stops
+        // mid-stream has to speak `no_ack` to reach the user at all.
+        let payload = gateway_idle_payload("custom-abc/claude/opus", "r7");
+        assert_eq!(payload["reason"], REASON_NO_ACK);
+        assert_eq!(payload["model"], "custom-abc/claude/opus");
+        assert_eq!(payload["requestId"], "r7");
+        assert!(payload["retryAfter"].is_null());
+        // Not a capacity report: the frontend's per-turn overload budget must not move.
+        assert_eq!(payload["attempt"], 0);
+    }
+
+    #[test]
+    fn the_gateway_activity_clock_only_runs_forward() {
+        let activity = GatewayActivity::new();
+        let before = activity.idle();
+        activity.touch();
+        // Touching cannot make the observed silence longer than the request itself.
+        assert!(activity.idle() <= before + Duration::from_millis(50));
+    }
+
+    #[test]
+    fn the_alias_name_never_reaches_the_upstream_untouched() {
+        // The two steps an aliased request goes through: the stored target is the picker's
+        // `gateway:<gateway>:<model>` shape, and the router splits the routed form on the *first*
+        // slash only, so a decoded slash inside the model id survives.
+        let routed = crate::external_models::routed_target("gateway:custom-abc:claude%2Fopus");
+        let (gateway, model) = routed.split_once('/').unwrap();
+        assert_eq!(gateway, "custom-abc");
+        assert_eq!(model, "claude/opus");
     }
 }

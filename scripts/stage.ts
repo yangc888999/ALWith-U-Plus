@@ -30,6 +30,7 @@ import { $ } from "bun"
 
 import manifest from "../package.json"
 import { patchAdapter } from "./lib/adapter-patch"
+import { bridgeSource, stageBridge } from "./lib/bridge-artifact"
 import { stageComputer } from "./lib/computer-artifact"
 import { stageDriveNative } from "./lib/drive-artifact"
 import { runtimeBuildArtifact, runtimeSource, stageTarget } from "./lib/runtime-artifact"
@@ -258,3 +259,13 @@ for (const name of ["LICENSE", "THIRD_PARTY_NOTICES.md"]) {
 console.log(`licences -> ${licenses}`)
 
 await stageChromeBridge(join(root, "src-tauri/resources/chrome-bridge"))
+
+// The local bridge (`~/.codex/bridge`) ships inside the bundle and is released on launch by
+// `bridge_payload.rs`; staging copies whatever that directory holds right now. A machine without a
+// bridge stages nothing and the app simply reports that this build carries no payload.
+const bridge = await stageBridge(root, manifest.version)
+console.log(
+  bridge.staged
+    ? `alwith-bridge ${bridge.version} -> ${bridge.destination} (${bridge.files.length} file(s))`
+    : `alwith-bridge: ${bridgeSource()} has no proxy, bundling no payload`
+)

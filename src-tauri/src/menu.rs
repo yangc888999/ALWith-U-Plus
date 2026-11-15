@@ -69,13 +69,13 @@ fn t(key: &str, lang: &str) -> &'static str {
         ("zh-CN", "menu.edit") => "编辑",
         ("zh-CN", "menu.view") => "视图",
         ("zh-CN", "menu.window") => "窗口",
-        ("zh-CN", "app.about") => "关于 ALWith L",
+        ("zh-CN", "app.about") => "关于 ALWith U⁺",
         ("zh-CN", "app.preferences") => "偏好设置…",
         ("zh-CN", "app.services") => "服务",
-        ("zh-CN", "app.hide") => "隐藏 ALWith L",
+        ("zh-CN", "app.hide") => "隐藏 ALWith U⁺",
         ("zh-CN", "app.hideOthers") => "隐藏其他",
         ("zh-CN", "app.showAll") => "全部显示",
-        ("zh-CN", "app.quit") => "退出 ALWith L",
+        ("zh-CN", "app.quit") => "退出 ALWith U⁺",
         ("zh-CN", "file.newChat") => "新建对话",
         ("zh-CN", "file.newTab") => "新建标签页",
         ("zh-CN", "file.closeTab") => "关闭标签页",
@@ -103,13 +103,13 @@ fn t(key: &str, lang: &str) -> &'static str {
         (_, "menu.edit") => "Edit",
         (_, "menu.view") => "View",
         (_, "menu.window") => "Window",
-        (_, "app.about") => "About ALWith L",
+        (_, "app.about") => "About ALWith U⁺",
         (_, "app.preferences") => "Preferences…",
         (_, "app.services") => "Services",
-        (_, "app.hide") => "Hide ALWith L",
+        (_, "app.hide") => "Hide ALWith U⁺",
         (_, "app.hideOthers") => "Hide Others",
         (_, "app.showAll") => "Show All",
-        (_, "app.quit") => "Quit ALWith L",
+        (_, "app.quit") => "Quit ALWith U⁺",
         (_, "file.newChat") => "New Chat",
         (_, "file.newTab") => "New Tab",
         (_, "file.closeTab") => "Close Tab",
@@ -146,7 +146,7 @@ pub fn build_app_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri:
             MenuItemBuilder::with_id(OPEN_SETTINGS_ID, t("app.preferences", lang)).accelerator("Cmd+,").build(app)?;
         // NSApplication's predefined Quit bypasses ExitRequested on macOS.
         let quit_item = MenuItemBuilder::with_id(QUIT_ID, t("app.quit", lang)).accelerator("Cmd+Q").build(app)?;
-        SubmenuBuilder::new(app, "ALWith L")
+        SubmenuBuilder::new(app, "ALWith U⁺")
             .about_with_text(t("app.about", lang), None)
             .separator()
             .item(&preferences_item)

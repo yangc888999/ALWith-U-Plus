@@ -5,6 +5,8 @@
  * reads. The discussion itself runs in a regular conversation rooted at that directory, so the
  * group is a project like any other — its files, its memory and its transcript all live together.
  */
+import { groupsFolderName } from "./path"
+
 export interface GroupConfig {
   id: string
   name: string
@@ -146,6 +148,28 @@ export function groupFor(id: string): GroupConfig | null {
  * conversation lives — so they are compared the way the file system does: no trailing slash, and
  * case-insensitive on macOS.
  */
+/**
+ * Whether a directory sits inside a group's own folder, with or without a group record.
+ *
+ * `groupByDirectory` answers "does a *saved group* own this exact path". That is a different
+ * question, and using it as the only test is what let a meeting show up as a project: 新建会议
+ * creates the folder and the conversation before the record is written, a restored history may
+ * carry the old spelling of the path, and a healed (or never-bound) meeting can still be pointing
+ * at the Groups root. The shape of the path is enough to know a row belongs to 群聊:
+ *
+ *   ~/Documents/ALWith/groups/定价会      → yes
+ *   ~/Documents/ALWith/groups/定价会/资料 → yes (anything nested inside the meeting)
+ *   ~/Documents/ALWith/groups            → no (the root holds every meeting; it is not one)
+ *   ~/Documents/Other/定价会             → no (a normal project that happens to be named that)
+ *
+ * Case-insensitive on the fixed segments, separators normalised — the on-disk spelling mixes
+ * `ALwith` / `ALWith` / `ALWITH`. `groupByDirectory` keeps its exact-record semantics: ten-odd
+ * surfaces depend on "this group owns this path", and widening it would have moved real projects.
+ */
+export function isGroupDirectory(directory: string | null | undefined): boolean {
+  return groupsFolderName(directory) !== null
+}
+
 export function groupByDirectory(directory: string | null | undefined): GroupConfig | null {
   if (directory === null || directory === undefined || directory === "") return null
   const target = normalizeDirectory(directory)

@@ -84,9 +84,9 @@ test("a read-only chat retries its own session and disables retry while restorin
     client.store.setState(original, true)
   }
 })
-test("account-model recovery marks the surface so the generic read-only banner can be hidden", async () => {
+test("a revoked account model is a notice, not a read-only park", async () => {
   const original = client.state
-  const session = { ...createSession("revoked", "/tmp/revoked"), attached: false, readOnly: true }
+  const session = { ...createSession("revoked", "/tmp/revoked"), attached: false, readOnly: false }
   client.store.setState({ connection: "ready", accountModelRecovery: { revoked: true } })
   const view = render(
     <ThemeProvider>
@@ -94,20 +94,24 @@ test("account-model recovery marks the surface so the generic read-only banner c
     </ThemeProvider>
   )
   try {
-    // The banner still renders (CSS hides it in the app); the marker is what scopes that CSS to
-    // this cause only. The lock icon inside the alert is the selector's anchor.
-    const marker = view.container.querySelector("[data-account-recovery]")
-    expect(marker).not.toBeNull()
-    expect(marker?.querySelector('[data-slot="alert"] .lucide-lock')).not.toBeNull()
-    // A read-only session without the recovery flag keeps the banner unmarked.
-    client.store.setState({ accountModelRecovery: {} })
+    // No marker and no read-only banner: the recovery explanation is one line inside the composer,
+    // and the session is no longer parked read-only, so the package's "open in another client"
+    // banner would be claiming a cause that is not there.
+    expect(view.container.querySelector("[data-account-recovery]")).toBeNull()
+    expect(view.queryByText("Open in another client")).not.toBeInTheDocument()
+    // A session that really is read-only (another client holds it) keeps its banner and its 重试
+    // button even while the recovery flag is set — those are two different causes.
     view.rerender(
       <ThemeProvider>
-        <ChatView session={session} onNewChat={() => {}} onDeleted={() => {}} />
+        <ChatView
+          session={{ ...session, attached: false, readOnly: true }}
+          onNewChat={() => {}}
+          onDeleted={() => {}}
+        />
       </ThemeProvider>
     )
-    expect(view.container.querySelector("[data-account-recovery]")).toBeNull()
     expect(view.getByText("Open in another client")).toBeInTheDocument()
+    expect(view.getByRole("button", { name: "Try again" })).toBeInTheDocument()
   } finally {
     view.unmount()
     client.store.setState(original, true)

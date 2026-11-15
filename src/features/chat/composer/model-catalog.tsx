@@ -5,15 +5,15 @@ import { Bot } from "lucide-react";
 import { NATIVE_MODEL_GROUP } from "@/agent/client";
 import openaiLogo from "@/components/icons/openai-logo.svg";
 import { ProviderMark } from "@/components/provider-mark";
-import modelPresentation from "@/lib/model-presentation.json";
+import i18n from "@/lib/i18n"
+import modelPresentation from "@/lib/model-presentation.json"
+import { resolveModelConfig } from "@/lib/model-config"
 import {
   displayModelLabel,
   gatewayModelId,
   getProviderSnapshot,
   isAccountModel,
-  nativeCatalogStatus,
   nativeModelOverrides,
-  servedNativeRows,
   pickerProviderGroups,
   PROVIDERS
 } from "@/lib/providers";
@@ -22,11 +22,26 @@ import alwithLogo from "../../../../src-tauri/icons/32x32.png";
 
 import { ModelSettingsAction } from "./model-settings-action";
 
-type ModelOption = ChatModelOption & { shortLabel?: string };
+type ModelOption = ChatModelOption & { shortLabel?: string; unverified?: boolean };
 type ModelGroup = { id: string; name: string; models: ModelOption[] };
 
 const presentation: Record<string, { shortLabel: string } | undefined> =
-  modelPresentation;
+  modelPresentation
+
+/** English text the hint falls back to when no translation is loaded (unit tests, failed init). */
+const UNAVAILABLE_HINT = "may be unavailable"
+
+/**
+ * The "this catalog did not list it" suffix, resolved per call rather than at module load: the menu
+ * renders in the current language, and a module-level constant would freeze whichever language
+ * booted first. `i18n.t` can hand back the key itself (missing resource) or nothing at all (an
+ * instance that was never initialised, as in unit tests); both mean "use the literal".
+ */
+function unavailableHint(): string {
+  const key = "composer.modelMayBeUnavailable"
+  const translated = i18n.t(key) as string | undefined
+  return translated === undefined || translated === "" || translated === key ? UNAVAILABLE_HINT : translated
+};
 
 /**
  * Gateway models are addressed as `gateway:<provider>:<model>`. That prefix is routing detail, not
@@ -50,17 +65,17 @@ export function modelTriggerLabel(model: ModelOption): string {
  * engine keeps offering it until the provider config is re-applied, so trusting its catalog alone
  * left deleted models in the picker.
  *
- * Which rows survive is decided by `servedNativeRows`, the same call 设置 → 默认模型 and 分工 make.
+ * Which rows exist is decided by `resolveModelConfig`, the same call 设置 → 默认模型 and 分工 make.
  * Deciding it here a second way — this file used to drop tombstones on its own — is what left the
  * picker one model short of 设置.
  *
- * A row the user keeps but the engine has stopped serving is dropped from the picker, not greyed.
- * Greying kept the row in every list and demanded a live re-check on each menu open to know whether
- * it had come back; the check cost 0.1–8s and locked the picker while it ran. Hiding it means the
- * three surfaces agree with the engine without asking anything, and the row returns by itself the
- * moment the engine lists it again — the saved configuration is never rewritten.
+ * A row the user keeps but the engine has stopped listing stays in the picker with a "may be
+ * unavailable" suffix. Dropping it made the picker silently disagree with 设置 → 大模型 (which
+ * still shows the row, with a badge) and read as data loss. Nothing is re-checked on menu open:
+ * the suffix states what this catalog did or did not include, and it disappears by itself the
+ * moment the engine lists the model again — the saved configuration is never rewritten.
  */
-function trimNativeGroup(group: ModelGroup): ModelGroup {
+function trimNativeGroup(group: ModelGroup, sessionIds?: ReadonlySet<string>): ModelGroup {
   if (group.id !== NATIVE_MODEL_GROUP.id) return group;
   // A draft names the group before any catalog has arrived (`api_id: ""`). That placeholder is not
   // a model id, and leaving it in the list would read as "the catalog has one model, and it is not
@@ -76,18 +91,50 @@ function trimNativeGroup(group: ModelGroup): ModelGroup {
   // yet", not a failed catalog. A live session that published an empty integrated group means the
   // engine's online list_models failed — do not replay the saved shortlist into it.
   const draft = group.models.some((model) => model.api_id === "");
-  const catalog = listed.map((model) => ({ id: model.api_id, label: model.label }));
-  const status = nativeCatalogStatus(draft ? undefined : catalog);
-  const rows = servedNativeRows(saved, catalog, status);
+  // This group IS the live session's own picker, so it is the one config that may call itself
+  // authoritative — and only when it really carries rows (a draft placeholder is "not loaded yet").
+  const config = resolveModelConfig({
+    providerSnapshot: null,
+    native: draft
+      ? undefined
+      : {
+          sourceKind: "session",
+          name: group.name,
+          models: listed.map((model) => ({ id: model.api_id, label: model.label }))
+        },
+    savedOverrides: saved
+  });
+  const rows = config.entries;
+  // A saved row the engine did not list stays in the menu with a hint instead of disappearing.
+  // Hiding it made the picker silently disagree with 设置 → 大模型, where the same row is still
+  // there with a badge — and "a model I saved is gone" reads as data loss, not as a status. No
+  // extra request is involved: the hint says the list did not include it, which is exactly what we
+  // know, and the row goes back to normal the moment the engine lists it again.
+  // `group.models` has already been augmented with the saved rows, so it cannot answer "did the
+  // session list this id?". The caller passes the session's own ids, captured before that merge.
+  const listedIds = sessionIds ?? new Set(listed.map((model) => model.api_id))
+  const known = new Set(rows.map((row) => row.id))
+  const missing = (saved ?? [])
+    .map((row) => ({ id: row.api_id, label: row.label ?? row.api_id }))
+    .filter((row) => row.id !== "" && !listedIds.has(row.id) && !known.has(row.id))
   return {
     ...group,
-    models: rows.map((row) => {
-      const known = byId.get(row.id);
-      return known === undefined
-        ? { api_id: row.id, label: row.label }
-        : { ...known, api_id: row.id, label: row.label };
-    }),
-  };
+    models: [
+      ...rows.map((row) => {
+        const knownRow = byId.get(row.id)
+        const base =
+          knownRow === undefined
+            ? { api_id: row.id, label: row.label }
+            : { ...knownRow, api_id: row.id, label: row.label }
+        // The suffix is added by the caller's final label pass: this function only records the
+        // fact, because the presenter below rewrites `label` from the saved override. A draft has
+        // published no catalog yet, so "not listed" there means "not loaded", not "gone": every
+        // saved row would otherwise open the picker already wearing the hint.
+        return { ...base, unverified: draft ? false : !listedIds.has(row.id) }
+      }),
+      ...missing.map((row) => ({ api_id: row.id, label: row.label, unverified: true })),
+    ],
+  }
 }
 
 /**
@@ -154,13 +201,20 @@ function withSnapshotModels(groups: ModelGroup[]): ModelGroup[] {
 export function presentModelCatalog(groups: ModelGroup[]): ModelGroup[] {
   // Filter identity, not presentation: old sessions can retain LiteLLM rows in other groups,
   // and snapshot augmentation must not add the retired account entry back afterwards.
+  // Captured before `withSnapshotModels` folds the saved rows in: only this set says which ids the
+  // session itself listed, and only those may render without the "may be unavailable" hint.
+  const sessionIds = new Map(
+    groups.map((group) => [group.id, new Set(group.models.map((model) => model.api_id))])
+  )
   const trimmed = withSnapshotModels(groups)
     .filter((group) => group.id !== "litellm")
     .map((group) => ({
       ...group,
       models: group.models.filter((model) => !model.api_id.startsWith("gateway:litellm:")),
     }))
-    .map(trimNativeGroup);
+    .map((group) => trimNativeGroup(group, sessionIds.get(group.id)));
+  // Resolved once per call: every marked row in this render shares the same suffix.
+  const hint = unavailableHint()
   const ordered = [
     ...trimmed.filter((group) => group.id === NATIVE_MODEL_GROUP.id),
     ...trimmed.filter((group) => group.id !== NATIVE_MODEL_GROUP.id),
@@ -176,7 +230,10 @@ export function presentModelCatalog(groups: ModelGroup[]): ModelGroup[] {
         // A name the user set in 设置 → 大模型 wins over both the thread's stale catalogue label
         // and the bundled compact alias: the trigger used to keep showing "4.1-Flash" forever.
         const renamed = displayModelLabel(model.api_id)
-        const label = stripGatewayPrefix(renamed ?? model.label)
+        const base = stripGatewayPrefix(renamed ?? model.label)
+        // Marked rows stay visible with a hint instead of being dropped: "not in this catalog" is a
+        // status, not a deletion, and the same row is still listed in 设置 → 大模型.
+        const label = model.unverified === true ? `${base} · ${hint}` : base
         const account = group.id === "litellm" || group.id === "finture-enterprise" || isAccountModel(model.api_id)
         return {
           ...model,

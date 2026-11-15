@@ -106,10 +106,15 @@ export function AboutSection() {
         {/* Identity first: an About page should answer "what app / which build" before controls. */}
         <section className="flex flex-col items-center gap-3 rounded-xl border bg-card px-6 py-7 text-center">
           <div className="grid size-14 place-items-center overflow-hidden rounded-2xl shadow-sm">
-            <img src={appIcon} alt="ALWith L" className="size-14" draggable={false} />
+            <img src={appIcon} alt={t("app.name")} className="size-14" draggable={false} />
           </div>
           <div className="space-y-1">
-            <h2 className="text-base font-semibold">ALWith L</h2>
+            <h2 className="flex items-center justify-center gap-1.5 text-base font-semibold">
+              {t("app.wordmark")}
+              <span className="rounded-full bg-red-500 px-1.5 py-[1px] text-[10px] font-semibold leading-[1.2] text-white">
+                {t("app.plus")}
+              </span>
+            </h2>
             <p className="text-xs leading-5 text-muted-foreground">
               {t("settings.version", { version: clientVersion === null ? "—" : `v${clientVersion}` })}
               {" · "}

@@ -67,3 +67,15 @@ test("mobile connections are reachable from settings navigation", () => {
   fireEvent.click(screen.getByRole("button", { name: "Mobile connection" }))
   expect(screen.getByRole("region", { name: "Mobile connection" })).toBeVisible()
 })
+
+test("a retired ?tab=external deep link lands on 通用 instead of a blank page", () => {
+  // 外部调用页已下线：老链接（收藏、窗口 URL）不能掉进空白页，规范化后回落到「通用」。
+  window.history.replaceState({}, "", "/settings.html?tab=external")
+  try {
+    render(<SettingsPage />)
+    expect(screen.getByRole("heading", { level: 1, name: "General" })).toBeVisible()
+    expect(screen.queryByRole("button", { name: "External calls" })).toBeNull()
+  } finally {
+    window.history.replaceState({}, "", "/")
+  }
+})

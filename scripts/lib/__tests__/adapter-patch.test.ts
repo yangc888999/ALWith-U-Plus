@@ -142,6 +142,70 @@ test("staging applies all pinned fixes and refuses mismatched adapter sources", 
   expect(() => patchAdapter(`${original}\n${original}`)).toThrow("anchor")
 })
 
+/** Extracts top-level declarations from the patched bundle so they can be executed for real. */
+function declarations(start: string, end: string): string {
+  const from = source.indexOf(start)
+  const to = source.indexOf(end, from + start.length)
+  expect(from).toBeGreaterThan(0)
+  expect(to).toBeGreaterThan(from)
+  return source.slice(from, to)
+}
+
+const toolNames = new Function(
+  `${declarations("function functionToolName(name, namespace) {", "function commandToolName(source) {")}; return { functionToolName, normalizeCommandToolName }`
+)() as {
+  functionToolName: (name: string, namespace?: string) => string
+  normalizeCommandToolName: (raw: string) => string
+}
+const normalizeResponsesFrame = new Function(
+  `${declarations("function normalizeResponsesFrame(raw) {", "function normalizeWsFrame(data) {")}; return normalizeResponsesFrame`
+)() as (raw: unknown) => unknown
+
+test("legacy exec tool calls are normalized without touching the exec literals that are metadata", () => {
+  expect(source).toContain("normalizeCommandToolName")
+  expect(toolNames.normalizeCommandToolName("exec")).toBe("exec_command")
+  for (const untouched of ["exec_command", "write_stdin", "request_permissions", "foo", "nsexec", ""]) {
+    expect(toolNames.normalizeCommandToolName(untouched)).toBe(untouched)
+  }
+  // A bare legacy name becomes the registry name; a namespaced one is left alone.
+  expect(toolNames.functionToolName("exec")).toBe("exec_command")
+  expect(toolNames.functionToolName("exec", "mcp__server__")).toBe("mcp__server__exec")
+  expect(toolNames.functionToolName("exec_command")).toBe("exec_command")
+  // `"exec"` is also session metadata and a human-readable guardian label. Those strings are not
+  // tool names, so they must survive the patch byte-for-byte.
+  for (const metadata of [
+    'var SOURCES = new Set(["cli", "vscode", "exec", "appServer", "unknown"]);',
+    '    sourceKinds: ["cli", "vscode", "exec", "appServer", "unknown"],',
+    '    case "unifiedExec":\n      return "exec";'
+  ]) {
+    expect(source).toContain(metadata)
+    expect(original).toContain(metadata)
+  }
+})
+
+test("streamed Responses frames only rename tool-call items named exec", () => {
+  const frame = (item: Record<string, unknown>) => JSON.stringify({ type: "response.output_item.added", item })
+  const rename = (item: Record<string, unknown>) => JSON.parse(normalizeResponsesFrame(frame(item)) as string).item.name
+  expect(rename({ type: "function_call", name: "exec", arguments: "{}", call_id: "c1" })).toBe("exec_command")
+  expect(rename({ type: "custom_tool_call", name: "exec", input: "", call_id: "c2" })).toBe("exec_command")
+  // Only the name changes; every other field is preserved for the engine.
+  const rewritten = JSON.parse(normalizeResponsesFrame(frame({ type: "function_call", name: "exec", call_id: "c1" })) as string)
+  expect(rewritten.item).toEqual({ type: "function_call", name: "exec_command", call_id: "c1" })
+  expect(rewritten.type).toBe("response.output_item.added")
+  // Non tool-call items and non-exact names pass through untouched.
+  expect(rename({ type: "function_call_output", name: "exec", output: "ok" })).toBe("exec")
+  expect(rename({ type: "message", name: "exec" })).toBe("exec")
+  expect(rename({ type: "function_call", name: "exec_command" })).toBe("exec_command")
+  expect(rename({ type: "function_call", name: "nsexec" })).toBe("nsexec")
+  // Fast path and malformed input return the original value, never a re-serialized frame.
+  for (const passthrough of ['{"type":"response.created"}', "not json at all", "", 42, null, undefined, ['"exec"']]) {
+    expect(normalizeResponsesFrame(passthrough) as unknown).toBe(passthrough)
+  }
+  expect(normalizeResponsesFrame('{"item":"exec"') as string).toBe('{"item":"exec"')
+  // The relay actually uses the helper for upstream -> downstream frames.
+  expect(source).toContain("downstream.send(binary ? data : normalizeWsFrame(data), { binary }, (error) => {")
+})
+
 test("different logical gateways on alwith resume the same thread with the target config, without restarting", async () => {
   const fixture = rebindFixture()
   await fixture.switch("gateway:other-enterprise:DS4.1")

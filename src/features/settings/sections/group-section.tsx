@@ -49,7 +49,7 @@ import { NATIVE_MODEL_GROUP } from "@/agent/client"
 import { useProviders } from "@/lib/use-providers"
 
 import { SettingsCard, SettingsNote } from "./shared"
-import { modelEntries } from "@/lib/model-catalog"
+import { resolveModelConfig, type ModelConfigEntry } from "@/lib/model-config"
 import { useSettingsNativeModels } from "@/lib/settings-bridge"
 
 interface SkillEntry {
@@ -62,7 +62,9 @@ export function GroupSection() {
   const { t } = useTranslation()
   const snapshot = useProviders()
   const native = useSettingsNativeModels()
-  const models = modelEntries(snapshot, native)
+  // The same read-only answer 设置 → 默认模型 shows: 分工 must not be able to pick a model the
+  // engine no longer serves, nor hide one it still does.
+  const models = resolveModelConfig({ providerSnapshot: snapshot, native }).entries
   // A fresh install is seeded with the personas the app bundles into ~/.codex/rob_models;
   // afterwards the stored list is the only source of truth (deleting them all sticks).
   const [roles, setRoles] = useState<GroupRole[]>(() => ensureDefaultGroupRoles())
@@ -367,7 +369,7 @@ function RoleCard({
   onRemove
 }: {
   role: GroupRole
-  models: ReturnType<typeof modelEntries>
+  models: ModelConfigEntry[]
   skills: SkillEntry[]
   expanded: boolean
   onToggle: () => void
@@ -458,7 +460,7 @@ function RoleEditor({
   onChange
 }: {
   role: GroupRole
-  models: ReturnType<typeof modelEntries>
+  models: ModelConfigEntry[]
   skills: SkillEntry[]
   onChange: (patch: Partial<GroupRole>) => void
 }) {

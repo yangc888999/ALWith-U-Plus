@@ -8,7 +8,7 @@ const controller = createWindowController<void>({
     const windows = navigator.platform.includes("Win")
     const window = new WebviewWindow("guide", {
       url: "/guide.html",
-      title: "ALWith L Guide",
+      title: "ALWith U⁺ Guide",
       width: 1000,
       height: 760,
       minWidth: 640,

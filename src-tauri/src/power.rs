@@ -42,7 +42,7 @@ impl PreventSleep {
                 .idle(true)
                 .sleep(true)
                 .reason("Agent is running")
-                .app_name("ALWith L")
+                .app_name("ALWith U⁺")
                 .app_reverse_domain("ai.alwith.u")
                 .create()
                 .map_err(|error| error.to_string())

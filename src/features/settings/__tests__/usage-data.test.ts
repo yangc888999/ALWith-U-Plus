@@ -3,7 +3,9 @@ import { describe, expect, test } from "vitest"
 import type { UsagePoint } from "@/bindings"
 
 import {
+  ALL_CLIENT_SOURCES,
   ALL_GROUP,
+  ALL_SCOPES,
   bucketKeys,
   cacheHitRate,
   cutoff,
@@ -20,6 +22,10 @@ import {
   ranking,
   seriesByGroup,
   sum,
+  sumWithUnknownCost,
+  filterByClientSource,
+  filterByScope,
+  scopeOf,
   utcDayOf,
   within
 } from "../usage-data"
@@ -41,6 +47,119 @@ function point(partial: Partial<UsagePoint> & { date: string }): UsagePoint {
 
 const TODAY = new Date(2026, 10, 2) // 2026-11-02, local midnight
 
+describe("client source and pricing helpers", () => {
+  const sourcedRows = [
+    point({ date: "2026-11-01" }),
+    { ...point({ date: "2026-11-01" }), clientSource: "workbuddy" as const },
+    { ...point({ date: "2026-11-01" }), clientSource: "qwen_office" as const },
+    { ...point({ date: "2026-11-01" }), clientSource: "other_agent" as const }
+  ]
+
+  test("ALL includes legacy rows and every known source", () => {
+    expect(filterByClientSource(sourcedRows, ALL_CLIENT_SOURCES)).toHaveLength(4)
+    expect(ALL_CLIENT_SOURCES).toBe("all")
+  })
+
+  test("legacy rows default to alwith_l", () => {
+    expect(filterByClientSource(sourcedRows, "alwith_l")).toHaveLength(1)
+  })
+
+  test("external source with no matching rows is empty", () => {
+    expect(filterByClientSource(sourcedRows, "other_agent")).toHaveLength(1)
+    expect(filterByClientSource(sourcedRows, "workbuddy").map((row) => (row as { clientSource?: string }).clientSource)).toEqual(["workbuddy"])
+  })
+
+  test("unknown pricing is excluded from known cost and counted separately", () => {
+    const rows = [
+      { ...point({ date: "2026-11-01", tokens: 100 }), cost: 2 },
+      point({ date: "2026-11-01", tokens: 50 }),
+      { ...point({ date: "2026-11-01", tokens: 25 }), cost: Number.NaN }
+    ]
+    expect(sumWithUnknownCost(rows)).toEqual({
+      requests: 3,
+      input: 300,
+      cached: 0,
+      output: 30,
+      tokens: 175,
+      cost: 2,
+      unknownTokenCount: 75,
+      unknownCostRows: 2
+    })
+  })
+})
+
+describe("call scope filtering", () => {
+  const rows = [
+    point({ date: "2026-11-01", model: "legacy" }),
+    { ...point({ date: "2026-11-01", model: "own" }), clientSource: "alwith_l" as const },
+    { ...point({ date: "2026-11-01", model: "wb" }), clientSource: "workbuddy" as const },
+    { ...point({ date: "2026-11-01", model: "qw" }), clientSource: "qwen_office" as const },
+    { ...point({ date: "2026-11-01", model: "agent" }), clientSource: "other_agent" as const }
+  ]
+
+  test("scopeOf reads only clientSource and treats a missing one as an ALWith L call", () => {
+    expect(scopeOf({})).toBe("internal")
+    expect(scopeOf({ clientSource: undefined })).toBe("internal")
+    expect(scopeOf({ clientSource: "alwith_l" })).toBe("internal")
+    expect(scopeOf({ clientSource: "workbuddy" })).toBe("external")
+    expect(scopeOf({ clientSource: "qwen_office" })).toBe("external")
+    expect(scopeOf({ clientSource: "other_agent" })).toBe("external")
+  })
+
+  test("model, provider and request-path names never stand in for the caller", () => {
+    const internal = { model: "workbuddy-proxy", provider: "qwen_office", path: "/workbuddy/v1", clientSource: "alwith_l" }
+    const external = { model: "gpt-6-luna", provider: "codex", path: "/v1/chat", clientSource: "workbuddy" }
+    expect(scopeOf(internal)).toBe("internal")
+    expect(scopeOf(external)).toBe("external")
+    expect(scopeOf({ model: "workbuddy-proxy", provider: "workbuddy" } as { clientSource?: string })).toBe("internal")
+  })
+
+  test("all returns the original rows untouched", () => {
+    expect(ALL_SCOPES).toBe("all")
+    expect(filterByScope(rows, ALL_SCOPES)).toBe(rows)
+    expect(filterByScope(rows, "all")).toHaveLength(rows.length)
+  })
+
+  test("internal and external are disjoint and their union is the whole ledger", () => {
+    const internal = filterByScope(rows, "internal")
+    const external = filterByScope(rows, "external")
+    expect(internal.map((row) => (row as { model: string }).model)).toEqual(["legacy", "own"])
+    expect(external.map((row) => (row as { model: string }).model)).toEqual(["wb", "qw", "agent"])
+    expect(internal.some((row) => external.includes(row))).toBe(false)
+    expect(rows.every((row) => internal.includes(row) || external.includes(row))).toBe(true)
+    expect([...internal, ...external]).toHaveLength(rows.length)
+    expect(new Set([...internal, ...external])).toEqual(new Set(rows))
+  })
+
+  test("unknown cost semantics survive scope filtering", () => {
+    const priced = [
+      { ...point({ date: "2026-11-01", tokens: 100 }), cost: 2 },
+      { ...point({ date: "2026-11-01", tokens: 50 }), clientSource: "workbuddy" as const },
+      { ...point({ date: "2026-11-01", tokens: 25 }), clientSource: "qwen_office" as const, cost: Number.NaN }
+    ]
+    const all = sumWithUnknownCost(filterByScope(priced, "all"))
+    const internal = sumWithUnknownCost(filterByScope(priced, "internal"))
+    const external = sumWithUnknownCost(filterByScope(priced, "external"))
+    expect(all).toEqual({
+      requests: 3,
+      input: 300,
+      cached: 0,
+      output: 30,
+      tokens: 175,
+      cost: 2,
+      unknownTokenCount: 75,
+      unknownCostRows: 2
+    })
+    expect(internal.cost).toBe(2)
+    expect(internal.unknownCostRows).toBe(0)
+    expect(external.cost).toBe(0)
+    expect(external.unknownTokenCount).toBe(75)
+    expect(external.unknownCostRows).toBe(2)
+    expect(internal.tokens + external.tokens).toBe(all.tokens)
+    expect(internal.unknownCostRows + external.unknownCostRows).toBe(all.unknownCostRows)
+  })
+})
+
 describe("cutoff", () => {
   test("counts today as one of the days", () => {
     expect(cutoff("30d", TODAY)).toBe("2026-10-04")
@@ -52,14 +171,14 @@ describe("cutoff", () => {
 describe("sum", () => {
   test("adds every column and keeps an empty list at zero", () => {
     const total = sum([point({ date: "2026-11-01", requests: 2, input: 30, cached: 70, output: 5, tokens: 105 })])
-    expect(total).toEqual({ requests: 2, input: 30, cached: 70, output: 5, tokens: 105, cost: 0 })
-    expect(sum([])).toEqual({ requests: 0, input: 0, cached: 0, output: 0, tokens: 0, cost: 0 })
+    expect(total).toMatchObject({ requests: 2, input: 30, cached: 70, output: 5, tokens: 105, cost: 0 })
+    expect(sum([])).toMatchObject({ requests: 0, input: 0, cached: 0, output: 0, tokens: 0, cost: 0 })
   })
 })
 
 describe("cacheHitRate", () => {
   test("divides cached reads by everything the provider read", () => {
-    expect(cacheHitRate({ requests: 1, input: 100, cached: 900, output: 10, tokens: 1010, cost: 0 })).toBeCloseTo(0.9)
+    expect(cacheHitRate({ requests: 1, input: 100, cached: 900, output: 10, tokens: 1010, cost: 0, unknownTokenCount: 0, unknownCostRows: 0 })).toBeCloseTo(0.9)
   })
 
   test("stays at zero rather than NaN before anything ran", () => {

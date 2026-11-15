@@ -319,7 +319,7 @@ pub(crate) async fn apply(app: &AppHandle, client: &Arc<alwith_api::RuntimeClien
                 || gate.account.is_none()
                 || !state.connection.lock().unwrap().as_ref().is_some_and(|current| Arc::ptr_eq(current, &connection))
             {
-                return Err("ALwith account changed".into());
+                return Err("ALwith 账号已变更，请重试".into());
             }
         }
         if !app.state::<crate::runtime::RuntimeState>().current().is_ok_and(|current| Arc::ptr_eq(&current, &client)) {
@@ -352,7 +352,7 @@ pub(crate) async fn apply(app: &AppHandle, client: &Arc<alwith_api::RuntimeClien
                 }
                 state.applied.lock().unwrap().remove(&agent);
             }
-            return Err("ALwith account changed during enterprise configuration".into());
+            return Err("企业配置过程中 ALwith 账号已变更，请重试".into());
         }
         Ok(())
     });

@@ -157,7 +157,8 @@ test("the integrated model group is answered on request and republished when it 
   for (let index = 0; index < 5; index++) await Promise.resolve()
   // The settings window asks; the main window answers with whatever it holds (null before a session).
   await bus.events.emitTo("main", "settings:request-native-models", undefined)
-  expect(models("settings:native-models")).toEqual([null])
+  // Published to both the (retired) settings window label and the main overlay.
+  expect(models("settings:native-models")).toEqual([null, null])
 
   // The list appears with the first session: the next store tick republishes it.
   native = {
@@ -169,10 +170,10 @@ test("the integrated model group is answered on request and republished when it 
   expect(models("settings:native-models").at(-1)).toEqual(native)
   // An unchanged list is not republished on later ticks.
   must<() => void>(notify, "the store subscription")()
-  expect(models("settings:native-models")).toHaveLength(2)
+  expect(models("settings:native-models")).toHaveLength(4)
   // A changed one is.
   native = { ...native, models: [...native.models, { id: "gpt-6-sol", label: "6-Sol", efforts: [], defaultEffort: null }] }
   must<() => void>(notify, "the store subscription")()
-  expect(models("settings:native-models")).toHaveLength(3)
+  expect(models("settings:native-models")).toHaveLength(6)
   stop.stop()
 })

@@ -14,7 +14,6 @@
   },
   "ignoreDependencies": [
     // Rust-only transport consumed by src-tauri/Cargo.toml.
-    "@alwith/enterprise-client",
     "@alwith/native-kit",
     // Bundled into the app by scripts/stage.ts from the pinned package versions
     "@openai/codex",

@@ -17,7 +17,7 @@ import {
   type ProviderSnapshot,
   rememberNativeOverrides,
   resolveSessionModel,
-  retiredNativeRows,
+  unverifiedNativeRows,
   servedNativeRows,
   setProviderSnapshot
 } from "../providers"
@@ -391,11 +391,11 @@ test("an engine that published no catalog does not resurrect withdrawn models", 
   ).toEqual(["gpt-6.1-sol"])
 })
 
-test("the withdrawn ids are reported separately, for the one table that still shows them", () => {
+test("the unverified ids are reported separately, for the one table that still shows them", () => {
   const catalog = [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol" }]
-  expect(retiredNativeRows([savedSol, savedTerra], catalog)).toEqual(["gpt-6.1-terra"])
-  // An empty catalog proves nothing, so nothing is marked withdrawn.
-  expect(retiredNativeRows([savedSol, savedTerra], [])).toEqual([])
+  expect(unverifiedNativeRows([savedSol, savedTerra], catalog)).toEqual(["gpt-6.1-terra"])
+  // An empty catalog proves nothing, so nothing is marked unverified.
+  expect(unverifiedNativeRows([savedSol, savedTerra], [])).toEqual([])
 })
 
 test("a pasted endpoint is normalized back to the Responses API root", () => {

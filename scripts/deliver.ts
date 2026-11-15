@@ -18,7 +18,7 @@ import { basename, dirname, join } from "node:path"
 const root = join(import.meta.dir, "..")
 const bundle = join(root, "src-tauri", "target", "release", "bundle")
 const dest = process.env.ALWITH_DELIVERY_DIR ?? "/Users/flyme/Documents/ALwith"
-const product = "ALWith L"
+const product = "ALWith U Plus"
 
 const dmgPattern = /^(.*?)_([^_]+)_([^_]+)\.dmg$/
 

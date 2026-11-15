@@ -102,5 +102,64 @@ export function patchAdapter(source: string): string {
           throw new Error("Session provider did not match the selected runtime after resume retries");
         const authProvider = metadata.modelProvider ?? null;`
   )
+  // Codex's built-in tool registry only knows the current shell tool names. A tool call
+  // replayed from an older rollout (or echoed by a model) named `exec` reaches the engine as
+  // an unknown tool, and `unified_exec` answers `unsupported call: exec` -- the turn dies
+  // before the command ever runs. Normalize on the way out, at the single place tool-call
+  // names are produced, and keep the guardian label and session `SOURCES` literals untouched
+  // because those `exec` strings are metadata, not tool names.
+  replace(
+    "function commandToolName(source) {",
+    `function normalizeCommandToolName(raw) {
+  return raw === "exec" ? "exec_command" : raw;
+}
+function commandToolName(source) {`
+  )
+  replace(
+    'function functionToolName(name, namespace) {\n  return `${namespace ?? ""}${name}`;\n}',
+    'function functionToolName(name, namespace) {\n  const full = `${namespace ?? ""}${name}`;\n  return normalizeCommandToolName(full);\n}'
+  )
+  // The compatibility proxy relays upstream frames byte-for-byte, so a legacy `exec` name can
+  // also arrive inside a streamed Responses frame. Only rewrite the two item types whose name
+  // is a tool name; everything else (including raw binary and unrelated text) is passed through
+  // unchanged, and the `"exec"` substring pre-check keeps the JSON parse off the hot path.
+  replace(
+    "class ResponsesProxy {",
+    `function normalizeResponsesFrame(raw) {
+  if (typeof raw !== "string" || !raw.includes('"exec"'))
+    return raw;
+  let frame;
+  try {
+    frame = JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+  if (frame === null || typeof frame !== "object" || Array.isArray(frame))
+    return raw;
+  const item = frame.item;
+  if (item === null || typeof item !== "object" || Array.isArray(item))
+    return raw;
+  if (item.type !== "function_call" && item.type !== "custom_tool_call")
+    return raw;
+  if (item.name !== "exec")
+    return raw;
+  return JSON.stringify({ ...frame, item: { ...item, name: "exec_command" } });
+}
+function normalizeWsFrame(data) {
+  if (typeof data === "string")
+    return normalizeResponsesFrame(data);
+  const bytes = Buffer.isBuffer(data) ? data : messageBytes(data);
+  if (!bytes.includes('"exec"'))
+    return data;
+  const text = bytes.toString("utf8");
+  const normalized = normalizeResponsesFrame(text);
+  return normalized === text ? data : normalized;
+}
+class ResponsesProxy {`
+  )
+  replace(
+    "      downstream.send(data, { binary }, (error) => {",
+    "      downstream.send(binary ? data : normalizeWsFrame(data), { binary }, (error) => {"
+  )
   return source
 }

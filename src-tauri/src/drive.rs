@@ -26,7 +26,7 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::DynRuntime> {
                 ownership_directory: home.join(".alwith-drive").join("owners"),
                 default_root: home.join("YUP Drive"),
                 reserved_roots: vec![],
-                device_name: "ALWith L".into(),
+                device_name: "ALWith U⁺".into(),
                 client_version: env!("CARGO_PKG_VERSION").into(),
                 open_url: Arc::new(move |url| {
                     opener.opener().open_url(url, None::<&str>).map_err(|error| alwith_drive::NativeError::new("failed", error))

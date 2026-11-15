@@ -14,7 +14,9 @@ const native = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/core", () => ({ invoke: native.invoke, isTauri: () => true }))
 vi.mock("@tauri-apps/plugin-opener", () => ({ openPath: vi.fn(async () => {}) }))
 vi.mock("@/lib/use-providers", () => ({ useProviders: () => null }))
-vi.mock("@/lib/settings-bridge", () => ({ useSettingsNativeModels: () => [] }))
+// `undefined` is the bridge's real "not answered yet" value; the settings window has no session of
+// its own, so the GPT group starts empty in these tests.
+vi.mock("@/lib/settings-bridge", () => ({ useSettingsNativeModels: () => undefined }))
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string) => key,

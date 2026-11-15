@@ -46,6 +46,10 @@ impl Gate {
         self.models.clear();
         Ok(())
     }
+    // NOTE (engine contract): the two notices below stay in English. `client.ts::recoverReplay`
+    // matches them verbatim to raise the account-model recovery line, and the ACP adapter emits the
+    // same sentences from its side. They are translated for display in `src/lib/error-text.ts`
+    // (`error.accountModelRequired`), never at the source.
     fn check_selection(&self, requested: Option<&str>, session: Option<&str>) -> Result<(), String> {
         if let Some(model) = requested
             && model.starts_with(MODEL_PREFIX)
@@ -109,16 +113,16 @@ struct IssuedModel {
 }
 
 pub(super) fn parse_catalog(body: &str) -> Result<Option<CustomProvider>, String> {
-    let rows: Vec<Value> = serde_json::from_str(body).map_err(|_| "Invalid ALwith provider response")?;
+    let rows: Vec<Value> = serde_json::from_str(body).map_err(|_| "模型配置响应格式无法识别，请稍后重试")?;
     let mut selected = rows.into_iter().filter(|row| row["provider_id"] == ID);
     let Some(value) = selected.next() else { return Ok(None) };
     if selected.next().is_some() {
-        return Err("Duplicate ALwith provider".into());
+        return Err("账号返回了重复的模型供应商，请重新登录后重试".into());
     }
     if value["api_key"].as_str().is_none_or(|key| key.trim().is_empty()) {
         return Ok(None);
     }
-    let provider: IssuedProvider = serde_json::from_value(value).map_err(|_| "Invalid ALwith provider metadata")?;
+    let provider: IssuedProvider = serde_json::from_value(value).map_err(|_| "模型供应商信息无法识别，请重新登录后重试")?;
     if provider.hidden {
         return Ok(None);
     }
@@ -136,7 +140,7 @@ pub(super) fn parse_catalog(body: &str) -> Result<Option<CustomProvider>, String
                 || model.context_window == Some(0)
                 || !ids.insert(model.api_id.clone())
             {
-                return Err("Invalid or duplicate ALwith model metadata".to_string());
+                return Err("模型信息无法识别或存在重复".to_string());
             }
             Ok(CustomModel {
                 api_id: model.api_id,
@@ -153,7 +157,7 @@ pub(super) fn parse_catalog(body: &str) -> Result<Option<CustomProvider>, String
         return Ok(None);
     }
     if provider.name.trim().is_empty() {
-        return Err("Missing ALwith provider name".into());
+        return Err("账号未返回模型供应商名称".into());
     }
     Ok(Some(CustomProvider {
         id: ID.into(),
@@ -168,7 +172,7 @@ pub(super) fn parse_catalog(body: &str) -> Result<Option<CustomProvider>, String
 
 fn responses_base_url(raw: &str) -> Result<String, String> {
     // Account-issued gateways may use internal HTTP, as in the supported /v1/responses contract.
-    let url = reqwest::Url::parse(raw.trim()).map_err(|_| "Invalid ALwith gateway URL")?;
+    let url = reqwest::Url::parse(raw.trim()).map_err(|_| "模型网关地址无效")?;
     if !matches!(url.scheme(), "http" | "https")
         || url.host_str().is_none()
         || url.query().is_some()
@@ -176,13 +180,13 @@ fn responses_base_url(raw: &str) -> Result<String, String> {
         || !url.username().is_empty()
         || url.password().is_some()
     {
-        return Err("Invalid ALwith gateway URL".into());
+        return Err("模型网关地址无效".into());
     }
     let base = url.as_str().trim_end_matches('/').to_string();
     match url.path().trim_end_matches('/') {
         "" => Ok(format!("{base}/v1")),
         path if path.ends_with("/v1") => Ok(base),
-        _ => Err("ALwith gateway must supply a root URL or an API base ending in /v1".into()),
+        _ => Err("模型网关需要根地址或以 /v1 结尾的 API 地址".into()),
     }
 }
 
@@ -196,7 +200,7 @@ fn validate_account(account: &Account) -> Result<(), String> {
     if !matches!(account.api_base_url.as_str(), "https://api.alwith.ai/service" | "https://api-dev.alwith.ai/service")
         || account.user_uuid.trim().is_empty()
     {
-        return Err("Invalid ALwith account identity".into());
+        return Err("ALwith 账号身份无效，请重新登录".into());
     }
     Ok(())
 }
@@ -215,7 +219,7 @@ pub async fn providers_account_bind(window: tauri::WebviewWindow, account: Accou
             return Ok(gate.generation);
         }
         if !gate.targets.is_empty() {
-            return Err("Previous ALwith provider cleanup is incomplete; retry logout".into());
+            return Err("上一次模型供应商清理未完成，请重试退出登录".into());
         }
         gate.generation = gate.generation.checked_add(1).ok_or("Account generation exhausted")?;
         gate.account = Some(account.clone());
@@ -243,32 +247,32 @@ pub async fn providers_refresh_managed(
     let account = {
         let gate = state.managed.gate.lock().unwrap();
         if gate.generation != generation {
-            return Err(json!({"message":"ALwith account changed"}));
+            return Err(json!({"message":"ALwith 账号已变更，请重试"}));
         }
-        gate.account.clone().ok_or_else(|| json!({"message":"Sign in before loading ALwith models"}))?
+        gate.account.clone().ok_or_else(|| json!({"message":"请先登录 ALwith 账号再加载模型"}))?
     };
     if access_token.trim().is_empty() {
-        return Err(json!({"message":"Missing ALwith access token"}));
+        return Err(json!({"message":"登录已失效，请重新登录 ALwith 账号"}));
     }
     let result = fetch_catalog(&account.api_base_url, &access_token).await;
     let mut inner = state.inner.lock().await;
     {
         let mut gate = state.managed.gate.lock().unwrap();
         if gate.generation != generation || gate.account.as_ref() != Some(&account) {
-            return Err(json!({"message":"ALwith account changed during refresh"}));
+            return Err(json!({"message":"刷新过程中 ALwith 账号已变更，请重试"}));
         }
         let provider = match result {
             Ok(provider) => provider,
             Err(error) => {
-                inner.error = Some("ALwith model configuration refresh failed".into());
+                inner.error = Some("模型配置刷新失败，请稍后重试".into());
                 let _ = inner.snapshot().emit(app);
                 return Err(error);
             }
         };
         let mut next = inner.saved.clone();
         next.managed = Some(Cache { account, provider });
-        next.revision = next.revision.checked_add(1).ok_or_else(|| json!({"message":"Provider revision exhausted"}))?;
-        persist(&state.path, &next).map_err(|_| json!({"message":"Cannot save ALwith model configuration"}))?;
+        next.revision = next.revision.checked_add(1).ok_or_else(|| json!({"message":"模型配置版本号已用尽，请重启应用后重试"}))?;
+        persist(&state.path, &next).map_err(|_| json!({"message":"无法保存模型配置，请检查磁盘权限"}))?;
         gate.models = model_ids(next.managed.as_ref().and_then(|cache| cache.provider.as_ref()));
         let _ = RevokedSessions {
             session_ids: gate
@@ -295,17 +299,17 @@ async fn fetch_catalog(base: &str, token: &str) -> Result<Option<CustomProvider>
         .timeout(Duration::from_secs(20))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|_| json!({"message":"Cannot create ALwith configuration client"}))?;
+        .map_err(|_| json!({"message":"无法创建模型配置请求，请稍后重试"}))?;
     let response = client
         .get(format!("{base}/api/v1/providers"))
         .bearer_auth(token)
         .send()
         .await
-        .map_err(|_| json!({"message":"ALwith configuration request failed"}))?;
+        .map_err(|_| json!({"message":"模型配置请求失败，请检查网络后重试"}))?;
     if !response.status().is_success() {
-        return Err(json!({"status":response.status().as_u16(),"message":"ALwith configuration request rejected"}));
+        return Err(json!({"status":response.status().as_u16(),"message":"模型配置请求被拒绝，请重新登录后重试"}));
     }
-    let body = response.text().await.map_err(|_| json!({"message":"Cannot read ALwith configuration response"}))?;
+    let body = response.text().await.map_err(|_| json!({"message":"无法读取模型配置响应，请稍后重试"}))?;
     parse_catalog(&body).map_err(|message| json!({"message":message}))
 }
 
@@ -325,12 +329,12 @@ pub(super) async fn clear(app: &AppHandle) -> Result<(), String> {
     }
     let _transition = tokio::time::timeout(Duration::from_secs(10), state.managed.transition.lock())
         .await
-        .map_err(|_| "ALwith account transition did not settle; cleanup is incomplete")?;
+        .map_err(|_| "ALwith 账号切换未完成，清理尚未结束，请稍后重试")?;
     state.managed.gate.lock().unwrap().invalidate()?;
     let saved_error = {
         let mut inner = tokio::time::timeout(Duration::from_secs(10), state.inner.lock())
             .await
-            .map_err(|_| "ALwith provider configuration did not settle; cleanup is incomplete")?;
+            .map_err(|_| "模型供应商配置未完成，清理尚未结束，请稍后重试")?;
         inner.managed_active = false;
         inner.applied_revision = None;
         inner.saved.managed = None;
@@ -349,7 +353,7 @@ pub(super) async fn clear(app: &AppHandle) -> Result<(), String> {
 pub(super) async fn cleanup(app: &AppHandle) -> Result<(), String> {
     tokio::time::timeout(Duration::from_secs(30), cleanup_inner(app))
         .await
-        .map_err(|_| "ALwith provider cleanup timed out; execution remains blocked")?
+        .map_err(|_| "模型供应商清理超时，执行仍被阻塞，请稍后重试")?
 }
 
 async fn cleanup_inner(app: &AppHandle) -> Result<(), String> {
@@ -434,12 +438,12 @@ async fn cleanup_inner(app: &AppHandle) -> Result<(), String> {
             )
             .await;
             if !matches!(removed, Ok(Ok(_))) && !stop_dedicated(&client, &target).await {
-                return Err("ALwith provider cleanup is incomplete; wait for active sessions and retry".into());
+                return Err("模型供应商清理尚未完成，请等待当前会话结束后重试".into());
             }
         }
         // A stale Runtime cannot acknowledge cleanup for its replacement.
         if !runtime.current().is_ok_and(|current| Arc::ptr_eq(&current, &client)) {
-            return Err("Runtime changed during ALwith cleanup".into());
+            return Err("清理过程中运行时已切换，请重试".into());
         }
         state.managed.gate.lock().unwrap().targets.remove(&target);
         if target == "codex" {

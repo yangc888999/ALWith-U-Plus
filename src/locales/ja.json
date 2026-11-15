@@ -3,7 +3,7 @@
     "email": "メールアドレス",
     "code": "認証コード",
     "signIn": "サインイン",
-    "signOut": "ALWith L からログアウト"
+    "signOut": "ALWith U⁺ からログアウト"
   },
   "guide": {
     "help": "ヘルプを取得"
@@ -124,8 +124,15 @@
         "name": "フルアクセス",
         "description": "注意して使用してください：Codex は承認なしでワークスペース外のファイルを編集し、インターネットにアクセスできます"
       },
-      "heading": "ALWith L の操作をどのように承認しますか？"
-    }
+      "heading": "ALWith U⁺ の操作をどのように承認しますか？"
+    },
+    "turnProgress": {
+      "quietFor": "· no output for {{seconds}}s",
+      "autoNudged": "· nudged {{count}}×"
+    },
+    "retryAlertTitle": "“{{model}}” has been retried {{count}} times with no response; the system is still retrying in the background.",
+    "retryAlertJump": "Open conversation",
+    "retryAlertDescription": "Open the conversation to check progress, or switch to another model."
   },
   "composer": {
     "mode": "権限",
@@ -195,7 +202,12 @@
     },
     "trackpad": "トラックパッド",
     "trackpadEnabled": "トラックパッドのジェスチャを有効にする",
-    "threeFingerSwipeDesc": "3本指で横にスワイプしてキャンバスを移動"
+    "threeFingerSwipeDesc": "3本指で横にスワイプしてキャンバスを移動",
+    "providerReliability": "Connection reliability",
+    "autoRetry": "Retry interrupted connections",
+    "autoRetryDesc": "When a provider connection times out or drops, the same request is sent again instead of ending the turn.",
+    "autoNudge": "Nudge a silent turn",
+    "autoNudgeDesc": "When a model has produced nothing for 90 seconds, one “continue” is sent automatically — at most twice per turn."
   },
   "usage": {
     "usage": "使用量",
@@ -207,7 +219,8 @@
     "testButton": "接続テスト",
     "customButton": "カスタム",
     "saveButton": "保存",
-    "remove": "削除"
+    "remove": "削除",
+    "companyDisplayName": "Display name"
   },
   "updater": {
     "relaunchConfirmTitle": "更新のため再起動しますか?",
@@ -373,7 +386,7 @@
     "more": "その他の操作"
   },
   "app": {
-    "name": "ALWith L"
+    "name": "ALWith U⁺"
   },
   "notify": {
     "needsInput": "入力が必要です",
@@ -401,5 +414,50 @@
     "realtimeStart": "Codex 音声通話を開始",
     "realtimeStop": "音声通話を終了",
     "realtimeCancel": "音声接続をキャンセル"
+  },
+  "usageReport": {
+    "resetCardTitle": "クォータのリセット",
+    "resetCardDesc": "プランの利用ウィンドウがリセットされる時刻。",
+    "resetCardEmpty": "リセット時刻はまだありません",
+    "resetCardExpiresAt": "{{time}} にリセット",
+    "resetCardRemaining": "残り {{time}}",
+    "resetCardReset": "リセット時刻になりました",
+    "resetCardUse": "使う"
+  },
+  "providerUsage": {
+    "title": "Quota",
+    "refresh": "Refresh",
+    "remaining": "Remaining",
+    "limit": "Limit {{value}}",
+    "unlimited": "unlimited",
+    "resetAt": "Resets {{time}}",
+    "expiresAt": "Valid until {{time}}",
+    "plan": "Plan {{name}}",
+    "updatedAt": "Updated {{time}}",
+    "consoleOnly": "This provider's plan usage is only visible in its own console.",
+    "openConsole": "Open console",
+    "unsupported": "This provider publishes no usage endpoint.",
+    "unsupportedDisabled": "This provider is switched off, so no quota was read.",
+    "unsupportedNoBaseUrl": "This provider has no API base URL, so there is nowhere to ask.",
+    "unauthorized": "The key is invalid or has expired.",
+    "unreachable": "Usage is unavailable right now.",
+    "stale": "cached",
+    "freeAllowance": "Free allowance today",
+    "freeLocalCalls": "Calls today on this Mac",
+    "freeRemainingUnknown": "limit {{limit}} (remaining unknown)",
+    "freeBlocked": "Today's free calls are used up",
+    "freeResetVendor": "resets in {{time}}",
+    "freeResetUtcDay": "resets in {{time}} (daily at 00:00 UTC)",
+    "freeResetUtcDayRule": "resets daily at 00:00 UTC",
+    "resetNow": "Reset time reached"
+  },
+  "error": {
+    "accountCleanupFailed": "前の ALwith プロバイダーの後片付けに失敗しました（{{code}}）。しばらくしてからもう一度お試しください。",
+    "accountModelRequired": "このチャットのアカウントモデルは利用できなくなりました。下のモデル選択でモデルを選び、もう一度送信してください。",
+    "enterpriseModelNotReady": "The enterprise model is not ready yet. Sign in to your enterprise account in Settings → Account, then try again.",
+    "accountChanged": "実行中に ALwith アカウントが変更されました。もう一度お試しください。",
+    "accountModelConfigFailed": "ALwith のモデル設定を読み込めませんでした。再試行するか、もう一度サインインしてください。",
+    "accountCleanupPending": "前の ALwith アカウントの後片付けがまだ終わっていません。しばらくしてからもう一度お試しください。",
+    "enterpriseLogoutFailed": "サーバー側のサインアウトに失敗しましたが、このコンピューターのアクセス権は取り消されました。"
   }
 }

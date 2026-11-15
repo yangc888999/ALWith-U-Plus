@@ -2,7 +2,7 @@
   "platformAuth": {
     "code": "Kode verifikasi",
     "signIn": "Masuk",
-    "signOut": "Keluar dari ALWith L"
+    "signOut": "Keluar dari ALWith U⁺"
   },
   "guide": {
     "help": "Dapatkan bantuan"
@@ -116,8 +116,15 @@
         "name": "Akses penuh",
         "description": "Gunakan dengan hati-hati: Codex dapat mengedit berkas di luar ruang kerja ini dan mengakses internet tanpa persetujuan"
       },
-      "heading": "Bagaimana tindakan ALWith L disetujui?"
-    }
+      "heading": "Bagaimana tindakan ALWith U⁺ disetujui?"
+    },
+    "turnProgress": {
+      "quietFor": "· no output for {{seconds}}s",
+      "autoNudged": "· nudged {{count}}×"
+    },
+    "retryAlertTitle": "“{{model}}” has been retried {{count}} times with no response; the system is still retrying in the background.",
+    "retryAlertJump": "Open conversation",
+    "retryAlertDescription": "Open the conversation to check progress, or switch to another model."
   },
   "composer": {
     "mode": "Izin",
@@ -182,7 +189,12 @@
     },
     "trackpad": "Trackpad",
     "trackpadEnabled": "Aktifkan gestur trackpad",
-    "threeFingerSwipeDesc": "Geser horizontal dengan tiga jari untuk menggeser kanvas"
+    "threeFingerSwipeDesc": "Geser horizontal dengan tiga jari untuk menggeser kanvas",
+    "providerReliability": "Connection reliability",
+    "autoRetry": "Retry interrupted connections",
+    "autoRetryDesc": "When a provider connection times out or drops, the same request is sent again instead of ending the turn.",
+    "autoNudge": "Nudge a silent turn",
+    "autoNudgeDesc": "When a model has produced nothing for 90 seconds, one “continue” is sent automatically — at most twice per turn."
   },
   "usage": {
     "usage": "Penggunaan",
@@ -194,7 +206,8 @@
     "testButton": "Uji koneksi",
     "customButton": "Kustom",
     "saveButton": "Simpan",
-    "remove": "Hapus"
+    "remove": "Hapus",
+    "companyDisplayName": "Display name"
   },
   "updater": {
     "relaunchConfirmTitle": "Luncurkan ulang untuk memperbarui?",
@@ -359,7 +372,7 @@
     "more": "Tindakan lainnya"
   },
   "app": {
-    "name": "ALWith L"
+    "name": "ALWith U⁺"
   },
   "notify": {
     "needsInput": "Masukan Anda diperlukan",
@@ -387,5 +400,50 @@
     "realtimeStart": "Mulai panggilan suara Codex",
     "realtimeStop": "Akhiri panggilan suara",
     "realtimeCancel": "Batalkan koneksi suara"
+  },
+  "usageReport": {
+    "resetCardTitle": "Reset kuota",
+    "resetCardDesc": "Kapan jendela penggunaan paket direset.",
+    "resetCardEmpty": "Belum ada waktu reset",
+    "resetCardExpiresAt": "Reset pada {{time}}",
+    "resetCardRemaining": "Sisa {{time}}",
+    "resetCardReset": "Waktu reset tercapai",
+    "resetCardUse": "Gunakan"
+  },
+  "providerUsage": {
+    "title": "Quota",
+    "refresh": "Refresh",
+    "remaining": "Remaining",
+    "limit": "Limit {{value}}",
+    "unlimited": "unlimited",
+    "resetAt": "Resets {{time}}",
+    "expiresAt": "Valid until {{time}}",
+    "plan": "Plan {{name}}",
+    "updatedAt": "Updated {{time}}",
+    "consoleOnly": "This provider's plan usage is only visible in its own console.",
+    "openConsole": "Open console",
+    "unsupported": "This provider publishes no usage endpoint.",
+    "unsupportedDisabled": "This provider is switched off, so no quota was read.",
+    "unsupportedNoBaseUrl": "This provider has no API base URL, so there is nowhere to ask.",
+    "unauthorized": "The key is invalid or has expired.",
+    "unreachable": "Usage is unavailable right now.",
+    "stale": "cached",
+    "freeAllowance": "Free allowance today",
+    "freeLocalCalls": "Calls today on this Mac",
+    "freeRemainingUnknown": "limit {{limit}} (remaining unknown)",
+    "freeBlocked": "Today's free calls are used up",
+    "freeResetVendor": "resets in {{time}}",
+    "freeResetUtcDay": "resets in {{time}} (daily at 00:00 UTC)",
+    "freeResetUtcDayRule": "resets daily at 00:00 UTC",
+    "resetNow": "Reset time reached"
+  },
+  "error": {
+    "accountCleanupFailed": "Pembersihan penyedia ALwith sebelumnya gagal ({{code}}). Coba lagi sebentar.",
+    "accountModelRequired": "Model akun untuk obrolan ini sudah tidak tersedia. Pilih model di pemilih model di bawah, lalu kirim lagi.",
+    "enterpriseModelNotReady": "The enterprise model is not ready yet. Sign in to your enterprise account in Settings → Account, then try again.",
+    "accountChanged": "Akun ALwith berubah saat proses berjalan. Coba lagi.",
+    "accountModelConfigFailed": "Konfigurasi model ALwith gagal dimuat. Coba lagi atau masuk kembali.",
+    "accountCleanupPending": "Pembersihan akun ALwith sebelumnya belum selesai. Coba lagi sebentar.",
+    "enterpriseLogoutFailed": "Keluar di server gagal, tetapi akses komputer ini sudah dicabut."
   }
 }

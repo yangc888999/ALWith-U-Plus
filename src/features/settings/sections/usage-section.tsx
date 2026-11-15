@@ -35,12 +35,14 @@ import { Donut, GroupLines, seriesColor, Spark, StackedBars } from "../usage-cha
 import { WordCloud } from "../usage-word-cloud"
 import {
   ALL_GROUP,
+  ALL_SCOPES,
   cacheHitRate,
   change,
   cutoff,
   type CostedPoint,
   dailyBuckets,
   dayKey,
+  filterByScope,
   type Grain,
   type GroupBy,
   heatLevel,
@@ -56,6 +58,7 @@ import {
   seriesByGroup,
   sparkline,
   sum,
+  type UsageScopeFilter,
   utcDayOf,
   within
 } from "../usage-data"
@@ -314,6 +317,13 @@ export function UsageSection() {
   // calling yesterday "today".
   const [today, setToday] = useState(() => new Date())
   const [range, setRange] = useState<Range>("30d")
+  // 「调用范围」是页面顶部的一级维度：ALWith L 自己的内部调用 vs 其它客户端发起的外部调用。
+  // WorkBuddy / 千问办公 / 其它 Agent 只是明细里的来源标识，不做成顶部筛选项。
+  const [usageScope, setUsageScope] = useState<UsageScopeFilter>(ALL_SCOPES)
+  // 外部调用没有设置入口（那个模块已下线），账本里出现的外部行一律参与统计：
+  // 「全部」始终等于「内部 + 外部」，页面顶部固定给出三项。
+  const externalEnabled = true
+  const scopeFilter: UsageScopeFilter = usageScope
   const [metric, setMetric] = useState<Metric>("tokens")
   // 「今日」看的是一天之内的构成，不是趋势：按模型分组、用 Token 衡量、饼图看占比最直观。
   // 这也是分析区的默认视图（饼图没有时间轴，所以粒度固定为总计）。
@@ -459,6 +469,9 @@ export function UsageSection() {
     void load()
   }, [load])
 
+  // 额度重置搬去了 ChatGPT 账户卡（`codex-provider-section.tsx`）：它描述的是账户自己的额度
+  // 窗口，不是这份用量报表，放在这里只会让读者在两页之间来回找同一个数字。
+
   // Stale-while-revalidate: an expired snapshot arrives with `pending`, and the rebuild runs off
   // the main thread. Poll quietly until the fresh snapshot lands — and stop as soon as it does,
   // instead of re-reading on a fixed timer even after the data is current. A hard cap keeps a
@@ -540,6 +553,12 @@ export function UsageSection() {
   const to = dayKey(today)
   const previousFrom = useMemo(() => previousCutoff(range, today), [range, today])
 
+  // One scope-filtered copy of the localized ledger. 摘要、分析、两张热力图和调用明细都读这里，
+  // 切「调用范围」时页面上所有数字一起变；`report` 仍是 localizeUsageReport 之后的本地日历快照。
+  // 只过滤一次，避免每个 useMemo 各自重复算一遍。
+  const scopedPoints = useMemo(() => filterByScope(report?.points ?? [], scopeFilter), [report, scopeFilter])
+  const scopedRecent = useMemo(() => filterByScope(report?.recent ?? [], scopeFilter), [report, scopeFilter])
+
   // Prices come first: the analysis view's "cost" metric reads them while bucketing.
   const {
     usdToCny,
@@ -553,7 +572,7 @@ export function UsageSection() {
   } = usePriceStore()
 
   const view = useMemo(() => {
-    const all: CostedPoint[] = (report?.points ?? []).map((point) => ({
+    const all: CostedPoint[] = scopedPoints.map((point) => ({
       ...point,
       // Pricing still wants the original UTC day/hour bucket, not the localized calendar day.
       cost: costOf({ ...point, date: utcDayOf(point) }, prices, usdToCny, utcOffset) ?? 0
@@ -607,14 +626,14 @@ export function UsageSection() {
       // Per-day spend, for the cost stat's daily-trend sparkline.
       dailyCost: days.map((day) => day.cost)
     }
-  }, [report, from, to, previousFrom, grain, groupBy, metric, top, prices, usdToCny, utcOffset, t, modelNames])
+  }, [scopedPoints, from, to, previousFrom, grain, groupBy, metric, top, prices, usdToCny, utcOffset, t, modelNames])
 
   // Analysis reuses the overview's range: one window drives both cards, so the chart always
   // matches what the stat blocks above it are summarizing.
   const analysisRange = useMemo(() => ({ from, to }), [from, to])
 
   const analysisView = useMemo(() => {
-    const points = (report?.points ?? [])
+    const points = scopedPoints
       .map((point) => ({ ...point, cost: costOf({ ...point, date: utcDayOf(point) }, prices, usdToCny, utcOffset) ?? 0 }))
       .filter((point) => point.date >= analysisRange.from && point.date <= analysisRange.to)
     const allLabel = t("usageReport.groupAll")
@@ -631,7 +650,7 @@ export function UsageSection() {
       }))
     }
     return { groups, stacked }
-  }, [report, analysisRange, grain, groupBy, metric, top, prices, usdToCny, utcOffset, t, modelNames])
+  }, [scopedPoints, analysisRange, grain, groupBy, metric, top, prices, usdToCny, utcOffset, t, modelNames])
 
   // ---- Model prices & estimated spend ------------------------------------------------
   const patchPrice = (index: number, patch: Partial<ModelPrice>) => {
@@ -905,18 +924,17 @@ export function UsageSection() {
   const heat = useMemo(() => {
     const keys = monthKeysEndingAt(anchorMonth, monthSpan)
     if (keys.length === 0) return { blocks: [], max: 1 }
-    const blocks = monthBlocks(dailyBuckets(report?.points ?? [], `${keys[0]}-01`, to), keys)
+    const blocks = monthBlocks(dailyBuckets(scopedPoints, `${keys[0]}-01`, to), keys)
     const max = Math.max(1, ...blocks.flatMap((block) => block.cells.map((cell) => cell.tokens)))
     return { blocks, max }
-  }, [report, anchorMonth, monthSpan, to])
+  }, [scopedPoints, anchorMonth, monthSpan, to])
 
   // The 24-hour grid converts each UTC (day, hour) bucket to the reader's local day AND hour from
   // one instant (see usage-heatmap.ts), so UTC+8 no longer shifts the whole sheet by eight hours.
   const hourHeat = useMemo(() => {
-    const points = report?.points ?? []
-    const from = heatRangeFrom(heatRange, today, firstLocalDay(points))
-    return hourlyBuckets(points, from, dayKey(today))
-  }, [report, heatRange, today])
+    const from = heatRangeFrom(heatRange, today, firstLocalDay(scopedPoints))
+    return hourlyBuckets(scopedPoints, from, dayKey(today))
+  }, [scopedPoints, heatRange, today])
 
   // Once the report lands, open the grid on the newest month that actually has data: a fresh install
   // in a quiet month would otherwise greet the user with three empty calendars.
@@ -947,27 +965,27 @@ export function UsageSection() {
 
   const detailTurns = useMemo(
     () =>
-      (report?.recent ?? []).filter(
+      scopedRecent.filter(
         (turn) =>
           (detailFrom === "" || turn.date >= detailFrom) &&
           turn.date <= detailTo &&
           (detailVendor === "" || turn.provider === detailVendor) &&
           (detailModel === "" || turn.model === detailModel)
       ),
-    [report, detailFrom, detailTo, detailVendor, detailModel]
+    [scopedRecent, detailFrom, detailTo, detailVendor, detailModel]
   )
   // Vendor and model id options derive from the ledger itself, so the dropdowns only ever offer
   // ids that actually appear in the log.
   const detailVendors = useMemo(() => {
     const set = new Set<string>()
-    for (const turn of report?.recent ?? []) if (turn.provider !== "") set.add(turn.provider)
+    for (const turn of scopedRecent) if (turn.provider !== "") set.add(turn.provider)
     return [...set].sort()
-  }, [report])
+  }, [scopedRecent])
   const detailModels = useMemo(() => {
     const set = new Set<string>()
-    for (const turn of report?.recent ?? []) if (turn.model !== "") set.add(turn.model)
+    for (const turn of scopedRecent) if (turn.model !== "") set.add(turn.model)
     return [...set].sort()
-  }, [report])
+  }, [scopedRecent])
   const detailPages = Math.max(1, Math.ceil(detailTurns.length / DETAIL_PAGE_SIZE))
   const currentPage = Math.min(detailPage, detailPages)
   const pageRows = detailTurns.slice((currentPage - 1) * DETAIL_PAGE_SIZE, currentPage * DETAIL_PAGE_SIZE)
@@ -1043,6 +1061,30 @@ export function UsageSection() {
                 {t(`usageReport.range.${quick}`)}
               </button>
             ))}
+            {/* 调用范围：默认「全部」，只区分 ALWith L 内部调用与其它客户端的外部调用。
+                设置 → 外部调用 里关掉「统计外部调用」后，外部行整体退出统计，这里只剩两项。 */}
+            <Select
+              items={[
+                { value: ALL_SCOPES, label: t("usageReport.scopeAll") },
+                { value: "internal", label: t("usageReport.scopeInternal") },
+                ...(externalEnabled
+                  ? [{ value: "external", label: t("usageReport.scopeExternal") }]
+                  : [])
+              ]}
+              value={externalEnabled ? usageScope : "internal"}
+              onValueChange={(value) => setUsageScope(value as UsageScopeFilter)}
+            >
+              <SelectTrigger size="sm" aria-label={t("usageReport.scopeLabel")} className="w-[140px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_SCOPES}>{t("usageReport.scopeAll")}</SelectItem>
+                <SelectItem value="internal">{t("usageReport.scopeInternal")}</SelectItem>
+                {externalEnabled && (
+                  <SelectItem value="external">{t("usageReport.scopeExternal")}</SelectItem>
+                )}
+              </SelectContent>
+            </Select>
             <Select
               items={SELECT_RANGES.map((option) => ({ value: option, label: t(`usageReport.range.${option}`) }))}
               value={range}
@@ -1059,15 +1101,11 @@ export function UsageSection() {
                 ))}
               </SelectContent>
             </Select>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={t("usageReport.refresh")}
-              title={t("usageReport.refresh")}
-              disabled={loading}
-              onClick={() => void load(true)}
-            >
+            {/* 手动刷新：带文字，点一下就是一次显式重建（`load(true)` → usageReportRefresh）。
+                Ghost 图标按钮看不出可点，也看不出「已经在刷」，所以改成 outline + 文案。 */}
+            <Button variant="outline" size="sm" disabled={loading} onClick={() => void load(true)}>
               <RefreshCwIcon className={cn("size-3.5", loading && "animate-spin")} aria-hidden="true" />
+              {t("usageReport.refresh")}
             </Button>
           </div>
         }
@@ -1096,7 +1134,12 @@ export function UsageSection() {
         ) : view.points.length === 0 ? (
           <div className="py-4">
             <p className="text-sm font-medium">{pending ? t("usageReport.building") : t("usageReport.empty")}</p>
-            {!pending && <p className="mt-1 text-xs text-muted-foreground">{t("usageReport.emptyHint")}</p>}
+            {/* 只有「外部」且筛选后确实没有调用时才提示尚未接入；「全部」「内部」保持原来的空态文案。 */}
+            {!pending && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {scopeFilter === "external" ? t("usageReport.externalNotConnected") : t("usageReport.emptyHint")}
+              </p>
+            )}
           </div>
         ) : (
           /* Default 3×3: nine stats, three columns, three rows at the settings window's default

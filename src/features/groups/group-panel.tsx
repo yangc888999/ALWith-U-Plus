@@ -46,7 +46,7 @@ import {
 } from "@/features/workspace/project-directory"
 import { groupRoleFor } from "@/lib/group-roles"
 import { groupSessionRows, subscribeGroupSessionRows } from "@/lib/group-sessions"
-import { basename } from "@/lib/path"
+import { basename, groupsFolderName } from "@/lib/path"
 import { groupByDirectory, groups, removeGroup, setGroup, subscribeGroups, type GroupConfig } from "@/lib/groups"
 
 import { CreateMeetingDialog } from "./create-meeting-dialog"
@@ -119,7 +119,15 @@ export function GroupPanel({
 
   const sessionsOf = (group: GroupConfig): SessionSummary[] =>
     rows
-      .filter((row) => groupByDirectory(row.cwd)?.id === group.id)
+      .filter((row) => {
+        // A saved record is the authority on which group owns a path. Without one the row is still
+        // this group's meeting when both sit in the same folder under the Groups directory — the
+        // client diverts such rows here by path, so the panel must find them by path too.
+        const saved = groupByDirectory(row.cwd)
+        if (saved !== null) return saved.id === group.id
+        const folder = groupsFolderName(row.cwd)
+        return folder !== null && folder === groupsFolderName(group.directory)
+      })
       .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
 
   /**

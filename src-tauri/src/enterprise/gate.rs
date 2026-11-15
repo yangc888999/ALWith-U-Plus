@@ -32,7 +32,7 @@ impl Gate {
     }
     pub fn commit(&mut self, generation: u64, models: BTreeSet<String>) -> Result<(), String> {
         if self.account.is_none() || self.generation != generation {
-            return Err("ALwith account changed".into());
+            return Err("ALwith 账号已变更，请重试".into());
         }
         for route in self.routes.values_mut() {
             if !models.contains(&route.model) {
@@ -42,6 +42,8 @@ impl Gate {
         self.models = models;
         Ok(())
     }
+    // NOTE (engine contract): `check` keeps its English notices — `client.ts::recoverReplay` and
+    // `error-text.ts` treat them as the account-model revocation signal. See `providers/managed.rs`.
     pub fn check(&self, requested: Option<&str>, session: Option<&str>) -> Result<(), String> {
         if requested.is_some_and(|model| self.account.is_none() || !self.models.contains(model)) {
             return Err("The selected ALwith account model is unavailable. Select another model before sending.".into());

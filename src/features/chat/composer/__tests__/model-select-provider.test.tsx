@@ -724,11 +724,10 @@ test("the more models footer opens provider configuration and reports opening fa
   expect(controls.setConfig).not.toHaveBeenCalled();
 });
 
-test("a model the provider already refused is not listed", () => {
-  // The saved 可用模型 list outlives the catalog, but a row the engine no longer serves is dropped
-  // from every picker rather than shown greyed: keeping it visible meant asking the engine again on
-  // each menu open to find out whether it had come back. The saved row is not rewritten, so the
-  // model returns by itself once the catalog carries it.
+test("a model the provider already refused stays listed with a hint", () => {
+  // The saved 可用模型 list outlives the catalog. A row the engine no longer serves stays in the
+  // menu with a hint instead of vanishing — hiding it read as data loss and disagreed with
+  // 设置 → 大模型, which still lists the row. Nothing is re-checked on open.
   window.localStorage.setItem(
     "alwith:native-model-overrides",
     JSON.stringify([
@@ -747,7 +746,9 @@ test("a model the provider already refused is not listed", () => {
       models: [{ api_id: "gpt-6.1-sol", label: "6.1 Sol" }],
     },
   ]);
-  expect(group.models.map((model) => model.api_id)).toEqual(["gpt-6.1-sol"]);
+  expect(group.models.map((model) => model.api_id)).toEqual(["gpt-6.1-sol", "gpt-6.1-terra"]);
+  expect(group.models[1].label).toContain("6.1 Terra");
+  expect(group.models[1].label).toContain("may be unavailable");
 });
 
 test("a retired id the engine lists again stays selectable", () => {

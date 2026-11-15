@@ -1,5 +1,6 @@
-import { isGroupedSelect, isSelectOption } from "@alwith/api"
 import type * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable"
+
+import { sessionModelEntries, sessionModelGroups } from "@/lib/model-config"
 
 /** The only model group that may use a planner/worker split. */
 export const NATIVE_MODEL_GROUP = { id: "chatgpt", name: "ChatGPT" } as const
@@ -15,29 +16,6 @@ export type NativeModel = {
   defaultEffort: string | null
 }
 
-type AdapterModelMeta = {
-  alwith?: {
-    supportedReasoningEfforts?: unknown
-    defaultReasoningEffort?: unknown
-  }
-}
-
-function reasoningMetadata(option: { _meta?: Record<string, unknown> | null }): {
-  efforts: string[]
-  defaultEffort: string | null
-} {
-  const meta = option._meta as AdapterModelMeta | null | undefined
-  const rawEfforts = meta?.alwith?.supportedReasoningEfforts
-  const efforts = Array.isArray(rawEfforts)
-    ? [...new Set(rawEfforts.filter((value): value is string => typeof value === "string" && value !== ""))]
-    : []
-  const defaultEffort =
-    typeof meta?.alwith?.defaultReasoningEffort === "string" && meta.alwith.defaultReasoningEffort !== ""
-      ? meta.alwith.defaultReasoningEffort
-      : null
-  return { efforts, defaultEffort }
-}
-
 /**
  * Models that may take a planner/worker split, in catalog order.
  *
@@ -45,27 +23,23 @@ function reasoningMetadata(option: { _meta?: Record<string, unknown> | null }): 
  * efforts: those can be switched to and pinned like the native ones. Restricting the split to the
  * native group left the checkbox disabled whenever a third-party model was selected, which reads as
  * a broken control rather than an unavailable one.
+ *
+ * The picker is parsed in `model-config.ts` (`sessionModelGroups`) so this list and the ones the
+ * model menus show can never disagree; this function only drops the group name it does not need.
  */
 export function nativeModelCatalog(options: acp.SessionConfigOption[]): NativeModel[] {
-  const option = options.find((entry) => entry.category === "model" && entry.type === "select")
-  if (option === undefined || !isSelectOption(option) || !isGroupedSelect(option.options)) return []
-  const groups = [...option.options].sort(
-    (left, right) =>
-      Number(right.groupId === NATIVE_MODEL_GROUP.id) - Number(left.groupId === NATIVE_MODEL_GROUP.id)
-  )
-  return groups.flatMap((group) =>
-    group.options.map((choice) => ({
-      id: choice.value,
-      label: choice.name ?? choice.value,
-      groupId: group.groupId,
-      ...reasoningMetadata(choice)
-    }))
-  )
+  return sessionModelEntries(options).map((model) => ({
+    id: model.id,
+    label: model.label,
+    groupId: model.groupId,
+    efforts: model.efforts,
+    defaultEffort: model.defaultEffort
+  }))
 }
 
 /** Model membership alone decides whether the split may use a model. */
 export function isNativeModel(options: acp.SessionConfigOption[], model: string | null): boolean {
-  return model !== null && nativeModelCatalog(options).some((entry) => entry.id === model)
+  return model !== null && sessionModelEntries(options).some((entry) => entry.id === model)
 }
 
 /**
@@ -77,18 +51,17 @@ export function isNativeModel(options: acp.SessionConfigOption[], model: string 
 export function nativeGroupModels(
   options: acp.SessionConfigOption[]
 ): { id: string; name: string; models: NativeModel[] } | null {
-  const option = options.find((entry) => entry.category === "model" && entry.type === "select")
-  if (option === undefined || !isSelectOption(option) || !isGroupedSelect(option.options)) return null
-  const group = option.options.find((entry) => entry.groupId === NATIVE_MODEL_GROUP.id)
+  const group = sessionModelGroups(options).find((entry) => entry.id === NATIVE_MODEL_GROUP.id)
   if (group === undefined) return null
   return {
-    id: group.groupId,
-    name: group.name ?? NATIVE_MODEL_GROUP.name,
-    models: group.options.map((choice) => ({
-      id: choice.value,
-      label: choice.name ?? choice.value,
-      groupId: group.groupId,
-      ...reasoningMetadata(choice)
+    id: group.id,
+    name: group.name,
+    models: group.models.map((model) => ({
+      id: model.id,
+      label: model.label,
+      groupId: model.groupId,
+      efforts: model.efforts,
+      defaultEffort: model.defaultEffort
     }))
   }
 }

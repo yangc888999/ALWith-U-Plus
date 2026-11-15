@@ -446,8 +446,71 @@ test("the account-model recovery code names the recovery action, not the machine
   await chinese()
 
   const message = describeError(new Error("Turn ended: account_model_required"))
-  expect(message).toContain("使用所选模型继续")
+  // The recovery card is gone; the picker is the fix, so the sentence has to point at the picker
+  // that is still on screen rather than a button that no longer exists.
+  expect(message).toContain("模型选择器")
+  expect(message).not.toContain("使用所选模型继续")
   expect(message).not.toContain("account_model_required")
+})
+
+test("the account page's old English failures are read in Chinese", async () => {
+  await chinese()
+
+  // An `inner.error` snapshot persisted before the Rust strings were translated, plus the variants
+  // a second window can still answer with. Mapped by shape, so none of them survives as English.
+  const english = [
+    "ALwith account changed",
+    "ALwith account changed during refresh",
+    "ALwith account changed during enterprise configuration",
+    "Sign in before loading ALwith models",
+    "Missing ALwith access token",
+    "Invalid ALwith account identity",
+    "Enterprise account is not ready",
+    "ALwith configuration request failed",
+    "ALwith configuration request rejected",
+    "Invalid ALwith provider response",
+    "Duplicate ALwith provider",
+    "Invalid or duplicate ALwith model metadata",
+    "Invalid ALwith gateway URL",
+    "ALwith gateway must supply a root URL or an API base ending in /v1",
+    "Cannot save ALwith model configuration",
+    "Cannot read ALwith configuration response",
+    "Shared ALwith model catalog missing at /tmp/catalog.json",
+    "Shared ALwith router unavailable",
+    "Previous ALwith provider cleanup is incomplete; retry logout",
+    "ALwith account transition did not settle; cleanup is incomplete",
+    "ALwith provider cleanup timed out; execution remains blocked",
+    "Runtime changed during ALwith cleanup",
+    // The teardown path a logout or account switch can walk into. These are `String` errors from
+    // `clear`/`cleanup`, which reach the screen as a toast with no JSON envelope.
+    "Runtime unavailable; ALwith cleanup is unconfirmed",
+    "ALwith request admission did not settle",
+    "ALwith turn cancellation timed out",
+    "ALwith Runtime cleanup failed (invalid_request)",
+    "Remote enterprise logout failed; local access is revoked"
+  ]
+  for (const message of english) {
+    expect(describeError(new Error(message)), message).not.toBe(message)
+    // No sentence may come back with the "操作没有完成：" lead, which would mean it fell through.
+    expect(describeError(new Error(message)), message).not.toContain("操作没有完成")
+  }
+  // And a genuinely internal assertion still keeps its own words.
+  expect(describeError(new Error("Provider revision exhausted"))).toContain("Provider revision exhausted")
+})
+
+test("a failed teardown keeps the ACP code it failed with", async () => {
+  await chinese()
+
+  // The code is the only part of the sentence worth keeping: it is what turns "退出登录没成功" into a
+  // report someone can act on. The English around it must not survive, and the generic cleanup
+  // wording (which has no room for a code) must not win.
+  const message = describeError(new Error("ALwith Runtime cleanup failed (invalid_request)"))
+  expect(message).toContain("invalid_request")
+  expect(message).not.toContain("Runtime cleanup failed")
+  const unknown = describeError(new Error("ALwith Runtime cleanup failed (session_not_found)"))
+  expect(unknown).toContain("session_not_found")
+  // A code-less variant still lands, without inventing a code.
+  expect(describeError(new Error("ALwith turn cancellation timed out"))).not.toMatch(/[a-z_]{4,}/)
 })
 
 test("the company gateway's 502 body reads as a gateway outage, not a loopback URL", async () => {

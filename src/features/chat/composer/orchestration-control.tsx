@@ -22,7 +22,7 @@ import {
   subscribeOrchestrationDefaults
 } from "@/lib/orchestration-defaults"
 import { pendingPlanFor, subscribePendingPlan } from "@/lib/pending-plan"
-import { nativeCatalogStatus, nativeModelOverrides, servedNativeRows } from "@/lib/providers"
+import { resolveModelConfig } from "@/lib/model-config"
 import {
   orchestrationAllowedFor,
   orchestrationFor,
@@ -88,7 +88,7 @@ export function OrchestrationControl({ session }: { session: Session }): ReactNo
   const reportedIssue = useRef<string | null>(null)
 
   const nativeModels = nativeModelCatalog(session.configOptions)
-  // Same rows as 设置 → 默认模型 and the chat picker: one call, `servedNativeRows`, decides which
+  // Same rows as 设置 → 默认模型 and the chat picker: one call, `resolveModelConfig`, decides which
   // saved rows count, what they are called and how deep their effort ladder is. Gateway groups have
   // no saved list of their own, so they always come from the session catalog.
   //
@@ -98,16 +98,22 @@ export function OrchestrationControl({ session }: { session: Session }): ReactNo
   const engineGpt = nativeModels.filter((model) => model.groupId === NATIVE_MODEL_GROUP.id)
   // No model option at all means a draft that has not run `session/new` yet; a model option with
   // no integrated group means the engine really published none. Only the latter hides the saved
-  // shortlist, so a timed-out `list_models` cannot put withdrawn ids back into the split picker.
-  const hasModelOption = session.configOptions.some((entry) => entry.category === "model" && entry.type === "select")
-  const catalogStatus = nativeCatalogStatus(hasModelOption ? engineGpt : undefined)
-  const gptChoices: NativeModel[] = servedNativeRows(nativeModelOverrides(), engineGpt, catalogStatus).map((row) => ({
-    id: row.id,
-    label: row.label,
-    groupId: NATIVE_MODEL_GROUP.id,
-    efforts: row.efforts,
-    defaultEffort: row.defaultEffort
-  }))
+  // shortlist, so a timed-out `list_models` cannot put withdrawn ids back into the split picker —
+  // a distinction `resolveModelConfig` makes once, for every surface.
+  const gptChoices: NativeModel[] = resolveModelConfig({
+    providerSnapshot: null,
+    // No bridge list here: this surface holds the session itself, so `sessionOptions` is the catalog.
+    native: undefined,
+    sessionOptions: session.configOptions
+  })
+    .entries.filter((entry) => entry.groupId === NATIVE_MODEL_GROUP.id)
+    .map((entry) => ({
+      id: entry.id,
+      label: entry.label,
+      groupId: entry.groupId,
+      efforts: entry.efforts,
+      defaultEffort: entry.defaultEffort
+    }))
   const gatewayChoices = nativeModels.filter((model) => model.groupId !== NATIVE_MODEL_GROUP.id)
   const offered = [...gptChoices, ...gatewayChoices]
   // A split saved before the shortlist changed can still sit on a model that is no longer offered.

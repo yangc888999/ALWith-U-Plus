@@ -36,7 +36,7 @@ import {
   UsersIcon
 } from "lucide-react"
 import type { ReactNode } from "react"
-import { useContext, useEffect, useRef, useState, useSyncExternalStore } from "react"
+import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 
@@ -67,6 +67,7 @@ import { UpdateStatusButton } from "@/features/updater/components/update-status-
 import { ONLINE_BI_VIEW_ID } from "@/features/workspace/online-bi"
 import { usePreviewExtension } from "@/features/workspace/preview-extension"
 import { automationSessionRows, automationTitleOf, subscribeAutomationSessionRows } from "@/lib/automation-sessions"
+import { isGroupDirectory } from "@/lib/groups"
 import { useApp } from "@/lib/client"
 import { cn } from "@/lib/utils"
 import { openSettingsWindow, toggleSettingsWindow } from "@/lib/window-manager"
@@ -342,7 +343,15 @@ function SidebarPanels({
   // Sidebar panel (Desktop's activeNavigationItem): session list or activity.
   const view = useSessionsUiStore((s) => s.view)
   const setView = useSessionsUiStore((s) => s.setView)
-  const sessions = useApp((state) => state.sessionList)
+  const listedSessions = useApp((state) => state.sessionList)
+  // A meeting belongs to 群聊, never to 项目. The client diverts those rows when the list is built;
+  // this filter is the same test applied to rows that were already cached (a restored history, a
+  // healed folder, a record still pointing at the Groups root) so an old row cannot resurface here
+  // as a project after an update.
+  const sessions = useMemo(
+    () => listedSessions.filter((row) => !isGroupDirectory(row.cwd)),
+    [listedSessions]
+  )
   // Scheduled runs are kept out of `sessionList` by the client; their section reads this store.
   const automationRows = useSyncExternalStore(
     subscribeAutomationSessionRows,
@@ -580,8 +589,12 @@ function SidebarPanels({
       >
         <SidebarHeader className="shrink-0 gap-1 p-1 px-2" data-tauri-drag-region>
           <div className="flex h-8 items-center gap-0.5 px-1" data-tauri-drag-region>
-            <span className="min-w-0 flex-1 truncate text-sm font-semibold" data-tauri-drag-region>
-              {t("app.name")}
+            <span className="flex min-w-0 flex-1 items-center gap-1.5" data-tauri-drag-region>
+              <span className="truncate text-sm font-semibold">{t("app.wordmark")}</span>
+              {/* The edition reads as a badge, not as part of the name: red pill, white lettering. */}
+              <span className="shrink-0 rounded-full bg-red-500 px-1.5 py-[1px] text-[10px] font-semibold leading-[1.2] text-white">
+                {t("app.plus")}
+              </span>
             </span>
             <Tooltip>
               <TooltipTrigger

@@ -34,6 +34,7 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Spinner } from "@/components/ui/spinner"
 import { commands, type LarkAuthIdentity, type LarkAuthLogin, type LarkAuthStatus, type LarkCliStatus, type LarkUpdateCheck, type LarkUserProfile } from "@/bindings"
+import { formatCountdown } from "@/lib/format-countdown"
 import { openExternal } from "@/lib/open"
 
 import { SettingRow, SettingsCard, SettingsNote } from "./shared"
@@ -701,12 +702,6 @@ function UserPermissions({
       </div>
     </div>
   )
-}
-
-function formatCountdown(seconds: number): string {
-  const minutes = Math.floor(seconds / 60)
-  const rest = seconds % 60
-  return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`
 }
 
 /**

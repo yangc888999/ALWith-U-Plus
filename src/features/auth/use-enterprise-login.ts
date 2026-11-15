@@ -20,11 +20,13 @@ function enterpriseEmail(value: unknown): string | null {
 export interface EnterpriseLogin {
   /** True only while the very first check is in flight. */
   checking: boolean
-  /** Server authorization AND a healthy local renewal: the models are usable right now. */
+  /** A healthy local renewal, and — when the account service was asked at all — an answer that did
+   *  not revoke it. The server can only take authorization away, never grant it. */
   authorized: boolean
   /** The local renewal alone is healthy. The cached provider is NOT proof of sign-in: it survives
    *  offline and outlives an expired token, so this — not the provider list — is the sign-in signal. */
   renewalAvailable: boolean
+  /** The signed-in address, read from the native status so it survives without a server answer. */
   email: string | null
   status: EnterpriseStatus | null
   renewal: EnterpriseRenewal | null
@@ -40,6 +42,30 @@ const INITIAL: EnterpriseLogin = {
   status: null,
   renewal: null,
   error: false
+}
+
+/** How long a server answer is reused. Long enough that moving between settings sections costs one
+ *  request instead of one per mount, short enough that a revocation performed elsewhere is still
+ *  noticed without a restart. */
+const STATUS_TTL = 60_000
+interface CachedStatus {
+  account: string
+  at: number
+  status: EnterpriseStatus
+}
+/**
+ * The account service is the only authority on `enabled` / `authorization_status`, so it cannot be
+ * skipped outright while the renewal is healthy: a server-side revocation has to take effect, and
+ * "off the company network" has to read as offline rather than signed out. What it must not do is
+ * run on every mount. The answer is reused for `STATUS_TTL`, and every native event (renewal, login
+ * completion, model publication, revocation) drops it — an event is always answered with a fresh
+ * request, while ten ordinary visits to the account page cost one.
+ */
+let cachedStatus: CachedStatus | null = null
+
+/** Clears the shared answer. The hook drops it on every native event; tests call it per case. */
+export function resetEnterpriseStatusCache(): void {
+  cachedStatus = null
 }
 
 /**
@@ -73,22 +99,30 @@ export function useEnterpriseLogin(): EnterpriseLogin & { recheck: () => void } 
       const renewal = parseEnterpriseRenewal(native)
       const renewalAvailable = renewal.automatic_renewal && !renewal.requires_login
       const email = enterpriseEmail(native)
-      // Server confirmation is best-effort: being off the company network must not look like a
-      // sign-out while the local renewal is still healthy.
-      let status: EnterpriseStatus | null = null
+      // Server confirmation is reused, not re-asked, on a plain mount: a healthy renewal *is* the
+      // sign-in signal, and the previous answer is still the account service's word. Anything the
+      // account service might have changed arrives as a native event first, and that clears the
+      // cache below.
+      const reusable = cachedStatus?.account === account && Date.now() - cachedStatus.at < STATUS_TTL
+      let status: EnterpriseStatus | null = reusable && cachedStatus ? cachedStatus.status : null
       let error = false
-      try {
-        const server = await platformApiRequest<EnterpriseStatus>("/api/v1/me/enterprise/finture", "GET")
-        if (typeof server.enabled !== "boolean" || typeof server.authorization_status !== "string")
-          throw new Error("Invalid enterprise status")
-        status = server
-      } catch {
-        error = true
+      if (status === null) {
+        try {
+          const server = await platformApiRequest<EnterpriseStatus>("/api/v1/me/enterprise/finture", "GET")
+          if (typeof server.enabled !== "boolean" || typeof server.authorization_status !== "string")
+            throw new Error("Invalid enterprise status")
+          status = server
+          cachedStatus = { account, at: Date.now(), status: server }
+        } catch {
+          error = true
+        }
       }
       if (accountRef.current !== account || usePlatformAuth.getState().user !== identity) return
       setState({
         checking: false,
-        authorized: status !== null && enterpriseLoginAvailable(status, renewal),
+        // The server answer can only take authorization away, never grant it: a null status means
+        // "not answered", and being off the company network is not a sign-out.
+        authorized: renewalAvailable && (status === null || enterpriseLoginAvailable(status, renewal)),
         renewalAvailable,
         email,
         status,
@@ -104,19 +138,24 @@ export function useEnterpriseLogin(): EnterpriseLogin & { recheck: () => void } 
   }, [])
   checkRef.current = () => void check()
 
-  // A different account starts from a clean slate and checks once.
+  // A different account starts from a clean slate and checks once. The cache is keyed by account,
+  // so a new one misses it naturally — resetting here instead would empty it on every mount and
+  // put the request back on every visit to the page.
   useEffect(() => {
     setState(INITIAL)
     void check()
   }, [account, check])
 
   // One fresh read per relevant event. No timers: expiry, renewal, login completion, model
-  // publication and revocation all announce themselves.
+  // publication and revocation all announce themselves, and each one is itself the reason to ask
+  // the account service again instead of reusing the previous answer.
   useEffect(() => {
     if (!account) return
     let active = true
     const recheck = () => {
-      if (active) checkRef.current()
+      if (!active) return
+      resetEnterpriseStatusCache()
+      checkRef.current()
     }
     // The event bridge may be unavailable (e.g. a webview without the Tauri runtime). A failed
     // subscription degrades to "no live updates" rather than an unhandled rejection; the mount
@@ -138,6 +177,32 @@ export function useEnterpriseLogin(): EnterpriseLogin & { recheck: () => void } 
     }
   }, [account])
 
-  const recheck = useCallback(() => checkRef.current(), [])
+  // The explicit "ask again" path (the retry button, and the step after a sign-out): it must not
+  // hand back the answer the reader is retrying away from.
+  const recheck = useCallback(() => {
+    resetEnterpriseStatusCache()
+    checkRef.current()
+  }, [])
+  // Silent keep-alive. The company gateway rotates its token on its own schedule, and a settings
+  // window left open for hours otherwise only learns about it from an event. Re-ask every five
+  // minutes while the window is visible — no spinner, no toast, and the 60s answer cache still
+  // absorbs anything in between. This is what keeps the enterprise model list alive instead of
+  // letting it read as unavailable after a quiet spell.
+  useEffect(() => {
+    if (!account) return
+    const quietCheck = (): void => {
+      if (typeof document === "undefined" || document.visibilityState === "visible") checkRef.current()
+    }
+    const timer = window.setInterval(quietCheck, 5 * 60_000)
+    const onVisible = (): void => {
+      if (document.visibilityState === "visible") checkRef.current()
+    }
+    document.addEventListener("visibilitychange", onVisible)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener("visibilitychange", onVisible)
+    }
+  }, [account])
+
   return { ...state, recheck }
 }

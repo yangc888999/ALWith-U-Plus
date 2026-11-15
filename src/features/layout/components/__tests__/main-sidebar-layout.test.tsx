@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button"
 import { must } from "@/lib/__tests__/must"
 import { initI18n } from "@/lib/i18n"
 import * as preferences from "@/lib/preferences"
+import { settingsStore } from "@/lib/settings-store"
 
 import { type MainScreen, MainSidebarLayout } from "../main-sidebar-layout"
 
@@ -115,6 +116,23 @@ test("restores a saved pinned preference without rewriting it", () => {
   expect(view.toggle.querySelector(".lucide-panel-left")).toBeTruthy()
   expect(view.container.querySelector(".main-sidebar-edge")).toBeNull()
   expect(save).not.toHaveBeenCalled()
+})
+
+test("follows sidebar pin updates received from settings store", async () => {
+  const view = setup(true)
+  const revision = 100
+  act(() => {
+    settingsStore.accept({ revision, values: { "appearance.sidebarPinned": false }, browserMigrated: true })
+  })
+  expect(view.mode()).toBe("hidden")
+  expect(view.toggle.querySelector(".lucide-panel-left-dashed")).toBeTruthy()
+  expect(view.container.querySelector("[data-rail-show]")).toBeTruthy()
+
+  act(() => {
+    settingsStore.accept({ revision: revision + 1, values: { "appearance.sidebarPinned": true }, browserMigrated: true })
+  })
+  expect(view.mode()).toBe("pinned")
+  expect(view.toggle.querySelector(".lucide-panel-left")).toBeTruthy()
 })
 
 test("solid and dashed sidebar icons follow the pin preference", async () => {

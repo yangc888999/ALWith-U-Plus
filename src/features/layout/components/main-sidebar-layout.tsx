@@ -30,6 +30,7 @@ import { PanelDivider } from "@/features/workspace/panel-divider"
 import { useWorkspaceLayout } from "@/features/workspace/use-workspace-layout"
 import { isMac } from "@/lib/platform"
 import { savePreference } from "@/lib/preferences"
+import { settingsStore } from "@/lib/settings-store"
 import { useWindowFullscreen } from "@/lib/use-window-fullscreen"
 import { zoomStore } from "@/lib/zoom"
 
@@ -114,6 +115,16 @@ export function MainSidebarLayout({
   const fullscreen = useWindowFullscreen()
   const [pinned, setPinned] = useState(initialPinned)
   const [presentation, setPresentation] = useState<"docked" | "floating">(initialPinned ? "docked" : "floating")
+  useEffect(() => {
+    const syncPinned = (keys: string[]) => {
+      if (!keys.includes("appearance.sidebarPinned")) return
+      const next = settingsStore.get<boolean>("appearance.sidebarPinned")
+      if (typeof next !== "boolean") return
+      setPinned(next)
+      setPresentation("docked")
+    }
+    return settingsStore.subscribe(syncPinned)
+  }, [])
   const canvas = useMainCanvas(screen, pinned, onScreenChange, trailing !== undefined)
   const navigate = canvas.context.navigate
   const mainActive = screen === "main"

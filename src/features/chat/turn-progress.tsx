@@ -20,7 +20,7 @@
 
 import type { Session } from "@alwith/api"
 import { AlertTriangleIcon, CircleHelpIcon, Loader2Icon, SquareIcon } from "lucide-react"
-import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react"
+import { type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 import { subscribeGroupSpeaker } from "@/lib/group-runtime"
@@ -29,6 +29,7 @@ import { selectedModelId } from "@/agent/native-models"
 import { dismissOverload, matchesReportedModel, overloadNotice, subscribeOverload } from "./model-overload-alert"
 import { nudgeTurn } from "./nudge-turn"
 import { activeTool, awaitingUser } from "./turn-activity"
+import { autoNudgeEnabled, subscribeAutoNudge } from "@/lib/auto-nudge"
 import { getQueueSendMode, subscribeChatDisplayPreferences } from "@/lib/chat-display-preferences"
 import { displayModelLabel } from "@/lib/providers"
 import { cn } from "@/lib/utils"
@@ -61,6 +62,15 @@ const QUIET_MS = 90_000
 const OVERLOAD_TTL_MS = 120_000
 /** How long the row may sit with nothing new before an upstream notice is worth showing. */
 const NUDGE_MS = 30_000
+/** Past this much silence the row states the silence inside its one line — long before the ninety
+ *  seconds that make it worth acting on. Stated, not accused: no cause is implied. */
+const QUIET_TEXT_MS = 45_000
+/** The auto-nudge threshold. Long enough that a reasoning step is not interrupted, short enough that
+ *  a genuinely stalled turn does not sit there for the rest of the afternoon. */
+const AUTO_NUDGE_MS = 90_000
+/** At most two per turn. A third would be a loop, and a turn that ignores two nudges is not helped
+ *  by a third — that is when the reader stops it. */
+const AUTO_NUDGE_MAX = 2
 
 /** The turn currently in flight, or null when the session is not running. */
 function trackTurn(session: Session): Turn | null {
@@ -207,6 +217,88 @@ function duration(ms: number): { key: string; values: Record<string, number> } {
   return { key: "chat.turnProgress.minutesSeconds", values: { minutes, seconds } }
 }
 
+/**
+ * The automatic nudge: says 「继续」 into a turn that has been silent for ninety seconds.
+ *
+ * It is the manual button's effect on a timer, and it is deliberately conservative:
+ *
+ *   * never in queued-send mode (`steering === false`) — the nudge would arrive after the turn
+ *     settles and open a *second* turn, which is the opposite of pushing this one along;
+ *   * never while a local tool or a compaction pass is running, or while the reader is being asked
+ *     something — those are not the model failing to answer;
+ *   * never while the bridge is replaying an overload (`blocked`): a nudge cannot reach an upstream
+ *     that is already retrying, it would just queue behind it;
+ *   * at most twice per turn, ninety seconds apart.
+ *
+ * The silence it acts on is measured from the later of "the last output this turn produced" and
+ * "the moment this row started watching". A strip that mounts on a turn which went quiet two
+ * minutes ago therefore waits for its own ninety seconds — otherwise every window reload would fire
+ * a nudge for silence nobody was watching, and a reader who refocuses the app would find a stray
+ * 「继续」 in their transcript.
+ *
+ * It renders nothing; the count it reports is what the row prints.
+ */
+function AutoNudger({
+  session,
+  turnStart,
+  turnLast,
+  enabled,
+  steering,
+  localBusy,
+  parked,
+  blocked,
+  silentSeconds,
+  onCountChange
+}: {
+  session: Session
+  /** Stable per turn: identifies which turn the count belongs to. */
+  turnStart: number
+  turnLast: number
+  enabled: boolean
+  steering: boolean
+  localBusy: boolean
+  parked: boolean
+  blocked: boolean
+  /** Whole seconds of silence. Doubles as the throttle: the effect re-runs once per second, never
+   *  several times inside the same one. */
+  silentSeconds: number
+  onCountChange: (count: number) => void
+}): ReactNode {
+  const watch = useRef({ start: 0, count: 0, watchedFrom: 0, nudgedAt: 0 })
+
+  useEffect(() => {
+    const now = Date.now()
+    if (watch.current.start !== turnStart) {
+      watch.current = { start: turnStart, count: 0, watchedFrom: now, nudgedAt: 0 }
+      onCountChange(0)
+    }
+    if (!enabled || !steering || localBusy || parked || blocked) return
+    if (watch.current.count >= AUTO_NUDGE_MAX) return
+    const since = Math.max(turnLast, watch.current.watchedFrom)
+    if (now - since < AUTO_NUDGE_MS) return
+    // The first nudge does not necessarily move `turn.last` (a refused nudge leaves no item), so the
+    // spacing is tracked here as well instead of trusting the silence to reset.
+    if (watch.current.nudgedAt !== 0 && now - watch.current.nudgedAt < AUTO_NUDGE_MS) return
+    watch.current.count += 1
+    watch.current.nudgedAt = now
+    onCountChange(watch.current.count)
+    void nudgeTurn(session)
+  }, [
+    session,
+    turnStart,
+    turnLast,
+    enabled,
+    steering,
+    localBusy,
+    parked,
+    blocked,
+    silentSeconds,
+    onCountChange
+  ])
+
+  return null
+}
+
 export function TurnProgressBar({ session }: { session: Session }): ReactNode {
   const { t } = useTranslation()
   const running = session.state === "running" || session.state === "requires_action"
@@ -272,8 +364,20 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
     () => getQueueSendMode() === "immediate",
     () => getQueueSendMode() === "immediate"
   )
+  // 设置 → 大模型 → 长时间无输出自动催一句. On by default; a reader who turns it off keeps the
+  // manual button and nothing else changes.
+  const autoNudgeOn = useSyncExternalStore(subscribeAutoNudge, autoNudgeEnabled, autoNudgeEnabled)
 
   const turn = trackTurn(session)
+  // The count is keyed to the turn it belongs to, so a finished turn's "自动催了 1 次" can never
+  // show up over the next one: the key mismatch already reads as zero, without a reset effect.
+  const [autoNudge, setAutoNudge] = useState<{ turn: number; count: number }>({ turn: 0, count: 0 })
+  const reportAutoNudge = useCallback(
+    (count: number) => {
+      setAutoNudge({ turn: turn === null ? 0 : turn.start, count })
+    },
+    [turn]
+  )
   if (turn === null) return null
   const now = Date.now()
   const silent = now - turn.last
@@ -328,6 +432,11 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
   // a prompt is busy elsewhere or waiting on the reader — nudging either would be noise, and while
   // the bridge is replaying an overload, a nudge cannot reach it.
   const canNudge = quiet && steering && !localBusy && !parked && overload === null
+  // Whole seconds of silence, stated inside the row's one line — the same line, not a second card.
+  // A running tool or a parked prompt is not silence, so neither states one.
+  const quietSeconds = !localBusy && !parked && silent >= QUIET_TEXT_MS ? Math.floor(silent / 1000) : null
+  // Only this turn's count is shown; a previous turn's number can never leak onto the next one.
+  const autoNudged = autoNudge.turn === turn.start ? autoNudge.count : 0
   // `·` → `··` → `···` on the same 350ms beat as the re-render, so the row reads as alive
   // instead of ending in a static ellipsis that looks like truncated text.
   const dots = "·".repeat((Math.floor(now / 350) % 3) + 1)
@@ -364,6 +473,19 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
 
   return (
     <div className="w-full min-w-0" data-turn-progress="">
+      {/* Renders nothing: it owns the auto-nudge timer so the row itself stays a pure render. */}
+      <AutoNudger
+        session={session}
+        turnStart={turn.start}
+        turnLast={turn.last}
+        enabled={autoNudgeOn}
+        steering={steering}
+        localBusy={localBusy}
+        parked={parked}
+        blocked={overload !== null}
+        silentSeconds={Math.floor(silent / 1000)}
+        onCountChange={reportAutoNudge}
+      />
       <div
         className={cn(
           "relative flex min-w-0 items-center gap-2 overflow-hidden text-[11px]",
@@ -422,6 +544,20 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
                 <span className="inline-block w-[1.5em] text-left" aria-hidden="true">
                   {dots}
                 </span>
+              )}
+              {/* The silence, in the same line as the state. Stated, not accused: this says how
+                  long the row has been quiet, never why. An auto-nudge replaces it — once the row
+                  has done something about the wait, that is the more useful sentence. */}
+              {autoNudged > 0 ? (
+                <span className="shrink-0 text-muted-foreground" data-turn-auto-nudged="">
+                  {t("chat.turnProgress.autoNudged", { count: autoNudged })}
+                </span>
+              ) : (
+                quietSeconds !== null && (
+                  <span className="shrink-0 text-muted-foreground/80" data-turn-quiet-for="">
+                    {t("chat.turnProgress.quietFor", { seconds: quietSeconds })}
+                  </span>
+                )
               )}
             </>
           )}

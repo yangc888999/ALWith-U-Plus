@@ -5,17 +5,18 @@ import type { RateLimitWindow } from "@nyssance/codex-acp-v2/client"
 // agent connection through the settings bridge.
 import { format } from "date-fns"
 import type { TFunction } from "i18next"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
-import { ExternalLinkIcon } from "lucide-react"
+import { ExternalLinkIcon, RefreshCwIcon } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ActionCard } from "@/features/chat/action-card"
 import { LoginCard } from "@/features/connection/login-card"
 import { openExternal } from "@/lib/open"
 import {
+  requestAccountRefresh,
   requestActionResponse,
   requestSignIn,
   requestSignOut,
@@ -25,6 +26,7 @@ import {
 } from "@/lib/settings-bridge"
 
 import { SettingGroup, SettingLabel } from "./shared"
+import { UsageResetBlock } from "./usage-reset-card"
 
 /** Desktop's `UsageLimitRow`: label, a long bar, "n% remaining", then the reset time under it. */
 function UsageLimitRow({ label, window }: { label?: string; window?: RateLimitWindow }) {
@@ -82,15 +84,28 @@ function limitWindowLabel(window: RateLimitWindow, t: TFunction): string {
 export function CodexAccountSummary({
   account,
   disabled,
-  onSignOut
+  onSignOut,
+  onRefresh,
+  refreshing = false
 }: {
   account: SettingsAccount | undefined
   disabled: boolean
   onSignOut: () => void
+  /** Re-reads `account/rateLimits` and the banked-reset list. Optional so a caller that only wants
+   *  the identity + limit bars (the provider-section tests) still renders. */
+  onRefresh?: () => void
+  refreshing?: boolean
 }) {
   const { t } = useTranslation()
   const loading = account === undefined
   const signedIn = account?.account.account ?? null
+  // Bumped on every refresh so the reset-credit list (which fetches on its own) rereads too: one
+  // button must refresh everything the card shows, not half of it.
+  const [resetToken, setResetToken] = useState(0)
+  const refreshAll = (): void => {
+    setResetToken((token) => token + 1)
+    onRefresh?.()
+  }
   const identity =
     account === null
       ? t("usage.accountUnavailable")
@@ -144,17 +159,34 @@ export function CodexAccountSummary({
               {limits.primary === null && limits.secondary === null && (
                 <span className="text-sm text-muted-foreground">{t("usage.unavailable")}</span>
               )}
-              {/* Always date the numbers. When the live read failed, say so as well — a cached
-                  value is only honest if the reader can tell how old it is. */}
-              {account?.rateLimitsCapturedAt != null && (
+            </>
+          )}
+          {/* The timestamp and the refresh button are one row: the button refreshes exactly the
+              numbers above it, so it sits beside their date instead of inside the reset block.
+              Always drawn — a failed read still needs a way to try again. */}
+          {!loading && (
+            <div className="flex min-h-7 flex-wrap items-center justify-between gap-2">
+              {account?.rateLimitsCapturedAt != null ? (
                 <p className="text-[11px] text-muted-foreground" role="status">
                   {t(account.rateLimitsStale === true ? "usage.staleLimits" : "usage.lastUpdated", {
                     time: format(new Date(account.rateLimitsCapturedAt), "yyyy/MM/dd HH:mm")
                   })}
                 </p>
+              ) : (
+                <span />
               )}
-            </>
+              {onRefresh !== undefined && (
+                <Button variant="outline" size="sm" className="shrink-0" disabled={refreshing} onClick={refreshAll}>
+                  <RefreshCwIcon className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} aria-hidden="true" />
+                  {t("usageReport.resetCardRefresh")}
+                </Button>
+              )}
+            </div>
           )}
+          {/* 额度重置机会 replaces the standalone card that used to sit at the top of 用量: it
+              describes this account's own credits, so it belongs under the same bars. Only drawn
+              while signed in — a reset credit is a property of a ChatGPT account. */}
+          {signedIn !== null && <UsageResetBlock refreshToken={resetToken} />}
         </div>
       )}
     </section>
@@ -166,6 +198,18 @@ export function CodexProviderSection() {
   const agent = useSettingsAgent()
   const account = useSettingsAccount()
   const [signingOut, setSigningOut] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  // A refresh is a request/answer pair across two windows, so the spinner cannot end when the
+  // emit resolves. It ends when a new snapshot lands, and a timer ends it anyway if the main
+  // window never answers — a spinner that never stops is worse than a short lie.
+  useEffect(() => {
+    if (!refreshing) return
+    const timer = window.setTimeout(() => setRefreshing(false), 4_000)
+    return () => window.clearTimeout(timer)
+  }, [refreshing])
+  useEffect(() => {
+    setRefreshing(false)
+  }, [account])
   return (
     <SettingGroup>
       <SettingLabel>ChatGPT</SettingLabel>
@@ -173,6 +217,11 @@ export function CodexProviderSection() {
         <CodexAccountSummary
           account={account}
           disabled={agent == null || signingOut}
+          refreshing={refreshing}
+          onRefresh={() => {
+            setRefreshing(true)
+            void requestAccountRefresh().catch(() => undefined)
+          }}
           onSignOut={() => {
             setSigningOut(true)
             void requestSignOut()

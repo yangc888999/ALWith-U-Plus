@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
-import { modelEntries, type ModelEntry } from "@/lib/model-catalog"
+import { resolveModelConfig, type ModelConfigEntry } from "@/lib/model-config"
 import { NATIVE_MODEL_GROUP } from "@/agent/native-models"
 import { commands } from "@/bindings"
 import { defaultModelChoice } from "@/lib/default-model"
@@ -254,11 +254,13 @@ export function NewTaskDialog({
 
   const patch = (next: Partial<TaskDraft>): void => setForm((previous) => ({ ...previous, ...next }))
   const entries = useMemo(
-    () => (open ? modelEntries(providerSnapshot, nativeModels) : []),
+    // 定时任务 runs unattended hours later, so it must show exactly the rows the rest of the app
+    // considers servable — same read-only answer, no second opinion about 已下架.
+    () => (open ? resolveModelConfig({ providerSnapshot, native: nativeModels }).entries : []),
     [open, providerSnapshot, nativeModels]
   )
   const modelGroups = useMemo(() => {
-    const groups: Array<{ id: string; name: string; entries: ModelEntry[] }> = []
+    const groups: Array<{ id: string; name: string; entries: ModelConfigEntry[] }> = []
     for (const entry of entries) {
       let group = groups.find((candidate) => candidate.id === entry.groupId)
       if (group === undefined) {

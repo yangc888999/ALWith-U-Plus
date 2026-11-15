@@ -154,7 +154,7 @@ pub fn run() {
     if std::env::args().any(|arg| arg == "--animate") {
         app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
         app.finishLaunching();
-        first.setTitle(ns_string!("ALWith L fullscreen control regression"));
+        first.setTitle(ns_string!("ALWith U⁺ fullscreen control regression"));
         first.setCollectionBehavior(NSWindowCollectionBehavior::FullScreenPrimary);
         first.makeKeyAndOrderFront(None);
         for _ in 0..2 {

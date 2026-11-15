@@ -16,6 +16,7 @@
 
 import { useSyncExternalStore } from "react"
 
+import { isGroupsRootDirectory } from "@/lib/path"
 import { isTemporaryChatDir } from "@/lib/quick-chat"
 
 /** The draft composer has no session id yet, but still owns a project directory (a fresh meeting). */
@@ -66,11 +67,7 @@ function bindingFor(key: string): Readonly<ProjectDirectoryBinding> | null {
  * `ALWith` and `ALWITH` on case-insensitive macOS volumes.
  */
 export function isGroupsRoot(directory: string): boolean {
-  const normalized = directory.trim().replace(/\\/g, "/").replace(/\/+$/, "")
-  const parts = normalized.split("/").filter((part) => part !== "")
-  if (parts.length < 3) return false
-  const tail = parts.slice(-3).map((part) => part.toLowerCase())
-  return tail[0] === "documents" && tail[1] === "alwith" && tail[2] === "groups"
+  return isGroupsRootDirectory(directory)
 }
 
 /**

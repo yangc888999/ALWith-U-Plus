@@ -2,7 +2,7 @@
   "platformAuth": {
     "code": "Код подтверждения",
     "signIn": "Войти",
-    "signOut": "Выйти из ALWith L"
+    "signOut": "Выйти из ALWith U⁺"
   },
   "guide": {
     "help": "Получить помощь"
@@ -124,8 +124,15 @@
         "name": "Полный доступ",
         "description": "Используйте с осторожностью: Codex может изменять файлы вне этой рабочей области и обращаться к интернету без одобрения"
       },
-      "heading": "Как одобрять действия ALWith L?"
-    }
+      "heading": "Как одобрять действия ALWith U⁺?"
+    },
+    "turnProgress": {
+      "quietFor": "· no output for {{seconds}}s",
+      "autoNudged": "· nudged {{count}}×"
+    },
+    "retryAlertTitle": "“{{model}}” has been retried {{count}} times with no response; the system is still retrying in the background.",
+    "retryAlertJump": "Open conversation",
+    "retryAlertDescription": "Open the conversation to check progress, or switch to another model."
   },
   "composer": {
     "mode": "Разрешения",
@@ -195,7 +202,12 @@
     },
     "trackpad": "Трекпад",
     "trackpadEnabled": "Включить жесты трекпада",
-    "threeFingerSwipeDesc": "Проведите тремя пальцами по горизонтали для перемещения холста"
+    "threeFingerSwipeDesc": "Проведите тремя пальцами по горизонтали для перемещения холста",
+    "providerReliability": "Connection reliability",
+    "autoRetry": "Retry interrupted connections",
+    "autoRetryDesc": "When a provider connection times out or drops, the same request is sent again instead of ending the turn.",
+    "autoNudge": "Nudge a silent turn",
+    "autoNudgeDesc": "When a model has produced nothing for 90 seconds, one “continue” is sent automatically — at most twice per turn."
   },
   "usage": {
     "usage": "Использование",
@@ -209,7 +221,8 @@
     "testButton": "Проверить соединение",
     "customButton": "Пользовательский",
     "saveButton": "Сохранить",
-    "remove": "Удалить"
+    "remove": "Удалить",
+    "companyDisplayName": "Display name"
   },
   "updater": {
     "relaunchConfirmTitle": "Перезапустить для обновления?",
@@ -373,7 +386,7 @@
     "more": "Другие действия"
   },
   "app": {
-    "name": "ALWith L"
+    "name": "ALWith U⁺"
   },
   "notify": {
     "needsInput": "Требуется ваш ответ",
@@ -401,5 +414,50 @@
     "realtimeStart": "Начать голосовой звонок Codex",
     "realtimeStop": "Завершить голосовой звонок",
     "realtimeCancel": "Отменить голосовое подключение"
+  },
+  "usageReport": {
+    "resetCardTitle": "Сброс лимита",
+    "resetCardDesc": "Когда обновляются окна использования тарифа.",
+    "resetCardEmpty": "Время сброса пока неизвестно",
+    "resetCardExpiresAt": "Сброс {{time}}",
+    "resetCardRemaining": "Осталось {{time}}",
+    "resetCardReset": "Время сброса наступило",
+    "resetCardUse": "Использовать"
+  },
+  "providerUsage": {
+    "title": "Quota",
+    "refresh": "Refresh",
+    "remaining": "Remaining",
+    "limit": "Limit {{value}}",
+    "unlimited": "unlimited",
+    "resetAt": "Resets {{time}}",
+    "expiresAt": "Valid until {{time}}",
+    "plan": "Plan {{name}}",
+    "updatedAt": "Updated {{time}}",
+    "consoleOnly": "This provider's plan usage is only visible in its own console.",
+    "openConsole": "Open console",
+    "unsupported": "This provider publishes no usage endpoint.",
+    "unsupportedDisabled": "This provider is switched off, so no quota was read.",
+    "unsupportedNoBaseUrl": "This provider has no API base URL, so there is nowhere to ask.",
+    "unauthorized": "The key is invalid or has expired.",
+    "unreachable": "Usage is unavailable right now.",
+    "stale": "cached",
+    "freeAllowance": "Free allowance today",
+    "freeLocalCalls": "Calls today on this Mac",
+    "freeRemainingUnknown": "limit {{limit}} (remaining unknown)",
+    "freeBlocked": "Today's free calls are used up",
+    "freeResetVendor": "resets in {{time}}",
+    "freeResetUtcDay": "resets in {{time}} (daily at 00:00 UTC)",
+    "freeResetUtcDayRule": "resets daily at 00:00 UTC",
+    "resetNow": "Reset time reached"
+  },
+  "error": {
+    "accountCleanupFailed": "Не удалось очистить предыдущего провайдера ALwith ({{code}}). Повторите попытку чуть позже.",
+    "accountModelRequired": "Модель аккаунта для этого чата больше недоступна. Выберите модель в списке ниже и отправьте снова.",
+    "enterpriseModelNotReady": "The enterprise model is not ready yet. Sign in to your enterprise account in Settings → Account, then try again.",
+    "accountChanged": "Во время выполнения аккаунт ALwith изменился. Повторите попытку.",
+    "accountModelConfigFailed": "Не удалось загрузить конфигурацию моделей ALwith. Повторите попытку или войдите снова.",
+    "accountCleanupPending": "Очистка предыдущего аккаунта ALwith ещё не завершена. Повторите попытку чуть позже.",
+    "enterpriseLogoutFailed": "Не удалось выйти на сервере, но доступ с этого компьютера отозван."
   }
 }

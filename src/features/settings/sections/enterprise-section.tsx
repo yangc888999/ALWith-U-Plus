@@ -31,7 +31,7 @@ export function EnterpriseSection() {
   // Sign-in detection is shared with the company provider card: one event-driven source of truth,
   // so the two can never disagree and an expired token is noticed without any interval polling.
   const login = useEnterpriseLogin()
-  const { status, renewal, error, authorized, recheck } = login
+  const { status, renewal, error, authorized, email, recheck } = login
   const [busy, setBusy] = useState(false)
   const [confirm, setConfirm] = useState(false)
   const [pending, setPending] = useState<{ state: string; generation: number } | null>(null)
@@ -113,10 +113,14 @@ export function EnterpriseSection() {
       if (current()) setBusy(false)
     }
   }
-  const label = error
-    ? t("enterprise.unknown")
-    : authorized
-      ? (status?.email ?? t("enterprise.authorized"))
+  // A healthy renewal is a known state even when the account service cannot be reached, so it is
+  // answered first: "unknown" belongs to the case where nothing can vouch for the account.
+  const label = authorized
+    ? // The service is not asked on every visit, so the signed-in address comes from the native
+      // status when there is no server answer to read it from.
+      (status?.email ?? email ?? t("enterprise.authorized"))
+    : error
+      ? t("enterprise.unknown")
       : pending !== null
         ? t("enterprise.pending")
         : login.checking || status === null
@@ -150,9 +154,9 @@ export function EnterpriseSection() {
           )}
         </div>
       </SettingRow>
-      {authorized && <p className="text-xs text-muted-foreground">{t("enterprise.accountHint")}</p>}
+      {authorized && <p className="mt-2 mb-3 min-w-0 max-w-full break-words px-1 text-xs leading-5 text-muted-foreground">{t("enterprise.accountHint")}</p>}
       {(error || renewal?.error) && (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="mb-3 min-w-0 max-w-full break-words px-1 pt-1.5 text-sm leading-5 text-destructive">
           {t("enterprise.error")}
         </p>
       )}

@@ -72,12 +72,15 @@ async function offeredRows(): Promise<string[]> {
   )
 }
 
-test("the dialog's model menu leaves out a saved model the engine stopped serving", async () => {
+test("the dialog's model menu keeps a saved model the engine stopped serving, with a hint", async () => {
   saved.rows = [row("gpt-6.1-sol", "6.1 Sol"), row("gpt-6.1-terra", "6.1 Terra")]
   renderMenu(["gpt-6.1-sol"])
 
-  // No greyed row, no request to the engine on open — the row simply is not there.
-  expect(await offeredRows()).toEqual(["6.1 Sol"])
+  // Still one request-free list; the row is present and labelled as possibly unavailable.
+  const rows = await offeredRows()
+  expect(rows[0]).toBe("6.1 Sol")
+  expect(rows[1]).toContain("6.1 Terra")
+  expect(rows[1]).toContain("may be unavailable")
 })
 
 test("the same row returns as soon as the engine lists it again", async () => {

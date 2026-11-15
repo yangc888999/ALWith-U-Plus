@@ -7,7 +7,13 @@ import { ALL_PROVIDERS, type ProviderSnapshot } from "@/lib/providers"
 import type { SettingsAccount } from "@/lib/settings-bridge"
 
 import { CodexAccountSummary } from "../codex-provider-section"
-import { CustomProviderEditor, ProviderRow, ProviderTabs, retryOnRevisionConflict } from "../provider-section"
+import {
+  CustomProviderEditor,
+  ProviderRow,
+  ProviderTabs,
+  retryOnRevisionConflict,
+  unverifiedNativeModels
+} from "../provider-section"
 
 beforeAll(async () => {
   await initI18n("en")
@@ -36,6 +42,27 @@ function snapshot(revision: number, region = "intl"): ProviderSnapshot {
 }
 
 const saveModels = vi.fn(() => Promise.try(() => []))
+
+test("a bundled catalog never marks a callable model 已下架; only a live picker can", () => {
+  // 可用模型 keeps the user's rows; this is the list the 「已下架」 marker is derived from.
+  localStorage.setItem(
+    "alwith:native-model-overrides",
+    JSON.stringify([{ api_id: "gpt-6.1-terra", label: "Terra (mine)", enabled: true }])
+  )
+  const models = [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol", efforts: [], defaultEffort: null }]
+  const bundled = { id: "chatgpt", name: "ChatGPT", sourceKind: "bundled" as const, models }
+  const session = { id: "chatgpt", name: "ChatGPT", sourceKind: "session" as const, models }
+
+  // No session open: the main window answers with the app's bundled catalog, which is partial.
+  // Diffing the saved rows against it used to label gpt-6.1-terra 已下架 while it was callable.
+  expect(unverifiedNativeModels(bundled)).toEqual([])
+  // Nothing answered yet, or the engine answered nothing: no verdict either way.
+  expect(unverifiedNativeModels(undefined)).toEqual([])
+  expect(unverifiedNativeModels(null)).toEqual([])
+  // Not even a live session proves a model is gone: its picker is the「推荐模型集」preset, so a
+  // model missing there is merely outside the preset (6.1 Terra was wrongly flagged this way).
+  expect(unverifiedNativeModels(session)).toEqual([])
+})
 
 test("the disable error alerts switch enables silent retries when checked", async () => {
   const { setOverload429ReminderDisabled } = await import("@/lib/overload-429-settings")

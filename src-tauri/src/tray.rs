@@ -8,14 +8,14 @@ pub fn initialize(app: &tauri::AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(
         app,
         "tray-show",
-        if chinese { "打开 ALWith L" } else { "Open ALWith L" },
+        if chinese { "打开 ALWith U⁺" } else { "Open ALWith U⁺" },
         true,
         None::<&str>,
     )?;
     let quit = MenuItem::with_id(
         app,
         "tray-quit",
-        if chinese { "退出 ALWith L" } else { "Quit ALWith L" },
+        if chinese { "退出 ALWith U⁺" } else { "Quit ALWith U⁺" },
         true,
         None::<&str>,
     )?;
@@ -27,10 +27,11 @@ pub fn initialize(app: &tauri::AppHandle) -> tauri::Result<()> {
     let icon = app.default_window_icon().expect("application icon is configured").clone();
     TrayIconBuilder::with_id("main")
         .icon(icon)
-        // The tray glyph is the brand's orange-to-red "L"; template mode would flatten it to a
-        // single menu-bar tint, which is what made the old white icon disappear on light bars.
-        .icon_as_template(false)
-        .tooltip("ALWith L")
+        // The glyph is white-on-transparent, so it must be a template image: macOS then tints the
+        // alpha shape to match the menu bar (black on light, white on dark). Without template mode
+        // a white glyph is invisible on a light bar.
+        .icon_as_template(true)
+        .tooltip("ALWith U⁺")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| {

@@ -10,6 +10,42 @@ export type Range = "1d" | "3d" | "7d" | "30d" | "90d" | "1y" | "6m" | "12m" | "
 export type Metric = "tokens" | "requests" | "cost"
 export type Grain = "day" | "week" | "month"
 export type GroupBy = "model" | "provider" | "all"
+export type ClientSource = "alwith_l" | "workbuddy" | "qwen_office" | "other_agent"
+export const ALL_CLIENT_SOURCES = "all" as const
+export type ClientSourceFilter = ClientSource | typeof ALL_CLIENT_SOURCES
+
+// The scope helpers take any row that carries `clientSource`: a `UsagePoint`, a `UsageTurn`, or a
+// point with the locally computed `cost` attached. The field type is taken straight from the wire
+// type — `Pick<UsagePoint, "clientSource">` — so it cannot drift from the generated bindings.
+// Constraining to `UsagePoint` itself would reject the costed rows the charts pass in, and a
+// hand-written `{ clientSource?: string }` would be a second, silently-drifting copy of it.
+export function filterByClientSource<T extends Pick<UsagePoint, "clientSource">>(
+  rows: T[],
+  source: ClientSourceFilter
+): T[] {
+  return source === ALL_CLIENT_SOURCES ? rows : rows.filter((row) => (row.clientSource ?? "alwith_l") === source)
+}
+
+/**
+ * The top-level usage filter: every call that went through ALWith L, split by who made it.
+ * `clientSource` is the only evidence of a caller — a model id, a provider name or a request path
+ * says nothing about which client opened the call, so none of them may decide the scope.
+ */
+export type UsageScope = "all" | "internal" | "external"
+export const ALL_SCOPES = "all" as const
+export type UsageScopeFilter = UsageScope
+
+export function scopeOf(row: Pick<UsagePoint, "clientSource">): "internal" | "external" {
+  return (row.clientSource ?? "alwith_l") === "alwith_l" ? "internal" : "external"
+}
+
+export function filterByScope<T extends Pick<UsagePoint, "clientSource">>(
+  rows: T[],
+  scope: UsageScopeFilter
+): T[] {
+  if (scope === ALL_SCOPES) return rows
+  return rows.filter((row) => scopeOf(row) === scope)
+}
 
 /** The single bucket a "no grouping" chart draws: every model/provider folded into one line. */
 export const ALL_GROUP = "__all__"
@@ -21,10 +57,29 @@ function groupKeyOf(row: { model: string; provider: string }, by: GroupBy): stri
 }
 
 /** A usage row plus the RMB amount it cost; pricing lives on the client, not in the report. */
-export type CostedPoint = UsagePoint & { cost: number }
+export type CostedPoint = UsagePoint & { cost: number | null }
+
+/** Totals that make missing pricing visible instead of silently treating it as a zero-cost call. */
+export type CostSummary = Totals & { unknownTokenCount: number; unknownCostRows: number }
+
+export function sumWithUnknownCost(
+  rows: Array<Pick<UsagePoint, "requests" | "input" | "cached" | "output" | "tokens"> & { cost?: number | null }>
+): CostSummary {
+  const totals = sum(rows)
+  return rows.reduce<CostSummary>(
+    (summary, row) => {
+      if (row.cost === undefined || !Number.isFinite(row.cost)) {
+        summary.unknownTokenCount += row.tokens
+        summary.unknownCostRows += 1
+      }
+      return summary
+    },
+    { ...totals, unknownTokenCount: 0, unknownCostRows: 0 }
+  )
+}
 
 /** The metric value a chart, ranking or sparkline should read from a bucket/row. */
-export function metricValue(row: { tokens: number; requests: number; cost?: number }, metric: Metric): number {
+export function metricValue(row: { tokens: number; requests: number; cost?: number | null }, metric: Metric): number {
   if (metric === "tokens") return row.tokens
   if (metric === "requests") return row.requests
   return row.cost ?? 0
@@ -51,9 +106,11 @@ export type Totals = {
   output: number
   tokens: number
   cost: number
+  unknownTokenCount: number
+  unknownCostRows: number
 }
 
-export const EMPTY_TOTALS: Totals = { requests: 0, input: 0, cached: 0, output: 0, tokens: 0, cost: 0 }
+export const EMPTY_TOTALS: Totals = { requests: 0, input: 0, cached: 0, output: 0, tokens: 0, cost: 0, unknownTokenCount: 0, unknownCostRows: 0 }
 
 export type Bucket = {
   key: string
@@ -133,7 +190,7 @@ export function within<T extends { date: string }>(rows: T[], from: string, to?:
 }
 
 export function sum(
-  rows: Array<Pick<UsagePoint, "requests" | "input" | "cached" | "output" | "tokens"> & { cost?: number }>
+  rows: Array<Pick<UsagePoint, "requests" | "input" | "cached" | "output" | "tokens"> & { cost?: number | null }>
 ): Totals {
   return rows.reduce<Totals>(
     (total, row) => ({
@@ -142,7 +199,9 @@ export function sum(
       cached: total.cached + row.cached,
       output: total.output + row.output,
       tokens: total.tokens + row.tokens,
-      cost: total.cost + (row.cost ?? 0)
+      cost: total.cost + (Number.isFinite(row.cost) ? (row.cost ?? 0) : 0),
+      unknownTokenCount: total.unknownTokenCount + (row.cost == null || !Number.isFinite(row.cost) ? row.tokens : 0),
+      unknownCostRows: total.unknownCostRows + (row.cost == null || !Number.isFinite(row.cost) ? 1 : 0)
     }),
     { ...EMPTY_TOTALS }
   )
@@ -158,7 +217,7 @@ export function cacheHitRate(totals: Totals): number {
 }
 
 /** Every day of the range, gaps included: a heatmap with holes would misread as missing data. */
-export function dailyBuckets(rows: Array<UsagePoint & { cost?: number }>, from: string, to: string): Day[] {
+export function dailyBuckets(rows: Array<UsagePoint & { cost?: number | null }>, from: string, to: string): Day[] {
   const byDate = new Map<string, Day>()
   for (const row of rows) {
     const day = byDate.get(row.date) ?? {
@@ -203,7 +262,7 @@ function bucketLabel(key: string, grain: Grain): string {
 
 /** Ranked rows for the distribution list; `share` is of the same metric the list ranks by. */
 export function ranking(
-  rows: Array<UsagePoint & { cost?: number }>,
+  rows: Array<UsagePoint & { cost?: number | null }>,
   by: GroupBy,
   metric: Metric,
   top: number
@@ -285,7 +344,7 @@ export function bucketKeys(from: string, to: string, grain: Grain): string[] {
  * fold into one "other" band instead of vanishing, so the stack still adds up to the total.
  */
 export function seriesByGroup(
-  rows: Array<UsagePoint & { cost?: number }>,
+  rows: Array<UsagePoint & { cost?: number | null }>,
   grain: Grain,
   by: GroupBy,
   metric: Metric,
@@ -296,7 +355,7 @@ export function seriesByGroup(
   // Only the visible window: a row outside it would mint an extra column past the axis end, and
   // would let a model that was busy last month outrank one that is busy now.
   const scoped = rows.filter((row) => row.date >= from && row.date <= to)
-  const value = (row: { tokens: number; requests: number; cost?: number }) => metricValue(row, metric)
+  const value = (row: { tokens: number; requests: number; cost?: number | null }) => metricValue(row, metric)
   const totals = new Map<string, number>()
   for (const row of scoped) {
     const key = groupKeyOf(row, by)

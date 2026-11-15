@@ -3,7 +3,7 @@
     "email": "E-Mail",
     "code": "Bestätigungscode",
     "signIn": "Anmelden",
-    "signOut": "Von ALWith L abmelden"
+    "signOut": "Von ALWith U⁺ abmelden"
   },
   "guide": {
     "help": "Hilfe erhalten"
@@ -123,8 +123,15 @@
         "name": "Vollzugriff",
         "description": "Mit Vorsicht verwenden: Codex kann ohne Genehmigung Dateien außerhalb dieses Arbeitsbereichs bearbeiten und auf das Internet zugreifen"
       },
-      "heading": "Wie sollen ALWith L-Aktionen genehmigt werden?"
-    }
+      "heading": "Wie sollen ALWith U⁺-Aktionen genehmigt werden?"
+    },
+    "turnProgress": {
+      "quietFor": "· no output for {{seconds}}s",
+      "autoNudged": "· nudged {{count}}×"
+    },
+    "retryAlertTitle": "“{{model}}” has been retried {{count}} times with no response; the system is still retrying in the background.",
+    "retryAlertJump": "Open conversation",
+    "retryAlertDescription": "Open the conversation to check progress, or switch to another model."
   },
   "composer": {
     "mode": "Berechtigungen",
@@ -187,7 +194,12 @@
     },
     "trackpad": "Trackpad",
     "trackpadEnabled": "Trackpad-Gesten aktivieren",
-    "threeFingerSwipeDesc": "Mit drei Fingern horizontal über die Arbeitsfläche wischen"
+    "threeFingerSwipeDesc": "Mit drei Fingern horizontal über die Arbeitsfläche wischen",
+    "providerReliability": "Connection reliability",
+    "autoRetry": "Retry interrupted connections",
+    "autoRetryDesc": "When a provider connection times out or drops, the same request is sent again instead of ending the turn.",
+    "autoNudge": "Nudge a silent turn",
+    "autoNudgeDesc": "When a model has produced nothing for 90 seconds, one “continue” is sent automatically — at most twice per turn."
   },
   "usage": {
     "usage": "Nutzung",
@@ -201,7 +213,8 @@
     "testButton": "Verbindung testen",
     "customButton": "Benutzerdefiniert",
     "saveButton": "Speichern",
-    "remove": "Entfernen"
+    "remove": "Entfernen",
+    "companyDisplayName": "Display name"
   },
   "updater": {
     "relaunchConfirmTitle": "Neu starten zum Aktualisieren?",
@@ -343,7 +356,7 @@
     "more": "Weitere Aktionen"
   },
   "app": {
-    "name": "ALWith L"
+    "name": "ALWith U⁺"
   },
   "notify": {
     "needsInput": "Deine Eingabe wird benötigt",
@@ -371,5 +384,50 @@
     "realtimeStart": "Codex-Sprachanruf starten",
     "realtimeStop": "Sprachanruf beenden",
     "realtimeCancel": "Sprachverbindung abbrechen"
+  },
+  "usageReport": {
+    "resetCardTitle": "Kontingent-Reset",
+    "resetCardDesc": "Wann die Nutzungsfenster des Tarifs zurückgesetzt werden.",
+    "resetCardEmpty": "Noch kein Reset-Zeitpunkt",
+    "resetCardExpiresAt": "Reset am {{time}}",
+    "resetCardRemaining": "Noch {{time}}",
+    "resetCardReset": "Reset-Zeitpunkt erreicht",
+    "resetCardUse": "Verwenden"
+  },
+  "providerUsage": {
+    "title": "Quota",
+    "refresh": "Refresh",
+    "remaining": "Remaining",
+    "limit": "Limit {{value}}",
+    "unlimited": "unlimited",
+    "resetAt": "Resets {{time}}",
+    "expiresAt": "Valid until {{time}}",
+    "plan": "Plan {{name}}",
+    "updatedAt": "Updated {{time}}",
+    "consoleOnly": "This provider's plan usage is only visible in its own console.",
+    "openConsole": "Open console",
+    "unsupported": "This provider publishes no usage endpoint.",
+    "unsupportedDisabled": "This provider is switched off, so no quota was read.",
+    "unsupportedNoBaseUrl": "This provider has no API base URL, so there is nowhere to ask.",
+    "unauthorized": "The key is invalid or has expired.",
+    "unreachable": "Usage is unavailable right now.",
+    "stale": "cached",
+    "freeAllowance": "Free allowance today",
+    "freeLocalCalls": "Calls today on this Mac",
+    "freeRemainingUnknown": "limit {{limit}} (remaining unknown)",
+    "freeBlocked": "Today's free calls are used up",
+    "freeResetVendor": "resets in {{time}}",
+    "freeResetUtcDay": "resets in {{time}} (daily at 00:00 UTC)",
+    "freeResetUtcDayRule": "resets daily at 00:00 UTC",
+    "resetNow": "Reset time reached"
+  },
+  "error": {
+    "accountCleanupFailed": "Das Aufräumen des vorherigen ALwith-Anbieters ist fehlgeschlagen ({{code}}). Versuche es gleich noch einmal.",
+    "accountModelRequired": "Das Kontomodell dieses Chats ist nicht mehr verfügbar. Wähle unten in der Modellauswahl ein Modell und sende erneut.",
+    "enterpriseModelNotReady": "The enterprise model is not ready yet. Sign in to your enterprise account in Settings → Account, then try again.",
+    "accountChanged": "Das ALwith-Konto wurde währenddessen gewechselt. Versuche es erneut.",
+    "accountModelConfigFailed": "Die ALwith-Modellkonfiguration konnte nicht geladen werden. Versuche es erneut oder melde dich neu an.",
+    "accountCleanupPending": "Das vorherige ALwith-Konto wird noch aufgeräumt. Versuche es gleich noch einmal.",
+    "enterpriseLogoutFailed": "Die Abmeldung am Server ist fehlgeschlagen, der Zugriff auf diesen Rechner wurde aber entzogen."
   }
 }

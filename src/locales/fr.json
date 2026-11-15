@@ -3,7 +3,7 @@
     "email": "E-mail",
     "code": "Code de vérification",
     "signIn": "Connexion",
-    "signOut": "Se déconnecter d’ALWith L"
+    "signOut": "Se déconnecter d’ALWith U⁺"
   },
   "guide": {
     "help": "Obtenir de l'aide"
@@ -122,8 +122,15 @@
         "name": "Accès complet",
         "description": "À utiliser avec précaution : Codex peut modifier des fichiers hors de cet espace de travail et accéder à Internet sans approbation"
       },
-      "heading": "Comment approuver les actions de ALWith L ?"
-    }
+      "heading": "Comment approuver les actions de ALWith U⁺ ?"
+    },
+    "turnProgress": {
+      "quietFor": "· no output for {{seconds}}s",
+      "autoNudged": "· nudged {{count}}×"
+    },
+    "retryAlertTitle": "“{{model}}” has been retried {{count}} times with no response; the system is still retrying in the background.",
+    "retryAlertJump": "Open conversation",
+    "retryAlertDescription": "Open the conversation to check progress, or switch to another model."
   },
   "composer": {
     "model": "Modèle",
@@ -188,7 +195,12 @@
     },
     "trackpad": "Pavé tactile",
     "trackpadEnabled": "Activer les gestes du pavé tactile",
-    "threeFingerSwipeDesc": "Balayez horizontalement avec trois doigts pour déplacer le canevas"
+    "threeFingerSwipeDesc": "Balayez horizontalement avec trois doigts pour déplacer le canevas",
+    "providerReliability": "Connection reliability",
+    "autoRetry": "Retry interrupted connections",
+    "autoRetryDesc": "When a provider connection times out or drops, the same request is sent again instead of ending the turn.",
+    "autoNudge": "Nudge a silent turn",
+    "autoNudgeDesc": "When a model has produced nothing for 90 seconds, one “continue” is sent automatically — at most twice per turn."
   },
   "usage": {
     "usage": "Utilisation",
@@ -202,7 +214,8 @@
     "testButton": "Tester la connexion",
     "customButton": "Personnalisé",
     "saveButton": "Enregistrer",
-    "remove": "Retirer"
+    "remove": "Retirer",
+    "companyDisplayName": "Display name"
   },
   "updater": {
     "relaunchConfirmTitle": "Relancer pour mettre à jour ?",
@@ -352,7 +365,7 @@
     "more": "Plus d’actions"
   },
   "app": {
-    "name": "ALWith L"
+    "name": "ALWith U⁺"
   },
   "notify": {
     "needsInput": "Votre intervention est nécessaire",
@@ -380,5 +393,50 @@
     "realtimeStart": "Démarrer un appel vocal Codex",
     "realtimeStop": "Terminer l’appel vocal",
     "realtimeCancel": "Annuler la connexion vocale"
+  },
+  "usageReport": {
+    "resetCardTitle": "Réinitialisation du quota",
+    "resetCardDesc": "Quand les fenêtres d'utilisation du forfait sont réinitialisées.",
+    "resetCardEmpty": "Aucune heure de réinitialisation",
+    "resetCardExpiresAt": "Réinitialisé le {{time}}",
+    "resetCardRemaining": "Encore {{time}}",
+    "resetCardReset": "Heure de réinitialisation atteinte",
+    "resetCardUse": "Utiliser"
+  },
+  "providerUsage": {
+    "title": "Quota",
+    "refresh": "Refresh",
+    "remaining": "Remaining",
+    "limit": "Limit {{value}}",
+    "unlimited": "unlimited",
+    "resetAt": "Resets {{time}}",
+    "expiresAt": "Valid until {{time}}",
+    "plan": "Plan {{name}}",
+    "updatedAt": "Updated {{time}}",
+    "consoleOnly": "This provider's plan usage is only visible in its own console.",
+    "openConsole": "Open console",
+    "unsupported": "This provider publishes no usage endpoint.",
+    "unsupportedDisabled": "This provider is switched off, so no quota was read.",
+    "unsupportedNoBaseUrl": "This provider has no API base URL, so there is nowhere to ask.",
+    "unauthorized": "The key is invalid or has expired.",
+    "unreachable": "Usage is unavailable right now.",
+    "stale": "cached",
+    "freeAllowance": "Free allowance today",
+    "freeLocalCalls": "Calls today on this Mac",
+    "freeRemainingUnknown": "limit {{limit}} (remaining unknown)",
+    "freeBlocked": "Today's free calls are used up",
+    "freeResetVendor": "resets in {{time}}",
+    "freeResetUtcDay": "resets in {{time}} (daily at 00:00 UTC)",
+    "freeResetUtcDayRule": "resets daily at 00:00 UTC",
+    "resetNow": "Reset time reached"
+  },
+  "error": {
+    "accountCleanupFailed": "Le nettoyage du fournisseur ALwith précédent a échoué ({{code}}). Réessayez dans un instant.",
+    "accountModelRequired": "Le modèle de compte de cette conversation n'est plus disponible. Choisissez un modèle dans le sélecteur ci-dessous, puis renvoyez.",
+    "enterpriseModelNotReady": "The enterprise model is not ready yet. Sign in to your enterprise account in Settings → Account, then try again.",
+    "accountChanged": "Le compte ALwith a changé pendant l'opération. Réessayez.",
+    "accountModelConfigFailed": "Le chargement de la configuration des modèles ALwith a échoué. Réessayez ou reconnectez-vous.",
+    "accountCleanupPending": "Le nettoyage du compte ALwith précédent n'est pas terminé. Réessayez dans un instant.",
+    "enterpriseLogoutFailed": "La déconnexion côté serveur a échoué, mais l'accès de cet ordinateur a été révoqué."
   }
 }

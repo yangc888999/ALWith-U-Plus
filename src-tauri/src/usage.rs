@@ -26,6 +26,8 @@ use std::sync::Mutex;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct UsagePoint {
+    #[serde(default = "default_client_source")]
+    pub client_source: String,
     pub date: String,
     pub hour: u8,
     pub provider: String,
@@ -43,6 +45,8 @@ pub struct UsagePoint {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageTurn {
+    #[serde(default = "default_client_source")]
+    pub client_source: String,
     pub at: String,
     pub date: String,
     pub provider: String,
@@ -89,6 +93,10 @@ const RECENT_LIMIT: usize = 2000;
 /// out the short questions the cloud is meant to summarise.
 const PROMPT_LIMIT: usize = 1200;
 const PROMPT_CHARS: usize = 400;
+
+fn default_client_source() -> String {
+    "alwith_l".to_string()
+}
 
 fn codex_home() -> Result<PathBuf, String> {
     if let Ok(value) = std::env::var("CODEX_HOME") {
@@ -325,6 +333,7 @@ fn parse_file(path: &Path, turns: &mut Vec<UsageTurn>, prompts: &mut Vec<String>
                 let cache_write = number(usage, "cache_write_input_tokens");
                 let (provider, name) = split_model(if model.is_empty() { "unknown" } else { &model });
                 turns.push(UsageTurn {
+                    client_source: default_client_source(),
                     date: at.get(0..10).unwrap_or(&at).to_string(),
                     at,
                     provider,
@@ -403,7 +412,114 @@ fn parse_file_cached(path: &Path, turns: &mut Vec<UsageTurn>, prompts: &mut Vec<
     parse_file(path, turns, prompts)
 }
 
-fn build(directory: &Path) -> UsageReport {
+/// `$HOME/.alwith/usage/external.jsonl` — the append-only external-call ledger.
+///
+/// This is the single source of truth for the ledger path on the Rust side. The writer is an
+/// external proxy script (not another module in this crate): it appends one camelCase JSON object
+/// per line. Keeping the path here makes `usage.rs` self-contained — it compiles and its tests
+/// run without any other Rust module having landed.
+fn external_ledger_path() -> Result<PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
+    Ok(PathBuf::from(home)
+        .join(".alwith")
+        .join("usage")
+        .join("external.jsonl"))
+}
+
+/// One line of the external ledger, as written by the external proxy script.
+///
+/// Field names are camelCase on the wire (`requestId`, `usageKnown`, …). The fields are private
+/// by design: this type is only a deserialization target for the reader, never exported to the
+/// frontend. `requestId` and `reasoning` are not surfaced in `UsageTurn`, but they are declared
+/// so a row missing them is rejected as malformed instead of being silently reinterpreted.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+// Both fields are part of the wire contract but are deliberately not surfaced in `UsageTurn`.
+#[allow(dead_code)]
+struct ExternalLedgerRecord {
+    request_id: String,
+    client: String,
+    provider: String,
+    model: String,
+    at: String,
+    input: u64,
+    cached: u64,
+    output: u64,
+    reasoning: u64,
+    total: u64,
+    usage_known: bool,
+}
+
+/// Reads the append-only external call ledger (`external.jsonl`) into the same `UsageTurn` shape
+/// the rollout transcripts use.
+///
+/// The ledger is shared with other clients that call this app's proxy, so its rows are *external*
+/// by definition: `client` is kept verbatim as `client_source` (never the internal `alwith_l`
+/// marker). The file is appended to by a different writer, and an interrupted append can leave a
+/// partial line, so every row is parsed independently and any bad row is skipped instead of
+/// failing the whole usage report.
+fn read_external_turns(path: &Path) -> Vec<UsageTurn> {
+    let mut turns = Vec::new();
+    // A ledger that does not exist yet simply has no external calls.
+    let Ok(bytes) = std::fs::read(path) else {
+        return turns;
+    };
+    for raw in bytes.split(|byte| *byte == b'\n') {
+        let Ok(line) = std::str::from_utf8(raw) else {
+            continue;
+        };
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // Skip half-written appends, malformed JSON and rows missing required fields.
+        let Ok(record) = serde_json::from_str::<ExternalLedgerRecord>(line) else {
+            continue;
+        };
+        // `date` is the UTC day prefix, the exact `YYYY-MM-DD` slice rollout turns use. A short
+        // or malformed timestamp cannot be placed in a bucket, so drop that row.
+        let Some(day) = record.at.get(0..10) else {
+            continue;
+        };
+        let date = day.to_string();
+        // Guard against an external call being mislabelled as an internal engine turn: an empty
+        // client or the internal marker is normalised to `other_agent`.
+        let client_source = if record.client.is_empty() || record.client == "alwith_l" {
+            "other_agent".to_string()
+        } else {
+            record.client.clone()
+        };
+        // When the upstream response exposed no usage, still count the request but never invent
+        // tokens: all four token columns stay zero. Otherwise honour `total`, falling back to the
+        // sum of the components when a writer left it at zero.
+        let (input, cached, output, tokens) = if record.usage_known {
+            let fallback = record
+                .input
+                .saturating_add(record.cached)
+                .saturating_add(record.output);
+            let tokens = if record.total == 0 { fallback } else { record.total };
+            (record.input, record.cached, record.output, tokens)
+        } else {
+            (0, 0, 0, 0)
+        };
+        // `UsageTurn` has no `reasoning` column (and no `request_id`); both are intentionally
+        // dropped here. Only `UsagePoint` carries `reasoning`, and it stays at its default zero.
+        turns.push(UsageTurn {
+            client_source,
+            at: record.at,
+            date,
+            provider: record.provider,
+            model: record.model,
+            input,
+            cached,
+            output,
+            tokens,
+        });
+    }
+    turns
+}
+
+fn build(directory: &Path, external: &Path) -> UsageReport {
     let files = rollout_files(directory);
     // Forget transcripts that were deleted or rotated away; everything still present is either
     // reused or re-parsed below.
@@ -423,6 +539,10 @@ fn build(directory: &Path) -> UsageReport {
             sessions += 1;
         }
     }
+    // External proxy calls live in their own append-only ledger, not in the Codex transcripts.
+    // Fold them in before sorting so both `recent` and the hourly buckets see one unified,
+    // newest-first list. The ledger path is passed explicitly so tests never read the real HOME.
+    turns.extend(read_external_turns(external));
     turns.sort_by(|left, right| right.at.cmp(&left.at));
     if prompts.len() > PROMPT_LIMIT {
         prompts.drain(..prompts.len() - PROMPT_LIMIT);
@@ -431,12 +551,23 @@ fn build(directory: &Path) -> UsageReport {
 }
 
 fn summarize(turns: &mut Vec<UsageTurn>, sessions: u32, scanned: u32, prompts: Vec<String>) -> UsageReport {
-    let mut points: BTreeMap<(String, u8, String, String), UsagePoint> = BTreeMap::new();
+    // `client_source` is part of the key. An internal engine turn and an external proxy call can
+    // share the same (date, hour, provider, model); the old 4-tuple key merged them and let one
+    // bucket's first turn label every request in it, which made the 内部/外部 filter wrong. One
+    // bucket per source keeps the two from ever bleeding into each other.
+    let mut points: BTreeMap<(String, u8, String, String, String), UsagePoint> = BTreeMap::new();
     for turn in turns.iter() {
         let hour = hour_of(&turn.at);
         let entry = points
-            .entry((turn.date.clone(), hour, turn.provider.clone(), turn.model.clone()))
+            .entry((
+                turn.date.clone(),
+                hour,
+                turn.provider.clone(),
+                turn.model.clone(),
+                turn.client_source.clone(),
+            ))
             .or_insert_with(|| UsagePoint {
+                client_source: turn.client_source.clone(),
                 date: turn.date.clone(),
                 hour,
                 provider: turn.provider.clone(),
@@ -491,6 +622,30 @@ fn cache_is_fresh(modified: std::time::SystemTime, now: std::time::SystemTime) -
         .is_ok_and(|age| age <= CACHE_TTL)
 }
 
+/// Length of the append-only external ledger, or 0 when it does not exist yet.
+/// One `stat` only: opening the usage page must never walk the ~73 MiB session tree.
+fn external_ledger_len() -> u64 {
+    external_ledger_path()
+        .ok()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .map(|meta| meta.len())
+        .unwrap_or(0)
+}
+
+/// The snapshot is stale when its 30-minute lifetime expired **or** the external ledger grew
+/// since the snapshot was written. The second check is what makes a fresh WorkBuddy call show up
+/// without waiting for the TTL or pressing refresh: `CachedReport.fingerprint` alone cannot do
+/// that, because the snapshot reader never compares it. Kept pure so the rule is testable.
+fn snapshot_needs_rebuild(
+    cache_mtime: Option<std::time::SystemTime>,
+    now: std::time::SystemTime,
+    cached_ledger_len: u64,
+    current_ledger_len: u64,
+) -> bool {
+    let expired = !cache_mtime.is_some_and(|time| cache_is_fresh(time, now));
+    expired || cached_ledger_len != current_ledger_len
+}
+
 /// One rebuild at a time. The settings window and the refresh button can both ask for fresh
 /// numbers; two concurrent 73 MiB walks would also race on the cache's temporary file.
 static BUILD_LOCK: Mutex<()> = Mutex::new(());
@@ -524,8 +679,14 @@ fn rebuild_report() -> Result<UsageReport, String> {
     if !directory.is_dir() {
         return Ok(UsageReport::default());
     }
-    let fingerprint = fingerprint(&rollout_files(&directory));
-    let mut report = build(&directory);
+    // The external ledger is an input to the report, so its (path, length, mtime) must take part
+    // in the fingerprint: appending a row then invalidates the cache and forces a rebuild. Keep
+    // the ledger OUT of `rollout_files` (that walk is Codex sessions only) and add it here.
+    let external = external_ledger_path()?;
+    let mut files = rollout_files(&directory);
+    files.push(external.clone());
+    let fingerprint = fingerprint(&files);
+    let mut report = build(&directory, &external);
     store_cache(fingerprint, &report);
     report.updated_at = now_millis();
     report.pending = false;
@@ -570,15 +731,26 @@ fn usage_report_snapshot() -> Result<UsageReport, String> {
     let modified = std::fs::metadata(&path)
         .ok()
         .and_then(|meta| meta.modified().ok());
-    let fresh = modified.is_some_and(|time| cache_is_fresh(time, std::time::SystemTime::now()));
-    if !fresh {
-        spawn_rebuild();
-    }
     let mut report = std::fs::read(&path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<CachedReport>(&bytes).ok())
-        .map(|cached| cached.report)
-        .unwrap_or_default();
+        .map(|cached| {
+            // A cache written before this field existed carries 0, so the first read after the
+            // upgrade rebuilds once and then settles — no migration, no version bump.
+            if snapshot_needs_rebuild(
+                modified,
+                std::time::SystemTime::now(),
+                cached.external_ledger_len,
+                external_ledger_len(),
+            ) {
+                spawn_rebuild();
+            }
+            cached.report
+        })
+        .unwrap_or_else(|| {
+            spawn_rebuild();
+            UsageReport::default()
+        });
     report.updated_at = modified.map(file_millis).unwrap_or(0);
     report.pending = REBUILDING.load(Ordering::SeqCst);
     Ok(report)
@@ -596,6 +768,7 @@ fn store_cache(fingerprint: u64, report: &UsageReport) {
     }
     let payload = CachedReport {
         fingerprint,
+        external_ledger_len: external_ledger_len(),
         report: report.clone(),
     };
     let Ok(bytes) = serde_json::to_vec(&payload) else {
@@ -611,6 +784,10 @@ fn store_cache(fingerprint: u64, report: &UsageReport) {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CachedReport {
     fingerprint: u64,
+    /// Byte length of the external ledger when this snapshot was built. `default` keeps caches
+    /// written before the field existed readable; their first read triggers one rebuild.
+    #[serde(default)]
+    external_ledger_len: u64,
     report: UsageReport,
 }
 
@@ -799,6 +976,59 @@ mod tests {
         std::fs::write(directory.join(name), lines.join("\n")).unwrap();
     }
 
+    /// Unique temp directory for the tests that build a report from a rollout tree.
+    ///
+    /// These used to be fixed paths (`/tmp/alwith-usage-dedup`, …). Two concurrent
+    /// `cargo test` processes then raced: one could `remove_dir_all` the directory the
+    /// other had just written, which surfaced as `report.points[0]` index out of bounds.
+    /// The process id keeps processes apart, the atomic counter keeps repeated calls
+    /// inside one process apart, and the label keeps each test's directory readable.
+    /// No new dependency is introduced (`tempfile` stays for the tests already using it).
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("alwith-usage-{label}-{}-{seq}", std::process::id()))
+    }
+
+    /// `build` takes the ledger path explicitly, so a test can point at a temp dir and never
+    /// touch the real `$HOME` ledger. Deliberately left uncreated: `read_external_turns` treats
+    /// a missing file as an empty one, which is what these rollout-only tests want.
+    fn empty_ledger(root: &Path) -> PathBuf {
+        root.join("external.jsonl")
+    }
+
+    /// One row of the external ledger, in the camelCase wire format `ExternalLedgerRecord`
+    /// deserializes. Written as raw JSON (not via the struct) so these tests describe the file
+    /// contract of the reader rather than depending on how the writer constructs its values.
+    #[allow(clippy::too_many_arguments)]
+    fn external_row(
+        request_id: &str,
+        client: &str,
+        provider: &str,
+        model: &str,
+        at: &str,
+        input: u64,
+        cached: u64,
+        output: u64,
+        total: u64,
+        usage_known: bool,
+    ) -> String {
+        serde_json::json!({
+            "requestId": request_id,
+            "client": client,
+            "provider": provider,
+            "model": model,
+            "at": at,
+            "input": input,
+            "cached": cached,
+            "output": output,
+            "reasoning": 0,
+            "total": total,
+            "usageKnown": usage_known,
+        })
+        .to_string()
+    }
+
     fn turn_context(model: &str) -> String {
         format!(r#"{{"timestamp":"2026-10-14T10:00:00.000Z","type":"turn_context","payload":{{"model":"{model}"}}}}"#)
     }
@@ -817,7 +1047,7 @@ mod tests {
 
     #[test]
     fn only_rollout_files_are_read() {
-        let root = std::env::temp_dir().join("alwith-usage-walk");
+        let root = unique_temp_dir("walk");
         let _ = std::fs::remove_dir_all(&root);
         write_session(&root.join("2026/10/14"), "rollout-a.jsonl", &[]);
         write_session(&root.join("2026/10/14"), "notes.txt", &["nope"]);
@@ -829,12 +1059,12 @@ mod tests {
 
     #[test]
     fn cached_tokens_are_not_billed_as_input() {
-        let root = std::env::temp_dir().join("alwith-usage-input");
+        let root = unique_temp_dir("input");
         let _ = std::fs::remove_dir_all(&root);
         let context = turn_context("kimi/kimi-k2.6");
         let count = token_count("2026-10-14T10:00:05.000Z", 1000, 900, 50);
         write_session(&root.join("2026/10/14"), "rollout-a.jsonl", &[&context, &count]);
-        let report = build(&root);
+        let report = build(&root, &empty_ledger(&root));
         assert_eq!(report.points.len(), 1);
         let point = &report.points[0];
         assert_eq!(point.provider, "kimi");
@@ -850,13 +1080,13 @@ mod tests {
     #[test]
     fn a_compacted_counter_does_not_shrink_the_total() {
         // The second record repeats a smaller `total_token_usage`; only the per-call deltas matter.
-        let root = std::env::temp_dir().join("alwith-usage-compaction");
+        let root = unique_temp_dir("compaction");
         let _ = std::fs::remove_dir_all(&root);
         let context = turn_context("gpt-6-luna");
         let first = token_count("2026-10-14T10:00:05.000Z", 1000, 0, 100);
         let second = token_count("2026-10-14T10:01:05.000Z", 2000, 0, 200);
         write_session(&root.join("2026/10/14"), "rollout-a.jsonl", &[&context, &first, &second]);
-        let report = build(&root);
+        let report = build(&root, &empty_ledger(&root));
         let point = &report.points[0];
         assert_eq!(point.requests, 2);
         assert_eq!(point.tokens, 1100 + 2200);
@@ -866,7 +1096,7 @@ mod tests {
 
     #[test]
     fn the_same_record_emitted_twice_counts_once() {
-        let root = std::env::temp_dir().join("alwith-usage-dedup");
+        let root = unique_temp_dir("dedup");
         let _ = std::fs::remove_dir_all(&root);
         let context = turn_context("deepseek-flash");
         let count = token_count("2026-10-14T10:00:05.000Z", 10, 0, 5);
@@ -875,7 +1105,7 @@ mod tests {
             "rollout-a.jsonl",
             &[&context, &count, &count],
         );
-        let report = build(&root);
+        let report = build(&root, &empty_ledger(&root));
         assert_eq!(report.points[0].requests, 1);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -894,9 +1124,9 @@ mod tests {
 
     #[test]
     fn a_missing_sessions_directory_is_an_empty_report() {
-        let root = std::env::temp_dir().join("alwith-usage-missing");
+        let root = unique_temp_dir("missing");
         let _ = std::fs::remove_dir_all(&root);
-        let report = build(&root);
+        let report = build(&root, &empty_ledger(&root));
         assert!(report.points.is_empty());
         assert!(report.recent.is_empty());
         assert_eq!(report.scanned, 0);
@@ -936,4 +1166,322 @@ mod tests {
         });
         assert_eq!(prompt_text(&event).as_deref(), Some("用量页怎么又空了"));
     }
+
+    #[test]
+    fn a_missing_external_ledger_is_an_empty_set_of_turns() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(read_external_turns(&root.path().join("never-written.jsonl")).is_empty());
+    }
+
+    #[test]
+    fn an_external_ledger_row_becomes_a_point_and_a_recent_turn() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let ledger = root.path().join("external.jsonl");
+        std::fs::write(
+            &ledger,
+            external_row(
+                "req-1",
+                "workbuddy",
+                "acme",
+                "acme/gpt-x",
+                "2026-11-15T03:11:05.000Z",
+                120,
+                30,
+                50,
+                200,
+                true,
+            ),
+        )
+        .unwrap();
+
+        let report = build(&sessions, &ledger);
+        assert_eq!(report.points.len(), 1, "one external call → one bucket");
+        let point = &report.points[0];
+        assert_eq!(point.client_source, "workbuddy", "clientSource must be the ledger client");
+        assert_eq!(point.date, "2026-11-15");
+        assert_eq!(point.hour, 3);
+        assert_eq!(point.provider, "acme");
+        assert_eq!(point.model, "acme/gpt-x");
+        assert_eq!(point.requests, 1);
+        assert_eq!(point.input, 120);
+        assert_eq!(point.cached, 30);
+        assert_eq!(point.output, 50);
+        assert_eq!(point.tokens, 200);
+
+        // The same row is also the request table's only entry, still tagged as external.
+        assert_eq!(report.recent.len(), 1);
+        assert_eq!(report.recent[0].client_source, "workbuddy");
+        assert_eq!(report.recent[0].tokens, 200);
+        assert_eq!(report.recent[0].at, "2026-11-15T03:11:05.000Z");
+        assert_eq!(report.recent[0].date, "2026-11-15");
+    }
+
+    #[test]
+    fn a_row_with_unknown_usage_counts_the_request_but_has_zero_tokens() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let ledger = root.path().join("external.jsonl");
+        // Non-zero numbers in the row must NOT leak through when usageKnown is false.
+        std::fs::write(
+            &ledger,
+            external_row(
+                "req-2",
+                "qwen_office",
+                "acme",
+                "acme/gpt-x",
+                "2026-11-15T03:11:05.000Z",
+                999,
+                888,
+                777,
+                2664,
+                false,
+            ),
+        )
+        .unwrap();
+
+        let report = build(&sessions, &ledger);
+        assert_eq!(report.recent.len(), 1, "the request still produces a turn");
+        let turn = &report.recent[0];
+        assert_eq!(turn.client_source, "qwen_office");
+        assert_eq!(turn.input, 0);
+        assert_eq!(turn.cached, 0);
+        assert_eq!(turn.output, 0);
+        assert_eq!(turn.tokens, 0);
+
+        assert_eq!(report.points.len(), 1);
+        let point = &report.points[0];
+        assert_eq!(point.requests, 1, "the request count must not be lost");
+        assert_eq!(point.input, 0);
+        assert_eq!(point.cached, 0);
+        assert_eq!(point.output, 0);
+        assert_eq!(point.tokens, 0);
+    }
+
+    #[test]
+    fn malformed_ledger_rows_are_skipped_without_losing_the_good_ones() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let ledger = root.path().join("external.jsonl");
+        let good = external_row(
+            "req-good",
+            "workbuddy",
+            "acme",
+            "acme/gpt-x",
+            "2026-11-15T03:11:05.000Z",
+            10,
+            0,
+            5,
+            15,
+            true,
+        );
+        // A row missing required fields, a half-written append, plain garbage, a blank line and
+        // a timestamp too short to yield a UTC day prefix. Only `good` may survive.
+        let missing_fields = r#"{"requestId":"req-half","client":"workbuddy"}"#;
+        let short_at = external_row(
+            "req-short", "workbuddy", "acme", "acme/gpt-x", "2026-11", 1, 0, 1, 2, true,
+        );
+        std::fs::write(
+            &ledger,
+            format!(
+                "not json at all\n{good}\n{{\"requestId\":\"partial\"\n{missing_fields}\n{short_at}\n\n"
+            ),
+        )
+        .unwrap();
+
+        let report = build(&sessions, &ledger);
+        assert_eq!(report.recent.len(), 1, "only the well-formed row survives");
+        assert_eq!(report.recent[0].at, "2026-11-15T03:11:05.000Z");
+        assert_eq!(report.points.len(), 1);
+        assert_eq!(report.points[0].requests, 1);
+        assert_eq!(report.points[0].tokens, 15);
+    }
+
+    #[test]
+    fn internal_and_external_turns_never_share_a_bucket() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        // Both calls are made identical in every bucket dimension (date, hour, provider, model)
+        // and even share the exact `at`. Only `client_source` differs — precisely the case the
+        // old 4-tuple key conflated into one bucket labelled by whichever turn came first.
+        let context = turn_context("acme/gpt-x");
+        let count = token_count("2026-10-14T10:00:05.000Z", 100, 10, 20);
+        write_session(&sessions.join("2026/10/14"), "rollout-a.jsonl", &[&context, &count]);
+
+        let ledger = root.path().join("external.jsonl");
+        // `model` is deliberately the split model name (`gpt-x`, not `acme/gpt-x`) so the two
+        // turns collide on the OLD key; the writer normally stores the full gateway/model name.
+        std::fs::write(
+            &ledger,
+            external_row(
+                "req-3",
+                "workbuddy",
+                "acme",
+                "gpt-x",
+                "2026-10-14T10:00:05.000Z",
+                300,
+                0,
+                40,
+                340,
+                true,
+            ),
+        )
+        .unwrap();
+
+        let report = build(&sessions, &ledger);
+        assert_eq!(
+            report.points.len(),
+            2,
+            "internal and external calls must produce two distinct buckets"
+        );
+        let internal = report
+            .points
+            .iter()
+            .find(|point| point.client_source == "alwith_l")
+            .expect("an internal bucket");
+        let external = report
+            .points
+            .iter()
+            .find(|point| point.client_source == "workbuddy")
+            .expect("an external bucket");
+
+        // Neither bucket may absorb the other's numbers.
+        assert_eq!(internal.requests, 1);
+        assert_eq!(internal.input, 90, "100 - 10 cached - 0 cache_write");
+        assert_eq!(internal.tokens, 120, "100 input + 20 output");
+        assert_eq!(external.requests, 1);
+        assert_eq!(external.input, 300);
+        assert_eq!(external.tokens, 340);
+
+        // The request table keeps both rows, each tagged with its own source.
+        assert_eq!(report.recent.len(), 2);
+        assert!(report.recent.iter().any(|turn| turn.client_source == "alwith_l"));
+        assert!(report.recent.iter().any(|turn| turn.client_source == "workbuddy"));
+    }
+
+    #[test]
+    fn external_rows_normalise_their_source_and_fall_back_for_a_missing_total() {
+        let root = tempfile::tempdir().unwrap();
+        let ledger = root.path().join("external.jsonl");
+        let empty_client = external_row(
+            "r1", "", "acme", "acme/gpt-x", "2026-11-15T03:11:05.000Z", 10, 0, 5, 0, true,
+        );
+        let internal_marker = external_row(
+            "r2", "alwith_l", "acme", "acme/gpt-x", "2026-11-15T03:11:06.000Z", 20, 0, 7, 0, true,
+        );
+        std::fs::write(&ledger, format!("{empty_client}\n{internal_marker}")).unwrap();
+
+        let turns = read_external_turns(&ledger);
+        assert_eq!(turns.len(), 2);
+        assert!(
+            turns.iter().all(|turn| turn.client_source == "other_agent"),
+            "empty/'alwith_l' clients must never masquerade as internal turns"
+        );
+        // total == 0 must fall back to input + cached + output rather than report zero tokens.
+        assert_eq!(turns[0].tokens, 15);
+        assert_eq!(turns[1].tokens, 27);
+    }
+
+    #[test]
+    fn ledger_creation_and_growth_invalidate_the_cache_fingerprint() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = root.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let ledger = root.path().join("external.jsonl");
+        // Mirror rebuild_report's exact input list: rollout files plus the ledger path.
+        let mut files = rollout_files(&sessions);
+        files.push(ledger.clone());
+
+        let missing = fingerprint(&files);
+        let first = external_row(
+            "req-1", "workbuddy", "acme", "acme/gpt-x", "2026-11-15T03:11:05.000Z", 10, 0, 5, 15, true,
+        );
+        std::fs::write(&ledger, &first).unwrap();
+        let created = fingerprint(&files);
+        assert_ne!(missing, created, "creating the ledger must invalidate the cache");
+
+        let second = external_row(
+            "req-2", "workbuddy", "acme", "acme/gpt-x", "2026-11-15T03:12:05.000Z", 20, 0, 6, 26, true,
+        );
+        std::fs::write(&ledger, format!("{first}\n{second}")).unwrap();
+        let grown = fingerprint(&files);
+        assert_ne!(created, grown, "appending a row (len/mtime change) must invalidate the cache");
+    }
+
+    /// The single ledger row produced by the real chain on this machine:
+    /// WorkBuddy → `~/.workbuddy/alwith-proxy.py` (127.0.0.1:18765) → `/alwith/responses`.
+    /// Written **verbatim** from the first (and only) line of
+    /// `$HOME/.alwith/usage/external.jsonl` — including the writer's spaces after each `:`.
+    /// Unlike a synthetic (or re-minified) fixture, this pins the exact bytes that crossed
+    /// the Python writer → Rust reader boundary, field names and values included.
+    #[test]
+    fn a_real_workbuddy_ledger_row_is_read_as_an_external_turn() {
+        const REAL_ROW: &str = r#"{"requestId": "resp_08af0c8728f3ee47016af9284b349487d0a03d2824959b808b", "client": "workbuddy", "provider": "chatgpt", "model": "gpt-6-astra", "at": "2026-11-15T03:34:36.650Z", "input": 7, "cached": 0, "output": 5, "reasoning": 0, "total": 12, "usageKnown": true}"#;
+
+        let root = unique_temp_dir("real-contract");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let ledger = root.join("external.jsonl");
+        // The real ledger is an append-only JSONL: one row plus its trailing newline.
+        std::fs::write(&ledger, format!("{REAL_ROW}\n")).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&ledger).unwrap(),
+            format!("{REAL_ROW}\n"),
+            "the fixture on disk must be byte-for-byte the real sample"
+        );
+
+        let turns = read_external_turns(&ledger);
+        assert_eq!(turns.len(), 1, "the real row must deserialize into exactly one turn");
+        let turn = &turns[0];
+        assert_eq!(turn.client_source, "workbuddy", "never folded into the internal alwith_l source");
+        assert_eq!(turn.provider, "chatgpt");
+        assert_eq!(turn.model, "gpt-6-astra");
+        assert_eq!(turn.input, 7);
+        assert_eq!(turn.cached, 0);
+        assert_eq!(turn.output, 5);
+        assert_eq!(turn.tokens, 12);
+        assert_eq!(turn.date, "2026-11-15", "UTC day is the first 10 chars of `at`");
+        assert_eq!(turn.at, "2026-11-15T03:34:36.650Z", "`at` must be kept verbatim");
+
+        // The request table (not just the hourly bucket) must carry the real row unchanged.
+        let sessions = root.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let report = build(&sessions, &ledger);
+        assert_eq!(report.recent.len(), 1);
+        assert_eq!(report.recent[0].client_source, "workbuddy");
+        assert_eq!(report.recent[0].at, "2026-11-15T03:34:36.650Z");
+        assert_eq!(report.recent[0].tokens, 12);
+
+        // The hourly bucket must carry the same numbers, keyed by the external client source
+        // (the five-part aggregation key keeps it separate from an internal turn).
+        assert_eq!(report.points.len(), 1);
+        let point = &report.points[0];
+        assert_eq!(point.client_source, "workbuddy");
+        assert_eq!(point.date, "2026-11-15");
+        assert_eq!(point.hour, 3);
+        assert_eq!(point.requests, 1);
+        assert_eq!(point.input, 7);
+        assert_eq!(point.cached, 0);
+        assert_eq!(point.output, 5);
+        assert_eq!(point.tokens, 12);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+    #[test]
+    fn a_fresh_cache_is_invalidated_when_the_external_ledger_grows() {
+        let now = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let just_written = now - std::time::Duration::from_secs(5);
+        // Inside the 30-minute lifetime and the ledger did not change: keep the fast path.
+        assert!(!snapshot_needs_rebuild(Some(just_written), now, 264, 264));
+        // One appended row is enough to invalidate even a five-second-old snapshot.
+        assert!(snapshot_needs_rebuild(Some(just_written), now, 264, 528));
+        // An expired cache rebuilds regardless of the ledger, and a missing cache rebuilds too.
+        let expired = now - std::time::Duration::from_secs(31 * 60);
+        assert!(snapshot_needs_rebuild(Some(expired), now, 264, 264));
+        assert!(snapshot_needs_rebuild(None, now, 0, 0));
+    }
+
 }
