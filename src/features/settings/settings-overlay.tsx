@@ -156,14 +156,25 @@ export function SettingsOverlay() {
           follow(event, (dx, dy, start) => clamp({ ...start, x: start.x + dx, y: start.y + dy }))
         }}
       />
-      <button
-        type="button"
-        aria-label={t("settings.close")}
-        onClick={closeSettingsOverlay}
-        className="absolute start-3 top-2 z-20 flex size-7 items-center justify-center rounded-full border border-border/60 bg-muted/80 text-muted-foreground shadow-sm transition-colors hover:border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
-      >
-        <XIcon className="size-3.5" aria-hidden="true" />
-      </button>
+      {/* 左上角按 macOS 习惯摆成红绿灯：红点是关闭，hover 才浮出 ×；另外两点是纯装饰
+          —— 这个面板没有最小化/最大化语义，做成能点的假按钮会骗人，所以只跟着拖拽走。
+          12px 直径 + 8px 间隙是系统 traffic light 的尺寸，圆心落在 (16,16)，和系统窗口对齐。 */}
+      <div className="absolute start-2.5 top-2.5 z-20 flex items-center gap-2" data-settings-traffic>
+        <button
+          type="button"
+          aria-label={t("settings.close")}
+          onClick={closeSettingsOverlay}
+          className="group relative flex size-3 items-center justify-center rounded-full border border-black/15 bg-[#ff5f57] shadow-[inset_0_1px_0_rgb(255_255_255/0.35)] transition-colors hover:bg-[#ff4136] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        >
+          <XIcon
+            className="size-2 text-black/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
+            aria-hidden="true"
+            strokeWidth={3}
+          />
+        </button>
+        <span aria-hidden="true" className="size-3 rounded-full border border-black/10 bg-black/10 dark:border-white/10 dark:bg-white/15" />
+        <span aria-hidden="true" className="size-3 rounded-full border border-black/10 bg-black/10 dark:border-white/10 dark:bg-white/15" />
+      </div>
       <div className="flex min-h-0 flex-1 flex-col">
         <SettingsPage embedded />
       </div>
