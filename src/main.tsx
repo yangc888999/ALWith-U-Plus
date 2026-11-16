@@ -34,7 +34,7 @@ import { initI18n } from "@/lib/i18n"
 import { startPreferenceSync } from "@/lib/preference-sync"
 import { startGatewayRetrySync } from "@/lib/gateway-retry-settings"
 import { startOverload429MuteSync } from "@/lib/overload-429-settings"
-import { loadPreferences } from "@/lib/preferences"
+import { loadPreferences, defaultPreferences } from "@/lib/preferences"
 import { isQueueCancelled } from "@/lib/queued-prompt"
 import { bootstrapSettings } from "@/lib/settings-store"
 import { hydrateZoom } from "@/lib/zoom"
@@ -166,7 +166,21 @@ async function bootstrap(): Promise<void> {
   // each of these is a separate IPC round trip. The ones that do not feed each other now run
   // together; only what the first frame actually shows (preferences, translations, zoom) is still
   // awaited in order.
-  const [, preferences] = await Promise.all([bootstrapSettings(), loadPreferences()])
+  //
+  // Settings must not be able to abort the boot. Its read is an IPC call into the Rust store, and
+  // on a cold first launch it can be slow or stay pending; letting that rejection escape used to
+  // skip `createRoot` entirely, so the window showed a blank page instead of a running app with
+  // default settings. Degrade to defaults, log it, and keep going.
+  const settingsReady = bootstrapSettings().catch((error: unknown) => {
+    console.warn("[settings] boot read failed; continuing with defaults", error)
+  })
+  // Same reasoning for preferences: it reads the same store over IPC. A hung or failed read must
+  // degrade to a fresh-install default set, never leave the window blank.
+  const preferencesReady = loadPreferences().catch((error: unknown) => {
+    console.warn("[preferences] boot read failed; continuing with defaults", error)
+    return defaultPreferences()
+  })
+  const [, preferences] = await Promise.all([settingsReady, preferencesReady])
   predictionPreference.setState({ enabled: preferences.composerPredictions ?? true })
   hydrateProfileOverrides({
     owner: preferences.profileOwner,
@@ -185,7 +199,10 @@ async function bootstrap(): Promise<void> {
   // restarting the whole engine — which aborts whatever other chats are streaming. Move those
   // records onto the shared router before the runtime starts, so no chat costs anyone else's turn.
   if (isTauri()) {
-    await invoke("migrate_threads_to_router").catch((error: unknown) => {
+    // Thread migration is housekeeping for legacy chats, not something the first frame needs. It
+    // walks every stored thread, so on a first launch after an upgrade it can take a long time —
+    // and while it ran, the window sat on the placeholder. Move it off the first-frame path.
+    void invoke("migrate_threads_to_router").catch((error: unknown) => {
       console.warn("[router-migration]", error)
     })
   }

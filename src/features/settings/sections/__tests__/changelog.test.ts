@@ -6,13 +6,20 @@ import { parseChangeLog } from "../changelog"
 test("the update-log dialog carries the shipped version and every bullet of it", () => {
   const groups = parseChangeLog(changelog)
   // CHANGELOG 按版本倒序维护；第一组必须就是当前发布版本，且要有本次修复的中文条目。
-  expect(groups[0].version).toBe("1.0.5")
+  expect(groups[0].version).toBe("1.0.7")
   expect(groups[0].items.length).toBeGreaterThan(0)
-  expect(groups[0].items.join(" ")).toContain("口令登录卡顿")
-  expect(groups[0].items.join(" ")).toContain("侧边栏无法展开")
-  // 本次同时发布的窗口缺陷也必须写进日志，不能只写在提交里。
-  expect(groups[0].items.join(" ")).toContain("最大化")
-  expect(groups[0].items.join(" ")).toContain("目标屏工作区")
+  expect(groups[0].items.join(" ")).toContain("首次打开白屏")
+  expect(groups[0].items.join(" ")).toContain("首屏等待路径")
+  // 上一版的侧栏展开与四栏约束仍在日志里可读。
+  const layout = groups.find((group) => group.version === "1.0.6")
+  expect(layout?.items.join(" ")).toContain("完整展开模式")
+  expect(layout?.items.join(" ")).toContain("四栏")
+  // 更早一版的登录 / 侧边栏 / 窗口修复仍在日志里可读。
+  const shipped = groups.find((group) => group.version === "1.0.5")
+  expect(shipped?.items.join(" ")).toContain("口令登录卡顿")
+  expect(shipped?.items.join(" ")).toContain("侧边栏无法展开")
+  expect(shipped?.items.join(" ")).toContain("最大化")
+  expect(shipped?.items.join(" ")).toContain("目标屏工作区")
   // 上一版的两条修复仍在日志里可读。
   const previous = groups.find((group) => group.version === "1.0.4")
   expect(previous?.items.join(" ")).toContain("正在安装更新")

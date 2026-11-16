@@ -87,7 +87,7 @@ function applyInitialTheme(): void {
 /** Browser previews have no native persistence; production bootstrap always initializes Rust. */
 export async function bootstrapSettings(): Promise<void> {
   try {
-    if (isTauri()) await initializeSettings()
+    if (isTauri()) await withTimeout(initializeSettings(), SETTINGS_BOOT_TIMEOUT_MS)
     else applyInitialTheme()
   } catch (error: unknown) {
     // 这一段跑在 React 挂载之前。以前把异常原文写进 #root，等于在启动画面上直接糊一段英文栈
@@ -96,7 +96,41 @@ export async function bootstrapSettings(): Promise<void> {
     showBootFailureNotice()
     throw error
   } finally {
-    document.documentElement.style.visibility = "visible"
+    revealDocument()
+  }
+}
+
+/**
+ * Reveal the document and cancel the inline fallback timer in index.html.
+ *
+ * `visibility: hidden` is set in index.html so the first paint is not an unstyled flash. Undoing
+ * it must never depend on a promise settling: the settings read is an IPC call, and on a cold
+ * first launch it can stay pending. Both this path and the inline timer call the same thing.
+ */
+export function revealDocument(): void {
+  document.documentElement.style.visibility = "visible"
+  const timer = (window as { __alwithRevealTimer?: ReturnType<typeof setTimeout> }).__alwithRevealTimer
+  if (timer !== undefined) {
+    clearTimeout(timer)
+    delete (window as { __alwithRevealTimer?: unknown }).__alwithRevealTimer
+  }
+}
+
+/** A settings read that never settles must not hold the whole window on a blank page. */
+const SETTINGS_BOOT_TIMEOUT_MS = 8_000
+
+/** Rejects if `work` has not settled in time; the original promise is left to finish on its own. */
+async function withTimeout(work: Promise<void>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("Settings did not load in time")), ms)
+      })
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
   }
 }
 

@@ -55,6 +55,26 @@ const store = {
   }
 }
 
+/** The values a fresh install starts with; also the fallback when the store cannot be read. */
+export function defaultPreferences(): Preferences {
+  return {
+    composerPredictions: true,
+    sidebarPinned: true,
+    chatWindowShortcut: "Alt+Space",
+    lastProjectDirectory: null,
+    language: null,
+    zoomLevel: null,
+    modelSelections: { main: null, chat: null },
+    navigationSoundMode: "scale",
+    navigationInstrument: "acoustic_grand_piano",
+    externalEditor: null,
+    lastSession: null,
+    profileNickname: null,
+    profileAvatar: null,
+    profileOwner: null
+  }
+}
+
 export async function loadPreferences(): Promise<Preferences> {
   await settingsStore.read()
   const [
