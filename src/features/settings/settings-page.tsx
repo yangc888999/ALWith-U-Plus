@@ -292,7 +292,7 @@ export function SettingsPage({ embedded = false }: { embedded?: boolean }) {
       showTitleBar={!embedded}
       embedded={embedded}
     >
-      <Pane viewportRef={viewportRef} viewportClassName="px-6 pt-5 pb-10">
+      <Pane viewportRef={viewportRef} viewportClassName="px-6 pt-8 pb-10">
         <section
           className="settings-content mx-auto w-full max-w-4xl"
           aria-label={

@@ -10,6 +10,7 @@ test("the update-log dialog carries the shipped version and every bullet of it",
   expect(groups[0].items.length).toBeGreaterThan(0)
   expect(groups[0].items.join(" ")).toContain("按显示器记忆窗口尺寸")
   expect(groups[0].items.join(" ")).toContain("当前屏幕工作区")
+  expect(groups[0].items.join(" ")).toContain("单一 ✕ 关闭按钮")
   // 上一版的四栏错位修复仍在日志里可读。
   const layout8 = groups.find((group) => group.version === "1.0.8")
   expect(layout8?.items.join(" ")).toContain("侧边栏被推到中间")

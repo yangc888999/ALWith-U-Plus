@@ -156,25 +156,21 @@ export function SettingsOverlay() {
           follow(event, (dx, dy, start) => clamp({ ...start, x: start.x + dx, y: start.y + dy }))
         }}
       />
-      {/* 左上角按 macOS 习惯摆成红绿灯：红点是关闭，hover 才浮出 ×；另外两点是纯装饰
-          —— 这个面板没有最小化/最大化语义，做成能点的假按钮会骗人，所以只跟着拖拽走。
-          12px 直径 + 8px 间隙是系统 traffic light 的尺寸，圆心落在 (16,16)，和系统窗口对齐。 */}
-      <div className="absolute start-2.5 top-2.5 z-20 flex items-center gap-2" data-settings-traffic>
-        <button
-          type="button"
-          aria-label={t("settings.close")}
-          onClick={closeSettingsOverlay}
-          className="group relative flex size-3 items-center justify-center rounded-full border border-black/15 bg-[#ff5f57] shadow-[inset_0_1px_0_rgb(255_255_255/0.35)] transition-colors hover:bg-[#ff4136] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-        >
-          <XIcon
-            className="size-2 text-black/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
-            aria-hidden="true"
-            strokeWidth={3}
-          />
-        </button>
-        <span aria-hidden="true" className="size-3 rounded-full border border-black/10 bg-black/10 dark:border-white/10 dark:bg-white/15" />
-        <span aria-hidden="true" className="size-3 rounded-full border border-black/10 bg-black/10 dark:border-white/10 dark:bg-white/15" />
-      </div>
+      {/* 单一关闭按钮，**不再**画假红绿灯。
+          这个面板是主窗口里的浮层，而主窗口 32px 标题栏上已经有系统画的红绿灯；之前在这里放三颗
+          几乎一样的圆点，结果是两个「关」上下相隔 40px：一个关面板、一个退掉整个 App。系统红绿灯
+          是 OS 画的、且 0.4.3 能那样做是因为它真是独立窗口 —— 浮层复刻不了，就不该复刻。
+          方形命中区 + ✕ 也不再用窗控的图形语言，避免宣称自己有最小化/放大。
+          28px 命中区、12px/8px 内缩与侧栏 px-3 同基线；颜色全走 token，深色主题自动跟随。 */}
+      <button
+        type="button"
+        aria-label={t("settings.close")}
+        title={`${t("settings.close")} (Esc)`}
+        onClick={closeSettingsOverlay}
+        className="absolute start-3 top-2 z-20 flex size-7 items-center justify-center rounded-lg text-muted-foreground/80 transition-colors hover:bg-foreground/[0.08] hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      >
+        <XIcon className="size-4" aria-hidden="true" />
+      </button>
       <div className="flex min-h-0 flex-1 flex-col">
         <SettingsPage embedded />
       </div>
