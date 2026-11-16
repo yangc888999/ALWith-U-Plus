@@ -19,6 +19,14 @@ import { useThreeFingerSwipeEnabled } from "@/lib/trackpad-preference"
 import type { CanvasContext, CanvasWorkspace } from "./canvas-context"
 import { resolveMainCanvasGeometry } from "./canvas-geometry"
 
+/**
+ * Stand-in geometry for the one frame before the ResizeObserver reports real sizes. It only has to
+ * produce *distinct* stops so Atlas is never constructed on three coincident anchors; the measured
+ * values replace it immediately. 1280x248 matches the default window and sidebar width.
+ */
+const PLACEHOLDER_VIEWPORT = 1280
+const PLACEHOLDER_NAVIGATION = 248
+
 export function useMainCanvas(
   screen: "main" | "leading",
   pinned: boolean,
@@ -34,6 +42,8 @@ export function useMainCanvas(
   navigationPeeking: boolean
   select: (index: number) => void
   width: number
+  /** False until the viewport and navigation have been measured; anchors are degenerate before that. */
+  measured: boolean
   direction: "ltr" | "rtl"
 } {
   const { i18n } = useTranslation()
@@ -60,6 +70,8 @@ export function useMainCanvas(
   const divider = useRef(false)
   const [dividerDragging, setDividerState] = useState(false)
   const appliedGeometry = useRef<string | null>(null)
+  /** Set when a geometry rebuild must re-align the track even if the snap index is unchanged. */
+  const realign = useRef(false)
   const [request, setRequest] = useState<{
     region: "chat" | "preview" | "trailing"
     revision: number
@@ -73,9 +85,22 @@ export function useMainCanvas(
   useLayoutEffect(() => {
     callbacks.current = { onScreenChange, screen }
   }, [onScreenChange, screen])
+  // The first render has not measured anything: `size` is {0,0}, so `resolveSplitGeometry` returns
+  // leading=0 / main=0 and **every snap collapses onto offset 0**. Atlas is constructed with those
+  // degenerate anchors and immediately does `goTo(initialRegion)`, settling the track on an offset
+  // derived from three identical stops. When the ResizeObserver later delivers real numbers,
+  // `refresh()` rebuilds the snap list but Atlas still reports the same `selected` index, so the
+  // track keeps the stale offset — on screen the sidebar sits in the middle with a blank leading
+  // strip to its left and chat/preview squeezed right (2026-11-16, first launch and maximising).
+  //
+  // Atlas requires at least one nonempty, unique region anchor at construction, so the anchors
+  // cannot simply be withheld. Instead give the unmeasured frame a non-degenerate placeholder:
+  // distinct stops from the very first paint, replaced by the real measurement one frame later.
+  const measured = size.viewport > 0 && size.navigation > 0
+  const measurement = measured ? size : { viewport: PLACEHOLDER_VIEWPORT, navigation: PLACEHOLDER_NAVIGATION }
   const geometry = useMemo(
-    () => resolveMainCanvasGeometry({ ...size, pinned, chat: workspace.chat, preview: workspace.preview }, trailing),
-    [size, pinned, workspace.chat, workspace.preview, trailing]
+    () => resolveMainCanvasGeometry({ ...measurement, pinned, chat: workspace.chat, preview: workspace.preview }, trailing),
+    [measurement, pinned, workspace.chat, workspace.preview, trailing]
   )
   const geometryKey = `${geometry.stops.join(":")}:${geometry.content}:${direction}`
   const { ref: atlasRef, atlas: api } = useAtlas({
@@ -157,13 +182,21 @@ export function useMainCanvas(
     if (geometryChanged) {
       api.refresh({ direction })
       appliedGeometry.current = geometryKey
+      // A rebuild changes where every snap physically sits. Atlas keeps its own `selected`
+      // index across the rebuild, so `goToSnap(desired)` below would be a no-op whenever the
+      // index happens to match — leaving the track on the pre-rebuild offset. Force the
+      // alignment after a geometry change instead of trusting the index.
+      realign.current = true
     }
     if (requested) region.current = request.region
     if (region.current === "preview" && !workspace.visible) region.current = "chat"
     const desired = region.current === "preview" && !geometry.split ? 1 : geometry.regions.indexOf(region.current)
     appliedRequest.current = request?.revision ?? null
     const animating = requested && !reduced() && api.getGeometry().selected !== desired
-    api.goToSnap(desired, { instant: !animating })
+    // Never animate the correction of a stale offset: the reader did not ask to move, so the
+    // track must land on the right region immediately rather than slide across the window.
+    api.goToSnap(desired, { instant: !animating || realign.current })
+    realign.current = false
     rebuilding.current = false
     if (requested) commitScreen(desired)
     setSelected(desired)
@@ -290,6 +323,7 @@ export function useMainCanvas(
     navigationPeeking,
     select,
     width: size.viewport,
+    measured,
     direction
   }
 }
