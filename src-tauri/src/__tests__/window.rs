@@ -105,68 +105,80 @@ fn sized_respects_shares_minimum_and_work_area() {
 }
 
 #[test]
-fn parse_new_format_roundtrip() {
-    let mut records = DisplayRecords::default();
-    records.by_display.insert("A".into(), record(2880.0, 1620.0, 2400.0, 1400.0));
-    records.by_display.insert("B".into(), record(1440.0, 2560.0, 1200.0, 2000.0));
-    records.last = Some("B".into());
-
+fn the_current_format_is_a_bare_global_share() {
+    let records = DisplayRecords { share: Some((0.9, 0.95)) };
     let text = serde_json::to_string(&records).unwrap();
-    let parsed = parse_display_records(&text);
-    assert_eq!(parsed.last.as_deref(), Some("B"));
-    assert_eq!(parsed.by_display.len(), 2);
-    assert_eq!(parsed.by_display["A"].width, 2400.0);
-    assert_eq!(parsed.by_display["B"].work_height, 2560.0);
+    // Nothing per display is written any more — that is the whole point of the redesign.
+    assert!(!text.contains("by_display"));
+    assert_eq!(parse_display_records(&text).share, Some((0.9, 0.95)));
+    assert_eq!(saved_share(&parse_display_records(&text)), (0.9, 0.95));
 }
 
 #[test]
-fn parse_legacy_single_record_as_fallback() {
+fn an_old_single_record_migrates_to_a_share() {
     let legacy = r#"{"work_width":2880.0,"work_height":1620.0,"width":2400.0,"height":1400.0}"#;
     let parsed = parse_display_records(legacy);
-    assert!(parsed.last.is_none());
-    assert_eq!(parsed.by_display.len(), 1);
-    let saved = parsed.by_display.get(LEGACY_KEY).expect("legacy record kept as fallback");
-    assert_eq!(saved.width, 2400.0);
-    assert_eq!(saved.work_height, 1620.0);
-    // The upgraded legacy record is still usable as a footprint source for any (unseen) key.
-    assert_eq!(footprint_record_for(&parsed, "A").map(|r| r.width), Some(2400.0));
+    let (w, h) = saved_share(&parsed);
+    // 2400/2880 and 1400/1620 — the proportion survives, the display identity does not.
+    assert!((w - 2400.0 / 2880.0).abs() < 1e-9);
+    assert!((h - 1400.0 / 1620.0).abs() < 1e-9);
 }
 
 #[test]
-fn parse_legacy_with_integer_values() {
-    let legacy = r#"{"work_width":2880,"work_height":1620,"width":2400,"height":1400}"#;
+fn an_old_per_display_map_migrates_to_one_share() {
+    // The shape that caused the shrinking: several displays, `last` pointing at one of them.
+    let legacy = r#"{"by_display":{
+        "A|0,0":{"work_width":2880.0,"work_height":1620.0,"width":2400.0,"height":1400.0},
+        "B|1440,0":{"work_width":1440.0,"work_height":2560.0,"width":1200.0,"height":2000.0}},
+        "last":"B|1440,0"}"#;
     let parsed = parse_display_records(legacy);
-    assert_eq!(parsed.by_display.get(LEGACY_KEY).unwrap().width, 2400.0);
+    let (w, h) = saved_share(&parsed);
+    // The proportion of the display the window was last sized on wins.
+    assert!((w - 1200.0 / 1440.0).abs() < 1e-9);
+    assert!((h - 2000.0 / 2560.0).abs() < 1e-9);
+}
+
+#[test]
+fn integer_valued_old_records_still_migrate() {
+    let legacy = r#"{"work_width":2880,"work_height":1620,"width":2400,"height":1400}"#;
+    let (w, _) = saved_share(&parse_display_records(legacy));
+    assert!((w - 2400.0 / 2880.0).abs() < 1e-9);
 }
 
 #[test]
 fn parse_corrupt_or_empty_is_safe_default() {
     for text in ["not json", "{}", "", "null", "[]", "123"] {
-        assert!(parse_display_records(text).by_display.is_empty(), "{text}");
-        assert!(parse_display_records(text).last.is_none(), "{text}");
+        assert!(parse_display_records(text).share.is_none(), "{text}");
     }
 }
 
 #[test]
-fn footprint_record_prefers_target_then_last_then_legacy() {
-    let mut records = DisplayRecords::default();
-    records.by_display.insert("A".into(), record(2880.0, 1620.0, 2400.0, 1400.0));
-    records.by_display.insert("B".into(), record(1440.0, 2560.0, 1200.0, 2000.0));
-    records.by_display.insert(LEGACY_KEY.into(), record(1920.0, 1080.0, 1600.0, 900.0));
-    records.last = Some("A".into());
+fn the_share_is_the_only_thing_that_decides_size() {
+    // There is no per-display state left to fall back to: a fresh install starts from the defaults,
+    // and a stored share is used verbatim regardless of which display the window is on.
+    assert_eq!(saved_share(&DisplayRecords::default()), (DEFAULT_WIDTH_FRACTION, DEFAULT_HEIGHT_FRACTION));
+    assert_eq!(saved_share(&DisplayRecords { share: Some((0.9, 0.95)) }), (0.9, 0.95));
+    // A nonsense share is ignored rather than propagated.
+    for bad in [(0.0, 0.0), (-1.0, 2.0), (f64::NAN, 0.5), (f64::INFINITY, 0.5)] {
+        assert_eq!(saved_share(&DisplayRecords { share: Some(bad) }), (DEFAULT_WIDTH_FRACTION, DEFAULT_HEIGHT_FRACTION));
+    }
+}
 
-    // Target has its own record -> it wins even though `last` points elsewhere (return visit).
-    assert_eq!(footprint_record_for(&records, "B").unwrap().width, 1200.0);
-    // Target unseen -> carry over the share from `last` (first arrival on a new display).
-    assert_eq!(footprint_record_for(&records, "C").unwrap().width, 2400.0);
-
-    // No target, no `last` -> legacy fallback.
-    records.last = None;
-    assert_eq!(footprint_record_for(&records, "C").unwrap().width, 1600.0);
-
-    // Nothing anywhere -> None (caller falls back to default fractions).
-    records.by_display.remove(LEGACY_KEY);
-    assert!(footprint_record_for(&records, "C").is_none());
+#[test]
+fn an_unfamiliar_display_does_not_resize_the_window() {
+    // The regression: a 2560x1640 window on a 2880x1620 work area was rebuilt to 1912x960 simply
+    // because the display key was not in the store. Identity must not participate in sizing.
+    let input = GeometryInput {
+        share: (0.89, 0.98),
+        work: (2880.0, 1620.0),
+        display_changed: false,
+        landed_here: false,
+        maximized: false,
+        fullscreen: false,
+        validate_size: true,
+        fractions: (0.89, 0.98),
+    };
+    assert_eq!(plan_geometry(input), GeometryPlan::Keep);
 }
 
 #[test]
@@ -222,7 +234,7 @@ fn a_maximized_window_is_never_rebuilt() {
     let maximized = plan_geometry(GeometryInput {
         share: (1.0, 1.0),
         work: (2560.0, 1440.0),
-        unseen_display: false,
+        display_changed: false,
         landed_here: false,
         maximized: true,
         fullscreen: false,
@@ -231,19 +243,35 @@ fn a_maximized_window_is_never_rebuilt() {
     });
     assert_eq!(maximized, GeometryPlan::Keep);
 
-    // Same frame, no longer maximised: an absurd size is still rejected at startup.
-    let restored = plan_geometry(GeometryInput {
+    // Same frame, no longer maximised: a window that exactly fills the work area is a legitimate
+    // choice and must survive a restart. This is the case the old "share > 0.95" rule wrongly shrank
+    // back to 85% on every launch.
+    let fills = plan_geometry(GeometryInput {
         share: (1.0, 1.0),
         work: (2560.0, 1440.0),
-        unseen_display: false,
+        display_changed: false,
         landed_here: false,
         maximized: false,
         fullscreen: false,
         validate_size: true,
         fractions: (1.0, 1.0),
     });
+    assert_eq!(fills, GeometryPlan::Keep);
+
+    // A truly corrupt capture (11440x3000 recorded on a 2560x1440 panel ≈ 4.5x the work area) is
+    // still rejected at startup and falls back to the defaults.
+    let absurd = plan_geometry(GeometryInput {
+        share: (4.47, 2.08),
+        work: (2560.0, 1440.0),
+        display_changed: false,
+        landed_here: false,
+        maximized: false,
+        fullscreen: false,
+        validate_size: true,
+        fractions: (4.47, 2.08),
+    });
     assert_eq!(
-        restored,
+        absurd,
         GeometryPlan::Rebuild {
             width: (2560.0f64 * DEFAULT_WIDTH_FRACTION).round(),
             height: (1440.0f64 * DEFAULT_HEIGHT_FRACTION).round()
@@ -256,7 +284,7 @@ fn a_fullscreen_window_is_never_rebuilt() {
     let plan = plan_geometry(GeometryInput {
         share: (0.2, 0.2),
         work: (1920.0, 1050.0),
-        unseen_display: true,
+        display_changed: true,
         landed_here: true,
         maximized: false,
         fullscreen: true,
@@ -273,7 +301,7 @@ fn a_window_sized_for_a_smaller_panel_is_rebuilt_from_the_share() {
     let plan = plan_geometry(GeometryInput {
         share: (1920.0 / 2560.0, 960.0 / 1440.0),
         work: (2560.0, 1440.0),
-        unseen_display: true,
+        display_changed: true,
         landed_here: false,
         maximized: false,
         fullscreen: false,
@@ -287,7 +315,7 @@ fn a_window_sized_for_a_smaller_panel_is_rebuilt_from_the_share() {
     let too_small = plan_geometry(GeometryInput {
         share: (0.30, 0.40),
         work: (2560.0, 1440.0),
-        unseen_display: false,
+        display_changed: false,
         landed_here: false,
         maximized: false,
         fullscreen: false,
@@ -304,7 +332,7 @@ fn a_normal_share_and_a_deliberate_small_window_are_left_alone() {
         plan_geometry(GeometryInput {
             share: (0.80, 0.80),
             work: (1920.0, 1050.0),
-            unseen_display: false,
+            display_changed: false,
             landed_here: false,
             maximized: false,
             fullscreen: false,
@@ -320,7 +348,7 @@ fn a_normal_share_and_a_deliberate_small_window_are_left_alone() {
         plan_geometry(GeometryInput {
             share: (MIN_WIDTH_FRACTION, MIN_HEIGHT_FRACTION),
             work: (1920.0, 1050.0),
-            unseen_display: false,
+            display_changed: false,
             landed_here: false,
             maximized: false,
             fullscreen: false,
@@ -339,7 +367,7 @@ fn a_drag_onto_a_display_always_rebuilds_from_that_displays_own_share() {
     let plan = plan_geometry(GeometryInput {
         share: (0.60, 0.60),
         work: (2560.0, 1440.0),
-        unseen_display: false,
+        display_changed: false,
         landed_here: true,
         maximized: false,
         fullscreen: false,

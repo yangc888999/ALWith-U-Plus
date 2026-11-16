@@ -6,11 +6,14 @@ import { parseChangeLog } from "../changelog"
 test("the update-log dialog carries the shipped version and every bullet of it", () => {
   const groups = parseChangeLog(changelog)
   // CHANGELOG 按版本倒序维护；第一组必须就是当前发布版本，且要有本次修复的中文条目。
-  expect(groups[0].version).toBe("1.0.8")
+  expect(groups[0].version).toBe("1.0.9")
   expect(groups[0].items.length).toBeGreaterThan(0)
-  expect(groups[0].items.join(" ")).toContain("侧边栏被推到中间")
-  expect(groups[0].items.join(" ")).toContain("两屏")
-  // 上一版的白屏修复仍在日志里可读。
+  expect(groups[0].items.join(" ")).toContain("按显示器记忆窗口尺寸")
+  expect(groups[0].items.join(" ")).toContain("当前屏幕工作区")
+  // 上一版的四栏错位修复仍在日志里可读。
+  const layout8 = groups.find((group) => group.version === "1.0.8")
+  expect(layout8?.items.join(" ")).toContain("侧边栏被推到中间")
+  // 更早一版的白屏修复仍在日志里可读。
   const boot = groups.find((group) => group.version === "1.0.7")
   expect(boot?.items.join(" ")).toContain("首次打开白屏")
   expect(boot?.items.join(" ")).toContain("首屏等待路径")
