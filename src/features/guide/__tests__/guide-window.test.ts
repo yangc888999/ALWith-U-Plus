@@ -52,7 +52,7 @@ test("repeated opens create one bundled guide window and restore its focus", asy
   expect(state.created).toHaveBeenCalledOnce()
   expect(state.created).toHaveBeenCalledWith(
     "guide",
-    expect.objectContaining({ url: "/guide.html", title: "ALWith L Guide" })
+    expect.objectContaining({ url: "/guide.html", title: "ALWith U⁺ Guide" })
   )
   expect(state.show).toHaveBeenCalledTimes(2)
   expect(state.focus).toHaveBeenCalledTimes(2)
@@ -75,7 +75,7 @@ test.each(["Win32", "MacIntel"] as const)("%s retains native guide window contro
   expect(state.created).toHaveBeenCalledWith(
     "guide",
     expect.objectContaining({
-      title: "ALWith L Guide",
+      title: "ALWith U⁺ Guide",
       hiddenTitle: platform !== "Win32",
       titleBarStyle: platform === "Win32" ? "visible" : "overlay"
     })

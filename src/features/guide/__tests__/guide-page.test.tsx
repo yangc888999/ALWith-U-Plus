@@ -50,7 +50,7 @@ test.each(["Win32", "MacIntel"] as const)("%s uses the appropriate guide title b
   const view = render(<GuidePage />)
   const header = view.container.querySelector(".guide-window > div > [data-tauri-drag-region]")
   if (platform === "Win32") expect(header).toBeNull()
-  else expect(header).toHaveTextContent("ALWith L Guide")
+  else expect(header).toHaveTextContent("ALWith U⁺ Guide")
   expect(view.getByRole("navigation", { name: "Guide chapters" })).toBeVisible()
   expect(view.getByRole("main", { name: "Welcome" })).toBeVisible()
 })

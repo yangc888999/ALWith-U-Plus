@@ -2291,6 +2291,11 @@ export type Snapshot_Deserialize = {
   builtInModels: { [key in string]: CustomModel_Deserialize[] }
   status: string
   error?: string | null
+  /**
+   *  The account catalog could not be refreshed. Displayed as a neutral notice, never as
+   *  `status: "failed"` — see the field of the same name on `Inner`.
+   */
+  managedError?: string | null
 }
 
 export type Snapshot_Serialize = {
@@ -2310,6 +2315,11 @@ export type Snapshot_Serialize = {
   builtInModels: { [key in string]: CustomModel_Serialize[] }
   status: string
   error: string | null
+  /**
+   *  The account catalog could not be refreshed. Displayed as a neutral notice, never as
+   *  `status: "failed"` — see the field of the same name on `Inner`.
+   */
+  managedError: string | null
 }
 
 export type StagedImport = {

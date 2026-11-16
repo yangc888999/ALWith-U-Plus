@@ -540,6 +540,11 @@ export function ProviderSection({ initialProviderId }: { initialProviderId?: str
             <p className="mb-3 text-sm text-muted-foreground">{t("provider.pending")}</p>
           )}
           {snapshot?.error && <p className="mb-3 text-sm text-destructive">{snapshot.error}</p>}
+          {/* 账号目录拉不到，跟「配置没应用」是两件事：「立即应用」能把后者写进引擎，对前者
+              一点用都没有。所以这里用中性色单独提示，也不触发下面那颗按钮。 */}
+          {snapshot?.managedError && (
+            <p className="mb-3 text-xs text-muted-foreground">{snapshot.managedError}</p>
+          )}
           {snapshot && snapshot.status !== "applied" && (
             <Button variant="outline" className="mb-3 self-start" disabled={busy !== null} onClick={() => void retry()}>
               {t("provider.applyNow")}

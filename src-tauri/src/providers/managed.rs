@@ -270,10 +270,13 @@ pub async fn providers_refresh_managed(
                 log::warn!("Provider catalog: managed refresh failed: {detail}");
                 // Only surface it when the engine is actually routing through this account's
                 // gateway. On a first sign-in — or an account with no managed catalog at all —
-                // this failure costs the reader nothing, and a red banner over a working provider
+                // this failure costs the reader nothing, and a notice over a working provider
                 // list is pure noise.
                 if inner.managed_active {
-                    inner.error = Some(format!("模型配置刷新失败：{detail}"));
+                    // `managed_error`, not `error`: a catalog that failed to download cannot be
+                    // fixed by 「立即应用」, and folding it into `error` also flipped `status` to
+                    // "failed" so that button appeared next to a banner it could not clear.
+                    inner.managed_error = Some(format!("账号模型目录暂未同步：{detail}"));
                     let _ = inner.snapshot().emit(app);
                 }
                 return Err(error);
@@ -296,6 +299,7 @@ pub async fn providers_refresh_managed(
         inner.saved = next;
         inner.managed_active = true;
         inner.error = None;
+        inner.managed_error = None;
     }
     let snapshot = inner.snapshot();
     let _ = snapshot.emit(app);
@@ -346,6 +350,9 @@ pub(super) async fn clear(app: &AppHandle) -> Result<(), String> {
             .await
             .map_err(|_| "模型供应商配置未完成，清理尚未结束，请稍后重试")?;
         inner.managed_active = false;
+        // Signing out removes the account the notice was about; leaving it up would blame a
+        // catalog that is no longer in play.
+        inner.managed_error = None;
         inner.applied_revision = None;
         inner.saved.managed = None;
         inner.saved.revision = inner.saved.revision.checked_add(1).ok_or("Provider revision exhausted")?;
