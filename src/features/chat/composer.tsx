@@ -42,7 +42,11 @@ const noHandOff: NonNullable<ComposerProps["onHandOff"]> = () => {}
 
 /** The input's height, dragged from the top edge of the card and remembered across launches. */
 const INPUT_HEIGHT_KEY = "alwith:composer-input-height"
-const INPUT_MIN = 40
+// At least two rows must stay visible. A smaller drag (the old floor was 40px) can hide the
+// placeholder and resize grip entirely, which reads as "the input box is gone" — the same class of
+// bug the account-recovery CSS used to cause. Stored values below this floor are ignored on load,
+// so a hand-edited or malformed localStorage value cannot collapse the composer either.
+const INPUT_MIN = 72
 const INPUT_MAX = 720
 
 /**

@@ -119,7 +119,12 @@ static OVERLOAD_MUTE: AtomicBool = AtomicBool::new(false);
 
 /// Whether the user has asked to mute every overload notice and replay in silence.
 pub fn set_overload_mute(mute: bool) {
-    OVERLOAD_MUTE.store(mute, Ordering::Relaxed);
+    let previous = OVERLOAD_MUTE.swap(mute, Ordering::Relaxed);
+    // 开关状态写一行日志：用户报「设了没重试」时，先确认桥接层到底有没有armed，
+    // 再看日志里有没有 `muted overload, immediate replay`（真正发生重放的证据）。
+    if previous != mute {
+        log::info!("bridge: overload mute -> {mute}");
+    }
 }
 
 /// Whether `relay` should swallow `server_is_overloaded` and replay immediately.

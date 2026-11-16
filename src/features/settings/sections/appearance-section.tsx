@@ -129,7 +129,7 @@ function ThemeSegmented({
     <div
       role="group"
       aria-label="主题"
-      className="grid w-[300px] grid-cols-3 gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5"
+      className="grid w-[300px] max-w-full grid-cols-3 gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5"
     >
       {options.map(([theme, label, Icon]) => (
         <button
@@ -178,7 +178,7 @@ function MaterialSegmented({
     <div
       role="group"
       aria-label={t("settings.materialMode")}
-      className="grid w-[300px] grid-cols-3 gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5"
+      className="grid w-[300px] max-w-full grid-cols-3 gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5"
     >
       {options.map(([mode, label]) => (
         <button
@@ -335,17 +335,33 @@ export function AppearanceSection() {
           title={t("settings.materialMode")}
           desc={t(`settings.materialDesc.${materialMode === "solid" ? "solid" : materialMode === "aero" ? "aero" : "glass"}`)}
         >
-          <div className="flex flex-col items-end gap-1">
+          <div className="flex w-[300px] max-w-full flex-col items-end gap-1">
             <MaterialSegmented value={materialMode} onChange={setAppearanceMode} />
-            {materialMode !== "solid" && (materialEffect?.applied === false || materialFailure !== null) && (
-              <p className="max-w-[300px] text-end text-[11px] leading-4 text-amber-600 dark:text-amber-400">
-                {materialFailure ?? materialEffect?.detail ?? t("settings.materialUnavailable")}
-              </p>
-            )}
+            {/* 这一行必须始终占位：只在出错时渲染会让卡片高度随档位跳变，
+                下面的「透明度 / 界面缩放」跟着上下移动，看起来像 Tab 自己在动。 */}
+            <p
+              className={cn(
+                "min-h-4 max-w-[300px] text-end text-[11px] leading-4",
+                materialMode !== "solid" && (materialEffect?.applied === false || materialFailure !== null)
+                  ? "text-amber-600 dark:text-amber-400"
+                  : "invisible"
+              )}
+            >
+              {materialFailure ?? materialEffect?.detail ?? t("settings.materialUnavailable")}
+            </p>
           </div>
         </SettingRow>
-        <SettingRow compact title={t("settings.transparency")} desc={t("settings.transparencyDesc")}>
-          <div className="flex w-[300px] items-center gap-3">
+        <SettingRow
+          compact
+          title={t("settings.transparency")}
+          desc={materialMode === "solid" ? t("settings.transparencySolid") : t("settings.transparencyDesc")}
+        >
+          {materialMode === "solid" ? (
+            <span className="flex h-5 w-[300px] max-w-full items-center justify-end text-xs text-muted-foreground">
+              {t("settings.transparencySolidValue")}
+            </span>
+          ) : (
+          <div className="flex w-[300px] max-w-full items-center gap-3">
             <Slider.Root
               value={[transparency]}
               min={0}
@@ -371,6 +387,7 @@ export function AppearanceSection() {
             </Slider.Root>
             <span className="w-9 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{transparency}</span>
           </div>
+          )}
         </SettingRow>
         <SettingRow compact title={t("zoom.label")} desc={t("settings.zoomDesc")}>
           <Select

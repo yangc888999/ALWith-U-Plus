@@ -10,7 +10,6 @@ const IS_WINDOWS = navigator.platform.includes("Win")
 export function AuxWindowShell({
   title,
   showTitleBar = true,
-  embedded = false,
   sidebar,
   sidebarClassName,
   className,
@@ -18,19 +17,16 @@ export function AuxWindowShell({
 }: {
   title?: ReactNode
   showTitleBar?: boolean
-  embedded?: boolean
   sidebar: ReactNode
   sidebarClassName?: string
   className?: string
   children: ReactNode
 }) {
   return (
-    <div className={cn("flex bg-background", embedded ? "h-full" : "h-screen", className)}>
+    <div className={cn("flex h-screen bg-background", className)}>
       <aside className={cn("flex shrink-0 flex-col border-e border-border bg-sidebar", sidebarClassName)}>
-        {/* Windows uses a native title bar outside the webview. Embedded in the main window the
-            shell already sits under that window's chrome: the extra 32px strip there was an
-            empty band above 账号与设备 with nothing to drag. */}
-        {!IS_WINDOWS && !embedded && <div className="h-8 shrink-0" data-tauri-drag-region />}
+        {/* Windows uses a native title bar outside the webview. */}
+        {!IS_WINDOWS && <div className="h-8 shrink-0" data-tauri-drag-region />}
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{sidebar}</div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">

@@ -5,11 +5,12 @@ import { SettingsIcon } from "@solar-icons/react/bold-duotone/settings"
 import { isTauri } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import { getCurrentWebviewWindow, WebviewWindow } from "@tauri-apps/api/webviewWindow"
-import { GlobeIcon } from "lucide-react"
+import { ArrowLeftIcon, GlobeIcon } from "lucide-react"
 import { useCallback, useContext, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { commands } from "@/bindings"
+import { Button } from "@/components/ui/button"
 import { openChatWindow } from "@/lib/chat-window"
 
 import { CanvasContext } from "../lib/canvas-context"
@@ -86,9 +87,25 @@ export function TrailingBoard() {
     <div
       ref={pane}
       className="relative flex h-full min-h-0 flex-col select-none"
-      aria-label={t("sidebar.leadingNavigation")}
+      aria-label={t("canvas.appsTitle")}
     >
+      {/* The apps screen used to be a bare card list: parked on it (status-bar dot, trackpad
+          flick), the window read as broken — no title, no explanation, no way back to the chat.
+          A titled header with an explicit return action makes it a normal screen. */}
+      <div className="flex flex-none flex-col gap-1 px-1 pb-3 pt-2">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="min-w-0 truncate text-sm font-semibold text-foreground">{t("canvas.appsTitle")}</h2>
+          <Button variant="outline" size="xs" className="shrink-0" onClick={() => canvas?.navigate("chat")}>
+            <ArrowLeftIcon className="size-3 rtl:-scale-x-100" />
+            {t("canvas.backToChat")}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">{t("canvas.appsDescription")}</p>
+      </div>
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-4">
+        {runningApps.length === 0 && windows.length === 0 && (
+          <p className="px-1 py-6 text-center text-xs text-muted-foreground">{t("canvas.appsEmpty")}</p>
+        )}
         {runningApps.map((app) => {
           const icon = app.icon ? (
             <img src={app.icon} alt="" draggable={false} className="object-contain" />

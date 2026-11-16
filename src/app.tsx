@@ -64,6 +64,7 @@ import {
   DRAFT_DIRECTORY_KEY,
   isGroupsRoot,
   resolveProjectDirectory,
+  shouldOpenFourColumns,
   useBoundProjectDirectory
 } from "@/features/workspace/project-directory"
 import { usePreviewVisiblePreference } from "@/features/workspace/preview-visible-preference"
@@ -76,7 +77,7 @@ import { playCompletionSound, soundForRunState } from "@/lib/completion-sound"
 import { bumpDockBadge, clearDockBadge } from "@/lib/dock-badge"
 import { settingsStore } from "@/lib/settings-store"
 import { startFreeModelWatch } from "@/features/providers/free-model-watch"
-import { startAppearanceMode } from "@/lib/appearance-mode"
+import { startAppearanceMode, startAppearanceSync } from "@/lib/appearance-mode"
 import { startPriceRefresh } from "@/features/settings/price-refresh"
 import { installChatShortcut } from "@/lib/chat-shortcut"
 import {
@@ -114,7 +115,6 @@ import { useReadVisibleSession } from "@/lib/use-read-visible-session"
 import { useSurfaceOperation } from "@/lib/use-surface-operation"
 import { useWindowFocus } from "@/lib/window-focus"
 import { openSettingsWindow } from "@/lib/window-manager"
-import { SettingsOverlay } from "@/features/settings/settings-overlay"
 
 // Matches `lib/startup-window.ts#FALLBACK_MS`: a startup failure keeps retrying while the silent
 // window is open, and this is how long that window lasts at most before the banner may speak.
@@ -495,7 +495,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   // select / 新开一场 / 查看会议文件 wins over the session cwd, so 拉会 always has a directory even
   // on the very first frame. Subscribing keeps this value fresh on every binding write.
   const directoryKey = selectedId ?? DRAFT_DIRECTORY_KEY
-  useBoundProjectDirectory(directoryKey)
+  const boundDirectory = useBoundProjectDirectory(directoryKey)
   const projectDirectory = resolveProjectDirectory({
     sessionId: selectedId,
     sessionCwd: session?.cwd ?? null,
@@ -506,15 +506,18 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   // `readOnly` is deliberately NOT a condition: an account-model recovery session is still a
   // project with files, and hiding its columns because the composer is locked was the reported bug.
   const isTemporaryChat = directoryReason === "temporary"
-  // Projects open the preview column by default when its own visibility toggle is on (设置 →
-  // 界面布局 → 显示预览栏). A temporary chat is two columns regardless: it has no project behind
-  // it to preview. `missing` does NOT auto-open the columns: a fresh install that has never picked
-  // a folder should not be greeted by an empty third pane — clicking 文件栏 opens the column and
-  // shows the guidance on demand. `invalid` IS opened automatically, so the one-click repair is on
-  // screen without an extra click.
+  // 首页/聊天默认两栏，只有真正进入项目才可能四栏，且仍受「显示预览栏」设置约束。
+  // 根因（2026-11-16）：`resolveProjectDirectory` 在没有绑定时会回退到 `lastDirectory`，
+  // 于是首次进入/新聊天被当成项目、自动弹出预览栏，把对话栏挤到 17%、输入框挤成一条缝。
+  // 因此这里不能用回退后的 `directoryReason` 判定，只看当前 key 的明确绑定或会话自身 cwd。
+  // 设置里关掉预览栏时，即使是项目也保持两栏（`shouldOpenFourColumns` 内统一处理）。
   const [previewVisible] = usePreviewVisiblePreference()
-  const defaultFourColumns =
-    directoryReason !== "temporary" && directoryReason !== "missing" && previewVisible
+  const defaultFourColumns = shouldOpenFourColumns({
+    boundDirectory: boundDirectory?.directory ?? null,
+    sessionCwd: session?.cwd ?? null,
+    previewVisible,
+    invalidDirectory: directoryReason === "invalid"
+  })
   const directoryGuidance = t(
     directoryReason === "invalid"
       ? "workspace.invalidDirectoryHint"
@@ -1077,7 +1080,10 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   // A Dock badge left over from the previous session has no meaning after a relaunch.
   useEffect(() => clearDockBadge(), [])
   // 外观材质（Liquid Glass / Aero / 纯色）：启动就把存下来的模式落到 DOM 与窗口上。
-  useEffect(() => startAppearanceMode(), [])
+  useEffect(() => {
+    startAppearanceMode()
+    startAppearanceSync()
+  }, [])
   // App 开着就检查 OpenRouter 有没有新上架的 :free 模型（开关默认关，设置页可开）。
   useEffect(() => startFreeModelWatch(), [])
   // 用量页价格自动刷新：启动时到期就跑，之后每 6 小时一次；失败静默，不打断当前操作。
@@ -1486,7 +1492,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
         >
           <HotkeysDialog open={hotkeysOpen} onOpenChange={setHotkeysOpen} />
           {globalFormDialog}
-          <SettingsOverlay />
           <CommandPalette
             open={paletteOpen}
             onOpenChange={setPaletteOpen}

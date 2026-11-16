@@ -122,7 +122,8 @@ pre,
   /* 外观透明度系数：1 = 原样，越小越透。由 `appearance-mode.ts` 写到 <html> 行内样式上。
      只乘进底色 / 卡片 / 侧栏的 alpha，文字与边框不受影响。 */
   --appearance-alpha: 1;
-  --canvas-page-indicator: oklch(0.985 0 0);
+  /* 画布圆点在浅色底上必须是深色，深色底上才是白色 —— 反过来写就是「浅色模式下看不见」。 */
+  --canvas-page-indicator: oklch(0.25 0 0);
   --background: oklch(1 0 0 / var(--appearance-alpha, 1));
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0 / var(--appearance-alpha, 1));
@@ -166,6 +167,7 @@ pre,
 }
 
 .dark {
+  --canvas-page-indicator: oklch(0.985 0 0);
   --background: color-mix(in srgb, #181818 calc(var(--appearance-alpha, 1) * 100%), transparent);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0 / var(--appearance-alpha, 1));
@@ -331,24 +333,6 @@ html[data-window-backdrop="acrylic"]
 [data-sidebar-mode="pinned"] .main-screen-content > .main-chat-surface {
   margin-inline-start: 0;
 }
-/* Active navigation is intentionally stronger than a 5% tint: it must remain legible over
-   wallpaper and transparent materials, and communicate the current destination without hover. */
-.main-sidebar-panel [aria-current="page"],
-.main-sidebar-rail [aria-current="page"] {
-  position: relative;
-  background-color: color-mix(in oklab, var(--foreground) 10%, transparent);
-  color: var(--foreground);
-}
-.main-sidebar-panel [aria-current="page"]::before,
-.main-sidebar-rail [aria-current="page"]::before {
-  content: "";
-  position: absolute;
-  inset-block: 7px;
-  inset-inline-start: 2px;
-  width: 3px;
-  border-radius: 999px;
-  background: var(--primary);
-}
 [data-sidebar-mode="pinned"] .main-screen-leading > .main-chat-surface {
   margin-inline-end: 0;
 }
@@ -431,7 +415,7 @@ html[data-window-backdrop="acrylic"]
   width: var(--active-sidebar-width);
   height: 100%;
   /* 收起/展开时外壳宽度要跟着动：只淡出不缩宽，侧栏会在 0 宽度里被瞬间裁掉，看起来闪一下。 */
-  transition: width 420ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: width 280ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 /* A drag owns the width: skip the open/close easing so the edge follows the pointer. */
 .main-sidebar-shell[data-resizing] {
@@ -498,50 +482,41 @@ html[data-window-backdrop="acrylic"]
 [data-sidebar-mode="floating"] .main-screen-track > .main-sidebar-shell {
   width: 0;
 }
-/* 收起/展开都使用明确的状态终点。不要只依赖基础态 transition：从 hidden 切回 pinned 时，
-   hidden 的 visibility 延迟和基础态的 visibility:visible 会互相覆盖，导致展开像瞬移。 */
+/* 展开方向也要有过渡：只在 [data-sidebar-mode] 里写 transition，回到固定态时属性消失，
+   动画会瞬间归位——收起有动画、展开没有，就是「僵硬」的来源。 */
 [data-sidebar-mode="pinned"] .main-sidebar-viewport {
   transform: translateX(0);
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
   transition:
-    transform 420ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 360ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 280ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 220ms cubic-bezier(0.32, 0.72, 0, 1),
     visibility 0s;
 }
-/* 收起 = 短距离向左收拢（48px），外壳同步收窄，正文同步让位。
-   不再整块滑出视口，避免看起来像第二页突然被放出或整栏瞬间消失。 */
+/* 收起 = 整块向左滑出（translateX(-100%)），外壳同步收窄，正文同步让位。
+   不要在 hidden 态裁切外壳：裁切会把滑出变成「从右往左被剪掉」，看起来还是硬切。 */
 [data-sidebar-mode="hidden"] .main-sidebar-viewport {
-  transform: translateX(-48px);
+  transform: translateX(-100%);
 }
 /* The rail owns a static 58px slot (52px column + 6px seam) in both collapsed and peeking
    states, so opening or dismissing the floating card never moves the chat frame. */
 [data-sidebar-mode="hidden"] .main-screen-content > .main-chat-surface,
 [data-sidebar-mode="floating"] .main-screen-content > .main-chat-surface {
-  margin-inline-start: min(calc(58px + var(--main-surface-gutter) / 2), 58px);
-}
-@media (max-width: 720px) {
-  [data-sidebar-mode="hidden"] .main-screen-content > .main-chat-surface,
-  [data-sidebar-mode="floating"] .main-screen-content > .main-chat-surface {
-    margin-inline-start: 44px;
-  }
-  .main-sidebar-rail {
-    width: 40px;
-  }
+  margin-inline-start: calc(58px + var(--main-surface-gutter) / 2);
 }
 /* 会话区让位与外壳同拍，否则侧栏还在滑、正文已经跳到位。 */
 .main-screen-content > .main-chat-surface {
-  transition: margin-inline-start 420ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: margin-inline-start 280ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 [data-sidebar-mode="hidden"] .main-sidebar-viewport {
   pointer-events: none;
   opacity: 0;
   visibility: hidden;
   transition:
-    transform 360ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 300ms cubic-bezier(0.22, 1, 0.36, 1),
-    visibility 0s linear 360ms;
+    transform 280ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    visibility 0s linear 280ms;
 }
 /* The peek is a floating card beside the rail: inset from the window edges, fully rounded,
    soft shadow, painted over the chat surface. The shell stays zero-width in flow. */
@@ -562,8 +537,8 @@ html[data-window-backdrop="acrylic"]
   visibility: visible;
   transform: none;
   transition:
-    opacity 200ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 160ms cubic-bezier(0.32, 0.72, 0, 1),
+    transform 180ms cubic-bezier(0.32, 0.72, 0, 1),
     visibility 0s;
 }
 /* When the sidebar is unpinned, a one-column icon rail stays on the leading edge: the header
@@ -581,8 +556,8 @@ html[data-window-backdrop="acrylic"]
   pointer-events: none;
   transform: translateX(-8px);
   transition:
-    opacity 260ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 170ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 190ms cubic-bezier(0.22, 1, 0.36, 1),
     visibility 0s;
   /* Promote to its own layer so the crossfade composites on the GPU instead of repainting the
      whole surface — this is what keeps the collapse smooth on lower-end machines. */
@@ -610,55 +585,34 @@ html[data-window-backdrop="acrylic"]
   transform: none;
   /* 等侧栏先退场再出现：两者同时淡入淡出会叠出一帧「两套侧栏」。 */
   transition:
-    opacity 220ms cubic-bezier(0.22, 1, 0.36, 1) 300ms,
-    transform 240ms cubic-bezier(0.22, 1, 0.36, 1) 300ms,
-    visibility 0s 300ms;
+    opacity 160ms cubic-bezier(0.32, 0.72, 0, 1) 130ms,
+    transform 180ms cubic-bezier(0.32, 0.72, 0, 1) 130ms,
+    visibility 0s 130ms;
 }
-/* Each icon starts tucked left and transparent; the visible state releases them in a tight
-   cascade. The old 40ms-per-icon stagger ran past 400ms and read as laggy — 20ms keeps the
-   motion legible without the sluggish build-up. The footer pair lands last. */
+/* Each icon starts tucked left and transparent; the visible state releases them one after
+   another (40ms apart) for a cascade. The footer pair lands last, mirroring the panel's
+   bottom-anchored footer. */
 .main-sidebar-rail button {
   opacity: 0;
   transform: translateX(-10px);
   transition:
-    opacity 240ms cubic-bezier(0.22, 1, 0.36, 1),
-    transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: opacity, transform;
+    opacity 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 [data-rail-show] .main-sidebar-rail button {
   opacity: 1;
   transform: none;
 }
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(1) {
-  transition-delay: 0ms;
-}
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(2) {
-  transition-delay: 20ms;
-}
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(3) {
-  transition-delay: 40ms;
-}
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(4) {
-  transition-delay: 60ms;
-}
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(5) {
-  transition-delay: 80ms;
-}
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(6) {
-  transition-delay: 100ms;
-}
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(7) {
-  transition-delay: 120ms;
-}
-[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(8) {
-  transition-delay: 140ms;
-}
-[data-rail-show] .main-sidebar-rail > .mt-auto > button:nth-child(1) {
-  transition-delay: 160ms;
-}
-[data-rail-show] .main-sidebar-rail > .mt-auto > button:nth-child(2) {
-  transition-delay: 180ms;
-}
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(1) { transition-delay: 60ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(2) { transition-delay: 100ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(3) { transition-delay: 140ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(4) { transition-delay: 180ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(5) { transition-delay: 220ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(6) { transition-delay: 260ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(7) { transition-delay: 300ms; }
+[data-rail-show] .main-sidebar-rail > :first-child > button:nth-child(8) { transition-delay: 340ms; }
+[data-rail-show] .main-sidebar-rail > .mt-auto > button:nth-child(1) { transition-delay: 400ms; }
+[data-rail-show] .main-sidebar-rail > .mt-auto > button:nth-child(2) { transition-delay: 440ms; }
 @keyframes activity-notification-pulse {
   0%,
   100% {
@@ -1138,6 +1092,27 @@ body > div:has(> [data-slot="dialog-overlay"]) > * {
   background: color-mix(in srgb, var(--card) 96%, transparent);
 }
 
+/* 纯色档（solid）与壁纸互斥：纯色的定义就是「不透明、不叠层、不费 GPU」。
+   壁纸在 solid 下整张不画（display:none 连绘制都省掉），壁纸档为透出它而写的那套
+   半透明表面也同时收回成实色 —— 否则用户选了「纯色」，界面仍然透出桌面。 */
+html[data-appearance="solid"] .wallpaper-background,
+html[data-appearance="solid"] [data-wallpaper="active"] .wallpaper-shell::before {
+  display: none;
+}
+html[data-appearance="solid"] [data-wallpaper="active"] [data-slot="sidebar-wrapper"],
+html[data-appearance="solid"] [data-wallpaper="active"] [data-slot="sidebar"] {
+  background: var(--sidebar);
+}
+html[data-appearance="solid"] [data-wallpaper="active"] .main-chat-surface,
+html[data-appearance="solid"] [data-wallpaper="active"] .main-screen-trailing {
+  background: var(--background);
+}
+html[data-appearance="solid"]
+  [data-wallpaper="active"]
+  :is(.settings-card, [data-slot="popover"], [data-slot="dialog-content"]) {
+  background: var(--card);
+}
+
 /* ALWith L agent identity, shared with the compiled native cursor artwork. */
 :root {
   --computer-cursor-body: rgb(97 92 89);
@@ -1227,6 +1202,39 @@ body > div:has(> [data-slot="dialog-overlay"]) > * {
   width: var(--sidebar-width);
   height: 100%;
   padding-inline: 4px;
+}
+/* 纯色档（solid）：浅色纯白、深色纯黑，不接受任何透明度。
+   它同时对应 Rust 侧不挂窗口材质，所以这里把 alpha 钉死，避免滑块残留值把它变成
+   「半透明但没有材质」的脏底。 */
+html[data-appearance="solid"] {
+  --appearance-alpha: 1 !important;
+  /* 纯色的定义就是字面意义上的纯白/纯黑：不再经过 token 的 color-mix 计算，
+     也不依赖窗口是否真透明。三处（html / body / #root）都写死，避免某一层没铺到
+     而露出桌面——用户看到的「选了纯色还是透」就是这种漏层。 */
+  --background: #fff;
+  background-color: #fff;
+}
+html.dark[data-appearance="solid"] {
+  --background: #000;
+  --card: oklch(0.205 0 0);
+  --sidebar: #101010;
+  background-color: #000;
+}
+html[data-appearance="solid"] body,
+html[data-appearance="solid"] #root {
+  background-color: #fff;
+}
+html.dark[data-appearance="solid"] body,
+html.dark[data-appearance="solid"] #root {
+  background-color: #000;
+}
+
+/* 功能屏要和聊天面板一样有自己的表面底色。透明度系数只乘进 --background/--card/--sidebar，
+   而这个区域原先什么底色都没有：玻璃/雾面档把透明度调低后整屏透底，卡片像浮在纯黑里
+   （0.4.3 的 token 恒不透明所以看不出缺口）。跟随 --background 让纯色档与 0.4.3 逐像素一致，
+   玻璃档与主屏同一张半透明表面，文字与卡片保持同一对比度体系。 */
+html:not([data-appearance="solid"]) .main-screen-trailing {
+  background-color: var(--background);
 }
 
 /* Selected provider pill: a halo instead of a neutral outline. Light surfaces get a cyan glow;
@@ -1541,7 +1549,9 @@ body > div:has(> [data-slot="dialog-overlay"]) > * {
 /* Composer input height: the drag handle on the card's top edge writes this variable. Unset, the
    textarea keeps its content height (2.5rem floor); set, it is pinned to that height and scrolls. */
 [data-composer] .alwith-composer-textarea {
-  min-height: var(--composer-input-height, 2.5rem);
+  /* Never let a persisted drag (or a malformed stored value) collapse the box below two rows:
+     the placeholder and resize grip must stay visible or the composer reads as "missing". */
+  min-height: max(var(--composer-input-height, 0px), 4.5rem);
   max-height: var(--composer-input-height, none);
   overflow-y: auto;
   /* The shared textarea primitive carries a visible form border. The composer already has its

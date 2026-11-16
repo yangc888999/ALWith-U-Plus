@@ -9,6 +9,7 @@
     "chat"
   ],
   "permissions": [
+    "core:event:default",
     "core:default",
     "core:app:allow-set-app-theme",
     "core:window:allow-set-title",

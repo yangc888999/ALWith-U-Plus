@@ -1,4 +1,15 @@
 /**
+ * ============================================================================
+ * 🚫 唯一模型出口 —— 请勿绕过（给后续 AI 的硬性约定）
+ * ----------------------------------------------------------------------------
+ * ① 默认会话模型、② 分工默认模型（规划/执行）、③ 对话输入框模型下拉、④ 拉会成员模型，
+ * 这四处**必须**调用本文件的 `resolveModelOptions()`（设置窗口可用 `useModelOptions()` 薄封装）。
+ * 不允许任何 UI 再自建候选清单、白名单、别名表、星号后缀、「可能不可用」判断或私有分组名。
+ * 新增/启用/改名一个模型，只在「供应商与可用模型」维护一次，四处自动同步。
+ * 改动本文件前先读下面的历史根因（v1.0.2）：四处各取一套数据导致的消失与误标就是这么来的。
+ * ============================================================================
+ */
+/**
  * 四处模型选择器的唯一出口（single source of truth）。
  *
  * 消费方（全部调用 `resolveModelOptions`，或设置窗口的 `useModelOptions()` 薄封装）：
@@ -143,7 +154,18 @@ export interface ModelOptionsResult {
  * 唯一的紧凑短名表。它只影响触发器上的文案，**从不参与候选集裁决**：表里查不到的模型
  * （例如用户新启用的 6.1 Terra）直接显示完整显示名。四处不再各带一份别名表。
  */
-const presentationTable: Record<string, { shortLabel?: string } | undefined> = presentation
+const presentationTable: Record<string, { shortLabel?: string } | undefined> = (() => {
+  const table: Record<string, { shortLabel?: string }> = {}
+  for (const [key, value] of Object.entries(presentation)) {
+    table[key] = value
+    // 设置里存的是裸 id（`deepseek-flash`），而短名表按 `gateway:<provider>:<id>` 登记。
+    // 只查全键会让裸 id 落回服务端给的短名（用户看到的是「Flash」这种没头没尾的词），
+    // 所以同时登记去掉网关前缀的裸 id；全键优先，冲突时以显式全键为准。
+    const bare = /^gateway:[^:]+:(.+)$/.exec(key)?.[1]
+    if (bare !== undefined && table[bare] === undefined) table[bare] = value
+  }
+  return table
+})()
 
 /** 尾部脏别名：星号后缀、`· 可能不可用` / `may be unavailable`、`（未验证）`。 */
 const DIRTY_LABEL_PATTERNS: readonly RegExp[] = [
@@ -220,8 +242,13 @@ function toOption(
   // 用户在「供应商与可用模型」里改的名优先于会话/引擎目录里的旧名；历史脏 label 在此清洗。
   // `renamed !== null` 表示用户显式命名过该模型 —— 此时紧凑短名表必须让位，否则一次改名
   // 看起来永远没生效（旧版就踩过这个坑）。没有显式命名时才用统一短名表。
-  const renamed = displayModelLabel(entry.id)
-  const label = cleanModelLabel(renamed ?? displayModelLabel(entry.id, entry.label) ?? entry.label)
+  // `displayModelLabel(id)` 对网关模型返回的是**供应商目录里的 label**（DeepSeek 这条就叫
+  // "Flash"），并不代表用户改过名。旧写法把它当成「显式命名」，于是紧凑短名表永远让位，
+  // 触发器上只剩供应商给的裸词。只有和目录 label 不同才算用户命名，短名表才该退出。
+  const catalogLabel = cleanModelLabel(displayModelLabel(entry.id, entry.label) ?? entry.label)
+  const explicit = displayModelLabel(entry.id)
+  const renamed = explicit !== null && cleanModelLabel(explicit) !== catalogLabel ? explicit : null
+  const label = cleanModelLabel(renamed ?? catalogLabel)
   const shortLabel = renamed !== null ? label : modelShortLabel(entry.id, label)
   const fastMode = fastModes === null ? modelFastModeFor(entry.id) : fastModes[entry.id] === true
   return {

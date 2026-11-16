@@ -40,8 +40,6 @@ import { useExtensions } from "@/features/extensions/use-extensions"
 import { MobileSection } from "@/features/mobile/mobile-section"
 import { EditorSettingsSection } from "@/features/workspace/editor-settings-dialog"
 import { SETTINGS_CHANGE_TAB, SETTINGS_RESET_SCROLL, type SettingsNavigation, type SettingsSection } from "@/lib/window-manager"
-import { setSettingsOverlaySection, useSettingsOverlay } from "@/lib/settings-overlay"
-import { cn } from "@/lib/utils"
 
 import { AboutSection } from "./sections/about-section"
 import { GroupSection } from "./sections/group-section"
@@ -99,28 +97,22 @@ function normalizeSection(value: string | null): SettingsSection | null {
   return isSection(value) ? value : null
 }
 
-export function SettingsPage({ embedded = false }: { embedded?: boolean }) {
+export function SettingsPage() {
   const driveVisible = useDriveVisible()
   const driveEnabled = useYupDriveEnabled()
   const { host, state } = useExtensions()
   const [extensionSection, setExtensionSection] = useState<string | null>(null)
   const { t } = useTranslation()
   useAccentDataAttribute()
-  // Embedded in the main window (overlay) the active section comes from the overlay store; the
-  // standalone settings window still reads it from the `?tab=` URL.
-  const overlay = useSettingsOverlay()
-  const [section, setSection] = useState<SettingsSection>(() =>
-    embedded ? overlay.section : (normalizeSection(new URLSearchParams(window.location.search).get("tab")) ?? "general")
-  )
+  const [section, setSection] = useState<SettingsSection>(() => {
+    const tab = new URLSearchParams(window.location.search).get("tab")
+    return normalizeSection(tab) ?? "general"
+  })
 
-  const [providerTarget, setProviderTarget] = useState(() =>
-    embedded
-      ? { id: overlay.providerId, revision: 0 }
-      : {
-          id: new URLSearchParams(window.location.search).get("provider") ?? undefined,
-          revision: 0
-        }
-  )
+  const [providerTarget, setProviderTarget] = useState(() => ({
+    id: new URLSearchParams(window.location.search).get("provider") ?? undefined,
+    revision: 0
+  }))
 
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const scrollToTop = useCallback(() => {
@@ -132,25 +124,14 @@ export function SettingsPage({ embedded = false }: { embedded?: boolean }) {
     scrollToTop()
   }, [section, extensionSection, scrollToTop])
 
-  // Embedded mode: the overlay store drives the active section (openSettingsWindow / close from
-  // anywhere re-targets the mounted page). The standalone window path uses the two Tauri events
-  // below instead, so skip both the sync and the window listeners here.
-  useEffect(() => {
-    if (!embedded) return
-    setSection(overlay.section)
-    setProviderTarget((previous) => ({ id: overlay.providerId, revision: previous.revision + 1 }))
-  }, [embedded, overlay.section, overlay.providerId])
-
   // Close hides this window instead of destroying it, so the DOM (and its scrollTop) survives.
   // Every reopen explicitly returns to the top so the first card — the usage overview — is whole.
   useEffect(() => {
-    if (embedded) return
     const stop = listen<null>(SETTINGS_RESET_SCROLL, scrollToTop)
     return () => void stop.then((fn) => fn())
-  }, [embedded, scrollToTop])
+  }, [scrollToTop])
 
   useEffect(() => {
-    if (embedded) return
     const stop = listen<string | SettingsNavigation>(SETTINGS_CHANGE_TAB, (event) => {
       const payload = event.payload
       const next = normalizeSection(typeof payload === "string" ? payload : payload.section)
@@ -164,12 +145,11 @@ export function SettingsPage({ embedded = false }: { embedded?: boolean }) {
       }
     })
     return () => void stop.then((fn) => fn())
-  }, [embedded])
+  }, [])
 
   // Close = hide: the window keeps its state and the next open is instant (VS Code and
-  // Obsidian do the same). In embedded mode the overlay owns closing, so leave the main window alone.
+  // Obsidian do the same).
   useEffect(() => {
-    if (embedded) return
     const win = getCurrentWindow()
     const stop = win.onCloseRequested((event) => {
       event.preventDefault()
@@ -179,7 +159,7 @@ export function SettingsPage({ embedded = false }: { embedded?: boolean }) {
       void stop
         .then((fn) => fn())
         .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))
-  }, [embedded])
+  }, [])
 
   const content =
     extensionSection !== null ? (
@@ -240,11 +220,7 @@ export function SettingsPage({ embedded = false }: { embedded?: boolean }) {
       <NavigationStack
         role="navigation"
         aria-label={t("settings.title")}
-        className={cn(
-          "min-h-0 overflow-y-auto px-3 pb-4 [&>*]:shrink-0",
-          // 嵌入浮层时左上角是关闭按钮，导航第一组标题要避开它。
-          embedded ? "pt-9" : "pt-5"
-        )}
+        className="min-h-0 overflow-y-auto px-3 pt-5 pb-4 [&>*]:shrink-0"
       >
         {SECTION_GROUPS.map((group) => {
           const sections = group.sections.filter((id) => id !== "drive" || (driveVisible && driveEnabled))
@@ -263,7 +239,6 @@ export function SettingsPage({ embedded = false }: { embedded?: boolean }) {
                     onClick={() => {
                       setSection(id)
                       setExtensionSection(null)
-                      if (embedded) setSettingsOverlaySection(id)
                     }}
                   >
                     <Icon />
@@ -289,10 +264,8 @@ export function SettingsPage({ embedded = false }: { embedded?: boolean }) {
       sidebar={sidebar}
       sidebarClassName="settings-sidebar w-60 [--navigation-row-height:42px]"
       className="settings-window"
-      showTitleBar={!embedded}
-      embedded={embedded}
     >
-      <Pane viewportRef={viewportRef} viewportClassName="px-6 pt-8 pb-10">
+      <Pane viewportRef={viewportRef} viewportClassName="px-6 pt-5 pb-10">
         <section
           className="settings-content mx-auto w-full max-w-4xl"
           aria-label={

@@ -1,33 +1,146 @@
-import { afterEach, expect, test } from "vitest"
+import type { WebviewWindow } from "@tauri-apps/api/webviewWindow"
+import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
-import { openSettingsWindow, toggleSettingsWindow } from "../window-manager"
-import { closeSettingsOverlay, getSettingsOverlayState } from "../settings-overlay"
+const host = vi.hoisted(() => ({
+  mac: false,
+  existing: false,
+  creationError: null as string | null,
+  create: vi.fn<(label: string, options: ConstructorParameters<typeof WebviewWindow>[1]) => void>(),
+  show: vi.fn(),
+  focus: vi.fn(),
+  destroy: vi.fn(),
+  attach: vi.fn(),
+  emit: vi.fn()
+}))
+vi.mock("@tauri-apps/plugin-os", () => ({ platform: () => (host.mac ? "macos" : "windows") }))
+vi.mock("../platform", () => ({ isMac: () => host.mac }))
+vi.mock("../i18n", () => ({ default: { t: () => "Settings" } }))
+vi.mock("@/bindings", () => ({ commands: { attachWindowToMain: host.attach } }))
+vi.mock("@tauri-apps/api/event", () => ({ emitTo: host.emit }))
+vi.mock("@tauri-apps/api/window", async () => {
+  // 生产代码用窗口级 API（`getCurrentWindow`）：子 webview 有焦点时 `getCurrentWebviewWindow()`
+  // 会抛 "current webview is not a WebviewWindow"。测试里两者指向同一个假窗口。
+  const webviewWindow = await import("@tauri-apps/api/webviewWindow")
+  return { ...webviewWindow, getCurrentWindow: () => webviewWindow.getCurrentWebviewWindow() }
+})
 
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  WebviewWindow: class {
+    constructor(label: string, options: ConstructorParameters<typeof WebviewWindow>[1]) {
+      host.create(label, options)
+    }
+    static getByLabel() {
+      return Promise.resolve(
+        host.existing ? { show: host.show, setFocus: host.focus, destroy: host.destroy } : null
+      )
+    }
+    show = host.show
+    setFocus = host.focus
+    once(event: string, handler: (event: { payload: string }) => void) {
+      return Promise.try(() => {
+        if (event === (host.creationError === null ? "tauri://created" : "tauri://error"))
+          handler({ payload: host.creationError ?? "" })
+        return () => {}
+      })
+    }
+  }
+}))
+import { openSettingsWindow } from "../window-manager"
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  host.mac = false
+  host.existing = false
+  host.creationError = null
+  document.documentElement.style.setProperty("--background", "white")
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    fillStyle: "",
+    fillRect: vi.fn(),
+    getImageData: () => ({ data: new Uint8ClampedArray([255, 255, 255, 255]) })
+  } as unknown as CanvasRenderingContext2D)
+})
 afterEach(() => {
-  closeSettingsOverlay()
+  vi.restoreAllMocks()
+  document.documentElement.style.removeProperty("--background")
 })
 
-test("openSettingsWindow opens the in-main-window overlay on the requested section", () => {
-  void openSettingsWindow("general")
-  expect(getSettingsOverlayState()).toMatchObject({ open: true, section: "general" })
+test("Windows settings retains native window decorations", async () => {
+  await openSettingsWindow("general")
+  expect(host.create).toHaveBeenCalledWith(
+    "settings",
+    expect.objectContaining({
+      url: "/settings.html?tab=general",
+      // The settings window is resizable now; the size floor keeps the layout usable.
+      resizable: true,
+      minWidth: 720,
+      minHeight: 620,
+      maximizable: false,
+      minimizable: false
+    })
+  )
+  expect(host.create.mock.calls[0]?.[1]?.decorations).not.toBe(false)
 })
 
-test("a provider target is carried into the overlay state", () => {
-  void openSettingsWindow("provider", { providerId: "openrouter" })
-  expect(getSettingsOverlayState()).toMatchObject({ open: true, section: "provider", providerId: "openrouter" })
+test("macOS settings keeps the overlay title bar and opens as an independent window", async () => {
+  host.mac = true
+  await openSettingsWindow()
+  expect(host.create).toHaveBeenCalledWith(
+    "settings",
+    expect.objectContaining({
+      hiddenTitle: true,
+      titleBarStyle: "overlay"
+    })
+  )
+  // Independent window: no child-window attachment (the attached path made edge-resize janky),
+  // and no start-hidden flag — the created handler shows it.
+  expect(host.create.mock.calls[0]?.[1]?.visible).not.toBe(false)
+  expect(host.attach).not.toHaveBeenCalled()
 })
 
-test("toggleSettingsWindow opens when closed and closes when already open", () => {
-  closeSettingsOverlay()
-  void toggleSettingsWindow("account")
-  expect(getSettingsOverlayState().open).toBe(true)
-  expect(getSettingsOverlayState().section).toBe("account")
-  void toggleSettingsWindow("account")
-  expect(getSettingsOverlayState().open).toBe(false)
+test("reopening hidden Windows settings reuses the window and selects the requested tab", async () => {
+  host.existing = true
+  await openSettingsWindow("appearance")
+  expect(host.create).not.toHaveBeenCalled()
+  expect(host.show).toHaveBeenCalledOnce()
+  expect(host.focus).toHaveBeenCalledOnce()
+  expect(host.emit).toHaveBeenCalledWith("settings", "settings-change-tab", "appearance")
 })
 
-test("reopening re-targets the section without closing the overlay", () => {
-  void openSettingsWindow("general")
-  void openSettingsWindow("appearance")
-  expect(getSettingsOverlayState()).toMatchObject({ open: true, section: "appearance" })
+test("reopening hidden macOS settings always shows and focuses the existing window", async () => {
+  host.mac = true
+  host.existing = true
+  await openSettingsWindow("computer")
+  await openSettingsWindow("computer")
+  expect(host.show).toHaveBeenCalledTimes(2)
+  expect(host.focus).toHaveBeenCalledTimes(2)
+  expect(host.create).not.toHaveBeenCalled()
+  expect(host.attach).not.toHaveBeenCalled()
+})
+
+test("OpenRouter target is encoded in new settings windows", async () => {
+  await openSettingsWindow("provider", { providerId: "openrouter" })
+  expect(host.create).toHaveBeenCalledWith("settings", expect.objectContaining({
+    url: "/settings.html?tab=provider&provider=openrouter"
+  }))
+})
+
+test("OpenRouter target reaches existing settings windows", async () => {
+  host.existing = true
+  await openSettingsWindow("provider", { providerId: "openrouter" })
+  expect(host.emit).toHaveBeenCalledWith("settings", "settings-change-tab", {
+    section: "provider", providerId: "openrouter"
+  })
+})
+
+test("a stale hidden settings window is recreated instead of silently staying closed", async () => {
+  host.existing = true
+  host.show.mockRejectedValueOnce(new Error("window not found"))
+
+  await openSettingsWindow("extensions")
+
+  expect(host.destroy).toHaveBeenCalledOnce()
+  expect(host.create).toHaveBeenCalledWith(
+    "settings",
+    expect.objectContaining({ url: "/settings.html?tab=extensions" })
+  )
 })

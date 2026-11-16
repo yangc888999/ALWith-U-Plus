@@ -536,6 +536,21 @@ test("the sidebar width follows the measured canvas, not window.innerWidth", asy
   }
 })
 
+test("a fresh main screen parks on chat, never on the trailing apps screen", async () => {
+  await withCanvasGeometry(async () => {
+    const view = render(workspaceLayout(true))
+    const dots = [...view.container.querySelectorAll<HTMLButtonElement>(".canvas-dots button")]
+    // First dot = chat, last dot = trailing. Startup must select chat…
+    expect(dots[0]).toHaveAttribute("aria-current", "page")
+    expect(dots.at(-1)).not.toHaveAttribute("aria-current")
+    // …and the apps screen stays inert until the reader explicitly travels there.
+    const trailing = must(view.container.querySelector('[data-screen-panel="trailing"]'), "trailing screen")
+    expect(trailing.hasAttribute("inert")).toBe(true)
+    expect(view.container.querySelector("[data-sidebar-mode]")).toHaveAttribute("data-sidebar-mode", "pinned")
+    view.unmount()
+  })
+})
+
 test("the pin button survives the canvas moving to the workspace screen", async () => {
   await withCanvasGeometry(async () => {
     const view = render(workspaceLayout(true))
@@ -548,6 +563,35 @@ test("the pin button survives the canvas moving to the workspace screen", async 
     expect(save).not.toHaveBeenCalled()
     view.unmount()
   })
+})
+
+test("the apps screen becomes interactive when parked and the chat dot brings the reader back", async () => {
+  // jsdom never advances Embla's animation frames, so an eased return trip would not settle
+  // within the test. Reduced motion makes every jump instant — the settled end state is the
+  // same one a real window reaches after the animation.
+  const media = window.matchMedia
+  window.matchMedia = ((query: string) => ({
+    ...media(query),
+    matches: query.includes("prefers-reduced-motion")
+  })) as typeof window.matchMedia
+  try {
+    await withCanvasGeometry(async () => {
+      const view = render(workspaceLayout(true))
+      const trailing = must(view.container.querySelector('[data-screen-panel="trailing"]'), "trailing screen")
+      await parkOnWorkspace(view.container)
+      // Parked on trailing: its controls (the board's back-to-chat button) must be reachable.
+      expect(trailing.hasAttribute("inert")).toBe(false)
+      const dots = [...view.container.querySelectorAll<HTMLButtonElement>(".canvas-dots button")]
+      expect(dots.at(-1)).toHaveAttribute("aria-current", "page")
+      await act(() => Promise.try(() => fireEvent.click(must(dots[0], "chat dot"))))
+      expect(dots[0]).toHaveAttribute("aria-current", "page")
+      expect(trailing.hasAttribute("inert")).toBe(true)
+      expect(view.container.querySelector("[data-sidebar-mode]")).toHaveAttribute("data-sidebar-mode", "pinned")
+      view.unmount()
+    })
+  } finally {
+    window.matchMedia = media
+  }
 })
 
 test("pressing the pin button from the workspace screen returns to chat and docks", async () => {

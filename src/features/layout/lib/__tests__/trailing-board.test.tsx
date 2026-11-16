@@ -1,9 +1,18 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { afterEach, expect, test, vi } from "vitest"
+import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
 import { TrailingBoard } from "../../components/trailing-board"
+import { CanvasContext } from "../canvas-context"
 
 const open = vi.hoisted(() => vi.fn(() => Promise.resolve()))
+/** Mutable per-test running-app list: the empty-state case needs zero cards. */
+const running = vi.hoisted(() => ({
+  apps: [{ name: "Google Chrome", bundle_id: "com.google.Chrome", icon: null }] as Array<{
+    name: string
+    bundle_id: string
+    icon: string | null
+  }>
+}))
 vi.mock("@/lib/chat-window", () => ({ openChatWindow: vi.fn() }))
 vi.mock("@/lib/background-errors", () => ({ reportBackgroundError: vi.fn() }))
 vi.mock("@/bindings", () => ({
@@ -15,7 +24,7 @@ vi.mock("@/bindings", () => ({
   }
 }))
 vi.mock("../use-running-apps", () => ({
-  useRunningApps: () => [{ name: "Google Chrome", bundle_id: "com.google.Chrome", icon: null }]
+  useRunningApps: () => running.apps
 }))
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true }))
 vi.mock("@tauri-apps/api/event", () => ({ listen: () => Promise.resolve(() => {}) }))
@@ -31,6 +40,9 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
   getCurrentWebviewWindow: () => ({ onFocusChanged: () => Promise.resolve(() => {}) })
 }))
 vi.mock("react-i18next", () => ({ useTranslation: () => ({ t: (key: string) => key }) }))
+beforeEach(() => {
+  running.apps = [{ name: "Google Chrome", bundle_id: "com.google.Chrome", icon: null }]
+})
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
@@ -49,4 +61,45 @@ test("Chrome card opens the browser while its corner badge opens the bridge guid
   expect(open).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole("button", { name: "chromeBridge.bringToFront" }))
   await waitFor(() => expect(open).toHaveBeenCalledWith({ bundleId: "com.google.Chrome" }))
+})
+
+/** The apps screen used to be a bare card list on a black pane with no way back to the chat. */
+function canvasValue(navigate: (region: "chat" | "preview" | "trailing") => void) {
+  return {
+    viewportWidth: 1200,
+    budget: 952,
+    selected: 2,
+    trailingActive: true,
+    split: false,
+    moving: false,
+    setWorkspace: () => {},
+    navigate,
+    setDividerDragging: () => {}
+  }
+}
+
+test("the apps screen shows a title, a description and a working back-to-chat action", () => {
+  const navigate = vi.fn()
+  render(
+    <CanvasContext.Provider value={canvasValue(navigate)}>
+      <TrailingBoard />
+    </CanvasContext.Provider>
+  )
+  expect(screen.getByRole("heading", { name: "canvas.appsTitle" })).toBeVisible()
+  expect(screen.getByText("canvas.appsDescription")).toBeVisible()
+  expect(screen.queryByText("canvas.appsEmpty")).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole("button", { name: "canvas.backToChat" }))
+  expect(navigate).toHaveBeenCalledWith("chat")
+})
+
+test("an empty apps screen explains itself instead of rendering a blank pane", async () => {
+  running.apps = []
+  render(
+    <CanvasContext.Provider value={canvasValue(() => {})}>
+      <TrailingBoard />
+    </CanvasContext.Provider>
+  )
+  expect(await screen.findByText("canvas.appsEmpty")).toBeVisible()
+  // The return action survives the empty list — it is the reader's only obvious exit.
+  expect(screen.getByRole("button", { name: "canvas.backToChat" })).toBeVisible()
 })

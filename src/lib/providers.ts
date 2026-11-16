@@ -270,6 +270,31 @@ export function isAccountModel(model: string | null | undefined): boolean {
 }
 
 /** Desktop's default selection prefers a user-configured provider; native defaults stay engine-owned. */
+/**
+ * 模型改名后的兜底重绑定。
+ *
+ * 企业目录里的 api_id 是一长串随时会变的字符（`deepseek-v4.1-flash-1017` → `...-1102`），
+ * 供应商也会给同一模型补日期后缀或换大小写。会话里存的是当时的 id，一旦目录换了写法，
+ * 精确比对就落空——旧实现直接回落到 `models[0]`，于是「会话记的是 A、实际发的是 B」。
+ * 这里在精确比对失败后按**归一化 id** 找唯一候选：去掉网关前缀、大小写、分隔符与 4 位以上
+ * 数字尾巴，再做前缀包含匹配；命中多个视为有歧义，交回原来的回落顺序而不是猜。
+ */
+function normalizeModelId(id: string): string {
+  const bare = /^gateway:[^:]+:(.+)$/.exec(id)?.[1] ?? id
+  return bare.toLowerCase().replace(/[-_.\s]/g, "").replace(/\d{4,}$/, "")
+}
+
+function rebindRenamedModel(stored: string, models: readonly string[]): string | null {
+  if (!stored.startsWith("gateway:")) return null
+  const target = normalizeModelId(stored)
+  if (target === "") return null
+  const hits = models.filter((candidate) => {
+    const other = normalizeModelId(candidate)
+    return other !== "" && (other === target || other.startsWith(target) || target.startsWith(other))
+  })
+  return hits.length === 1 ? hits[0] ?? null : null
+}
+
 export function resolveSessionModel(
   model: string | null,
   snapshot: ProviderSnapshot,
@@ -287,6 +312,14 @@ export function resolveSessionModel(
     if (migrated) return migrated
   }
   if (model !== null && (!model.startsWith("gateway:") || models.includes(model))) return model
+  // 目录换了写法（日期后缀、大小写、连字符）时按归一化 id 重绑，避免静默换到 models[0]。
+  if (model !== null) {
+    const rebound = rebindRenamedModel(model, models)
+    if (rebound !== null) {
+      console.info(`[models] rebound stale selection ${model} -> ${rebound}`)
+      return rebound
+    }
+  }
   // A stale enterprise selection must not block opening the conversation or composing a new turn.
   // The picker will let the user choose another currently available model; only return the normal
   // fallback here instead of throwing a red error before the composer can render.

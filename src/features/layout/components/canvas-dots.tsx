@@ -25,7 +25,7 @@ export function CanvasDots({
           }}
           variant="ghost"
           size="icon-xs"
-          className="size-4 rounded-full hover:bg-transparent active:bg-transparent dark:hover:bg-transparent"
+          className="flex h-4 items-center justify-center rounded-full px-0.5 hover:bg-transparent active:bg-transparent dark:hover:bg-transparent"
           aria-label={t("canvas.page", { number: index + 1 })}
           aria-current={selected === index ? "page" : undefined}
           onClick={() => onSelect(index)}
@@ -48,9 +48,12 @@ export function CanvasDots({
             buttons.current[target]?.focus({ preventScroll: true })
           }}
         >
+          {/* 当前页拉成一根短横条：圆点只有 6px，光靠透明度分不出第几页。 */}
           <span
             aria-hidden="true"
-            className={`size-1.5 rounded-full bg-[var(--canvas-page-indicator)] transition-opacity duration-200 motion-reduce:transition-none ${selected === index ? "opacity-100" : "opacity-40"}`}
+            className={`h-1.5 rounded-full bg-[var(--canvas-page-indicator)] transition-all duration-200 motion-reduce:transition-none ${
+              selected === index ? "w-5 opacity-100" : "w-1.5 opacity-45"
+            }`}
           />
         </Button>
       ))}

@@ -13,6 +13,7 @@
 //     「厚玻璃」版本 —— 看起来仍然是这个风格，但不假装有折射。
 
 import { isTauri } from "@tauri-apps/api/core"
+import { emit, listen } from "@tauri-apps/api/event"
 import { useSyncExternalStore } from "react"
 
 import { commands, type AppearanceEffect } from "@/bindings"
@@ -53,12 +54,26 @@ function readTransparency(): number {
  */
 function paintTransparency(): void {
   if (typeof document === "undefined") return
-  const alpha = 1 - (transparency / 100) * (1 - TRANSPARENCY_FLOOR)
+  // 纯色档不接受透明度：它存在的意义就是「不透明、不叠窗口材质、省 GPU」。
+  // 把系数钉在 1，滑块残留的值不会把它悄悄变回半透明（切到别的档位时值仍然保留）。
+  const alpha = mode === "solid" ? 1 : 1 - (transparency / 100) * (1 - TRANSPARENCY_FLOOR)
   document.documentElement.style.setProperty("--appearance-alpha", alpha.toFixed(3))
   document.documentElement.dataset.appearanceTransparency = String(transparency)
 }
 
 /** 设置透明度：先落 CSS，再落存储。同一个值重复设置是无操作。 */
+/**
+ * 跨窗口广播：WKWebView 的多个 webview 各有独立 JS 上下文，localStorage 写入**不会**在
+ * 另一个 webview 里触发 `storage` 事件（设置页改成纯色、主窗口仍半透明就是这么来的）。
+ * Tauri 的全局事件才是可靠通道：谁改了，就把值广播给所有窗口。
+ */
+const APPEARANCE_EVENT = "appearance:changed"
+
+function broadcast(): void {
+  if (!isTauri()) return
+  void emit(APPEARANCE_EVENT, { mode, transparency }).catch(() => undefined)
+}
+
 export function setAppearanceTransparency(next: number): void {
   const value = Math.min(100, Math.max(0, Math.round(next)))
   if (value === transparency) return
@@ -70,6 +85,7 @@ export function setAppearanceTransparency(next: number): void {
   }
   paintTransparency()
   publish()
+  broadcast()
 }
 
 export function appearanceTransparencySnapshot(): number {
@@ -156,7 +172,10 @@ export function setAppearanceMode(next: AppearanceMode): void {
     // 存储不可用：本次运行有效，下次启动回默认。
   }
   paint(next)
+  // 切档同时重算底色 alpha：从玻璃档带着 60% 透明度回到纯色，不重算就会留下一层透底。
+  paintTransparency()
   publish()
+  broadcast()
   void applyNative(next)
 }
 
@@ -213,4 +232,47 @@ export function useAppearanceEffect(): AppearanceEffect | null {
 
 export function useAppearanceFailure(): string | null {
   return useSyncExternalStore(subscribeAppearanceMode, appearanceFailureSnapshot, appearanceFailureSnapshot)
+}
+
+// ---------------------------------------------------------------------------------------------
+// 跨窗口同步（主窗口 ↔ 设置窗口）
+//
+// 设置窗口与主窗口是两个 webview：在设置里拖透明度、换材质，改的是**本窗口**的
+// `--appearance-alpha` / `data-appearance`，主窗口既没有 storage 监听也不会重绘 —— 于是
+// 「透明度只对设置页有效、主界面没反应」。localStorage 同源共享，`storage` 事件就是那条
+// 现成的通道：读到别人的写入后，本窗口按同一份值重绘（材质那层由 Rust 命令作用于主窗口，
+// 这里只负责 DOM）。
+/** 由 App 启动时调用一次：订阅别的窗口发来的外观变更。 */
+export function startAppearanceSync(): void {
+  if (!isTauri()) return
+  void listen<{ mode: AppearanceMode; transparency: number }>(APPEARANCE_EVENT, (event) => {
+    const payload = event.payload
+    if (payload === null || typeof payload !== "object") return
+    const nextMode = (APPEARANCE_MODES as readonly string[]).includes(payload.mode) ? payload.mode : mode
+    const nextTransparency = Number.isFinite(payload.transparency) ? payload.transparency : transparency
+    const modeChanged = nextMode !== mode
+    const transparencyChanged = nextTransparency !== transparency
+    if (!modeChanged && !transparencyChanged) return
+    mode = nextMode
+    transparency = nextTransparency
+    if (modeChanged) paint(mode)
+    paintTransparency()
+    publish()
+  }).catch(() => undefined)
+}
+
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== null && event.key !== STORAGE_KEY && event.key !== TRANSPARENCY_KEY) return
+    const nextMode = readStored()
+    const nextTransparency = readTransparency()
+    const modeChanged = nextMode !== mode
+    const transparencyChanged = nextTransparency !== transparency
+    if (!modeChanged && !transparencyChanged) return
+    mode = nextMode
+    transparency = nextTransparency
+    if (modeChanged) paint(mode)
+    paintTransparency()
+    publish()
+  })
 }

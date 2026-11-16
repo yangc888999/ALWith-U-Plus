@@ -115,6 +115,39 @@ export function subscribeProjectDirectories(listener: () => void): () => void {
 }
 
 /**
+ * Whether the workspace should open its preview + file columns by default.
+ *
+ * The rule the layout follows (2026-11-16): a first launch and a plain chat stay at two columns
+ * (sidebar + conversation); only actually *entering a project* may open four, and even then the
+ * reader's 显示预览栏 setting has the final say.
+ *
+ * The trap this avoids: `resolveProjectDirectory` falls back to `lastDirectory` when neither the
+ * draft key nor the session carries a binding. Left unchecked, that fallback made the home screen —
+ * which has no session and never picked a folder this run — look like a project and spring open a
+ * preview of somebody else's files. So "has a usable directory" is deliberately NOT enough here;
+ * the directory must come from an explicit source: a binding for the current key (a folder picked
+ * for this draft/session, a meeting, a 查看文件 action) or the session's own cwd.
+ */
+export function shouldOpenFourColumns(input: {
+  /** An explicit binding for the current surface key (draft key or session id). */
+  boundDirectory: string | null
+  /** The selected session's own cwd, when a session is open. */
+  sessionCwd: string | null
+  /** The 显示预览栏 preference — even a real project stays two-column when it is off. */
+  previewVisible: boolean
+  /** A rejected directory must open the pane so its one-click repair hint is on screen. */
+  invalidDirectory?: boolean
+}): boolean {
+  // An invalid attempt is the one case that opens regardless of the visibility preference: the
+  // repair affordance lives inside the workspace column and cannot help anyone while it is shut.
+  if (input.invalidDirectory) return true
+  if (!input.previewVisible) return false
+  const explicit = input.boundDirectory ?? input.sessionCwd
+  if (explicit === null || explicit.trim() === "") return false
+  return !isTemporaryChatDir(explicit) && !isGroupsRoot(explicit)
+}
+
+/**
  * React-facing read; the snapshot is the frozen binding object, stable across renders.
  *
  * It must be the *raw* attempt, not the valid-only `projectDirectoryFor`. A rejected (Groups-root

@@ -60,7 +60,19 @@ pub async fn appearance_effect(app: AppHandle, mode: String) -> Result<Appearanc
     let (tx, rx) = mpsc::channel::<AppearanceEffect>();
     let mode_for_task = mode.clone();
     let window_for_task = window.clone();
+    // 材质要**同时**挂到所有应用窗口上。此前只处理 "main"，于是设置窗口里拖透明度时，
+    // 设置页自己让出了 alpha 却没有材质（看起来像一块透底），而主窗口因为拿不到材质也
+    // 看不出效果 —— 用户看到的就是「透明度只对设置页有效」。
+    let others: Vec<tauri::WebviewWindow> = app
+        .webview_windows()
+        .into_iter()
+        .filter(|(label, _)| label != "main")
+        .map(|(_, window)| window)
+        .collect();
     app.run_on_main_thread(move || {
+        for window in &others {
+            let _ = apply(window, &mode_for_task);
+        }
         let result = apply(&window_for_task, &mode_for_task);
         let _ = tx.send(result);
     })

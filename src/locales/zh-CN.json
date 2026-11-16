@@ -618,7 +618,7 @@
     "themeDesc": "跟随系统会随 macOS 外观自动切换。",
     "materialMode": "外观材质",
     "materialModeDesc": "窗口背后的材质：点到哪一档就介绍哪一档。",
-    "materialSolid": "简洁",
+    "materialSolid": "纯色",
     "materialAero": "Aero",
     "materialLiquidGlass": "Liquid Glass",
     "materialUnavailable": "此系统不支持窗口材质，已退回 CSS 近似。",
@@ -876,12 +876,14 @@
     "autoNudgeDesc": "模型超过 90 秒没有输出时，自动发送一条「继续」，每个回合最多两次。",
     "close": "关闭设置",
     "materialDesc": {
-      "solid": "偏纯色，性能开销最低。",
-      "aero": "毛玻璃雾面效果。",
-      "glass": "让桌面折射进来，macOS 26 以上适用。"
+      "solid": "不透明，最省资源。",
+      "aero": "毛玻璃雾面。",
+      "glass": "桌面折射，macOS 26+。"
     },
     "transparency": "透明度",
-    "transparencyDesc": "数值越大，窗口越透明；文字与边框不受影响。"
+    "transparencyDesc": "数值越大越透明。",
+    "transparencySolid": "纯色档固定不透明。",
+    "transparencySolidValue": "固定不透明"
   },
   "usage": {
     "title": "套餐用量限额",
@@ -2111,7 +2113,11 @@
   },
   "canvas": {
     "navigation": "页面导航",
-    "page": "第 {{number}} 页"
+    "page": "第 {{number}} 页",
+    "appsTitle": "功能",
+    "appsDescription": "这里列出正在运行的应用与工具窗口，点击卡片即可切换过去。",
+    "appsEmpty": "暂无正在运行的应用或工具窗口。",
+    "backToChat": "返回对话"
   },
   "collection": {
     "defaultFavorites": "收藏夹",

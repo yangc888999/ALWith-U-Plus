@@ -6,6 +6,8 @@ import { NATIVE_MODEL_GROUP } from "@/agent/client"
 import type { ProviderSnapshot } from "@/lib/providers"
 import { defaultModelFallback, displayModelLabel, resolveSessionModel } from "@/lib/providers"
 
+import { modelShortLabel } from "@/lib/model-options"
+
 import { modelTriggerLabel, presentModelCatalog } from "./model-catalog"
 import { ModelSettingsAction } from "./model-settings-action"
 
@@ -67,7 +69,13 @@ export function DraftModelSelect({
         ? { api_id: "", label: placeholder }
         : (models.find((item) => item.api_id === defaultModel) ?? {
             api_id: defaultModel ?? "",
-            label: savedModelLabel(defaultModel) ?? defaultModel ?? NATIVE_MODEL_GROUP.name
+            // 目录里没有这一行时（未登录企业账号、供应商快照还没回来）只能回落到保存的显示名。
+            // 那个名字是供应商给的（DeepSeek 这条就叫 "Flash"），补一次统一短名表，触发器才不会
+            // 只显示一个没头没尾的词。
+            label: (() => {
+              const saved = savedModelLabel(defaultModel) ?? defaultModel ?? ""
+              return modelShortLabel(defaultModel ?? "", saved) ?? saved ?? NATIVE_MODEL_GROUP.name
+            })()
           })
       : (models.find((item) => item.api_id === model) ?? {
           api_id: model,

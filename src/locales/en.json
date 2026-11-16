@@ -618,7 +618,7 @@
     "themeDesc": "System follows the macOS appearance automatically.",
     "materialMode": "Window material",
     "materialModeDesc": "The material behind the window: each option explains itself.",
-    "materialSolid": "Simple",
+    "materialSolid": "Solid",
     "materialAero": "Aero",
     "materialLiquidGlass": "Liquid Glass",
     "materialUnavailable": "This system has no window material; falling back to a CSS approximation.",
@@ -876,12 +876,14 @@
     "sidebarVisibleDesc": "Project chats open with the sidebar docked; off keeps the icon rail — click an icon to expand.",
     "close": "Close settings",
     "materialDesc": {
-      "solid": "Nearly flat colour, the cheapest to render.",
-      "aero": "Frosted, misted glass.",
-      "glass": "Lets the desktop refract through. Requires macOS 26 or later."
+      "solid": "Opaque, cheapest.",
+      "aero": "Frosted blur.",
+      "glass": "Desktop refraction, macOS 26+."
     },
     "transparency": "Transparency",
-    "transparencyDesc": "Higher means a more transparent window; text and borders stay put."
+    "transparencyDesc": "Higher is more transparent.",
+    "transparencySolid": "Solid is always opaque.",
+    "transparencySolidValue": "Always opaque"
   },
   "usage": {
     "title": "Plan usage limits",
@@ -2111,7 +2113,11 @@
   },
   "canvas": {
     "navigation": "Page navigation",
-    "page": "Page {{number}}"
+    "page": "Page {{number}}",
+    "appsTitle": "Apps",
+    "appsDescription": "Running apps and tool windows appear here. Select a card to switch to it.",
+    "appsEmpty": "No running apps or tool windows right now.",
+    "backToChat": "Back to chat"
   },
   "collection": {
     "defaultFavorites": "Favorites",

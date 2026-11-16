@@ -4,18 +4,21 @@
  * `session?.cwd ?? lastDirectory` recomputation never had.
  */
 import { act, renderHook } from "@testing-library/react"
-import { beforeEach, expect, test, vi } from "vitest"
+import { beforeEach, describe, expect, test, vi } from "vitest"
 
 vi.mock("@/bindings", () => ({
   commands: { quickChatDirectory: vi.fn(async () => "/Users/me/Documents/ALwith") },
   events: new Proxy({}, { get: () => ({ name: "stub" }) })
 }))
 
+import { primeQuickChatRoot } from "@/lib/quick-chat"
+
 import {
   bindProjectDirectory,
   isGroupsRoot,
   projectDirectoryFor,
   resolveProjectDirectory,
+  shouldOpenFourColumns,
   useBoundProjectDirectory
 } from "../project-directory"
 
@@ -134,4 +137,51 @@ test("an invalid binding publishes a snapshot and a healed rebind replaces it", 
   expect(result.current?.invalid).toBeUndefined()
   expect(result.current?.directory).toBe(MEETING)
   expect(projectDirectoryFor("invalid-snapshot")?.directory).toBe(MEETING)
+})
+
+// 2026-11-16 layout bug: a remembered `lastDirectory` used to make the home screen look like a
+// project, springing the preview/file columns open and squeezing the chat composer into a sliver.
+// Only an explicit folder pick for the current surface (or a session's own cwd) may open four —
+// and even then the 显示预览栏 preference wins. `lastDirectory` is deliberately not an input here.
+describe("shouldOpenFourColumns", () => {
+  test("a first launch with nothing bound stays two columns", () => {
+    expect(
+      shouldOpenFourColumns({ boundDirectory: null, sessionCwd: null, previewVisible: true })
+    ).toBe(false)
+  })
+
+  test("a plain chat session with no explicit directory stays two columns", () => {
+    expect(
+      shouldOpenFourColumns({ boundDirectory: null, sessionCwd: null, previewVisible: true })
+    ).toBe(false)
+  })
+
+  test("an explicitly picked project opens four only when the preview preference is on", () => {
+    const base = { boundDirectory: MEETING, sessionCwd: null }
+    expect(shouldOpenFourColumns({ ...base, previewVisible: true })).toBe(true)
+    expect(shouldOpenFourColumns({ ...base, previewVisible: false })).toBe(false)
+  })
+
+  test("a session's own cwd counts as an explicit project", () => {
+    expect(
+      shouldOpenFourColumns({ boundDirectory: null, sessionCwd: MEETING, previewVisible: true })
+    ).toBe(true)
+  })
+
+  test("a temporary chat never opens four even when preview is enabled", async () => {
+    await primeQuickChatRoot()
+    const QUICK_CHAT_ROOT = "/Users/me/Documents/ALwith"
+    expect(
+      shouldOpenFourColumns({ boundDirectory: `${QUICK_CHAT_ROOT}/Chat/2026-11-16`, sessionCwd: null, previewVisible: true })
+    ).toBe(false)
+    expect(
+      shouldOpenFourColumns({ boundDirectory: null, sessionCwd: GROUPS_ROOT, previewVisible: true })
+    ).toBe(false)
+  })
+
+  test("an invalid directory opens the pane regardless, so the repair hint is reachable", () => {
+    expect(
+      shouldOpenFourColumns({ boundDirectory: null, sessionCwd: null, previewVisible: false, invalidDirectory: true })
+    ).toBe(true)
+  })
 })
