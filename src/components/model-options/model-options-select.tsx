@@ -71,7 +71,12 @@ export function ModelOptionsSelect({
             <SelectLabel>{group.name}</SelectLabel>
             {group.options.map((option) => (
               <SelectItem key={option.id} value={option.id} disabled={!option.available}>
-                <ModelOptionIcon kind={option.icon} className="model-option-icon" />
+                {/* 图标必须用 `ModelOptionIcon` 的默认类 `model-picker-icon` —— 那是 index.css
+                    里唯一把盒子约束成 1.25rem、把内部 img/svg 约束成 0.875rem 的类。这里曾传
+                    过一个全仓没有定义的 `model-option-icon`，span 于是没有任何尺寸约束：智谱是
+                    唯一挂远程 favicon 的供应商，那张原图直接按自身尺寸撑成大方块，而其余走
+                    lucide 的供应商恰好有 24px 默认尺寸，看上去"正常"。 */}
+                <ModelOptionIcon kind={option.icon} />
                 <span className={cn("truncate", !option.available && "text-muted-foreground")}>{option.label}</span>
               </SelectItem>
             ))}

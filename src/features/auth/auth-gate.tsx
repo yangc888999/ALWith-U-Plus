@@ -63,16 +63,21 @@ export function AuthGate({ children, auxiliary = false }: { children: ReactNode;
   const authenticated = usePlatformAuth((s) => s.isAuthenticated)
   const loading = usePlatformAuth((s) => s.isLoading)
   const [unlocked, setUnlocked] = useState(readPassphraseUnlocked)
+  // The passphrase is a local fallback, not a login: `isAuthenticated` stays false, so Drive and
+  // the account-managed ALwith provider stay hidden exactly as they should, while the Codex engine
+  // and every other vendor's models keep working.
+  //
+  // Both doorways are checked *before* the restore spinner. The account service only answers inside
+  // the company network and its `init()` can sit in `isLoading` for a whole profile round trip, so a
+  // reader who already walked through the local door must never be sent back to a spinner — the
+  // escape hatch would be held hostage by exactly the service it exists to bypass (2026-11-16).
+  if (authenticated || unlocked) return children
   if (loading)
     return (
       <div className="flex h-dvh items-center justify-center">
         <Spinner />
       </div>
     )
-  // The passphrase is a local fallback, not a login: `isAuthenticated` stays false, so Drive and
-  // the account-managed ALwith provider stay hidden exactly as they should, while the Codex engine
-  // and every other vendor's models keep working.
-  if (authenticated || unlocked) return children
   // Auxiliary windows render nothing until signed in — correct for the chat bubble, which has
   // nothing to say without an account. Settings is different: it is a page the reader asked for,
   // and 设置 → 账号 renders the sign-in form itself. Gating the window put the form in front of
@@ -88,13 +93,7 @@ export function AuthGate({ children, auxiliary = false }: { children: ReactNode;
   )
 }
 
-export function PlatformLogin({
-  onPassphrase,
-  embedded = false
-}: {
-  onPassphrase?: () => void
-  embedded?: boolean
-}) {
+export function PlatformLogin({ onPassphrase, embedded = false }: { onPassphrase?: () => void; embedded?: boolean }) {
   const { t } = useTranslation()
   const [mode, setMode] = useState<Mode>("code")
   const [email, setEmail] = useState("")
@@ -105,13 +104,28 @@ export function PlatformLogin({
   const busy = pendingAction !== null
   const [error, setError] = useState("")
   const [cooldowns, setCooldowns] = useState<Record<string, number>>({})
-  const [now, setNow] = useState(Date.now())
   const cooldownKey = `${mode}:${email.trim().toLowerCase()}`
-  const seconds = Math.max(0, Math.ceil(((cooldowns[cooldownKey] ?? 0) - now) / 1000))
+  // Absolute deadline of the resend cooldown for the address currently typed in. 0 = no cooldown.
+  const cooldownUntil = cooldowns[cooldownKey] ?? 0
+  // Only a running cooldown needs a clock. The old form ticked a `Date.now()` interval for the whole
+  // lifetime of the component, so every mode — including the passphrase door, which has no
+  // countdown at all — re-rendered its tabs, every field and both buttons once a second while the
+  // reader was typing. Nothing on this form can change between ticks when `seconds` is 0, so the
+  // clock now exists only while something is counting down.
+  const [seconds, setSeconds] = useState(0)
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000)
+    const remaining = (): number => Math.max(0, Math.ceil((cooldownUntil - Date.now()) / 1000))
+    setSeconds(remaining())
+    if (cooldownUntil <= Date.now()) return
+    // Ticking faster than the displayed second keeps the boundary honest, while `setSeconds` with
+    // an unchanged number is a no-op for React: four ticks per second cost one render.
+    const timer = setInterval(() => {
+      const next = remaining()
+      setSeconds(next)
+      if (next === 0) clearInterval(timer)
+    }, 250)
     return () => clearInterval(timer)
-  }, [])
+  }, [cooldownUntil])
   async function run(action: "sendCode" | "submit") {
     if (busy) return
     setPendingAction(action)
@@ -136,8 +150,8 @@ export function PlatformLogin({
     if (mode === "register" && (await authClient.emailExists(email.trim())).registered)
       throw new Error(t("platformAuth.registered"))
     await authClient.sendVerificationCode(email.trim(), mode === "register" ? "REGISTER" : "LOGIN")
+    // The deadline itself drives the countdown; the effect above restarts the clock from it.
     setCooldowns((current) => ({ ...current, [cooldownKey]: Date.now() + 60_000 }))
-    setNow(Date.now())
   }
   async function submit() {
     // The local passphrase never touches the network: it is the way in when the account service
@@ -158,18 +172,10 @@ export function PlatformLogin({
   }
   return (
     <div
-      className={
-        embedded
-          ? "flex flex-col gap-4"
-          : "flex h-dvh flex-col overflow-auto bg-background text-foreground"
-      }
+      className={embedded ? "flex flex-col gap-4" : "flex h-dvh flex-col overflow-auto bg-background text-foreground"}
     >
       {embedded ? null : <div data-tauri-drag-region className="h-10 shrink-0" />}
-      <div
-        className={
-          embedded ? "flex w-full flex-col gap-4" : "m-auto flex w-full max-w-md flex-col gap-6 px-6 py-8"
-        }
-      >
+      <div className={embedded ? "flex w-full flex-col gap-4" : "m-auto flex w-full max-w-md flex-col gap-6 px-6 py-8"}>
         <header className="flex flex-col gap-2">
           <h1 className="text-xl font-semibold">{t("app.name")}</h1>
           <p className="text-sm text-muted-foreground">{t("platformAuth.intro")}</p>
@@ -209,18 +215,18 @@ export function PlatformLogin({
         >
           <FieldGroup>
             {mode !== "passphrase" && (
-            <Field data-disabled={busy}>
-              <FieldLabel htmlFor="alwith-email">{t("platformAuth.email")}</FieldLabel>
-              <Input
-                id="alwith-email"
-                type="email"
-                autoComplete="email"
-                required
-                disabled={busy}
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </Field>
+              <Field data-disabled={busy}>
+                <FieldLabel htmlFor="alwith-email">{t("platformAuth.email")}</FieldLabel>
+                <Input
+                  id="alwith-email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  disabled={busy}
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                />
+              </Field>
             )}
             {mode === "passphrase" && (
               <Field data-disabled={busy}>

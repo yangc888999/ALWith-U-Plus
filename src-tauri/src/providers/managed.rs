@@ -264,8 +264,18 @@ pub async fn providers_refresh_managed(
         let provider = match result {
             Ok(provider) => provider,
             Err(error) => {
-                inner.error = Some("模型配置刷新失败，请稍后重试".into());
-                let _ = inner.snapshot().emit(app);
+                // The banner used to be one fixed sentence, so a 401 ("登录已失效") and a timeout
+                // read identically and neither told the reader what to do. Keep the real message.
+                let detail = error.get("message").and_then(Value::as_str).unwrap_or("请稍后重试");
+                log::warn!("Provider catalog: managed refresh failed: {detail}");
+                // Only surface it when the engine is actually routing through this account's
+                // gateway. On a first sign-in — or an account with no managed catalog at all —
+                // this failure costs the reader nothing, and a red banner over a working provider
+                // list is pure noise.
+                if inner.managed_active {
+                    inner.error = Some(format!("模型配置刷新失败：{detail}"));
+                    let _ = inner.snapshot().emit(app);
+                }
                 return Err(error);
             }
         };

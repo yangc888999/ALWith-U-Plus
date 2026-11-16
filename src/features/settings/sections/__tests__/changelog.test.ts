@@ -6,9 +6,16 @@ import { parseChangeLog } from "../changelog"
 test("the update-log dialog carries the shipped version and every bullet of it", () => {
   const groups = parseChangeLog(changelog)
   // CHANGELOG 按版本倒序维护；第一组必须就是当前发布版本，且要有本次修复的中文条目。
-  expect(groups[0].version).toBe("1.0.4")
+  expect(groups[0].version).toBe("1.0.5")
   expect(groups[0].items.length).toBeGreaterThan(0)
-  expect(groups[0].items.join(" ")).toContain("正在安装更新")
+  expect(groups[0].items.join(" ")).toContain("口令登录卡顿")
+  expect(groups[0].items.join(" ")).toContain("侧边栏无法展开")
+  // 本次同时发布的窗口缺陷也必须写进日志，不能只写在提交里。
+  expect(groups[0].items.join(" ")).toContain("最大化")
+  expect(groups[0].items.join(" ")).toContain("目标屏工作区")
+  // 上一版的两条修复仍在日志里可读。
+  const previous = groups.find((group) => group.version === "1.0.4")
+  expect(previous?.items.join(" ")).toContain("正在安装更新")
   // 历史条目仍完整可读，1.0.0 的 18 条一条都不能少。
   const initial = groups.find((group) => group.version === "1.0.0")
   expect(initial).toBeDefined()

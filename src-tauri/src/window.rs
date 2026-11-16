@@ -1,6 +1,6 @@
 //! Window helpers ported from ALwith Desktop's `app/native.rs`.
 
-use tauri::{LogicalPosition, LogicalSize, Manager, Monitor};
+use tauri::{LogicalPosition, Manager, Monitor, PhysicalSize};
 
 #[tauri3_specta::command]
 pub fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
@@ -121,12 +121,21 @@ pub fn attach_window_to_main(app: tauri::AppHandle, label: String) -> Result<boo
 //
 // We re-validate the geometry at startup: a sane saved size is kept but clamped inside the
 // monitor's work area; anything absurd (or off-screen) falls back to a proportion of the
-// display. Each display keeps its own remembered window share (keyed by name + work-area
-// geometry), so moving the window between a 2880x1620 landscape panel and a 1440x2560 portrait
-// panel rebuilds the right size on each, without a single global record being polluted by mixed
-// geometry. A drag that lands the window on a *different* display triggers a debounced rebuild;
-// same-display drags and manual resizes are left untouched. Display-layout changes still only
-// rescue a fully off-screen window, so a deliberate placement is never moved.
+// display. Each display keeps its own remembered window share (keyed by name + the display's own
+// frame origin, which the Dock, the menu bar and Stage Manager cannot move), so moving the window
+// between a 2880x1620 landscape panel and a 1440x2560 portrait panel rebuilds the right size on
+// each, without a single global record being polluted by mixed geometry. A drag that lands the
+// window on a *different* display triggers a debounced rebuild; same-display drags and manual
+// resizes are left untouched.
+//
+// A display's own parameters can also change without any drag (resolution, scale factor, input
+// source, a panel plugged in or removed). That path used to only rescue a window that had drifted
+// fully off-screen, so a window prepared for the old panel kept its old size on the new, larger
+// one — the "只占屏幕左边三分之一、侧边栏被压到 100px" report. It now runs the same share model.
+//
+// Everything below compares rectangles in **global physical pixels**. `Monitor::work_area` and
+// `outer_position`/`outer_size` already share that space, whereas dividing each by its own scale
+// factor (window vs monitor) yields coordinates that cannot be compared on a mixed-DPI pair.
 
 const MAIN_MIN_WIDTH: f64 = 1250.0;
 const MAIN_MIN_HEIGHT: f64 = 750.0;
@@ -148,6 +157,11 @@ const LEGACY_KEY: &str = "__legacy_single__";
 /// The window's size relative to one display's work area. A separate record is kept per display,
 /// so switching between differently-sized panels remembers each panel's own share instead of a
 /// single global record being overwritten with "new work area + old window size".
+///
+/// `work_width`/`work_height` are the work area *at the time the share was taken*. They may be
+/// stale (the Dock moved since), and that is fine: the record is only ever read as the ratio
+/// `width / work_width` — the share — which is scale-free by construction. A stale denominator
+/// therefore still yields the share the reader chose on this panel.
 #[derive(Clone, Copy, Debug, serde::Deserialize, serde::Serialize)]
 struct DisplayRecord {
     work_width: f64,
@@ -186,11 +200,8 @@ struct MoveMonitorState {
     applying: bool,
 }
 
-static MOVE_MONITOR_STATE: std::sync::Mutex<MoveMonitorState> = std::sync::Mutex::new(MoveMonitorState {
-    last_key: None,
-    generation: 0,
-    applying: false,
-});
+static MOVE_MONITOR_STATE: std::sync::Mutex<MoveMonitorState> =
+    std::sync::Mutex::new(MoveMonitorState { last_key: None, generation: 0, applying: false });
 
 fn move_state() -> std::sync::MutexGuard<'static, MoveMonitorState> {
     MOVE_MONITOR_STATE.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -256,25 +267,28 @@ fn footprint_record_for(records: &DisplayRecords, key: &str) -> Option<DisplayRe
         .copied()
 }
 
-/// A stable identity for a display. Comparing only work-area width/height (the old `same_display`
-/// check) conflates two identically-sized monitors; combining the name with the work-area origin
-/// and size distinguishes them. Values are logical points, rounded to absorb sub-point jitter, so
-/// a mere scale-factor change does not invalidate the key.
-fn display_key(name: Option<&str>, wa_x: f64, wa_y: f64, wa_w: f64, wa_h: f64) -> String {
+/// A stable identity for a display: its name plus the origin of its **own frame**.
+///
+/// The work area is deliberately *not* part of the identity. `work_area()` shrinks and moves
+/// whenever the Dock is shown/hidden or resized, the menu bar appears/disappears, or Stage Manager
+/// takes a strip off the side — so including it (either its size or its origin) turned a mere Dock
+/// change into "a brand new display". Every such fake display then re-created the window from a
+/// carried-over footprint, which is exactly the observed "换屏后窗口尺寸乱跳、越换越小":
+/// the same panel appeared as `…|1920x960`, `…|1920x1050` and `…|2560x1320`, and each of those was
+/// sized as if it were a display the app had never seen.
+///
+/// The display's own `position()` only changes when the displays are physically rearranged, which
+/// really is a different layout. Values are logical points rounded to whole points, so sub-point
+/// jitter cannot invalidate the key either.
+fn display_key(name: Option<&str>, x: f64, y: f64) -> String {
     let r = |v: f64| v.round() as i64;
-    format!("{}|{},{}|{}x{}", name.unwrap_or("?"), r(wa_x), r(wa_y), r(wa_w), r(wa_h))
+    format!("{}|{},{}", name.unwrap_or("?"), r(x), r(y))
 }
 
 fn monitor_display_key(monitor: &Monitor) -> String {
     let mscale = monitor.scale_factor();
-    let wa = monitor.work_area();
-    display_key(
-        monitor.name().map(String::as_str),
-        wa.position.x as f64 / mscale,
-        wa.position.y as f64 / mscale,
-        wa.size.width as f64 / mscale,
-        wa.size.height as f64 / mscale,
-    )
+    let position = monitor.position();
+    display_key(monitor.name().map(String::as_str), position.x as f64 / mscale, position.y as f64 / mscale)
 }
 
 /// The share of the screen the window covered when it was last sized there.
@@ -295,6 +309,111 @@ fn sized(fractions: (f64, f64), wa_w: f64, wa_h: f64) -> (f64, f64) {
         (wa_w * fractions.0).round().clamp(MAIN_MIN_WIDTH.min(wa_w), wa_w),
         (wa_h * fractions.1).round().clamp(MAIN_MIN_HEIGHT.min(wa_h), wa_h),
     )
+}
+
+/// A rectangle in global physical pixels. Every geometry comparison in this module uses this one
+/// unit; logical points are only produced at the very edge, when a share is recorded.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RectPx {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+fn work_area_px(monitor: &Monitor) -> RectPx {
+    let wa = monitor.work_area();
+    RectPx { x: wa.position.x as f64, y: wa.position.y as f64, w: wa.size.width as f64, h: wa.size.height as f64 }
+}
+
+/// The area two rectangles share. Zero when they merely touch, so a window sitting exactly on the
+/// seam between two displays belongs to neither rather than to both.
+fn overlap_area(a: RectPx, b: RectPx) -> f64 {
+    let w = (a.x + a.w).min(b.x + b.w) - a.x.max(b.x);
+    let h = (a.y + a.h).min(b.y + b.h) - a.y.max(b.y);
+    if w <= 0.0 || h <= 0.0 { 0.0 } else { w * h }
+}
+
+/// The display a window belongs to: the one it covers the most of.
+///
+/// `window.current_monitor()` is the obvious call and it is the wrong one — for a window that
+/// straddles two displays (a maximised window whose frame is one pixel over the seam, a window
+/// mid-drag) the platform may answer either, and acting on "either" is what let a maximised window
+/// grow past its own screen edge because the *other* display's width was used as the ceiling.
+fn owning_monitor_index(areas: &[RectPx], window: RectPx) -> Option<usize> {
+    let mut best: Option<(usize, f64)> = None;
+    for (index, area) in areas.iter().enumerate() {
+        let covered = overlap_area(*area, window);
+        if covered <= 0.0 {
+            continue;
+        }
+        if best.is_none_or(|(_, most)| covered > most) {
+            best = Some((index, covered));
+        }
+    }
+    best.map(|(index, _)| index)
+}
+
+/// What a display change should do with the main window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum GeometryPlan {
+    /// Leave the size alone; the window is already the right size for this display.
+    Keep,
+    /// Resize (in logical points) and re-centre in the owning display's work area.
+    Rebuild { width: f64, height: f64 },
+}
+
+struct GeometryInput {
+    /// The window's size as a share of the owning display's work area.
+    share: (f64, f64),
+    /// Logical work-area size of the owning display.
+    work: (f64, f64),
+    /// This display has no record of its own: the current size came from another panel.
+    unseen_display: bool,
+    /// A drag onto this display: the size is by definition the one from the previous panel.
+    landed_here: bool,
+    maximized: bool,
+    fullscreen: bool,
+    /// The startup pass also rejects an absurdly large or sub-minimum saved size.
+    validate_size: bool,
+    /// The share to rebuild at (this display's own record, else `last`, else the defaults).
+    fractions: (f64, f64),
+}
+
+/// The single place that decides whether a window's size belongs to the display it is on.
+///
+/// The model is a share of the work area, never a pixel size: the size for a display is always
+/// `work_area × that display's remembered share`. A window is only rebuilt when its current share
+/// could not have been chosen for this display — it is below [`MIN_WIDTH_FRACTION`] (prepared for a
+/// smaller panel), the display is one we have never sized on, or a drag just carried it here.
+/// A deliberate small window, a maximised window and a fullscreen window are left untouched.
+fn plan_geometry(input: GeometryInput) -> GeometryPlan {
+    // Never fight the window server: a maximised or fullscreen window is positioned by the system
+    // and its frame is the work area itself (a share of ~1.0), which the "too large" test below
+    // would otherwise read as a corrupt saved geometry and shrink to 85%.
+    if input.fullscreen || input.maximized {
+        return GeometryPlan::Keep;
+    }
+    let rebuild = |fractions: (f64, f64)| {
+        let (width, height) = sized(fractions, input.work.0, input.work.1);
+        GeometryPlan::Rebuild { width, height }
+    };
+    let smaller_than_intended = input.share.0 < MIN_WIDTH_FRACTION || input.share.1 < MIN_HEIGHT_FRACTION;
+    if input.landed_here || input.unseen_display || smaller_than_intended {
+        return rebuild(input.fractions);
+    }
+    if !input.validate_size {
+        return GeometryPlan::Keep;
+    }
+    // Startup: a saved size that cannot belong to any real display (the classic symptom of a
+    // transient maximised/zoned state captured as 11440×3000) falls back to the defaults.
+    let absurd = input.share.0 > MAX_RESTORED_FRACTION || input.share.1 > MAX_RESTORED_FRACTION;
+    let too_small = input.share.0 * input.work.0 < MAIN_MIN_WIDTH.min(input.work.0)
+        || input.share.1 * input.work.1 < MAIN_MIN_HEIGHT.min(input.work.1);
+    if absurd || too_small {
+        return rebuild((DEFAULT_WIDTH_FRACTION, DEFAULT_HEIGHT_FRACTION));
+    }
+    GeometryPlan::Keep
 }
 
 /// Records the main window's current size against the display it is *actually* on, keyed by that
@@ -323,206 +442,328 @@ pub fn note_main_window_geometry(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
-    let Some(monitor) = window.current_monitor().ok().flatten() else {
+    // A maximized/fullscreen frame is the work area, not the size the reader picked. Recording it
+    // would remember "100% of the screen" for this display and restore the app maximized-looking
+    // on the next launch — the other half of the "最大化也异常" report.
+    if window.is_maximized().unwrap_or(false) || window.is_fullscreen().unwrap_or(false) {
+        return;
+    }
+    let (Ok(outer), Ok(position), Ok(monitors)) =
+        (window.outer_size(), window.outer_position(), app.available_monitors())
+    else {
         return;
     };
-    let Ok(outer) = window.outer_size() else {
+    let frame = RectPx { x: position.x as f64, y: position.y as f64, w: outer.width as f64, h: outer.height as f64 };
+    let areas: Vec<RectPx> = monitors.iter().map(work_area_px).collect();
+    // Same ownership rule as every other path here: the display the window covers the most of.
+    let Some(owner) = owning_monitor_index(&areas, frame) else {
         return;
     };
-    let scale = window.scale_factor().unwrap_or(1.0);
+    let monitor = &monitors[owner];
+    let work = areas[owner];
     let mscale = monitor.scale_factor();
-    let wa = monitor.work_area();
-    let key = monitor_display_key(&monitor);
+    let key = monitor_display_key(monitor);
     let mut records = load_display_records(app);
+    // Both numbers are recorded in this display's logical space, so the stored share is the ratio
+    // of the window to its panel and carries no scale factor of its own.
     records.by_display.insert(
         key.clone(),
         DisplayRecord {
-            work_width: wa.size.width as f64 / mscale,
-            work_height: wa.size.height as f64 / mscale,
-            width: outer.width as f64 / scale,
-            height: outer.height as f64 / scale,
+            work_width: work.w / mscale,
+            work_height: work.h / mscale,
+            width: frame.w / mscale,
+            height: frame.h / mscale,
         },
     );
     records.last = Some(key);
     save_display_records(app, &records);
 }
 
-/// True when the logical rect intersects at least one monitor's work area.
-fn is_on_any_monitor(monitors: &[Monitor], x: f64, y: f64, w: f64, h: f64) -> bool {
-    monitors.iter().any(|m| {
-        let scale = m.scale_factor();
-        let wa = m.work_area();
-        let mx = wa.position.x as f64 / scale;
-        let my = wa.position.y as f64 / scale;
-        let mw = wa.size.width as f64 / scale;
-        let mh = wa.size.height as f64 / scale;
-        x < mx + mw && x + w > mx && y < my + mh && y + h > my
-    })
-}
-
-/// Applies a target size/position to the main window and persists the footprint for `key`.
-/// Re-fetches the window through the handle so this helper stays runtime-agnostic.
+/// Applies a target size/position to the main window and records the footprint for `key`.
+///
+/// Sizes arrive in physical pixels and are applied as such: `PhysicalSize`/`PhysicalPosition` need
+/// no scale factor at all, which removes the "divide by the window's scale or the monitor's?"
+/// ambiguity that made a mixed-DPI pair land on the wrong size.
 fn commit_main_window_geometry(
     app: &tauri::AppHandle,
     key: &str,
-    wa_x: f64,
-    wa_y: f64,
-    wa_w: f64,
-    wa_h: f64,
-    tgt_w: f64,
-    tgt_h: f64,
-    cur: (f64, f64, f64, f64), // cur_w, cur_h, cur_x, cur_y in logical points
+    work: RectPx,
+    target: (f64, f64), // logical size to apply
+    cur: RectPx,        // current frame, global physical pixels
     recentre: bool,
+    mscale: f64, // owning display's scale factor, for the recorded share only
 ) -> Result<(), String> {
     let window = app.get_webview_window("main").ok_or_else(|| "main window is gone".to_string())?;
-    if (tgt_w - cur.0).abs() > 0.5 || (tgt_h - cur.1).abs() > 0.5 {
-        window.set_size(LogicalSize::new(tgt_w, tgt_h)).map_err(|error| error.to_string())?;
+    let tgt_w = target.0;
+    let tgt_h = target.1;
+    let tgt_w_px = (tgt_w * mscale).round();
+    let tgt_h_px = (tgt_h * mscale).round();
+    if (tgt_w_px - cur.w).abs() > 1.0 || (tgt_h_px - cur.h).abs() > 1.0 {
+        window.set_size(PhysicalSize::new(tgt_w_px, tgt_h_px)).map_err(|error| error.to_string())?;
     }
+    let wa_x = work.x / mscale;
+    let wa_y = work.y / mscale;
+    let wa_w = work.w / mscale;
+    let wa_h = work.h / mscale;
     let (new_x, new_y) = if recentre {
         (wa_x + (wa_w - tgt_w) / 2.0, wa_y + (wa_h - tgt_h) / 2.0)
     } else {
-        (
-            cur.2.max(wa_x).min(wa_x + wa_w - tgt_w),
-            cur.3.max(wa_y).min(wa_y + wa_h - tgt_h),
-        )
+        // Keep a deliberate placement, only pulling the frame back inside the work area.
+        ((cur.x / mscale).max(wa_x).min(wa_x + wa_w - tgt_w), (cur.y / mscale).max(wa_y).min(wa_y + wa_h - tgt_h))
     };
     window.set_position(LogicalPosition::new(new_x, new_y)).map_err(|error| error.to_string())?;
 
     let mut records = load_display_records(app);
-    records.by_display.insert(
-        key.to_string(),
-        DisplayRecord { work_width: wa_w, work_height: wa_h, width: tgt_w, height: tgt_h },
-    );
+    records
+        .by_display
+        .insert(key.to_string(), DisplayRecord { work_width: wa_w, work_height: wa_h, width: tgt_w, height: tgt_h });
     records.last = Some(key.to_string());
     save_display_records(app, &records);
     Ok(())
 }
 
-/// Re-validate and, if needed, correct the main window's size/position against the displays.
-///
-/// * `only_if_offscreen = false` (startup): always ensure a sane, fully-visible size.
-/// * `only_if_offscreen = true` (display change): only act when the window is no longer on any
-///   monitor, so an intentional placement survives a monitor reconnect/rearrange.
-pub fn clamp_main_window_to_monitor(app: &tauri::AppHandle, only_if_offscreen: bool) -> Result<(), String> {
+/// Holds the adaptation reentrancy flag for the duration of one geometry commit, so the
+/// `Resized`/`Moved` events our own `set_size` emits are neither recorded nor re-scheduled — and so
+/// an early return can never leave the flag set.
+struct Applying;
+
+impl Applying {
+    fn enter() -> Option<Self> {
+        let mut state = move_state();
+        if state.applying {
+            return None;
+        }
+        state.applying = true;
+        Some(Self)
+    }
+}
+
+impl Drop for Applying {
+    fn drop(&mut self) {
+        move_state().applying = false;
+    }
+}
+
+/// Everything a geometry pass needs to know about the window and the display it is on, measured
+/// once so the two clamp paths cannot disagree about which display that is.
+struct Frame {
+    window: tauri::WebviewWindow,
+    work: RectPx,
+    frame: RectPx,
+    key: String,
+    mscale: f64,
+    maximized: bool,
+    /// The owning display has a footprint of its own, i.e. the window has been sized here before.
+    same_display: bool,
+    fractions: (f64, f64),
+}
+
+impl Frame {
+    /// The window's size as a share of its display's work area. Both numbers are in physical
+    /// pixels, so the share carries no scale factor and compares correctly across a mixed-DPI pair.
+    fn share(&self) -> (f64, f64) {
+        (self.frame.w / self.work.w, self.frame.h / self.work.h)
+    }
+
+    fn work_logical(&self) -> (f64, f64) {
+        (self.work.w / self.mscale, self.work.h / self.mscale)
+    }
+
+    /// The window is entirely inside its display's work area.
+    fn inside(&self) -> bool {
+        self.frame.x >= self.work.x
+            && self.frame.y >= self.work.y
+            && self.frame.x + self.frame.w <= self.work.x + self.work.w
+            && self.frame.y + self.frame.h <= self.work.y + self.work.h
+    }
+
+    fn is_fullscreen(&self) -> bool {
+        self.window.is_fullscreen().unwrap_or(false)
+    }
+}
+
+/// Reads the main window and the display it belongs to. `None` when there is no window or no
+/// display to measure against (a headless start), which every caller treats as a no-op.
+fn measure_main_window(app: &tauri::AppHandle) -> Result<Option<Frame>, String> {
     let Some(window) = app.get_webview_window("main") else {
-        return Ok(());
+        return Ok(None);
     };
-    let scale = window.scale_factor().map_err(|error| error.to_string())?;
     let monitors = app.available_monitors().map_err(|error| error.to_string())?;
     if monitors.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     let outer = window.outer_size().map_err(|error| error.to_string())?;
     let position = window.outer_position().map_err(|error| error.to_string())?;
-    let cur_w = outer.width as f64 / scale;
-    let cur_h = outer.height as f64 / scale;
-    let cur_x = position.x as f64 / scale;
-    let cur_y = position.y as f64 / scale;
+    let frame = RectPx { x: position.x as f64, y: position.y as f64, w: outer.width as f64, h: outer.height as f64 };
+    let areas: Vec<RectPx> = monitors.iter().map(work_area_px).collect();
+    let owner = owning_monitor_index(&areas, frame);
+    // Fully off every display: fall back to the primary so the caller can pull it back, instead of
+    // leaving the reader with a window they cannot reach.
+    let owner = match owner {
+        Some(index) => index,
+        None => match app.primary_monitor() {
+            Ok(Some(primary)) => {
+                let key = monitor_display_key(&primary);
+                monitors.iter().position(|monitor| monitor_display_key(monitor) == key).unwrap_or(0)
+            }
+            _ => 0,
+        },
+    };
+    let monitor = monitors[owner].clone();
+    let records = load_display_records(app);
+    let key = monitor_display_key(&monitor);
+    Ok(Some(Frame {
+        key: key.clone(),
+        same_display: records.by_display.contains_key(&key),
+        fractions: footprint(footprint_record_for(&records, &key)),
+        work: areas[owner],
+        mscale: monitor.scale_factor(),
+        maximized: window.is_maximized().unwrap_or(false),
+        frame,
+        window,
+    }))
+}
 
-    if only_if_offscreen && is_on_any_monitor(&monitors, cur_x, cur_y, cur_w, cur_h) {
+/// Commits a plan for `frame`. `recentre` is implied by a rebuild; a `Keep` only nudges the frame
+/// back inside the work area.
+fn apply_plan(app: &tauri::AppHandle, frame: &Frame, plan: GeometryPlan) -> Result<(), String> {
+    // A maximized or fullscreen frame belongs to the window server: it is already exactly the work
+    // area, so "resize to fit" would shrink it by a few pixels and "re-centre" would move it. Both
+    // are visible glitches, and recording that frame would remember ~100% as the reader's chosen
+    // size. Every display change re-maximizes on its own, so there is nothing left to do.
+    if frame.maximized || frame.is_fullscreen() {
+        log::info!("main window: maximized or fullscreen; leaving the frame to the window server");
         return Ok(());
     }
-
-    // Prefer the monitor the window is on; fall back to primary, then any monitor.
-    let primary = match app.primary_monitor() {
-        Ok(Some(monitor)) => Some(monitor),
-        _ => monitors.first().cloned(),
-    };
-    let monitor = window.current_monitor().ok().flatten().or(primary);
-    let Some(monitor) = monitor else {
+    let Some(_applying) = Applying::enter() else {
         return Ok(());
     };
-    let key = monitor_display_key(&monitor);
-    let mscale = monitor.scale_factor();
-    let wa = monitor.work_area();
-    let wa_x = wa.position.x as f64 / mscale;
-    let wa_y = wa.position.y as f64 / mscale;
-    let wa_w = wa.size.width as f64 / mscale;
-    let wa_h = wa.size.height as f64 / mscale;
-
-    let records = load_display_records(app);
-    // A display we have a footprint for is one the window was previously sized on; a fresh one
-    // (e.g. after a rearrange) is rebuilt from a carried-over share. Unlike the old work-area
-    // width/height comparison, this cannot conflate two identically-sized monitors.
-    let same_display = records.by_display.contains_key(&key);
-    let footprint_record = footprint_record_for(&records, &key);
-
-    let sane = cur_w <= wa_w * MAX_RESTORED_FRACTION
-        && cur_h <= wa_h * MAX_RESTORED_FRACTION
-        && cur_w >= MAIN_MIN_WIDTH.min(wa_w)
-        && cur_h >= MAIN_MIN_HEIGHT.min(wa_h)
-        && cur_w >= wa_w * MIN_WIDTH_FRACTION
-        && cur_h >= wa_h * MIN_HEIGHT_FRACTION
-        && cur_x + cur_w > wa_x
-        && cur_y + cur_h > wa_y
-        && cur_x < wa_x + wa_w
-        && cur_y < wa_y + wa_h;
-
-    // A window sized on another display (or on its first launch) is rebuilt from the share of the
-    // screen it used to cover, so a 4K panel gets a 4K-sized window and a laptop panel a laptop one.
-    let resized_by_display = !only_if_offscreen && !same_display;
-    let (tgt_w, tgt_h, recentre) = if only_if_offscreen || resized_by_display {
-        let (width, height) = sized(footprint(footprint_record), wa_w, wa_h);
-        (width, height, true)
-    } else if sane {
-        (cur_w, cur_h, false)
-    } else {
-        let (width, height) = sized((DEFAULT_WIDTH_FRACTION, DEFAULT_HEIGHT_FRACTION), wa_w, wa_h);
-        (width, height, true)
+    let (target, recentre) = match plan {
+        GeometryPlan::Keep => ((frame.frame.w / frame.mscale, frame.frame.h / frame.mscale), false),
+        GeometryPlan::Rebuild { width, height } => ((width, height), true),
     };
+    commit_main_window_geometry(app, &frame.key, frame.work, target, frame.frame, recentre, frame.mscale)
+}
 
+/// Re-validate and, if needed, correct the main window's size/position against the displays.
+///
+/// * `only_if_offscreen = false` (startup): always ensure a sane, fully-visible size.
+/// * `only_if_offscreen = true` (routine re-clamp): leave a window that sits inside its display at
+///   a share that display could have chosen — an intentional placement survives a monitor
+///   reconnect/rearrange. A window that is off-screen, or too small for the display it is now on,
+///   is pulled back and re-sized.
+pub fn clamp_main_window_to_monitor(app: &tauri::AppHandle, only_if_offscreen: bool) -> Result<(), String> {
+    let Some(frame) = measure_main_window(app)? else {
+        return Ok(());
+    };
+    let plan = plan_geometry(GeometryInput {
+        share: frame.share(),
+        work: frame.work_logical(),
+        unseen_display: !only_if_offscreen && !frame.same_display,
+        landed_here: false,
+        maximized: frame.maximized,
+        fullscreen: frame.is_fullscreen(),
+        validate_size: !only_if_offscreen,
+        fractions: frame.fractions,
+    });
     log::info!(
-        "main window: {cur_w:.0}x{cur_h:.0}pt at ({cur_x:.0},{cur_y:.0}) on a {wa_w:.0}x{wa_h:.0}pt display \
-         (scale {mscale:.2}, same display: {same_display}, sane: {sane}) -> {tgt_w:.0}x{tgt_h:.0}pt"
+        "main window: clamp {}x{}px at ({},{}) on {} (scale {:.2}, same display: {}, maximized: {}, \
+         plan: {:?})",
+        frame.frame.w.round(),
+        frame.frame.h.round(),
+        frame.frame.x.round(),
+        frame.frame.y.round(),
+        frame.key,
+        frame.mscale,
+        frame.same_display,
+        frame.maximized,
+        plan
     );
+    if only_if_offscreen && frame.inside() && plan == GeometryPlan::Keep {
+        return Ok(());
+    }
+    apply_plan(app, &frame, plan)
+}
 
-    commit_main_window_geometry(app, &key, wa_x, wa_y, wa_w, wa_h, tgt_w, tgt_h, (cur_w, cur_h, cur_x, cur_y), recentre)
+/// Re-builds the main window for the display it now belongs to after a display's own parameters
+/// changed (resolution, scale factor, input source, a panel plugged in or removed) with no drag.
+///
+/// This is the path that used to be missing. `clamp_main_window_to_monitor(.., true)` returns as
+/// soon as the window is still on some screen, so a window left over from a smaller panel kept its
+/// old frame on the new, larger one — it occupied a corner of the screen and the app laid itself out
+/// for a width it no longer had.
+pub fn adapt_main_window_after_display_change(app: &tauri::AppHandle) -> Result<(), String> {
+    if is_closing(app) {
+        return Ok(());
+    }
+    let Some(frame) = measure_main_window(app)? else {
+        return Ok(());
+    };
+    // Leaving fullscreen emits the same notification; resizing underneath it fights the window
+    // server and leaves a stray frame behind.
+    if frame.is_fullscreen() {
+        log::info!("main window: display changed while fullscreen on {}; deferring", frame.key);
+        return Ok(());
+    }
+    let plan = plan_geometry(GeometryInput {
+        share: frame.share(),
+        work: frame.work_logical(),
+        unseen_display: !frame.same_display,
+        landed_here: false,
+        maximized: frame.maximized,
+        fullscreen: false,
+        validate_size: false,
+        fractions: frame.fractions,
+    });
+    log::info!(
+        "main window: display changed, owning {} (share {:.2}x{:.2}, plan: {:?})",
+        frame.key,
+        frame.share().0,
+        frame.share().1,
+        plan
+    );
+    let result = if frame.inside() && plan == GeometryPlan::Keep { Ok(()) } else { apply_plan(app, &frame, plan) };
+    // The baseline must follow the new display, or the very next `Moved` reads as a cross-display
+    // drag and adapts a second time (a visible bounce). Bumping the generation also discards a
+    // drag adaptation that was scheduled before the display changed.
+    {
+        let mut state = move_state();
+        state.generation = state.generation.wrapping_add(1);
+        state.last_key = Some(frame.key.clone());
+    }
+    result
 }
 
 /// Rebuilds the main window to fit `target_key`'s work area after a drag landed it on a new
 /// display. Uses the target display's own remembered share when returning, otherwise carries over
 /// the share from the display it came from. Always re-centres within the target work area.
 fn adapt_main_window_to_display(app: &tauri::AppHandle, target_key: &str) -> Result<(), String> {
-    let window = app.get_webview_window("main").ok_or_else(|| "main window is gone".to_string())?;
-    let scale = window.scale_factor().map_err(|error| error.to_string())?;
-    let monitors = app.available_monitors().map_err(|error| error.to_string())?;
-    // The window may still straddle the boundary; prefer current_monitor when it is the target,
-    // otherwise locate the target by its stable key. If it vanished (unplugged mid-drag), no-op.
-    let monitor = window
-        .current_monitor()
-        .ok()
-        .flatten()
-        .filter(|m| monitor_display_key(m).as_str() == target_key)
-        .or_else(|| monitors.into_iter().find(|m| monitor_display_key(m).as_str() == target_key));
-    let Some(monitor) = monitor else {
-        log::info!("main window: target display {target_key} is gone; skipping adaptation");
+    let Some(frame) = measure_main_window(app)? else {
         return Ok(());
     };
-    let mscale = monitor.scale_factor();
-    let wa = monitor.work_area();
-    let wa_x = wa.position.x as f64 / mscale;
-    let wa_y = wa.position.y as f64 / mscale;
-    let wa_w = wa.size.width as f64 / mscale;
-    let wa_h = wa.size.height as f64 / mscale;
-
-    let outer = window.outer_size().map_err(|error| error.to_string())?;
-    let position = window.outer_position().map_err(|error| error.to_string())?;
-    let cur = (
-        outer.width as f64 / scale,
-        outer.height as f64 / scale,
-        position.x as f64 / scale,
-        position.y as f64 / scale,
-    );
-
-    let records = load_display_records(app);
-    let fractions = footprint(footprint_record_for(&records, target_key));
-    let (tgt_w, tgt_h) = sized(fractions, wa_w, wa_h);
-
+    if frame.key != target_key {
+        // The drag ended somewhere else again; the newer `Moved` owns the decision.
+        log::info!("main window: target display {target_key} is gone or no longer owns the window; skipping");
+        return Ok(());
+    }
+    let plan = plan_geometry(GeometryInput {
+        share: frame.share(),
+        work: frame.work_logical(),
+        unseen_display: !frame.same_display,
+        landed_here: true,
+        maximized: frame.maximized,
+        fullscreen: frame.is_fullscreen(),
+        validate_size: false,
+        fractions: frame.fractions,
+    });
     log::info!(
-        "main window: adapting to display {target_key} ({wa_w:.0}x{wa_h:.0}pt) -> {tgt_w:.0}x{tgt_h:.0}pt"
+        "main window: landed on {} (share {:.2}x{:.2}, plan: {:?})",
+        frame.key,
+        frame.share().0,
+        frame.share().1,
+        plan
     );
-
-    commit_main_window_geometry(app, target_key, wa_x, wa_y, wa_w, wa_h, tgt_w, tgt_h, cur, true)
+    apply_plan(app, &frame, plan)
 }
 
 /// Called on every main-window `Moved` event. Only a change of *display identity* schedules an
@@ -534,13 +775,13 @@ pub fn on_main_window_moved(app: &tauri::AppHandle) {
     if is_closing(app) {
         return;
     }
-    let Some(window) = app.get_webview_window("main") else {
+    // Ownership by largest overlap, exactly as the clamp paths decide it: `current_monitor()` is
+    // ambiguous for a window on the seam between two displays, and using a different rule here
+    // than there let a drag trigger an adaptation against the wrong display's work area.
+    let Some(frame) = measure_main_window(app).ok().flatten() else {
         return;
     };
-    let Some(monitor) = window.current_monitor().ok().flatten() else {
-        return;
-    };
-    let key = monitor_display_key(&monitor);
+    let key = frame.key.clone();
 
     let scheduled: Option<(u64, String)> = {
         let mut state = move_state();
@@ -606,11 +847,10 @@ pub fn install_main_window_monitoring(app: &tauri::AppHandle) {
         log::warn!("Could not adapt main window to the display: {error}");
     }
     // Seed the display baseline so the very first Moved event isn't mistaken for a cross-display
-    // drag, and a drag that is already underway is detected immediately.
-    if let Some(window) = app.get_webview_window("main") {
-        if let Some(key) = window.current_monitor().ok().flatten().map(|m| monitor_display_key(&m)) {
-            move_state().last_key = Some(key);
-        }
+    // drag, and a drag that is already underway is detected immediately. `measure_main_window`
+    // decides ownership by overlap, so the baseline names the display the window really is on.
+    if let Ok(Some(frame)) = measure_main_window(app) {
+        move_state().last_key = Some(frame.key);
     }
     #[cfg(target_os = "macos")]
     install_screen_change_observer(app);
@@ -635,8 +875,8 @@ mod screen_observer {
 
     pub(super) fn install(app: &tauri::AppHandle) {
         APP.set(app.clone()).expect("Main window screen observer installed once");
-        let mut builder =
-            ClassBuilder::new(c"AlwithMainScreenObserver", NSObject::class()).expect("Main window screen observer class");
+        let mut builder = ClassBuilder::new(c"AlwithMainScreenObserver", NSObject::class())
+            .expect("Main window screen observer class");
         // SAFETY: selector and callback agree; the observer lives until process exit.
         unsafe {
             builder.add_method(sel!(reclampMain:), reclamp as extern "C-unwind" fn(_, _, _));
@@ -663,9 +903,15 @@ mod screen_observer {
             if crate::window::is_closing(&handle) {
                 return;
             }
-            // Only fix the window if it drifted fully off-screen; never move an intentional placement.
+            // Two passes: pull a window that drifted off-screen back into view, then re-fit a
+            // window that was sized for the display parameters that just went away. The second
+            // pass is what makes "从另一个屏幕过来" land at the right size without the reader
+            // having to nudge the window themselves.
             if let Err(error) = clamp_main_window_to_monitor(&handle, true) {
                 log::warn!("Could not re-clamp main window after display change: {error}");
+            }
+            if let Err(error) = crate::window::adapt_main_window_after_display_change(&handle) {
+                log::warn!("Could not re-fit main window after display change: {error}");
             }
         }) {
             log::error!("Could not schedule main window re-clamp: {error}");
