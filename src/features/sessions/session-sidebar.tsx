@@ -63,19 +63,19 @@ import {
   SidebarRailContext,
   SidebarToggleContext
 } from "@/features/layout/components/main-sidebar-layout"
+import { useDisplayProfile } from "@/features/profile/use-display-profile"
 import { UpdateStatusButton } from "@/features/updater/components/update-status-button"
 import { ONLINE_BI_VIEW_ID } from "@/features/workspace/online-bi"
 import { usePreviewExtension } from "@/features/workspace/preview-extension"
 import { automationSessionRows, automationTitleOf, subscribeAutomationSessionRows } from "@/lib/automation-sessions"
-import { isGroupDirectory } from "@/lib/groups"
 import { useApp } from "@/lib/client"
+import { isGroupDirectory } from "@/lib/groups"
 import { cn } from "@/lib/utils"
 import { openSettingsWindow, toggleSettingsWindow } from "@/lib/window-manager"
 
 import { ActivityPanel } from "./activity-panel"
 import { SessionListHostProvider } from "./session-list-host"
 import { SidebarAccountMenu } from "./sidebar-account-menu"
-import { useDisplayProfile } from "@/features/profile/use-display-profile"
 import { SidebarMenuRow } from "./sidebar-menu-row"
 import { useSessionsUiStore } from "./store"
 import { useActivityNotification } from "./use-activity-notification"
@@ -189,9 +189,7 @@ function RailAvatarButton({ onSelect }: { onSelect: () => void }) {
   const avatar = (
     <Avatar className="size-6 after:border-0">
       {profile?.avatarUrl && <AvatarImage src={profile.avatarUrl} alt="" />}
-      <AvatarFallback className="bg-primary text-xs text-primary-foreground">
-        {profile?.initials ?? "?"}
-      </AvatarFallback>
+      <AvatarFallback className="bg-primary text-xs text-primary-foreground">{profile?.initials ?? "?"}</AvatarFallback>
     </Avatar>
   )
   return (
@@ -214,15 +212,7 @@ function RailAvatarButton({ onSelect }: { onSelect: () => void }) {
   )
 }
 
-function SidebarRailButton({
-  label,
-  icon: Icon,
-  active,
-  muted,
-  hint,
-  onSelect,
-  destinations
-}: SidebarRailItem) {
+function SidebarRailButton({ label, icon: Icon, active, muted, hint, onSelect, destinations }: SidebarRailItem) {
   const trigger = (
     <Button
       variant="ghost"
@@ -348,10 +338,7 @@ function SidebarPanels({
   // this filter is the same test applied to rows that were already cached (a restored history, a
   // healed folder, a record still pointing at the Groups root) so an old row cannot resurface here
   // as a project after an update.
-  const sessions = useMemo(
-    () => listedSessions.filter((row) => !isGroupDirectory(row.cwd)),
-    [listedSessions]
-  )
+  const sessions = useMemo(() => listedSessions.filter((row) => !isGroupDirectory(row.cwd)), [listedSessions])
   // Scheduled runs are kept out of `sessionList` by the client; their section reads this store.
   const automationRows = useSyncExternalStore(
     subscribeAutomationSessionRows,
@@ -380,6 +367,7 @@ function SidebarPanels({
   // layout); the same header actions run from it, so nothing is unreachable while collapsed.
   const railNode = useContext(SidebarRailContext)
   const sidebarToggle = useContext(SidebarToggleContext)
+  const expandSidebar = sidebarToggle?.expand
   // Projects are all visible by default; "展开显示" only appears after a collapse.
   const [allProjectsShown, setAllProjectsShown] = useState(true)
   // 会话 previews three rows; a project lists its recent conversations, with the rest behind its
@@ -459,6 +447,10 @@ function SidebarPanels({
   // View-based destinations live inside the panel itself. While the panel is collapsed they
   // also bring it back, otherwise the view would switch behind an invisible column.
   const openWithSidebar = (next: "sessions" | "drive" | "groups"): void => {
+    // The home surface is strictly four columns: sidebar, chat, preview and files. Any
+    // preview-extension child webview must be torn down before returning to sessions; otherwise
+    // the native BI child can survive the canvas switch and remain visible on another monitor.
+    if (next !== "sessions") closePreviewExtension()
     setView(next)
     if (sidebarToggle?.docked !== true) sidebarToggle?.toggle()
   }
@@ -547,13 +539,24 @@ function SidebarPanels({
       id: "chats",
       label: t("sidebar.quickChats"),
       icon: MessagesSquareIcon,
-      onSelect: () => openWithSidebar("sessions")
+      // Switching back to the home session list must tear down the native preview child first.
+      // Otherwise `online-bi-embed` remains a separate top-level window and can be left on the
+      // other monitor even though the main canvas is now showing chat.
+      onSelect: () => {
+        closePreviewExtension()
+        expandSidebar?.()
+        openWithSidebar("sessions")
+      }
     },
     {
       id: "projects",
       label: t("sidebar.projects"),
       icon: FolderIcon,
-      onSelect: () => openWithSidebar("sessions")
+      onSelect: () => {
+        closePreviewExtension()
+        expandSidebar?.()
+        openWithSidebar("sessions")
+      }
     }
   ]
 
@@ -592,7 +595,7 @@ function SidebarPanels({
             <span className="flex min-w-0 flex-1 items-center gap-1.5" data-tauri-drag-region>
               <span className="truncate text-sm font-semibold">{t("app.wordmark")}</span>
               {/* The edition reads as a badge, not as part of the name: red pill, white lettering. */}
-              <span className="shrink-0 rounded-full bg-red-500 px-1.5 py-[1px] text-[10px] font-semibold leading-[1.2] text-white">
+              <span className="shrink-0 rounded-full bg-red-500 px-1.5 py-[1px] text-[10px] leading-[1.2] font-semibold text-white">
                 {t("app.plus")}
               </span>
             </span>

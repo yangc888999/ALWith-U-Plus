@@ -1,7 +1,18 @@
-import { type ReactNode, useEffect, useRef } from "react"
 import { invoke } from "@tauri-apps/api/core"
+import { type ReactNode, useEffect, useRef } from "react"
 
 import { useDisplayProfile } from "@/features/profile/use-display-profile"
+
+// Tauri commands are asynchronous. Without one shared queue, a mount that was already sent can
+// finish after React unmounts this component and after cleanup sent `close`, resurrecting the old
+// child WebView on whichever monitor happened to win the geometry race. Serialising mount/navigate/
+// close makes "leave preview" a hard ordering guarantee: every close is after the last mount.
+let nativeViewOps: Promise<unknown> = Promise.resolve()
+function enqueueNativeViewOp<T>(operation: () => Promise<T>): Promise<T> {
+  const next = nativeViewOps.then(operation, operation)
+  nativeViewOps = next.catch(() => {})
+  return next
+}
 
 /**
  * The dashboard, rendered by a native child webview instead of an iframe.
@@ -33,19 +44,21 @@ export function OnlineBiNativeView({ src, reload = 0 }: { src: string; reload?: 
         if (disposed) return
         const box = element.getBoundingClientRect()
         if (box.width < 2 || box.height < 2) {
-          void invoke("online_bi_embed_set_visible", { visible: false }).catch(() => {})
+          void enqueueNativeViewOp(() => invoke("online_bi_embed_set_visible", { visible: false })).catch(() => {})
           return
         }
-        void invoke("online_bi_embed_mount", {
-          url: src,
-          x: box.left,
-          y: box.top,
-          width: box.width,
-          height: box.height,
-          email
-        })
+        void enqueueNativeViewOp(() =>
+          invoke("online_bi_embed_mount", {
+            url: src,
+            x: box.left,
+            y: box.top,
+            width: box.width,
+            height: box.height,
+            email
+          })
+        )
           .then(() => {
-            mounted.current = true
+            if (!disposed) mounted.current = true
           })
           .catch((error: unknown) => console.error("[online-bi] mount", error))
       })
@@ -60,7 +73,7 @@ export function OnlineBiNativeView({ src, reload = 0 }: { src: string; reload?: 
       observer.disconnect()
       window.removeEventListener("resize", sync)
       mounted.current = false
-      void invoke("online_bi_embed_close").catch(() => {})
+      void enqueueNativeViewOp(() => invoke("online_bi_embed_close")).catch(() => {})
     }
     // `src` is read on mount only; later changes navigate (see below).
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -70,7 +83,7 @@ export function OnlineBiNativeView({ src, reload = 0 }: { src: string; reload?: 
   // itself, which reloads the page without touching the cookie jar.
   useEffect(() => {
     if (!mounted.current) return
-    void invoke("online_bi_embed_navigate", { url: src }).catch((error: unknown) =>
+    void enqueueNativeViewOp(() => invoke("online_bi_embed_navigate", { url: src })).catch((error: unknown) =>
       console.error("[online-bi] navigate", error)
     )
   }, [src, reload])

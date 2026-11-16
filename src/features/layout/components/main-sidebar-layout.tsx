@@ -43,6 +43,8 @@ export type MainScreen = "main" | "leading"
 /** Lets a toolbar hide/show the docked sidebar without knowing the layout internals. */
 export const SidebarToggleContext = createContext<{
   toggle: () => void
+  /** Explicitly restore the full sidebar; rail destinations must not depend on toggle state. */
+  expand: () => void
   docked: boolean
 } | null>(null)
 
@@ -241,8 +243,10 @@ export function MainSidebarLayout({
     </div>
   )
 
+  const expandSidebar = useCallback(() => changePinned(true), [changePinned])
+
   return (
-    <SidebarToggleContext.Provider value={{ toggle: () => changePinned(!docked), docked }}>
+    <SidebarToggleContext.Provider value={{ toggle: () => changePinned(!docked), expand: expandSidebar, docked }}>
       {/* Hosts the rail element for the whole layout subtree: the sidebar (which portals its
         icons in) and the rail itself must both sit inside this provider. */}
       <SidebarRailContext.Provider value={railNode}>
