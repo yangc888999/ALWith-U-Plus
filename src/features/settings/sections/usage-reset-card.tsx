@@ -216,16 +216,16 @@ export function UsageResetBlock({ refreshToken }: { refreshToken: number }) {
               const remaining = at === null ? null : Math.floor(at - now / 1_000)
               const busy = redeeming === credit.id
               const asking = confirming === credit.id
+              // 与 ChatGPT 官方的重置额度列表同构：不使用编号徽章、不套卡片边框，只有发丝线
+              // 分隔的两列（标题+到期时间 / 右侧一个低调药丸按钮）。第一版用了彩色编号块 +
+              // 悬浮位移 + 阴影，属于「过度设计」，读者要的是「有几张、什么时候过期、点哪」。
               return (
                 <li
                   key={credit.id}
-                  className="group grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border border-border/60 bg-background/45 px-3 py-2.5 shadow-xs transition-all hover:-translate-y-px hover:border-primary/30 hover:bg-muted/30 hover:shadow-sm"
+                  className="flex items-center justify-between gap-3 border-b border-border/50 py-3 last:border-b-0"
                 >
-                  <span className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-xs font-semibold tabular-nums text-primary">
-                    {rows.indexOf(credit) + 1}
-                  </span>
                   <span className="min-w-0">
-                    <span className="block truncate text-[13px] font-semibold">{creditTitle(credit, t)}</span>
+                    <span className="block truncate text-[13px] font-medium text-foreground">{creditTitle(credit, t)}</span>
                     <span className="mt-0.5 block truncate text-[11px] tabular-nums text-muted-foreground">
                       {remaining === null
                         ? t("usageReport.resetCreditsNoExpiry")
@@ -242,10 +242,10 @@ export function UsageResetBlock({ refreshToken }: { refreshToken: number }) {
                         </Button>
                       )}
                       <Button
-                        variant={asking ? "destructive" : "outline"}
+                        variant={asking ? "destructive" : "secondary"}
                         size="sm"
                         disabled={busy}
-                        className="min-w-[76px]"
+                        className="h-7 min-w-[64px] rounded-full px-3 text-xs font-normal shadow-none"
                         onClick={() => {
                           if (!asking) {
                             setConfirming(credit.id)

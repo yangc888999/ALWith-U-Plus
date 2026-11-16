@@ -324,24 +324,33 @@ pub async fn enterprise_refresh(
     }
     .await;
     check()?;
-    let models = result
-        .as_ref()
-        .ok()
-        .and_then(|connection| connection.as_ref())
-        .map(|connection| {
-            connection
-                .provider
-                .models
-                .iter()
-                .map(|model| catalog::model_id(&connection.provider.id, &model.api_id))
-                .collect()
-        })
-        .unwrap_or_default();
-    {
+    // 一次失败的发现不是「目录权威地变空了」。刷新失败（网关抖动、平台 5xx、企业登录临时失效）
+    // 时**不要**动 gate 里的模型集，也不吊销已注册的路由：用户正在跑的会话会立刻变成
+    // 「企业模型不可用」，重新登录后模型又回来 —— 这就是「打开企业模型状态异常、和会话记录的
+    // 最后一个模型冲突」的由来。只在刷新成功后提交新的模型集，失败时把错误交给调用方显示。
+    // （对应上游 3328185e fix(enterprise): preserve connections after failed model refreshes）
+    // `Ok(None)` 是权威的「没有可用模型」（企业账号未授权 / 未自动续期）：这时必须清空，
+    // 否则撤销了企业模型、选择器里还留着旧条目。只有 `Err` 才是「这次没问出来」，保持不动。
+    let models = result.as_ref().ok().map(|connection| {
+        connection
+            .as_ref()
+            .map(|connection| {
+                connection
+                    .provider
+                    .models
+                    .iter()
+                    .map(|model| catalog::model_id(&connection.provider.id, &model.api_id))
+                    .collect::<BTreeSet<String>>()
+            })
+            .unwrap_or_default()
+    });
+    if let Some(models) = models {
         let mut gate = state.gate.lock().unwrap();
         gate.commit(generation, models).map_err(error)?;
         state.revoke_connection();
         *state.connection.lock().unwrap() = result.as_ref().ok().and_then(|connection| connection.as_ref()).cloned();
+    } else if let Err(reason) = &result {
+        log::warn!("[enterprise] refresh failed, keeping the previous connection: {reason}");
     }
     let notification = state.changed(app);
     runtime::cleanup(app).await?;

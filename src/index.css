@@ -1409,6 +1409,22 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   --accent-active: 14%; /* 侧栏选中项 */
 }
 
+:root[data-accent="snow-white"] {
+  --settings-accent: oklch(0.55 0.012 255);
+  --settings-accent-ink: oklch(0.28 0.012 255);
+}
+.dark[data-accent="snow-white"] {
+  --settings-accent: oklch(0.93 0.006 250);
+  --settings-accent-ink: oklch(0.97 0.004 250);
+}
+:root[data-accent="elegant-black"] {
+  --settings-accent: oklch(0.30 0.010 265);
+  --settings-accent-ink: oklch(0.20 0.010 265);
+}
+.dark[data-accent="elegant-black"] {
+  --settings-accent: oklch(0.62 0.010 265);
+  --settings-accent-ink: oklch(0.86 0.006 265);
+}
 :root[data-accent="lemon-green"] {
   --settings-accent: oklch(0.76 0.18 128);
   --settings-accent-ink: oklch(0.52 0.15 128);

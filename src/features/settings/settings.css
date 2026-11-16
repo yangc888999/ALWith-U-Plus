@@ -496,38 +496,28 @@
   .settings-window .settings-sidebar {
     width: 13rem;
   }
+  /* 自适应宽度：一行仍然是「标签 | 控件」两列，被压缩的是控件列本身，而不是把整行竖排。
+     竖排只留给真正的窄窗口（≤680）。这里给标签一个下限，否则控件自带固有宽度时中文会被
+     挤成一列单字（「显 / 示 / 输 / 入 / 建 / 议」）。 */
   .settings-window .settings-content {
-    --settings-control-width: min(15rem, 48%);
+    --settings-control-width: min(15rem, 44%);
   }
-  /* 窄窗口必须整行竖排。原来只改列宽，控制列带着自己的固有宽度（下拉 15rem、滑块 300px、
-     开关一排）继续占位，而 .settings-row-control 又是 flex-shrink:0 —— 标签列被压到只剩
-     一个字的宽度，中文逐字换行就成了「显 / 示 / 输 / 入 / 建 / 议」那一竖条。 */
-  .settings-window .settings-row,
-  .settings-window .settings-row-aligned {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    justify-content: flex-start;
-    gap: 0.5rem;
+  .settings-window .settings-row > :first-child {
+    min-width: 11rem;
   }
   .settings-window .settings-row-control {
-    width: 100%;
     min-width: 0;
     flex-shrink: 1;
-    justify-content: flex-start;
   }
   .settings-window .settings-row-control > * {
     max-width: 100%;
   }
-  /* 标签自身也兜一层：即便某个页面漏了上面的规则，也不会再退化成竖排单字。 */
-  .settings-window .settings-row-label,
-  .settings-window .settings-row-title {
-    min-width: 0;
-    overflow-wrap: anywhere;
+  .settings-window .settings-row-aligned {
+    grid-template-columns: minmax(11rem, 1fr) minmax(0, var(--settings-control-width));
   }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 680px) {
   .settings-window .settings-sidebar {
     width: 10rem;
   }

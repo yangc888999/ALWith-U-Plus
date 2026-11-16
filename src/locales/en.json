@@ -665,7 +665,9 @@
       "linenGray": "Linen Grey",
       "warmBrown": "Warm Brown",
       "skyBlue": "Sky Blue",
-      "emerald": "Emerald"
+      "emerald": "Emerald",
+      "snowWhite": "Snow White",
+      "elegantBlack": "Elegant Black"
     },
     "navigationSoundMode": "Navigation melody",
     "navigationSoundModes": {
@@ -1135,7 +1137,7 @@
     "expiryMinutes": "{{minutes}}m {{seconds}}s",
     "resetCreditsShowAll": "Show {{count}} more",
     "resetCreditsCollapse": "Show less",
-    "redeemNow": "Reset now",
+    "redeemNow": "Reset",
     "redeemConfirm": "Confirm reset",
     "redeemCancel": "Cancel",
     "redeem_reset": "Usage reset",

@@ -336,7 +336,18 @@ export function AppearanceSection() {
           desc={t(`settings.materialDesc.${materialMode === "solid" ? "solid" : materialMode === "aero" ? "aero" : "glass"}`)}
         >
           <div className="flex w-[300px] max-w-full flex-col items-end gap-1">
-            <MaterialSegmented value={materialMode} onChange={setAppearanceMode} />
+            <MaterialSegmented
+              value={materialMode}
+              onChange={(next) => {
+                setAppearanceMode(next)
+                // 纯色档配中性配色：浅色默认雪域白、深色默认雅致黑。只在「切到纯色」这一下
+                // 生效——用户之后仍可以自己改回彩色的强调色。
+                if (next === "solid") {
+                  const dark = document.documentElement.classList.contains("dark")
+                  setAccent(dark ? "elegant-black" : "snow-white")
+                }
+              }}
+            />
             {/* 这一行必须始终占位：只在出错时渲染会让卡片高度随档位跳变，
                 下面的「透明度 / 界面缩放」跟着上下移动，看起来像 Tab 自己在动。 */}
             <p

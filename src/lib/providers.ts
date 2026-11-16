@@ -320,10 +320,18 @@ export function resolveSessionModel(
       return rebound
     }
   }
-  // A stale enterprise selection must not block opening the conversation or composing a new turn.
-  // The picker will let the user choose another currently available model; only return the normal
-  // fallback here instead of throwing a red error before the composer can render.
-  if (isAccountModel(model) && purpose === "session") return models[0] ?? null
+  // 账号/企业模型不可用时的替代策略（2026-11-17 定稿）：**用确定可用的模型顶上去**，而不是
+  // 让会话卡住。优化点是「顶上去的那个要是可预期的」——优先用户自己配的默认模型，其次才是
+  // 目录里的第一个；并把替换记进日志，便于排查「会话记 A、实际跑 B」。
+  // 之所以不改成「保留记录 + 亮恢复卡」：企业模型失效往往伴随登录态变化，用户此刻只想继续
+  // 干活；恢复卡会在下一次真正被引擎拒绝时由 `accountModelRecovery` 亮起，两条路并不冲突。
+  if (isAccountModel(model) && purpose === "session") {
+    const replacement = defaultModelFallback(snapshot) ?? models[0] ?? null
+    if (replacement !== null && replacement !== model) {
+      console.info(`[models] account model unavailable, substituted ${model} -> ${replacement}`)
+    }
+    return replacement
+  }
   return models.find((entry) => entry === gatewayModelId(DEFAULT_PROVIDER_ID, DEFAULT_MODEL_ID)) ?? models[0] ?? null
 }
 

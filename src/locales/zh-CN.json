@@ -660,7 +660,9 @@
       "linenGray": "亚麻灰",
       "warmBrown": "暖心棕",
       "skyBlue": "晴空蓝",
-      "emerald": "翡冷翠"
+      "emerald": "翡冷翠",
+      "snowWhite": "雪域白",
+      "elegantBlack": "雅致黑"
     },
     "navigationSoundMode": "导航旋律",
     "navigationSoundModes": {
@@ -1135,7 +1137,7 @@
     "expiryMinutes": "{{minutes}}分{{seconds}}秒",
     "resetCreditsShowAll": "展开另外 {{count}} 张",
     "resetCreditsCollapse": "收起",
-    "redeemNow": "立即重置",
+    "redeemNow": "重置",
     "redeemConfirm": "确认重置",
     "redeemCancel": "取消",
     "redeem_reset": "额度已重置",
