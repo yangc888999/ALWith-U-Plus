@@ -67,18 +67,23 @@ test("a failed check is mirrored as checkFailed state instead of being hidden", 
   expect(store.getState().state).toEqual({ type: "checkFailed", message: "network unreachable" })
 })
 
-test("a ready update asks to relaunch once per version and installs only on acceptance", async () => {
-  const declined = fakeIo({ type: "idle" })
-  const store = createUpdaterStore(declined.io)
+test("a ready update is mirrored without prompting and installs only after an explicit confirm", async () => {
+  // Since 1.0.2 the sidebar card prompts; `init` never opens the relaunch question by itself.
+  const untouched = fakeIo({ type: "idle" })
+  const store = createUpdaterStore(untouched.io)
   await store.getState().init()
-  declined.emit(ready)
-  declined.emit(ready)
+  untouched.emit(ready)
+  untouched.emit(ready)
   await new Promise((resolve) => setTimeout(resolve, 0))
-  expect(declined.calls.ask).toBe(1)
-  expect(declined.calls.install).toBe(0)
+  expect(store.getState().state).toEqual(ready)
+  expect(untouched.calls.ask).toBe(0)
+  expect(untouched.calls.install).toBe(0)
 
   const accepted = fakeIo(ready, true)
-  await createUpdaterStore(accepted.io).getState().init()
+  const acceptedStore = createUpdaterStore(accepted.io)
+  await acceptedStore.getState().init()
+  expect(accepted.calls.ask).toBe(0)
+  await acceptedStore.getState().confirmInstallAndRelaunch()
   expect(accepted.calls.ask).toBe(1)
   expect(accepted.calls.install).toBe(1)
 })
@@ -104,7 +109,8 @@ test("an event received during the initial snapshot wins over stale state", asyn
   const store = createUpdaterStore(io)
   await store.getState().init()
   expect(store.getState().state).toEqual(ready)
-  expect(calls.ask).toBe(1)
+  // The fresh snapshot must not reopen the prompt either; the sidebar card owns that.
+  expect(calls.ask).toBe(0)
 })
 
 test("settings follows ready state without automatically prompting but can install manually", async () => {

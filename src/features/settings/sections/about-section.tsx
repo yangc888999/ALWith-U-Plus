@@ -9,15 +9,15 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useUpdaterStore } from "@/features/updater/store"
 import { openExternal } from "@/lib/open"
+
 // Release history comes from the file the release process already maintains; the locale files only
 // ever carried the newest version, which is why older entries were missing from the dialog.
 import changelog from "../../../../CHANGELOG.md?raw"
-import { parseChangeLog } from "./changelog"
 // The bundled app icon itself — the same artwork Finder and the Dock show. Drawing our own mark
 // here drifted from it (flat gradient, blocky L), so the About page now renders the real asset.
 import appIcon from "../../../../src-tauri/icons/128x128@2x.png"
-
 import { AutoUpdateRow } from "./auto-update-row"
+import { parseChangeLog } from "./changelog"
 import { SettingRow, SettingsCard } from "./shared"
 
 const UPSTREAM_PROJECT_URL = "https://github.com/ALwith-ai/alwith-u"
@@ -75,9 +75,13 @@ export function AboutSection() {
         return t("updater.readyDesc", { version: state.update.version })
       case "restarting":
         return t("updater.installing")
+      // `availableForDownload` is stored but never emitted (a hit downloads straight away), so it only
+      // surfaces in a state snapshot. It is a download in progress, not "up to date".
+      case "availableForDownload":
       case "downloading": {
-        const total = state.totalBytes ?? 0
-        const percent = total > 0 ? Math.min(Math.round(((state.downloadedBytes ?? 0) / total) * 100), 100) : 0
+        const downloaded = state.type === "downloading" ? (state.downloadedBytes ?? 0) : 0
+        const total = state.type === "downloading" ? (state.totalBytes ?? 0) : 0
+        const percent = total > 0 ? Math.min(Math.round((downloaded / total) * 100), 100) : 0
         return t("updater.downloading", { percent })
       }
       case "checkingForUpdates":
@@ -94,7 +98,7 @@ export function AboutSection() {
   const statusDot =
     state.type === "ready" || state.type === "restarting"
       ? "bg-amber-500"
-      : state.type === "checkingForUpdates" || state.type === "downloading"
+      : state.type === "checkingForUpdates" || state.type === "downloading" || state.type === "availableForDownload"
         ? "bg-sky-500"
         : state.type === "checkFailed"
           ? "bg-red-500"
@@ -111,7 +115,7 @@ export function AboutSection() {
           <div className="space-y-1">
             <h2 className="flex items-center justify-center gap-1.5 text-base font-semibold">
               {t("app.wordmark")}
-              <span className="rounded-full bg-red-500 px-1.5 py-[1px] text-[10px] font-semibold leading-[1.2] text-white">
+              <span className="rounded-full bg-red-500 px-1.5 py-[1px] text-[10px] leading-[1.2] font-semibold text-white">
                 {t("app.plus")}
               </span>
             </h2>
@@ -131,32 +135,39 @@ export function AboutSection() {
               >
                 {t("settings.customizedFromProject")}
               </a>{" "}
-              {t("settings.customizedFromSuffix")}
-              {" "}
+              {t("settings.customizedFromSuffix")}{" "}
               {/* A credit, not a field: kept out of the locale files so a translator cannot drop it. */}
               <span className="font-medium text-foreground/80">@Leo</span>
             </p>
           </div>
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground">
-              <span className={`size-1.5 rounded-full ${statusDot}`} />
-              {updaterText}
-            </span>
-            {(state.type === "ready" || state.type === "restarting") && (
+          {/* Exactly one update slot. It used to be a status capsule *plus* an install button, so
+              `restarting` printed the same "安装更新" sentence twice side by side; the sidebar card
+              owns the proactive prompt, this row only carries one status/action. */}
+          <div className="flex max-w-full flex-wrap items-center justify-center gap-2">
+            {state.type === "ready" ? (
               <Button
                 variant="outline"
                 size="sm"
-                disabled={state.type === "restarting"}
+                className="max-w-full rounded-full font-normal text-muted-foreground"
+                title={updaterText}
                 onClick={() => {
                   confirmInstallAndRelaunch().catch((error: unknown) =>
                     toast.error(error instanceof Error ? error.message : String(error))
                   )
                 }}
               >
-                {state.type === "restarting"
-                  ? t("updater.installing")
-                  : t("updater.ready", { version: state.update.version })}
+                <span className={`size-1.5 shrink-0 rounded-full ${statusDot}`} aria-hidden="true" />
+                <span className="truncate">{t("updater.ready", { version: state.update.version })}</span>
               </Button>
+            ) : (
+              <span
+                role="status"
+                aria-live="polite"
+                className="inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground"
+              >
+                <span className={`size-1.5 shrink-0 rounded-full ${statusDot}`} aria-hidden="true" />
+                <span className="min-w-0">{updaterText}</span>
+              </span>
             )}
           </div>
         </section>
@@ -235,7 +246,9 @@ function EngineUpdateRow({ cliVersion }: { cliVersion: string | null }) {
   const { t } = useTranslation()
   return (
     <SettingRow compact title={t("settings.engine")}>
-      <span className="text-sm text-muted-foreground">{t("settings.codexVersion", { version: cliVersion ?? "—" })}</span>
+      <span className="text-sm text-muted-foreground">
+        {t("settings.codexVersion", { version: cliVersion ?? "—" })}
+      </span>
     </SettingRow>
   )
 }

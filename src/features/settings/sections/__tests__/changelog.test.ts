@@ -6,9 +6,9 @@ import { parseChangeLog } from "../changelog"
 test("the update-log dialog carries the shipped version and every bullet of it", () => {
   const groups = parseChangeLog(changelog)
   // CHANGELOG 按版本倒序维护；第一组必须就是当前发布版本，且要有本次修复的中文条目。
-  expect(groups[0].version).toBe("1.0.3")
+  expect(groups[0].version).toBe("1.0.4")
   expect(groups[0].items.length).toBeGreaterThan(0)
-  expect(groups[0].items.join(" ")).toContain("默认会话模型")
+  expect(groups[0].items.join(" ")).toContain("正在安装更新")
   // 历史条目仍完整可读，1.0.0 的 18 条一条都不能少。
   const initial = groups.find((group) => group.version === "1.0.0")
   expect(initial).toBeDefined()

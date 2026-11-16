@@ -1,10 +1,10 @@
 import * as core from "@tauri-apps/api/core"
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks"
-import { act, render, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, waitFor } from "@testing-library/react"
 import { toast } from "sonner"
 import { afterEach, expect, test, vi } from "vitest"
 
-import { useUpdaterStore } from "@/features/updater/store"
+import { type UpdaterState, useUpdaterStore } from "@/features/updater/store"
 import { initI18n } from "@/lib/i18n"
 import * as bridge from "@/lib/settings-bridge"
 
@@ -126,5 +126,102 @@ test("the update log opens from the version row instead of sitting on the page",
     view.unmount()
     native.mockRestore()
     init.mockRestore()
+  }
+})
+
+// The update state is one slot on the About page: a status capsule, or — in `ready` — the install
+// button. A second element repeating the same sentence is the 1.0.2 bug this suite pins down.
+const INSTALLING = "Installing update… The app will restart automatically."
+const READY_DESC = "Version 1.0.3 is downloaded and ready to install."
+const update = { version: "1.0.3", filename: "update.tar.gz", signature: "sig", contentLength: 100 }
+const pristine = useUpdaterStore.getState()
+
+/** Mounts the About page with the updater pinned to `state`; init is stubbed so nothing resets it. */
+function renderAbout(state: UpdaterState) {
+  const native = vi.spyOn(core, "isTauri").mockReturnValue(true)
+  const init = vi.spyOn(useUpdaterStore.getState(), "init").mockResolvedValue()
+  mockIPC((command) => {
+    if (command === "plugin:app|version") return "1.0.2"
+    if (command === "codex_version") return "0.159.2"
+    throw new Error(`Unexpected command: ${command}`)
+  })
+  useUpdaterStore.setState({ state })
+  const view = render(<AboutSection />)
+  return {
+    view,
+    dispose: () => {
+      view.unmount()
+      useUpdaterStore.setState({
+        state: { type: "uninitialized" },
+        confirmInstallAndRelaunch: pristine.confirmInstallAndRelaunch
+      })
+      native.mockRestore()
+      init.mockRestore()
+    }
+  }
+}
+
+test.each<[string, UpdaterState, string]>([
+  ["idle", { type: "idle" }, "Up to date"],
+  ["checkingForUpdates", { type: "checkingForUpdates" }, "Checking for updates"],
+  ["downloading", { type: "downloading", update, downloadedBytes: 42, totalBytes: 100 }, "Downloading update 42%"],
+  ["availableForDownload", { type: "availableForDownload", update }, "Downloading update 0%"],
+  ["ready", { type: "ready", update }, "Relaunch to update to 1.0.3"],
+  ["restarting", { type: "restarting", update }, INSTALLING],
+  ["checkFailed", { type: "checkFailed", message: "network unreachable" }, "Update check failed: network unreachable"]
+])("the %s state is stated exactly once on the About page", (_name, state, expected) => {
+  const { view, dispose } = renderAbout(state)
+  try {
+    expect(view.getAllByText(expected)).toHaveLength(1)
+    // One slot only: either the live status capsule or the single install button.
+    const installButtons = view.queryAllByRole("button", { name: /Relaunch to update to/ })
+    const statuses = view.queryAllByRole("status")
+    expect(statuses.length + installButtons.length).toBe(1)
+    expect(view.queryByText(READY_DESC)).toBeNull()
+  } finally {
+    dispose()
+  }
+})
+
+// Regression: the identity card used to render a dot capsule *and* a disabled button, both printing
+// the installing sentence, so the About page showed it twice side by side.
+test("installing is reported once — no second capsule or button repeats it", () => {
+  const { view, dispose } = renderAbout({ type: "restarting", update })
+  try {
+    expect(view.getAllByText(INSTALLING)).toHaveLength(1)
+    expect(view.getAllByRole("status")).toHaveLength(1)
+    expect(view.queryAllByRole("button", { name: /Installing update|Relaunch to update to/ })).toHaveLength(0)
+  } finally {
+    dispose()
+  }
+})
+
+test("a ready update turns the single slot into the install action", async () => {
+  const confirm = vi.fn<() => Promise<void>>().mockResolvedValue()
+  useUpdaterStore.setState({ confirmInstallAndRelaunch: confirm })
+  const { view, dispose } = renderAbout({ type: "ready", update })
+  try {
+    const button = view.getByRole("button", { name: "Relaunch to update to 1.0.3" })
+    // The download confirmation is the tooltip, not a second visible line above the button.
+    expect(button).toHaveAttribute("title", READY_DESC)
+    expect(view.queryByText(READY_DESC)).toBeNull()
+    await act(() => Promise.try(() => fireEvent.click(button)))
+    expect(confirm).toHaveBeenCalledOnce()
+  } finally {
+    dispose()
+  }
+})
+
+test("an install that fails drops back to the single ready action so it can be retried", async () => {
+  const { view, dispose } = renderAbout({ type: "restarting", update })
+  try {
+    expect(view.getAllByText(INSTALLING)).toHaveLength(1)
+    // Rust restores `ready` when the installer reports an error, so the row must not stay busy.
+    await act(() => Promise.try(() => useUpdaterStore.setState({ state: { type: "ready", update } })))
+    expect(view.getAllByText("Relaunch to update to 1.0.3")).toHaveLength(1)
+    expect(view.queryByText(INSTALLING)).toBeNull()
+    expect(view.queryAllByRole("status")).toHaveLength(0)
+  } finally {
+    dispose()
   }
 })
