@@ -1,4 +1,5 @@
 import { listen } from "@tauri-apps/api/event"
+import { info } from "@tauri-apps/plugin-log"
 import { Loader2 } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
@@ -107,8 +108,12 @@ export function EnterpriseSection() {
         setConfirm(false)
         recheck()
       }
-    } catch {
-      // The shared hook surfaces status errors; a failed action just stops the spinner.
+    } catch (reason) {
+      // The hook surfaces *status* errors, but a failed action used to stop at the spinner: the
+      // reader clicked 登录 and nothing happened, with no way to tell why (2026-11-17). Log the
+      // stage and the reason so the next attempt leaves a trace — never the URL or its ticket.
+      const detail = reason instanceof Error ? reason.message : String(reason)
+      void info(`[enterprise] ${action} failed: ${detail.replaceAll(/https?:\/\/[^\s"']+/g, "[redacted-url]")}`)
     } finally {
       if (current()) setBusy(false)
     }

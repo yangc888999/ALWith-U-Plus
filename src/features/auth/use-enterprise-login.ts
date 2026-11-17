@@ -1,10 +1,12 @@
 import { listen } from "@tauri-apps/api/event"
+import { info } from "@tauri-apps/plugin-log"
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import { commands } from "@/bindings"
 
 import {
-  enterpriseLoginAvailable,
+  enterpriseSignedIn,
+  nativeAuthorizationStatus,
   parseEnterpriseRenewal,
   type EnterpriseRenewal,
   type EnterpriseStatus
@@ -99,6 +101,15 @@ export function useEnterpriseLogin(): EnterpriseLogin & { recheck: () => void } 
       const renewal = parseEnterpriseRenewal(native)
       const renewalAvailable = renewal.automatic_renewal && !renewal.requires_login
       const email = enterpriseEmail(native)
+      // The native layer owns the gateway session since 0.6.5: it is the one that renews the token
+      // every few minutes, so its own answer about authorization is the live one. The account
+      // service keeps a *record* of the enterprise link, and that record is not written back by a
+      // gateway login — after one it still read `enterprise_session_expired` while the gateway
+      // session was seconds old, which is how a signed-in account showed 未登录 (2026-11-17).
+      const nativeAuthorization = nativeAuthorizationStatus(native)
+      void info(
+        `[enterprise] native status authorization=${nativeAuthorization ?? "none"} renewal=${renewal.automatic_renewal} requires_login=${renewal.requires_login}`
+      )
       // Server confirmation is reused, not re-asked, on a plain mount: a healthy renewal *is* the
       // sign-in signal, and the previous answer is still the account service's word. Anything the
       // account service might have changed arrives as a native event first, and that clears the
@@ -120,9 +131,15 @@ export function useEnterpriseLogin(): EnterpriseLogin & { recheck: () => void } 
       if (accountRef.current !== account || usePlatformAuth.getState().user !== identity) return
       setState({
         checking: false,
-        // The server answer can only take authorization away, never grant it: a null status means
-        // "not answered", and being off the company network is not a sign-out.
-        authorized: renewalAvailable && (status === null || enterpriseLoginAvailable(status, renewal)),
+        // Three things can vouch for the account, in order of freshness:
+        //   1. the native layer's own `authorization_status`, which reflects the gateway session it
+        //      renews itself — a successful gateway login is proof even while the account service's
+        //      record still says the old session expired;
+        //   2. the account service answering "authorized";
+        //   3. no server answer at all (off the company network is not a sign-out).
+        // A stale server record must not revoke a session the native layer is actively renewing;
+        // a revocation announced by the service arrives as an event and clears this immediately.
+        authorized: enterpriseSignedIn({ nativeAuthorization, renewal, status }),
         renewalAvailable,
         email,
         status,
