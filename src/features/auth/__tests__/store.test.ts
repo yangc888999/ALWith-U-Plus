@@ -111,10 +111,12 @@ test("model refresh retries profile validation after cached login survives a sta
   expect(host.bind).toHaveBeenCalledWith({ account })
   expect(host.enterpriseBind).toHaveBeenCalledWith({ account })
   expect(host.refresh).toHaveBeenCalledWith({ generation: 1, accessToken: "test-access" })
+  // `modelLabels` 恒为空表：展示名由 Rust 侧用同一个 token 拉取，前端不为它多发一次请求。
   expect(host.enterpriseRefresh).toHaveBeenCalledWith({
     account,
     generation: 8,
-    accessToken: "test-access"
+    accessToken: "test-access",
+    modelLabels: {}
   })
 })
 

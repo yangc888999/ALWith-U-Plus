@@ -11,36 +11,13 @@ test("the update-log dialog carries the shipped version and every bullet of it",
   // 版本号跟随 package.json，避免每次发版都要改测试。
   expect(groups[0].version).toBe(pkg.version)
   expect(groups[0].items.length).toBeGreaterThan(0)
-  // 断言「最新一组日志非空且有中文条目」即可：具体条目随每次发版变化，把 1.0.9 的文案
-  // 钉在这里会让每次发版都要改测试（2026-11-17 已踩）。
+  // 1.2.0 起更新日志只保留「本次发版 + 1.0.0 特性清单」：历史逐版条目已按产品要求删除
+  // （2026-11-17）。这里只守住三条不变式：最新一组等于当前版本、非空、含中文。
   expect(groups[0].items.length).toBeGreaterThan(0)
   expect(groups[0].items.join(" ")).toMatch(/[\u4e00-\u9fa5]/)
-  // 上一版的四栏错位修复仍在日志里可读。
-  const layout8 = groups.find((group) => group.version === "1.0.8")
-  expect(layout8?.items.join(" ")).toContain("侧边栏被推到中间")
-  // 更早一版的白屏修复仍在日志里可读。
-  const boot = groups.find((group) => group.version === "1.0.7")
-  expect(boot?.items.join(" ")).toContain("首次打开白屏")
-  expect(boot?.items.join(" ")).toContain("首屏等待路径")
-  // 更早一版的侧栏展开与四栏约束仍在日志里可读。
-  const layout = groups.find((group) => group.version === "1.0.6")
-  expect(layout?.items.join(" ")).toContain("完整展开模式")
-  expect(layout?.items.join(" ")).toContain("四栏")
-  // 更早一版的登录 / 侧边栏 / 窗口修复仍在日志里可读。
-  const shipped = groups.find((group) => group.version === "1.0.5")
-  expect(shipped?.items.join(" ")).toContain("口令登录卡顿")
-  expect(shipped?.items.join(" ")).toContain("侧边栏无法展开")
-  expect(shipped?.items.join(" ")).toContain("最大化")
-  expect(shipped?.items.join(" ")).toContain("目标屏工作区")
-  // 上一版的两条修复仍在日志里可读。
-  const previous = groups.find((group) => group.version === "1.0.4")
-  expect(previous?.items.join(" ")).toContain("正在安装更新")
-  // 历史条目仍完整可读，1.0.0 的 18 条一条都不能少。
-  const initial = groups.find((group) => group.version === "1.0.0")
-  expect(initial).toBeDefined()
-  expect(initial?.items).toHaveLength(18)
-  expect(initial?.items[0]).toContain("拉会脑暴")
-  expect(initial?.items.at(-1)).toContain("聊天项目")
+  // 唯一保留的历史组是 1.0.0 的功能清单，它必须还在。
+  const shipped = groups.find((group) => group.version === "1.0.0")
+  expect(shipped?.items.length ?? 0).toBeGreaterThan(0)
 })
 
 test("a heading that is not a bare version ends the previous group", () => {

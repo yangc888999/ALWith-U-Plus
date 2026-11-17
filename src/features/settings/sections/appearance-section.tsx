@@ -340,7 +340,7 @@ export function AppearanceSection() {
               value={materialMode}
               onChange={(next) => {
                 setAppearanceMode(next)
-                // 纯色档配中性配色：浅色默认雪域白、深色默认雅致黑。只在「切到纯色」这一下
+                // 纯色档配中性配色：浅色默认雪域白、深色默认极致黑。只在「切到纯色」这一下
                 // 生效——用户之后仍可以自己改回彩色的强调色。
                 if (next === "solid") {
                   const dark = document.documentElement.classList.contains("dark")

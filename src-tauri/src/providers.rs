@@ -1776,6 +1776,12 @@ fn custom_catalog(provider: &CustomProvider) -> Result<Value, String> {
             if let Some(window) = model.context_window {
                 object.insert("context_window".into(), json!(window));
                 object.insert("max_context_window".into(), json!(window));
+                // ChatGPT 的 responses 端点**要求** reasoning 必须开启：模板里 sol 的
+                // `default_reasoning_summary: "none"` 会让引擎不带 reasoning 发送，服务端直接回
+                // `Reasoning is mandatory for this endpoint and cannot be disabled.`
+                // 这正是 terra 第一次尝试时那条「操作没有完成」的来源。
+                object.insert("default_reasoning_summary".into(), json!("auto"));
+                object.insert("reasoning_summary_format".into(), json!("auto"));
                 // No `auto_compact_token_limit`: the engine compacts at its own 95% default, which
                 // is what the user chose. The key used to be forced to 70% for the company relay,
                 // but a per-thread catalog never reached model resolution anyway (see
@@ -1966,11 +1972,73 @@ fn merged_catalog(app_data: &std::path::Path) -> Option<Value> {
             entries.push(entry);
         }
     }
+    // 引擎目录缺的 GPT 模型（目前只有 `gpt-6.1-terra`）由 bridge 提供。
+    //
+    // 事实链（2026-11-17 实测）：
+    //   * 引擎 0.7.39 的内置模型表里没有 terra，configOptions 也就没有它 → 选择器里选不到；
+    //   * 但本地 bridge（127.0.0.1:18765）的 `/v1/models` 已经列出 terra，实测
+    //     `POST /v1/chat/completions {model:"gpt-6.1-terra"}` 返回 200；
+    //   * 共享 router 的分派规则是「模型名不带斜杠 → 走 ChatGPT 原生后端」，所以 terra 只要
+    //     能进引擎目录，请求就会被 router 原样转发到 bridge 的 ChatGPT 通路上。
+    //
+    // 因此这里把 bridge 认、引擎不认的模型补进合并目录：引擎读到就列出它，选择不再落空，
+    // 也不会再出现「显示 terra、实际跑 sol」。等引擎版本自带这些模型时，同名条目会被上面的
+    // 去重逻辑挡住，这里的注入自然失效，不需要再改。
+    for (slug, display, window) in BRIDGE_ONLY_GPT_MODELS {
+        if !seen.insert((*slug).to_string()) {
+            continue;
+        }
+        // 模板必须取自同族模型（sol），不能用 entries 的第一条：第一版拿 deepseek 的条目当模板，
+        // 会把它的工具/搜索能力原样带给 GPT，选择器里看着对、实际能力是错的。
+        let template_entry = entries
+            .iter()
+            .find(|entry| entry.get("slug").and_then(Value::as_str) == Some("gpt-6.1-sol"))
+            .or_else(|| entries.first())
+            .cloned();
+        if let Some(template) = template_entry.map(|mut entry| {
+            if let Some(object) = entry.as_object_mut() {
+                object.insert("slug".into(), json!(slug));
+                object.insert("display_name".into(), json!(display));
+                object.insert("description".into(), json!("GPT coding model served through the local bridge."));
+                object.insert("context_window".into(), json!(window));
+                object.insert("max_context_window".into(), json!(window));
+            }
+            entry
+        }) {
+            log::info!("merged catalog: added bridge-only model {slug}");
+            entries.push(template);
+        }
+    }
+    // 已存在的同类条目也要补 reasoning：`seen` 去重会让「上游目录里已经有 terra」的情况跳过
+    // 上面的注入块，字段就停在模板原样（`default_reasoning_summary` 缺失 → 引擎按禁用发送 →
+    // 服务端回 "Reasoning is mandatory"）。这里统一收口，避免依赖条目来自哪一层。
+    for entry in entries.iter_mut() {
+        if entry.get("slug").and_then(Value::as_str) != Some("gpt-6.1-terra") {
+            continue;
+        }
+        if let Some(object) = entry.as_object_mut() {
+            object.insert("default_reasoning_summary".into(), json!("auto"));
+            object.insert("reasoning_summary_format".into(), json!("auto"));
+            if object.get("supported_reasoning_levels").is_none() {
+                object.insert(
+                    "supported_reasoning_levels".into(),
+                    json!([{"effort":"low"},{"effort":"medium"},{"effort":"high"}]),
+                );
+            }
+        }
+    }
     if entries.is_empty() {
         return None;
     }
     Some(json!({ "models": entries }))
 }
+
+/// 本地 bridge 支持、但引擎内置表里没有的 GPT 模型：(引擎 slug, 显示名, 上下文窗口)。
+///
+/// 来源是 `src-tauri/resources/alwith-bridge/alwith-model.py` 的 `NATIVE_MODELS` 与 bridge 的
+/// `/v1/models`（两者必须一致，由 `scripts/__tests__` 覆盖）。加模型时两处一起改。
+const BRIDGE_ONLY_GPT_MODELS: &[(&str, &str, u64)] =
+    &[("gpt-6.1-terra", "GPT · 6.1 Terra", 1_050_000)];
 
 /// The newest catalog file per provider prefix (`builtin-deepseek-<hash>.json` →
 /// `builtin-deepseek`) in a directory. Catalogs are content-addressed, so an edit leaves the old

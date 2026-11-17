@@ -535,7 +535,10 @@
     "retryAlertTitle": "“{{model}}” has been retried {{count}} times with no response; the system is still retrying in the background.",
     "retryAlertJump": "Open conversation",
     "retryAlertDescription": "Open the conversation to check progress, or switch to another model.",
-    "modelNotInCatalog": "This chat's model list no longer includes “{{from}}”; it is temporarily using “{{to}}”. Check 可用模型 in settings to confirm."
+    "modelNotInCatalog": "This chat's model list no longer includes “{{from}}”; it is temporarily using “{{to}}”. Check 可用模型 in settings to confirm.",
+    "modelFallbackApplied": "This chat's account model is unavailable; switched to “{{to}}”. History is intact — just send again.",
+    "modelFallbackManual": "Automatic model switch failed. Pick a model below and send again — history is intact.",
+    "orchestrationModelReplaced": "The {{role}} model is no longer available; switched to “{{to}}”."
   },
   "composer": {
     "mode": "Permissions",
@@ -668,7 +671,7 @@
       "skyBlue": "Sky Blue",
       "emerald": "Emerald",
       "snowWhite": "Snow White",
-      "elegantBlack": "Elegant Black"
+      "elegantBlack": "Absolute Black"
     },
     "navigationSoundMode": "Navigation melody",
     "navigationSoundModes": {

@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 pub const PROVIDER_PREFIX: &str = "custom_alwith_enterprise_";
 
 #[derive(Deserialize)]
-pub(super) struct IssuedProvider {
+pub(crate) struct IssuedProvider {
     pub provider_id: String,
     pub name: String,
     pub base_url: String,
@@ -17,7 +17,7 @@ pub(super) struct IssuedProvider {
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "camelCase"))]
-pub(super) struct Model {
+pub(crate) struct Model {
     #[serde(rename = "api_id")]
     pub api_id: String,
     pub label: String,
@@ -25,6 +25,7 @@ pub(super) struct Model {
     pub description: Option<String>,
 }
 
+#[allow(dead_code)] // 平台 `/api/v1/providers` 快照仍用于诊断与标签回落。
 pub(super) fn parse(value: Value) -> Result<Option<IssuedProvider>, String> {
     let rows = value.as_array().ok_or("模型配置响应格式无法识别，请稍后重试")?;
     let mut enterprise = rows.iter().filter(|row| row["auth_type"] == "enterprise_session");
@@ -52,6 +53,15 @@ pub(super) fn parse(value: Value) -> Result<Option<IssuedProvider>, String> {
     Ok(Some(provider))
 }
 
+
+/// 0.6.5 起 provider id 由原生生成（同账号稳定）。这里再拼一次账号维度，保证换账号绝不继承
+/// 上一个账号的模型选择——与 0.6.2 的行为一致。
+pub(super) fn scoped_provider_id(identity: &str, native: &str) -> String {
+    let digest = Sha256::digest(format!("{identity}:{native}"));
+    format!("{PROVIDER_PREFIX}{}", hex::encode(digest))
+}
+
+#[allow(dead_code)]
 pub(super) fn provider_id(account: &str, provider: &str) -> String {
     // Stable within an account; another account can never inherit a persisted model selection.
     format!("{PROVIDER_PREFIX}{}", hex::encode(Sha256::digest(format!("{}:{account}{provider}", account.len()))))
@@ -107,61 +117,13 @@ pub(super) struct Connection {
     pub relay: alwith_enterprise_client::RelayConnection,
 }
 
-pub(super) async fn connection(
-    // Only the release build resolves the resource dir through the app handle; a debug build reads
-    // the manifest's resources directly, so the parameter is unused there.
-    #[cfg_attr(debug_assertions, allow(unused_variables))] app: &tauri::AppHandle,
-    account: &str,
-    provider: IssuedProvider,
-    relay: alwith_enterprise_client::RelayConnection,
-    host: &alwith_enterprise_client::EnterpriseClient,
-    generation: u64,
-) -> Result<Connection, String> {
-    let id = provider_id(account, &provider.provider_id);
-    // The native owner builds the runtime catalog from a bundled source, exactly as the upstream
-    // enterprise integration does. The earlier port looked for `custom/models.json`, a resource
-    // this fork never ships, so every refresh failed after the provider fetch and no enterprise
-    // model ever reached the picker. `alwith/models.json` is this fork's shared account catalog.
-    #[cfg(not(debug_assertions))]
-    use tauri::Manager;
-    #[cfg(debug_assertions)]
-    let resources = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
-    #[cfg(not(debug_assertions))]
-    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
-    // `bundled_model_catalogs` only lists the eight built-in vendor catalogs (deepseek, qwen,
-    // openrouter, …); `alwith/models.json` is the account-owned template and is NOT in that list.
-    // Looking it up there made every refresh fail with "Shared ALwith model catalog unavailable"
-    // after a successful provider fetch, which surfaced to the reader as an authorization error.
-    let source = resources.join("alwith/models.json");
-    if !source.is_file() {
-        return Err(format!("共享模型目录缺失：{}", source.display()));
-    }
-    let models: Vec<_> = provider
-        .models
-        .iter()
-        .map(|model| alwith_enterprise_client::CatalogModel {
-            api_id: model.api_id.clone(),
-            label: model.label.clone(),
-            description: model.description.clone(),
-            context_window: model.context_window,
-        })
-        .collect();
-    let catalog = host.model_catalog(generation, &source, &models).await.map_err(|reason| reason.to_string())?;
-    let router = crate::bridge::router_base_url().ok_or("共享模型路由不可用，请重启应用后重试")?;
-    // Keep a copy inside the app's own data directory: the engine boots with one merged catalog
-    // (`providers::merged_catalog_path`), and this is where that merge looks for the enterprise
-    // models. The bytes are copied untouched — compaction stays at the engine's 95% default.
-    let catalog_path = relocated_catalog(app, &catalog.path).unwrap_or_else(|| catalog.path.clone());
-    Ok(connection_params(id, provider, relay, catalog_path, catalog.has_known_model, &router))
-}
-
 /// Copies the native owner's catalog into `app_data/enterprise-catalogs`, unchanged.
 ///
 /// The owner rebuilds its catalog under a content-addressed name on every refresh, so the merged
 /// catalog needs one stable place to find it. Nothing is injected: an earlier build rewrote the
 /// threshold to 70% of the window here, which never reached the engine's model resolution and only
 /// made the app disagree with what Codex actually did.
-fn relocated_catalog(app: &tauri::AppHandle, source: &std::path::Path) -> Option<std::path::PathBuf> {
+pub(super) fn relocated_catalog(app: &tauri::AppHandle, source: &std::path::Path) -> Option<std::path::PathBuf> {
     use std::hash::{Hash, Hasher};
     use tauri::Manager;
     let bytes = std::fs::read(source).ok()?;

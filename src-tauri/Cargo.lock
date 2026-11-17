@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "alwith-enterprise-client"
-version = "0.6.2"
+version = "0.6.5"
 dependencies = [
  "alwith-native-client 0.1.0",
  "serde",
@@ -181,7 +181,7 @@ dependencies = [
 
 [[package]]
 name = "alwith-u"
-version = "1.0.14"
+version = "1.2.0"
 dependencies = [
  "alwith-api",
  "alwith-browser",

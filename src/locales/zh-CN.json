@@ -535,7 +535,10 @@
     "retryAlertTitle": "「{{model}}」已自动重试 {{count}} 次仍无响应，系统仍在后台继续重试。",
     "retryAlertJump": "跳转到会话",
     "retryAlertDescription": "可在对应会话中查看进度，或切换其他模型。",
-    "modelNotInCatalog": "此会话的模型列表里没有「{{from}}」，已临时切到「{{to}}」。可在 设置 → 可用模型 里确认它是否仍然可用。"
+    "modelNotInCatalog": "此会话的模型列表里没有「{{from}}」，已临时切到「{{to}}」。可在 设置 → 可用模型 里确认它是否仍然可用。",
+    "modelFallbackApplied": "这条会话原来用的账号模型已失效，已自动切换到「{{to}}」。历史记录仍在，直接发送即可。",
+    "modelFallbackManual": "自动切换模型没有成功。请在下方选择器里挑一个模型，再点一次发送；历史记录不会丢。",
+    "orchestrationModelReplaced": "分工的{{role}}已经下线，已改用「{{to}}」。要继续用原模型，请先把它加回可用模型。"
   },
   "composer": {
     "mode": "权限",
@@ -663,7 +666,7 @@
       "skyBlue": "晴空蓝",
       "emerald": "翡冷翠",
       "snowWhite": "雪域白",
-      "elegantBlack": "雅致黑"
+      "elegantBlack": "极致黑"
     },
     "navigationSoundMode": "导航旋律",
     "navigationSoundModes": {

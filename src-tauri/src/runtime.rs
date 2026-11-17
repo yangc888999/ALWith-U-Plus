@@ -267,12 +267,14 @@ fn engines_table(app: &AppHandle) -> Result<String, String> {
         .and_then(|directory| crate::providers::merged_catalog_path(&directory))
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_default();
-    let codex_path_for_engine = |app: &AppHandle| -> Result<String, String> {
-        // A user-installed engine update wins over the bundled binary.
-        let over = app.path().app_data_dir().map_err(|error| error.to_string())?.join("codex-override/codex");
-        if over.is_file() {
-            return Ok(over.to_string_lossy().to_string());
-        }
+    // 引擎只用**随包发布**的那一份 Codex CLI（`binaries/codex`，由 package.json 的
+    // `@openai/codex` 精确锁版、`bun run stage` 从平台包复制而来）。
+    //
+    // 曾经这里优先用 `app_data/codex-override/codex`（设置页「更新引擎」下载的那份）。那条路
+    // 让同一台机器上的 CLI 版本与应用版本脱钩：包里的 0.169.0 与用户目录里的旧版并存，出问题的
+    // 时候任何一方都无法解释「我明明升级了」。产品决定（2026-11-17）：组件升级一律由发版带动，
+    // 应用不再接受外部投递的引擎二进制。
+    let codex_path_for_engine = |_app: &AppHandle| -> Result<String, String> {
         Ok(sidecar_path("codex")?.to_string_lossy().to_string())
     };
     let mut engines = json!({"codex": {

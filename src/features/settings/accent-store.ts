@@ -34,7 +34,7 @@ export const ACCENT_PRESETS: AccentPreset[] = [
   { id: "warm-brown", labelKey: "settings.accent.warmBrown", swatch: "oklch(0.62 0.09 55)" },
   { id: "sky-blue", labelKey: "settings.accent.skyBlue", swatch: "oklch(0.66 0.13 240)" },
   { id: "emerald", labelKey: "settings.accent.emerald", swatch: "oklch(0.68 0.12 168)" },
-  // 与「纯色」材质配套的两档中性色：浅色选雪域白、深色选雅致黑，整窗只有黑白灰，
+  // 与「纯色」材质配套的两档中性色：浅色选雪域白、深色选极致黑，整窗只有黑白灰，
   // 不再有彩色强调点与纯色底打架。
   { id: "snow-white", labelKey: "settings.accent.snowWhite", swatch: "oklch(0.97 0.004 250)" },
   { id: "elegant-black", labelKey: "settings.accent.elegantBlack", swatch: "oklch(0.24 0.006 265)" }

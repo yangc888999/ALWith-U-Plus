@@ -77,7 +77,12 @@ import { groupSessionKind, rememberGroupSessionRow, replaceGroupSessionRows } fr
 import { isModelRetired, retireModel, reviveModel } from "@/lib/retired-models"
 import { beginQueuedPrompt, cancelQueuedPrompt, endQueuedPrompt, QueueCancelledError } from "@/lib/queued-prompt"
 import { sandboxAllows, sandboxCapabilities, sandboxMode, sandboxSettings } from "@/lib/sandbox-preference"
-import { orchestrationAllowedFor, orchestrationFor, type SessionOrchestration } from "@/lib/session-orchestration"
+import {
+  orchestrationAllowedFor,
+  orchestrationFor,
+  setOrchestration,
+  type SessionOrchestration
+} from "@/lib/session-orchestration"
 
 import { forkTitle } from "./fork-title"
 import {
@@ -2319,6 +2324,12 @@ export class CodexClient extends CodexAcpClient<AppState> {
     const label = roleName === "planner" ? "规划模型" : "执行模型"
     this.selectingRole.add(id)
     try {
+      // 兜底：分工里记的模型可能已经下线（`deepseek-flash` 在 DeepSeek 关闭后就是这种）。
+      // 先核对目录，命中不了就换成这条会话当前可用的模型并写回配置，然后把话说明白。
+      // 此前直接丢给 setConfig，引擎回「模型 X 当前不可用，请换一个模型」——可读者看到的主
+      // 选择器是 Sol，根本不知道是分工在偷偷用旧模型（2026-11-17 现场）。
+      const repaired = this.repairOrchestrationRole(id, roleName, role, label)
+      if (repaired !== null) role = repaired
       const session = await this.switchSelectionModel(id, role.model, label)
 
       const model = nativeModelCatalog(session.configOptions).find((entry) => entry.id === role.model)
@@ -2338,6 +2349,37 @@ export class CodexClient extends CodexAcpClient<AppState> {
     } finally {
       this.selectingRole.delete(id)
     }
+  }
+
+  /**
+   * 分工角色模型失效时换一个确定可用的：优先这条会话当前选中的模型，其次目录里第一个非账号模型。
+   * 写回 localStorage 后，下一次发送不会再撞同一个错。
+   */
+  private repairOrchestrationRole(
+    id: string,
+    roleName: "planner" | "worker",
+    role: { model: string; effort: string | null; fastMode?: boolean },
+    label: string
+  ): { model: string; effort: string | null; fastMode?: boolean } | null {
+    const session = this.holds(id) ? this.session(id) : undefined
+    if (session === undefined) return null
+    const catalog = nativeModelCatalog(session.configOptions ?? [])
+    if (catalog.some((entry) => entry.id === role.model)) return null
+    const current = selectedModel(session.configOptions)
+    const available = catalog.filter((entry) => !entry.id.startsWith("gateway:"))
+    const next = available.find((entry) => entry.id === current) ?? available[0]
+    if (next === undefined) return null
+    const saved = orchestrationFor(id)
+    if (saved !== null) {
+      const patched = {
+        ...saved,
+        [roleName]: { model: next.id, effort: null, ...(role.fastMode === true ? { fastMode: true } : {}) }
+      }
+      setOrchestration(id, patched)
+    }
+    void info(`[orchestration] ${roleName} model ${role.model} unavailable, using ${next.id}`)
+    toast.info(i18n.t("chat.orchestrationModelReplaced", { role: label, to: next.label }), { duration: 8000 })
+    return { model: next.id, effort: null, ...(role.fastMode === true ? { fastMode: true } : {}) }
   }
 
   /**
@@ -2755,6 +2797,31 @@ export class CodexClient extends CodexAcpClient<AppState> {
     if (!this.current(scope) || !this.holds(id)) return true
     this.accountRevocations.set(id, (this.accountRevocations.get(id) ?? 0) + 1)
     this.setApp((state) => ({ accountModelRecovery: { ...state.accountModelRecovery, [id]: true } }))
+    // 兜底（2026-11-17）：账号/企业模型失效时，先把会话切到一个**确定可用**的模型，再把卡片
+    // 降级成一句说明。此前这里只挂恢复卡，读者必须自己挑模型、再点一次发送——而账号模型失效
+    // 大多发生在企业登录过期，读者此刻既不知道为什么，也不想研究选择器。
+    //
+    // 只切模型、不重放上一轮 prompt：重新执行用户没再确认的指令（可能已经在别处执行过）比
+    // 让读者自己按一次发送危险得多。
+    const fallback = this.accountModelFallback(id)
+    if (fallback !== null) {
+      try {
+        await this.landModelSwitch(id, "model", fallback.value, fallback.value)
+        this.accountRevocations.delete(id)
+        this.setApp((state) => {
+          const next = { ...state.accountModelRecovery }
+          delete next[id]
+          return { accountModelRecovery: next }
+        })
+        toast.info(i18n.t("chat.modelFallbackApplied", { to: fallback.label }), { duration: 8000 })
+        this.publishSession({ ...this.session(id), cwd, attached: false, restoring: false })
+        await super.afterResume(id, cwd, scope)
+        return true
+      } catch (reason) {
+        void info(`[account-model] fallback to ${fallback.value} failed: ${String(reason).slice(0, 200)}`)
+        toast.info(i18n.t("chat.modelFallbackManual"), { duration: 10000 })
+      }
+    }
     // Recorded, not enforced. `readOnly` used to be written here as well, and that single flag is
     // what disabled the input box: a model problem then looked like a broken composer with a dead
     // picker. The recovery flag above plus the stop reason below are enough to explain it in one
@@ -2767,6 +2834,24 @@ export class CodexClient extends CodexAcpClient<AppState> {
       error: { stopReason: ACCOUNT_MODEL_REQUIRED, error: null, meta: null }
     })
     return true
+  }
+
+  /** 会话模型失效时可安全顶替的选择：优先用户默认模型，其次目录里第一个非账号模型。 */
+  private accountModelFallback(id: string): { value: string; label: string } | null {
+    // 顺序很关键：先看用户自己配的默认模型（全局快照，不依赖这条会话的 configOptions）。
+    // 账号模型失效的会话，configOptions 里往往**只剩**那一个 gateway 模型——用会话候选过滤后
+    // 就没有任何可选项，兜底会静默失效，恢复卡照旧弹出来（2026-11-17 现场）。
+    const preferred = this.defaultModelOption?.() ?? null
+    if (preferred !== null && !preferred.startsWith("gateway:"))
+      return { value: preferred, label: preferred }
+    const session = this.holds(id) ? this.session(id) : undefined
+    if (session === undefined) return null
+    const candidates = nativeModelCatalog(session.configOptions ?? []).filter(
+      (entry) => !entry.id.startsWith("gateway:")
+    )
+    if (candidates.length === 0) return null
+    const hit = candidates.find((entry) => entry.id === preferred) ?? candidates[0]
+    return hit === undefined ? null : { value: hit.id, label: hit.label }
   }
 
   /** Flag sessions whose account-owned model is no longer served so their surface offers a new pick. */

@@ -79,15 +79,152 @@ fn controls(window: &tauri::WebviewWindow) -> Result<(), Value> {
 fn main_window(window: &tauri::WebviewWindow) -> Result<(), Value> {
     if window.label() == "main" { Ok(()) } else { Err(error("Enterprise account changes belong to the main window")) }
 }
+
+
+/// 平台给企业模型起的展示名（`api_id -> label`）。
+///
+/// 纯展示层：任何失败（离线、未授权、字段变形）都返回空表，让网关自己的 name 兜底。
+/// 放在 Rust 侧是因为这里正好握着同一次刷新的 access token，前端不必为它多发一次请求——
+/// 那会打乱启动期的请求序列（登录校验与刷新共用同一个 transport 计数）。
+async fn enterprise_model_labels(account: &Account, token: &str) -> BTreeMap<String, String> {
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    else {
+        return BTreeMap::new();
+    };
+    let url = format!("{}/api/v1/providers/finture-enterprise", account.api_base_url);
+    let Ok(response) = client.get(url).bearer_auth(token).send().await else {
+        log::debug!("[enterprise] model labels unavailable (request failed)");
+        return BTreeMap::new();
+    };
+    if !response.status().is_success() {
+        log::debug!("[enterprise] model labels unavailable ({})", response.status());
+        return BTreeMap::new();
+    }
+    let Ok(value) = response.json::<Value>().await else { return BTreeMap::new() };
+    if value["provider_id"] != "finture-enterprise" {
+        return BTreeMap::new();
+    }
+    let Some(models) = value["models"].as_array() else { return BTreeMap::new() };
+    let mut labels = BTreeMap::new();
+    for model in models {
+        let (Some(api_id), Some(label)) = (model["api_id"].as_str(), model["label"].as_str()) else {
+            continue;
+        };
+        let (api_id, label) = (api_id.trim(), label.trim());
+        if api_id.is_empty() || label.is_empty() || labels.contains_key(api_id) {
+            // 重复 id 说明元数据自相矛盾：整份丢弃比猜一个更安全。
+            return BTreeMap::new();
+        }
+        labels.insert(api_id.to_string(), label.to_string());
+    }
+    labels
+}
+
+/// 企业网关地址：生产与开发共用同一个 hosts 入口，由原生按环境选择。
+const GATEWAY_URL: &str = "https://ai-enterprise-ai-gateway-api-dev.finture.id";
+
+/// 申请名写进原生会话，便于网关上区分是哪个客户端开的路由。
+fn environment() -> String {
+    if crate::native::development_directory().is_some() && cfg!(debug_assertions) {
+        "development".into()
+    } else {
+        "production".into()
+    }
+}
+
+/// 登录邮箱给原生做会话标识。0.6.5 的 `prepare_gateway` 需要它，而我们的 bind 只传 baseUrl +
+/// userUuid（少改一处前端就少一个回归点），所以从平台的凭据文件里读；读不到就留空，
+/// 原生会按匿名会话处理，不阻断登录。
+fn account_email(app: &AppHandle) -> Option<String> {
+    let directory = app.path().app_data_dir().ok()?;
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&directory) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with("auth.") {
+                candidates.push(entry.path());
+            }
+        }
+    }
+    for path in candidates {
+        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let Ok(value) = serde_json::from_slice::<Value>(&bytes) else { continue };
+        if let Some(email) = value["user"]["login_email"].as_str()
+            && !email.trim().is_empty()
+        {
+            return Some(email.to_string());
+        }
+    }
+    None
+}
+
+/// 打包后的共享模型模板：引擎按这份 `alwith/models.json` 建企业目录。
+fn source_catalog(app: &AppHandle) -> Result<std::path::PathBuf, Value> {
+    let path = app.path().resource_dir().map_err(error)?.join("alwith/models.json");
+    if !path.exists() {
+        return Err(error("共享模型目录缺失，请重新安装应用后重试"));
+    }
+    Ok(path)
+}
+
+/// 把原生的连接结果组装成本应用使用的形状。
+///
+/// 关键差异：**不用** crate 的 `codex::connection()`。它把 `baseUrl` 指向企业 relay、把真实
+/// `api_key` 写进 `bearerToken`；而本应用要求凭据只留在原生内存与本机路由里，引擎侧一律指向
+/// 共享路由（`bridge::router_base_url`），由 router 转发。所以这里复用既有的
+/// `catalog::connection_params`，只把原生给的 provider 转成它的入参。
+fn build_connection(
+    app: &AppHandle,
+    identity: &str,
+    connection: alwith_enterprise_client::Connection,
+) -> Result<catalog::Connection, Value> {
+    let provider = catalog::IssuedProvider {
+        provider_id: connection.provider.id.clone(),
+        name: connection.provider.name.clone(),
+        base_url: connection.provider.base_url.clone(),
+        hidden: false,
+        models: connection
+            .provider
+            .models
+            .iter()
+            .map(|model| catalog::Model {
+                api_id: model.api_id.clone(),
+                label: model.label.clone(),
+                context_window: model.context_window,
+                description: model.description.clone(),
+            })
+            .collect(),
+    };
+    let catalog = connection.catalog.ok_or_else(|| error("企业模型目录缺失"))?;
+    // 目录稳定副本：`providers::merged_catalog_path` 只在固定位置找它（与 0.6.2 路径一致）。
+    let path = catalog::relocated_catalog(app, &catalog.path).unwrap_or(catalog.path);
+    let router = crate::bridge::router_base_url().ok_or_else(|| error("共享模型路由不可用，请重启应用后重试"))?;
+    let id = catalog::scoped_provider_id(identity, &provider.provider_id);
+    Ok(catalog::connection_params(
+        id,
+        provider,
+        connection.relay,
+        path,
+        catalog.has_known_model,
+        &router,
+    ))
+}
+
 impl Enterprise {
     async fn host(&self, app: &AppHandle) -> Result<&Arc<EnterpriseClient>, Value> {
         self.host.get_or_try_init(|| async {
-            let settings = app.path().app_data_dir().map_err(error)?.join("enterprise-settings.json");
+            // 0.6.5 起企业会话由原生持有：`open_gateway` 拿走一个**会话文件**，令牌、续期和
+            // 设备指纹都在原生侧，应用不再拿 access token 去换 relay。文件随应用数据目录走，
+            // 重装应用要重新登录一次，与上游行为一致。
+            let sessions = app.path().app_data_dir().map_err(error)?.join("enterprise-gateway-sessions.json");
             let directory = match crate::native::development_directory() {
                 Some(directory) => directory,
                 None => app.path().resource_dir().map_err(error)?.join("native"),
             };
-            let host = Arc::new(EnterpriseClient::open(&directory, &settings).await?);
+            let host = Arc::new(EnterpriseClient::open_gateway(&directory, &sessions).await?);
             let events = host.clone();
             let closing = self.closing.clone();
             let app = app.clone();
@@ -257,6 +394,9 @@ pub async fn enterprise_bind(window: tauri::WebviewWindow, account: Account) -> 
 #[tauri3_specta::command]
 pub async fn enterprise_refresh(
     window: tauri::WebviewWindow, account: Account, generation: u64, access_token: String,
+    // 平台为同一批模型给出的展示名（`api_id -> label`）。取不到时传空表：原生会退回网关自己的
+    // 名称，登录与续期绝不能因为一次元数据请求失败而中断。
+    model_labels: BTreeMap<String, String>,
 ) -> Result<Value, Value> {
     main_window(&window)?;
     let app = window.app_handle();
@@ -288,11 +428,20 @@ pub async fn enterprise_refresh(
     check()?;
     let result = async {
         let host = state.host(app).await?;
+        // `prepare_gateway` 取代了 0.6.2 的 `prepare(base_url, uuid, token)`：网关会话由原生建立，
+        // 应用只提供身份（用户 uuid + 邮箱 + 环境）与申请名，不再经手 access token。
         let native_generation = {
             let mut binding = state.binding.lock().await;
             check()?;
-            let native_generation =
-                host.prepare(account.api_base_url.clone(), account.user_uuid.clone(), access_token.clone()).await?;
+            let native_generation = host
+                .prepare_gateway(
+                    GATEWAY_URL.to_string(),
+                    account.user_uuid.clone(),
+                    account_email(app).unwrap_or_default(),
+                    environment(),
+                    "alwith-u".to_string(),
+                )
+                .await?;
             if let Err(reason) = check() {
                 host.suspend(native_generation).await?;
                 return Err(reason);
@@ -301,36 +450,27 @@ pub async fn enterprise_refresh(
                 account: account.clone(),
                 epoch: generation,
                 generation: native_generation,
-                token: access_token.clone(),
+                token: String::new(),
             });
             native_generation
         };
-        let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(20))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(error)?;
-        let response = http
-            .get(format!("{}/api/v1/providers", account.api_base_url))
-            .bearer_auth(access_token)
-            .send()
-            .await
-            .map_err(|_| error("模型配置请求失败，请检查网络后重试"))?;
-        if !response.status().is_success() {
-            return Err(error("模型配置请求被拒绝，请重新登录后重试"));
+        // `connect` 一次做完「确保会话 → 拉网关 provider → 校验 → 起 relay → 建引擎目录」。
+        // 0.6.2 那四步（GET /api/v1/providers → ensure → relay → modelCatalog）里最容易失败的
+        // 组合被原生收敛成一个原子操作。`labels` 目前交给原生返回的 label（平台标签接口要
+        // 单独授权，留到下一步）。
+        // 平台标签优先，缺口由调用方给的（一般是空表）补。
+        let mut labels = enterprise_model_labels(&account, &access_token).await;
+        for (api_id, label) in model_labels.iter() {
+            labels.entry(api_id.clone()).or_insert_with(|| label.clone());
         }
-        let catalog = response.json::<Value>().await.map_err(|_| error("模型配置响应格式无法识别，请稍后重试"))?;
+        let source = source_catalog(app)?;
+        if !labels.is_empty() {
+            log::debug!("[enterprise] applying {} platform model label(s)", labels.len());
+        }
+        let connected = host.connect(native_generation, &labels, Protocol::Responses, Some(&source)).await?;
         check()?;
-        let Some(provider) = catalog::parse(catalog).map_err(error)? else { return Ok(None) };
-        let status = host.ensure(native_generation).await?;
-        if status["automatic_renewal"] != true {
-            return Ok(None);
-        }
-        let gateway = provider.base_url.clone();
-        let relay = host.relay(native_generation, gateway, Protocol::Responses).await?;
-        Ok::<_, Value>(Some(Arc::new(
-            catalog::connection(app, &identity, provider, relay, host, native_generation).await.map_err(error)?,
-        )))
+        let Some(connection) = connected else { return Ok(None) };
+        Ok::<_, Value>(Some(Arc::new(build_connection(app, &identity, connection)?)))
     }
     .await;
     check()?;
@@ -430,13 +570,12 @@ pub async fn enterprise_update_account(
 ) -> Result<(), Value> {
     main_window(&window)?;
     let state = window.state::<Enterprise>();
-    state.current(generation).await?.update(generation, request_id, access_token.clone()).await?;
-    let mut binding = state.binding.lock().await;
-    let Some(binding) = binding.as_mut().filter(|binding| binding.generation == generation) else {
-        return Err(error("ALwith 账号已变更，请重试"));
-    };
-    binding.token = access_token;
-    // A rotated token invalidates the cached healthy answer: the credential it described is gone.
+    // 0.6.5 起企业令牌由原生网关会话持有：轮换、续期、重登都在原生侧完成，并通过
+    // `enterprise:event` 上报。应用不再把 access token 递进去，这条命令保留只为兼容前端
+    // 既有调用（它仍要确认账号没换），实际只刷新一次状态缓存。
+    state.current(generation).await?;
+    let request = request_id.clone();
+    log::debug!("[enterprise] account token rotation acknowledged (request {request}, {} bytes)", access_token.len());
     state.forget_status();
     Ok(())
 }

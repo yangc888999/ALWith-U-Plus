@@ -40,6 +40,7 @@ import { bootstrapSettings } from "@/lib/settings-store"
 import { hydrateZoom } from "@/lib/zoom"
 import { startZoomViewport } from "@/lib/zoom-viewport"
 import "./index.css"
+import { installScrollActivity } from "@/lib/scroll-activity"
 import { primeQuickChatRoot } from "@/lib/quick-chat"
 import { clampWindowToScreen } from "@/lib/window-fit"
 // Install before anything can toast: early startup rejections were the last raw-English path.
@@ -238,6 +239,7 @@ async function bootstrap(): Promise<void> {
   // Cache the quick-chat root before the first render decides what a chat is.
   void primeQuickChatRoot()
 
+  installScrollActivity()
   createRoot(root).render(
     <StrictMode>
       <AppDirectionProvider>

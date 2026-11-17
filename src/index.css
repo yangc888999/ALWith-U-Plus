@@ -841,6 +841,10 @@ body > div:has(> [data-slot="dialog-overlay"]) > * {
 }
 * {
   scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+[data-scrolling="true"],
+[data-scroll-always] {
   scrollbar-color: var(--app-scrollbar-thumb) transparent;
 }
 /* Standard scrollbar properties override WebKit sizing when both are supported. */
@@ -858,15 +862,36 @@ body > div:has(> [data-slot="dialog-overlay"]) > * {
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
+/* 默认透明 = 不画；`data-scrolling` 由 `lib/scroll-activity.ts` 在滚动时挂上，停下 900ms 摘掉。
+   宽度仍然占位，所以内容不会因为滚动条出现/消失而左右跳。 */
 ::-webkit-scrollbar-thumb {
   border-radius: 999px;
+  background: transparent;
+}
+[data-scrolling="true"]::-webkit-scrollbar-thumb,
+[data-scroll-always]::-webkit-scrollbar-thumb {
   background: var(--app-scrollbar-thumb);
 }
-::-webkit-scrollbar-thumb:hover {
+[data-scrolling="true"]::-webkit-scrollbar-thumb:hover,
+[data-scroll-always]::-webkit-scrollbar-thumb:hover {
   background: var(--app-scrollbar-thumb-hover);
 }
 ::-webkit-scrollbar-button {
   display: none;
+}
+
+/* 编辑器与代码块常驻滚动条：长文档里位置感比「干净」更重要。 */
+.alwith-editor,
+.alwith-editor *,
+.alwith-markdown-scroll,
+.alwith-markdown-scroll *,
+pre {
+  scrollbar-color: var(--app-scrollbar-thumb) transparent;
+}
+.alwith-editor ::-webkit-scrollbar-thumb,
+.alwith-markdown-scroll::-webkit-scrollbar-thumb,
+pre::-webkit-scrollbar-thumb {
+  background: var(--app-scrollbar-thumb);
 }
 
 /* Preview pane scrollbar: track stays a constant 10px so the layout never shifts, but the thumb

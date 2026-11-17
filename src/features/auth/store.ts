@@ -68,7 +68,9 @@ async function enterpriseBind(account: EnterpriseAccount): Promise<number> {
 async function enterpriseRefresh(generation: number, accessToken: string): Promise<void> {
   const binding = enterpriseBindings.get(generation)
   if (!binding) throw new Error("Enterprise account binding is missing")
-  await commands.enterpriseRefresh({ ...binding, accessToken })
+  // 展示名由 Rust 侧用同一个 access token 拉取：前端多打一次请求会改变启动期的请求序列
+  // （登录校验/刷新计次），而标签只是展示层数据，没必要让它挤进这条链路。
+  await commands.enterpriseRefresh({ ...binding, accessToken, modelLabels: {} })
 }
 async function enterpriseClear(): Promise<void> {
   enterpriseBindings.clear()

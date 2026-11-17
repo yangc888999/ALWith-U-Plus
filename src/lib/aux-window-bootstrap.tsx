@@ -3,6 +3,8 @@
 import { attachConsole, error as logError } from "@tauri-apps/plugin-log"
 import { type ComponentType, StrictMode } from "react"
 import { createRoot } from "react-dom/client"
+
+import { installScrollActivity } from "@/lib/scroll-activity"
 import { toast } from "sonner"
 
 import { AppDirectionProvider } from "@/components/alwith-ui/app-direction-provider"
@@ -76,6 +78,7 @@ export function bootstrapAuxWindow(opts: {
     }
     const root = document.getElementById("root")
     if (!root) throw new Error("the window page has no #root")
+    installScrollActivity()
     createRoot(root).render(
       <StrictMode>
         <AppDirectionProvider>

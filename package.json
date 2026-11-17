@@ -1,7 +1,7 @@
 {
   "name": "alwith-u",
   "private": true,
-  "version": "1.0.14",
+  "version": "1.2.0",
   "description": "An independent desktop client for the OpenAI Codex CLI",
   "license": "Apache-2.0",
   "type": "module",
@@ -116,8 +116,9 @@
     "y-websocket": "^3.1.0",
     "yjs": "^13.6.33",
     "zustand": "^5.0.16",
-    "@alwith/enterprise-client": "0.6.2",
-    "@alwith/native-enterprise": "0.6.2"
+    "@alwith/enterprise-client": "0.6.5",
+    "@alwith/native-enterprise": "0.6.5",
+    "@alwith/native-kit": "0.5.2"
   },
   "devDependencies": {
     "@alwith/native-auth": "^0.1.2",
