@@ -498,7 +498,10 @@ function withResizableCanvas(run: (resize: (viewport: number) => Promise<void>) 
     .finally(restore)
 }
 
-test("the sidebar width follows the measured canvas, not window.innerWidth", async () => {
+// 该用例描述的是 1.0.x 的「按实测画布宽度换算侧栏」——2026-11-16 用户要求主界面整体回到 0.4.3，
+// 而 1.0.8 引入的占位几何/实时测量正是「折叠后聊天被推到窗口左缘」的根因，已随画布逻辑一并回退。
+// 保留用例文本作为历史，跳过执行；若将来重新引入实测宽度，再把 skip 去掉。
+test.skip("the sidebar width follows the measured canvas, not window.innerWidth", async () => {
   // A share big enough that the 34% ceiling — not the 180px floor — decides the column, so the
   // number on the divider is a direct readout of which width the component resolved against. The
   // four shares must total exactly 1, otherwise `loadWorkspaceLayout` normalises them.

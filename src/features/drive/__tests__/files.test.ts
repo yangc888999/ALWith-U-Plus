@@ -3,22 +3,16 @@ import { beforeEach, expect, test, vi } from "vitest"
 const mocks = vi.hoisted(() => ({
   prepare: vi.fn((_controller: unknown, path: string) => Promise.resolve(path as string | null)),
   request: vi.fn(),
-  snapshot: vi.fn(
-    (): { snapshot: { generation: number; webBaseUrl: string; configured?: boolean } } => ({
-      snapshot: { generation: 1, webBaseUrl: "https://drive.example.test" }
-    })
-  ),
+  snapshot: vi.fn(() => ({ snapshot: { generation: 1, webBaseUrl: "https://drive.example.test" } })),
   external: vi.fn(async (_url: string) => {}),
   read: vi.fn(),
-  info: vi.fn(),
-  auth: { isAuthenticated: true, user: { login_email: "test@finture.id" } }
+  stat: vi.fn(),
+  info: vi.fn()
 }))
 vi.mock("@alwith/module-drive", () => ({ prepareDriveFile: mocks.prepare }))
 vi.mock("../controller", () => ({ drive: { request: mocks.request, getSnapshot: mocks.snapshot } }))
-vi.mock("../filesystem", () => ({ driveFileSystem: () => Promise.resolve({ readFile: mocks.read }) }))
+vi.mock("../filesystem", () => ({ driveFileSystem: () => Promise.resolve({ readFile: mocks.read, stat: mocks.stat }) }))
 vi.mock("@/lib/open", () => ({ openExternal: mocks.external }))
-vi.mock("@/lib/settings-store", () => ({ settingsStore: { get: () => true } }))
-vi.mock("@/features/auth/store", () => ({ usePlatformAuth: { getState: () => mocks.auth } }))
 vi.mock("@tauri-apps/plugin-dialog", () => ({ confirm: vi.fn() }))
 vi.mock("sonner", () => ({ toast: { info: mocks.info } }))
 
@@ -32,29 +26,173 @@ beforeEach(() => {
   mocks.snapshot.mockReturnValue({ snapshot: { generation: 1, webBaseUrl: "https://drive.example.test" } })
   mocks.read.mockResolvedValue(shortcut(7))
   mocks.request.mockResolvedValue({ type: "path", data: null })
-  mocks.auth.isAuthenticated = true
-  mocks.auth.user = { login_email: "test@finture.id" }
+  mocks.stat.mockResolvedValue(null)
+})
+
+test.each(["report.md", "image.png", "report.html"])(
+  "opens a local Drive file without waiting for synchronization: %s",
+  async (name) => {
+    mocks.snapshot.mockImplementation(() => ({
+      snapshot: {
+        generation: 1,
+        webBaseUrl: "https://drive.example.test",
+        configured: true,
+        localRoot: "/drive",
+        files: []
+      }
+    }))
+    mocks.stat.mockResolvedValue({ kind: "file", size: 123, version: "1" })
+    mocks.prepare.mockRejectedValue(new Error("Drive synchronization is unavailable"))
+    expect(await prepareWorkspaceFile(`/drive/${name}`)).toBe(`/drive/${name}`)
+    expect(mocks.prepare).not.toHaveBeenCalled()
+  }
+)
+
+test("a missing local file still uses Drive preparation", async () => {
+  mocks.snapshot.mockImplementation(() => ({
+    snapshot: {
+      generation: 1,
+      webBaseUrl: "https://drive.example.test",
+      configured: true,
+      localRoot: "/drive",
+      files: []
+    }
+  }))
+  expect(await prepareWorkspaceFile("/drive/missing.md")).toBe("/drive/missing.md")
+  expect(mocks.prepare).toHaveBeenCalled()
+})
+
+test("paused synchronization and a stale download state do not block an existing local file", async () => {
+  mocks.snapshot.mockImplementation(() => ({
+    snapshot: {
+      generation: 1,
+      webBaseUrl: "https://drive.example.test",
+      configured: true,
+      running: false,
+      localRoot: "/drive",
+      files: [{ localPath: "/drive/report.md", state: "notDownloaded" }]
+    }
+  }))
+  mocks.stat.mockResolvedValue({ kind: "file", size: 123, version: "1" })
+  expect(await prepareWorkspaceFile("/drive/report.md")).toBe("/drive/report.md")
+  expect(mocks.prepare).not.toHaveBeenCalled()
+})
+
+test("switching profiles during local inspection rejects the old file", async () => {
+  mocks.snapshot.mockImplementation(() => ({
+    snapshot: {
+      generation: 1,
+      webBaseUrl: "https://drive.example.test",
+      configured: true,
+      localRoot: "/drive",
+      files: []
+    }
+  }))
+  mocks.stat.mockImplementation(async () => {
+    mocks.snapshot.mockReturnValue({ snapshot: { generation: 2, webBaseUrl: "https://other.example.test" } })
+    return { kind: "file", size: 123, version: "1" }
+  })
+  await expect(prepareWorkspaceFile("/drive/report.md")).rejects.toThrow("profile changed")
+  expect(mocks.prepare).not.toHaveBeenCalled()
+  expect(mocks.external).not.toHaveBeenCalled()
+})
+
+test("local filesystem errors are reported instead of falling back to synchronization", async () => {
+  mocks.snapshot.mockImplementation(() => ({
+    snapshot: {
+      generation: 1,
+      webBaseUrl: "https://drive.example.test",
+      configured: true,
+      localRoot: "/drive",
+      files: []
+    }
+  }))
+  mocks.stat.mockRejectedValue(new Error("Permission denied"))
+  await expect(prepareWorkspaceFile("/drive/report.md")).rejects.toThrow("Permission denied")
+  expect(mocks.prepare).not.toHaveBeenCalled()
+})
+
+test("large local files retain the external application size limit", async () => {
+  mocks.snapshot.mockImplementation(() => ({
+    snapshot: {
+      generation: 1,
+      webBaseUrl: "https://drive.example.test",
+      configured: true,
+      localRoot: "/drive",
+      files: []
+    }
+  }))
+  mocks.stat.mockResolvedValue({ kind: "file", size: 16 * 1024 * 1024 + 1, version: "1" })
+  expect(await prepareWorkspaceFile("/drive/large.txt")).toBeNull()
+  expect(mocks.external).toHaveBeenCalledWith("/drive/large.txt")
+  expect(mocks.prepare).not.toHaveBeenCalled()
+})
+
+test.each([20, 40, 41])("a local %s MiB PDF stays in the shared preview instead of opening externally", async (mib) => {
+  mocks.snapshot.mockImplementation(() => ({
+    snapshot: {
+      generation: 1,
+      webBaseUrl: "https://drive.example.test",
+      configured: true,
+      localRoot: "/drive",
+      files: []
+    }
+  }))
+  mocks.stat.mockResolvedValue({ kind: "file", size: mib * 1024 * 1024, version: "1" })
+  expect(await prepareWorkspaceFile("/drive/large.pdf")).toBe("/drive/large.pdf")
+  expect(mocks.external).not.toHaveBeenCalled()
+  expect(mocks.prepare).not.toHaveBeenCalled()
+})
+
+test("cloud PDFs delegate oversized behavior to the shared preview", async () => {
+  await prepareWorkspaceFile("/drive/large.pdf.yupcloud")
+  // 上游 0.6.x 的 `prepareDriveFile` 有 `openLargeFilesExternally` 开关；本应用的
+  // module-drive 0.6.5 没有这个参数（大文件的打开策略由模块自己按预览类型决定）。
+  // 因此这里只断言「交给共享预览处理」，不断言那个不存在的开关。
+  expect(mocks.prepare).toHaveBeenCalledWith(
+    expect.anything(),
+    "/drive/large.pdf.yupcloud",
+    expect.anything()
+  )
+})
+
+test.each(["forbidden", "cloudOnly"])("local files retain the indexed %s restriction", async (state) => {
+  mocks.snapshot.mockImplementation(() => ({
+    snapshot: {
+      generation: 1,
+      webBaseUrl: "https://drive.example.test",
+      configured: true,
+      localRoot: "/drive",
+      files: [{ localPath: "/drive/report.md", state }]
+    }
+  }))
+  mocks.stat.mockResolvedValue({ kind: "file", size: 123, version: "1" })
+  await expect(prepareWorkspaceFile("/drive/report.md")).rejects.toThrow("available only in the cloud")
+  expect(mocks.stat).not.toHaveBeenCalled()
+  expect(mocks.external).not.toHaveBeenCalled()
+})
+
+test("cloud placeholders do not bypass download preparation", async () => {
+  mocks.snapshot.mockImplementation(() => ({
+    snapshot: {
+      generation: 1,
+      webBaseUrl: "https://drive.example.test",
+      configured: true,
+      localRoot: "/drive",
+      files: []
+    }
+  }))
+  mocks.stat.mockResolvedValue({ kind: "file", size: 123, version: "1" })
+  mocks.prepare.mockResolvedValue(null)
+  expect(await prepareWorkspaceFile("/drive/report.md.yupcloud")).toBeNull()
+  expect(mocks.prepare).toHaveBeenCalled()
+  expect(mocks.stat).not.toHaveBeenCalled()
 })
 
 test("ordinary files keep the existing preparation flow", async () => {
   expect(await prepareWorkspaceFile("/project/note.md")).toBe("/project/note.md")
   expect(mocks.read).not.toHaveBeenCalled()
   expect(mocks.request).not.toHaveBeenCalled()
-})
-
-test("a synced drive serves shortcuts for accounts without a company-domain email", async () => {
-  mocks.auth.user = { login_email: "personal@example.com" }
-  mocks.snapshot.mockReturnValue({
-    snapshot: { generation: 1, webBaseUrl: "https://drive.example.test", configured: true }
-  })
-  expect(await prepareWorkspaceFile("/project/a.yuplink")).toBeNull()
-  expect(mocks.external).toHaveBeenCalledWith("https://drive.example.test/file/7")
-})
-
-test("signed-out sessions resolve shortcuts as plain local paths", async () => {
-  mocks.auth.isAuthenticated = false
-  expect(await prepareWorkspaceFile("/project/note.md")).toBe("/project/note.md")
-  expect(mocks.read).not.toHaveBeenCalled()
 })
 
 test("shortcut opens the current native target through the workspace host", async () => {

@@ -4,7 +4,6 @@ import { isTauri } from "@tauri-apps/api/core"
 
 import type { ClientOptions } from "@/agent/client"
 
-/** Snapshot, preferences and knowledge context are ordinary requests; no credentials involved. */
 async function request(value: DriveRequest): Promise<DriveResponse> {
   return commands.request({ request: value })
 }

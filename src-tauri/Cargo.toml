@@ -1,6 +1,6 @@
 [package]
 name = "alwith-u"
-version = "1.0.11"
+version = "1.0.12"
 description = "An independent desktop client for the OpenAI Codex CLI"
 authors = ["alwith.ai"]
 license = "Apache-2.0"
@@ -15,6 +15,8 @@ tauri-build = { version = "3.0.0-alpha.4", features = [] }
 
 [features]
 hasgard-testing = ["dep:tauri-plugin-hasgard"]
+# 打开后 enterprise 走 0.6.5 的网关会话链路（1.0.13 起启用）。
+enterprise-gateway-sessions = []
 
 [dependencies]
 alwith-enterprise-client = { path = "../node_modules/@alwith/enterprise-client/rust" }

@@ -1,6 +1,9 @@
 import type { DriveControls } from "@alwith/module-drive/react"
+import { EllipsisIcon } from "lucide-react"
 import type { ReactNode } from "react"
 
+import { NumberInput } from "@/components/alwith-ui/number-input"
+import { Pane } from "@/components/alwith-ui/pane"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/alwith-ui/select"
 import { Button } from "@/components/ui/button"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu"
@@ -13,15 +16,20 @@ import "./dialog.css"
 export const driveDialogClassName = "alwith-drive-dialog max-h-[80vh] overflow-auto"
 
 export const driveControls: DriveControls = {
+  NavigationScroll: ({ className, children }) => (
+    <Pane className={`${className} session-list-scroll`} viewportClassName="pb-1">
+      {children}
+    </Pane>
+  ),
   Button,
-  Input,
+  Input: (props) => (props.type === "number" ? <NumberInput {...props} /> : <Input {...props} />),
   Switch,
   Menu: ({ label, children, items }): ReactNode => (
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
-          <Button variant="ghost" size="icon-sm" aria-label={label}>
-            {children ?? "⋯"}
+          <Button variant="ghost" size="icon-sm" className="alwith-drive-more-trigger" aria-label={label}>
+            {children ?? <EllipsisIcon className="alwith-drive-icon" />}
           </Button>
         }
       />

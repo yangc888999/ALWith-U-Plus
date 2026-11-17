@@ -1,3 +1,4 @@
+import { CONTRACT_VERSION } from "@alwith/module-drive"
 import type { DriveRequest, DriveResponse, Snapshot } from "@alwith/module-drive"
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
@@ -9,10 +10,10 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }))
 vi.mock("@tauri-apps/api/event", () => ({ emitTo: async () => {}, listen: () => Promise.resolve(() => {}) }))
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }))
 
-import { drive, driveRequestTimeoutMs } from "../controller"
+import { drive } from "../controller"
 
 const snapshot: Snapshot = {
-  version: 2,
+  version: CONTRACT_VERSION,
   generation: 1,
   sequence: 0,
   configured: true,
@@ -86,32 +87,31 @@ test("background configuration reads do not show save notifications", async () =
   expect(mocks.success).not.toHaveBeenCalled()
 })
 
-test("interactive sign-in is uncapped while the delete round trips have a deadline", () => {
-  expect(driveRequestTimeoutMs({ type: "login", baseUrl: "https://drive.test", token: "t", localRoot: "/drive" })).toBeNull()
-  expect(driveRequestTimeoutMs({ type: "ssoLogin", baseUrl: "https://drive.test", localRoot: "/drive" })).toBeNull()
-  expect(driveRequestTimeoutMs({ type: "cancelDeletes", projectId: 499 })).toBe(20_000)
-  expect(driveRequestTimeoutMs({ type: "confirmDeletes", projectId: 499 })).toBe(20_000)
-  expect(driveRequestTimeoutMs({ type: "sync" })).toBe(180_000)
-  expect(driveRequestTimeoutMs({ type: "snapshot" })).toBe(45_000)
+test("Drive uses plugin commands and the separate session credential permission", async () => {
+  await drive.request({ type: "roots" })
+  expect(mocks.invoke).toHaveBeenCalledWith("plugin:alwith-drive|request", { request: { type: "roots" } })
+  await drive.request({ type: "mcpSessionConfig" })
+  expect(mocks.invoke).toHaveBeenCalledWith("plugin:alwith-drive|session_request", {
+    request: { type: "mcpSessionConfig" }
+  })
+  expect(mocks.invoke).not.toHaveBeenCalledWith("plugin:alwith-drive|request", {
+    request: { type: "mcpSessionConfig" }
+  })
 })
 
-test("a wedged native delete call cannot freeze the shared refresh handle", async () => {
-  vi.useFakeTimers()
-  try {
-    mocks.invoke.mockImplementation((_command, { request }) => {
-      if (request.type === "snapshot") return Promise.resolve({ type: "snapshot", data: snapshot })
-      // The closed native dylib never answers this one.
-      if (request.type === "cancelDeletes") return new Promise<DriveResponse>(() => {})
-      return Promise.resolve({ type: "done" })
-    })
-    const wedged = drive.request({ type: "cancelDeletes", projectId: 499 })
-    const rejection = expect(wedged).rejects.toThrow("Drive request timed out: cancelDeletes")
-    await vi.advanceTimersByTimeAsync(20_000)
-    await rejection
-    // Rejecting at the transport releases the controller's deduplicated refresh promise, so the
-    // rest of the Drive panel stays usable instead of joining the stuck call.
-    await expect(drive.request({ type: "roots" })).resolves.toEqual({ type: "done" })
-  } finally {
-    vi.useRealTimers()
-  }
+test("structured native failures retain their message and original error", async () => {
+  const failure = { code: "failed", message: "Drive directory unavailable", module: "drive" }
+  mocks.invoke.mockRejectedValueOnce(failure)
+  await expect(drive.request({ type: "roots" })).rejects.toMatchObject({
+    message: failure.message,
+    cause: failure
+  })
+  expect(mocks.success).not.toHaveBeenCalled()
+})
+
+test("structured startup failures stay readable in controller state", async () => {
+  drive.dispose()
+  mocks.invoke.mockRejectedValueOnce({ code: "load", message: "Drive library unavailable" })
+  await expect(drive.attach()).rejects.toThrow("Drive library unavailable")
+  expect(drive.getSnapshot().error).toBe("Drive library unavailable")
 })

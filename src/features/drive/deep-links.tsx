@@ -3,10 +3,8 @@ import { driveFileWebUrl, parseDriveFileDeepLinkPath } from "@alwith/module-driv
 import { isTauri } from "@tauri-apps/api/core"
 import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link"
 import { useEffect, useRef } from "react"
-import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
-import { describeError } from "@/lib/error-text"
 import { openExternal } from "@/lib/open"
 
 import { drive } from "./controller"
@@ -14,7 +12,6 @@ import { safeDriveWebUrl } from "./files"
 
 /** Mount only in the main workspace. The callback authorizes and opens the indexed project. */
 export function useDriveDeepLinks(openTarget: (path: string) => Promise<void>): void {
-  const { t } = useTranslation()
   const target = useRef(openTarget)
   target.current = openTarget
   useEffect(() => {
@@ -58,11 +55,11 @@ export function useDriveDeepLinks(openTarget: (path: string) => Promise<void>): 
               if (!current.webBaseUrl)
                 throw new Error("Drive link is unavailable locally and has no web destination", { cause: lookupError })
               const url = safeDriveWebUrl(driveFileWebUrl(current.webBaseUrl, fileId))
-              toast.info(t("settings.driveOpenWeb"))
+              toast.info("This file is not available locally; opening it on the web")
               await openExternal(url)
             }
           } catch (error) {
-            if (!disposed) toast.error(describeError(error))
+            if (!disposed) toast.error(String(error))
           } finally {
             inFlight.delete(key)
             delivered.set(key, Date.now())
@@ -82,12 +79,12 @@ export function useDriveDeepLinks(openTarget: (path: string) => Promise<void>): 
           if (url.protocol !== "alwith-u:" || url.hostname !== "yup-drive") continue
           const fileId = parseDriveFileDeepLinkPath(url.pathname)
           if (fileId === null || url.username || url.password || url.port || url.search || url.hash) {
-            throw new Error("Invalid ALWith L Drive link")
+            throw new Error("Invalid ALwith U Drive link")
           }
           const key = String(fileId)
           if (!delivered.has(key) && !inFlight.has(key)) queued.set(key, fileId)
         } catch (error) {
-          toast.error(describeError(error))
+          toast.error(String(error))
         }
       }
       void drain()
@@ -108,7 +105,7 @@ export function useDriveDeepLinks(openTarget: (path: string) => Promise<void>): 
         })
       })
       .catch((error) => {
-        if (!disposed) toast.error(describeError(error))
+        if (!disposed) toast.error(String(error))
       })
     return () => {
       disposed = true

@@ -10,11 +10,6 @@ import { Switch } from "@/components/ui/switch"
 
 import { drive } from "./controller"
 
-// Cheap structural comparison so the 5s refresh doesn't re-render when nothing changed.
-function contentEqual<T>(previous: T | null, next: T): boolean {
-  return previous !== null && JSON.stringify(previous) === JSON.stringify(next)
-}
-
 export function DriveIntegrations(): ReactNode {
   const { i18n } = useTranslation()
   const zh = i18n.language.startsWith("zh")
@@ -31,8 +26,6 @@ export function DriveIntegrations(): ReactNode {
       return
     }
     let active = true
-    let timer: ReturnType<typeof setTimeout> | null = null
-    let failures = 0
     setError(null)
     const load = async (): Promise<void> => {
       const [settings, status] = await Promise.all([
@@ -42,32 +35,20 @@ export function DriveIntegrations(): ReactNode {
       if (settings.type !== "preferences" || status.type !== "archiveStatus")
         throw new Error("Invalid Drive integration settings")
       if (active) {
-        setPreferences((current) => (contentEqual(current, settings.data) ? current : settings.data))
-        setArchive((current) => (contentEqual(current, status.data) ? current : status.data))
+        setPreferences(settings.data)
+        setArchive(status.data)
       }
     }
-    // One pair of requests in flight at a time. The old 5s interval fired whether the previous
-    // pair had come back or not: while Drive is busy with a full sync each pair times out after
-    // 45s, so requests piled up, kept the daemon saturated and left the UI stuck on "syncing".
-    // Back off on consecutive failures and return to 5s as soon as Drive answers again.
-    const schedule = (delay: number): void => {
-      if (!active) return
-      timer = setTimeout(() => {
-        void load()
-          .then(() => {
-            failures = 0
-          })
-          .catch((cause: unknown) => {
-            failures += 1
-            if (active) setError(String(cause))
-          })
-          .finally(() => schedule(failures === 0 ? 5000 : Math.min(5000 * 2 ** failures, 60_000)))
-      }, delay)
+    const refresh = (): void => {
+      void load().catch((cause: unknown) => {
+        if (active) setError(String(cause))
+      })
     }
-    schedule(0)
+    refresh()
+    const timer = setInterval(refresh, 5000)
     return () => {
       active = false
-      if (timer !== null) clearTimeout(timer)
+      clearInterval(timer)
     }
   }, [connected, snapshot?.configured, snapshot?.generation])
   const change = (key: keyof Preferences, value: boolean): void => {

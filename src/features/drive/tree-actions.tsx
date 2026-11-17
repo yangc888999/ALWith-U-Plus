@@ -5,14 +5,13 @@ import {
   resolveCondenseScope,
   resolveDriveRoot
 } from "@alwith/module-drive/content"
-import { isPinned, togglePinned, useDrive } from "@alwith/module-drive/react"
+import { isPinned, togglePinned, useDriveSelector } from "@alwith/module-drive/react"
 import { writeText } from "@tauri-apps/plugin-clipboard-manager"
 import type { ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import { ContextMenuItem } from "@/components/ui/context-menu"
-import { describeError } from "@/lib/error-text"
 
 import { drive } from "./controller"
 import { driveFileSystem } from "./filesystem"
@@ -35,7 +34,16 @@ export function DriveTreeActions({
   onPublish: (path: string, kind: "file" | "directory") => void
   saveDocument: (path: string) => Promise<void>
 }): ReactNode {
-  const { snapshot } = useDrive(drive)
+  const snapshot = useDriveSelector(
+    drive,
+    (state) => state.snapshot,
+    (left, right) =>
+      left?.roots === right?.roots &&
+      left?.running === right?.running &&
+      left?.baseUrl === right?.baseUrl &&
+      left?.localRoot === right?.localRoot &&
+      left?.webBaseUrl === right?.webBaseUrl
+  )
   const { i18n } = useTranslation()
   const label = (en: string, zh: string): string => (i18n.language.startsWith("zh") ? zh : en)
   const profile = `${snapshot?.baseUrl ?? ""}|${snapshot?.localRoot ?? ""}`
@@ -45,7 +53,7 @@ export function DriveTreeActions({
   if (!snapshot?.running || !match || !scope) return null
   const realPath = path.replace(/\.yupcloud$/, "")
   const run = (action: () => Promise<void>): void => {
-    void action().catch((error) => toast.error(describeError(error)))
+    void action().catch((error) => toast.error(String(error)))
   }
   const link = async (desktop: boolean): Promise<void> => {
     const response = await drive.request({ type: "fileRemoteId", path: realPath })

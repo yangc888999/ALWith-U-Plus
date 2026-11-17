@@ -55,7 +55,7 @@ import { CollectionPanel } from "@/features/collection/collection-panel"
 import { dispatchCollection, reportCollection } from "@/features/collection/store"
 import { DriveArchiveAction } from "@/features/drive/archive-action"
 import { useDriveVisible } from "@/features/drive/use-drive-visible"
-import { useYupDriveEnabled } from "@/features/drive/yup-drive-preference"
+import { useDriveEnabledPreference } from "@/lib/drive-visible-preference"
 import { GroupPanel } from "@/features/groups/group-panel"
 import { GuideButton } from "@/features/guide/guide-button"
 import {
@@ -352,7 +352,7 @@ function SidebarPanels({
   // switching Drive off means "I do not want this here" → hide it. Missing an account means "this
   // exists but you cannot use it yet" → keep it, dimmed. Collapsing both into one flag left the row
   // sitting in the sidebar after the switch was turned off (2026-11-08).
-  const driveEnabled = useYupDriveEnabled()
+  const driveEnabled = useDriveEnabledPreference()
   const previewExtension = usePreviewExtension((state) => state.id)
   const openPreviewExtension = usePreviewExtension((state) => state.open)
   const closePreviewExtension = usePreviewExtension((state) => state.close)

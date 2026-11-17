@@ -72,8 +72,8 @@ test("Windows settings retains native window decorations", async () => {
       url: "/settings.html?tab=general",
       // The settings window is resizable now; the size floor keeps the layout usable.
       resizable: true,
-      minWidth: 720,
-      minHeight: 620,
+      minWidth: 860,
+      minHeight: 640,
       maximizable: false,
       minimizable: false
     })

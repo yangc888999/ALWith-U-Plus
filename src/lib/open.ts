@@ -1,4 +1,4 @@
-import { openPath, openUrl } from "@tauri-apps/plugin-opener"
+import { openPath, openUrl, revealItemsInDir } from "@tauri-apps/plugin-opener"
 
 export function fileLocationPath(value: string): string {
   const path = value.replace(/(?::\d+(?::\d+)?(?:[-–]\d+(?::\d+)?)?|#L\d+(?:C\d+)?(?:-L\d+(?:C\d+)?)?)$/, "")
@@ -12,6 +12,11 @@ export function fileLocationPath(value: string): string {
       throw error
     }
   })
+}
+
+/** Reveal a path in Finder / Explorer; the opener plugin owns the platform call. */
+export function revealInFileManager(path: string): Promise<void> {
+  return revealItemsInDir([fileLocationPath(path)])
 }
 
 export function openExternal(url: string): Promise<void> {

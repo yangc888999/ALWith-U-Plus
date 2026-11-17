@@ -34,6 +34,16 @@ struct Binding {
     generation: u64,
     token: String,
 }
+/// 原生企业模块是否支持「网关会话」。
+///
+/// 运行时探测在本机电里**不可用**：这一步调用 `enterprise.dispatch{capabilities}` 需要已打开的
+/// enterprise id（`Missing enterprise id`），而在 `open` 之前还拿不到 id；等 client 打开后再问，
+/// 0.6.2 的 crate 也没有这个接口。所以能力位改成**编译期特性开关**：
+///   * 1.0.12（当前）：`enterprise-gateway-sessions` 关闭 → 上报 false，登录链路完全不变；
+///   * 1.0.13：接上 0.6.5 crate 的 `open_gateway`（它自己会校验 `capabilities.gatewaySessions`），
+///     打开该特性，状态里的 `gatewaySessions` 随之变真，前端据此切到新路径。
+const GATEWAY_SESSIONS: bool = cfg!(feature = "enterprise-gateway-sessions");
+
 #[derive(Default)]
 pub struct Enterprise {
     host: OnceCell<Arc<EnterpriseClient>>,
@@ -386,15 +396,23 @@ pub async fn enterprise_clear(window: tauri::WebviewWindow) -> Result<(), Value>
 #[tauri3_specta::command]
 pub async fn enterprise_status(window: tauri::WebviewWindow) -> Result<Value, Value> {
     let state = window.state::<Enterprise>();
+    let gateway_sessions = GATEWAY_SESSIONS;
     let generation = {
         let binding = state.binding.lock().await;
         let Some(binding) = binding.as_ref() else {
-            return Ok(json!({"automatic_renewal":false,"requires_login":false,"error":null}));
+            return Ok(json!({
+                "automatic_renewal":false,"requires_login":false,"error":null,
+                "gatewaySessions":gateway_sessions
+            }));
         };
         binding.generation
     };
     state.current(generation).await?;
-    state.status(generation).await
+    let mut status = state.status(generation).await?;
+    if let Some(object) = status.as_object_mut() {
+        object.insert("gatewaySessions".into(), Value::Bool(gateway_sessions));
+    }
+    Ok(status)
 }
 #[tauri3_specta::command]
 pub async fn enterprise_begin(window: tauri::WebviewWindow, generation: u64) -> Result<Value, Value> {

@@ -1,5 +1,4 @@
 import { logBackgroundError } from "@/lib/background-errors"
-import { describeError } from "@/lib/error-text"
 
 import { drive } from "./controller"
 
@@ -8,29 +7,32 @@ export { drive } from "./controller"
 import type { FailedUpload, RootInfo } from "@alwith/module-drive"
 import {
   type DriveHost,
+  DriveMassDeleteDialog,
   DrivePanel,
   DriveSharing,
   driveTranslator,
   summarize,
-  useDrive
+  useDrive,
+  useDriveSelector
 } from "@alwith/module-drive/react"
 import "@alwith/module-drive/styles.css"
 import { type CondenseScope, DriveCondense } from "@alwith/module-drive/content"
 import { containsPath } from "@alwith/module-fs"
 import { isTauri } from "@tauri-apps/api/core"
 import { confirm, open } from "@tauri-apps/plugin-dialog"
-import { info } from "@tauri-apps/plugin-log"
-import { revealItemsInDir } from "@tauri-apps/plugin-opener"
-import { CloudIcon } from "lucide-react"
+import { CloudIcon, MessageSquareIcon } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
+import type { SessionSummary } from "@/agent/client"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { ProjectSessionPopover } from "@/features/chat/project-session-popover"
+import { useSessionsUiStore } from "@/features/sessions/store"
 import { useWorkspace } from "@/features/workspace/context"
-import { openExternal } from "@/lib/open"
+import { openExternal, revealInFileManager } from "@/lib/open"
 import { openSettingsWindow } from "@/lib/window-manager"
 
 import { driveControls, driveDialogClassName } from "./controls"
@@ -38,18 +40,10 @@ import { driveFileSystem, drivePathExists } from "./filesystem"
 import { DriveIntegrations } from "./integrations"
 import { saveDrivePins, useDrivePins } from "./pinned"
 import { useDriveVisible } from "./use-drive-visible"
-import { watchDriveRootDefaults } from "./root-defaults"
-import { useYupDriveEnabled } from "./yup-drive-preference"
 
 export function useDriveConnection(start = true): void {
-  const enabled = useYupDriveEnabled()
   useEffect(() => {
     if (!isTauri()) return
-    // Master switch off: never attach, and release any client the previous run opened.
-    if (!enabled) {
-      drive.dispose()
-      return
-    }
     let disposed = false
     void drive
       .attach()
@@ -58,35 +52,36 @@ export function useDriveConnection(start = true): void {
           await drive.request({ type: "start" })
           await drive.request({ type: "refreshClientConfig" })
         }
-        // First snapshot decides the default selection (only 02_用户经营 stays pinned).
-        watchDriveRootDefaults()
       })
       .catch((error: unknown) => {
-        // A background sync that the reader did not ask for keeps its details in the log; putting
-        // it on screen produced a red flash that named nothing actionable.
         if (!disposed) logBackgroundError("drive-startup", error)
       })
     return () => {
       disposed = true
       drive.dispose()
     }
-  }, [start, enabled])
+  }, [start])
 }
 
 export function DrivePage({
   onOpenProject,
-  renderProjectActions,
-  currentProject
+  currentProject,
+  currentSessionId,
+  onSelectSession
 }: {
-  renderProjectActions?: (root: RootInfo) => ReactNode
   currentProject?: string | null
+  currentSessionId?: string | null
+  onSelectSession: (session: SessionSummary) => void
   onOpenProject: (root: RootInfo) => Promise<void>
 }): ReactNode {
   const workspace = useWorkspace()
+  // 本应用的会话 store（module-chat 0.5.x）没有 driveSearchOpen：搜索面板由侧栏自己的
+  // 状态驱动，这里恒为 false，云盘侧栏就不会去抢搜索的展开态。
+  const searchVisible = false
+  void useSessionsUiStore
   const { i18n } = useTranslation()
   const locale = i18n.language.startsWith("zh") ? "zh-CN" : "en"
-  const { snapshot } = useDrive(drive)
-  const profile = `${snapshot?.baseUrl ?? ""}|${snapshot?.localRoot ?? ""}`
+  const profile = useDriveSelector(drive, ({ snapshot }) => `${snapshot?.baseUrl ?? ""}|${snapshot?.localRoot ?? ""}`)
   const pins = useDrivePins(profile)
   const [condense, setCondense] = useState<CondenseScope | null>(null)
   const openProject = async (root: RootInfo): Promise<void> => {
@@ -95,7 +90,8 @@ export function DrivePage({
     await workspace.openProject(root.localPath)
   }
   const host: DriveHost = {
-    renderProjectActions,
+    searchShortcut: false,
+    searchVisible,
     readDirectory: async (path) =>
       (await (await driveFileSystem(path)).readDirectory(path)).map((entry) => ({
         name: entry.name,
@@ -113,7 +109,7 @@ export function DrivePage({
       if (entry.isDirectory) await workspace.revealEntry(entry.path, root.localPath)
       else await workspace.openFile(entry.path, root.localPath)
     },
-    onRevealPath: (path) => revealItemsInDir(path),
+    onRevealPath: (path) => revealInFileManager(path),
     onOpenExternal: openExternal,
     pinnedDocs: pins,
     onPinnedDocsChange: (docs) => {
@@ -125,10 +121,29 @@ export function DrivePage({
       return Promise.try(() => {
         setCondense({ projectId: root.projectId, projectName: root.name, scopePath: null })
       })
-    }
+    },
+    renderProjectActions: (root) => (
+      <span onClick={(event) => event.stopPropagation()}>
+        <ProjectSessionPopover
+          cwd={root.localPath}
+          currentSessionId={currentSessionId}
+          onSelect={onSelectSession}
+          onNewChat={() => void openProject(root).catch((error: unknown) => toast.error(String(error)))}
+          trigger={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={locale === "zh-CN" ? "最近会话" : "Recent conversations"}
+            >
+              <MessageSquareIcon />
+            </Button>
+          }
+        />
+      </span>
+    )
   }
   return (
-    <div className="min-h-0 flex-1 overflow-auto">
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       <DrivePanel
         controller={drive}
         mode="launcher"
@@ -138,7 +153,7 @@ export function DrivePage({
         controls={driveControls}
         onOpenSettings={openDriveSettings}
         onOpenProject={openProject}
-        confirm={(message) => confirm(message, { title: i18n.t("drive.confirmTitle"), kind: "warning" })}
+        confirm={(message) => confirm(message, { title: "YUP Drive", kind: "warning" })}
       />
       <Dialog
         open={condense !== null}
@@ -201,7 +216,7 @@ export function DriveSharingDialog({ path, onClose }: { path: string | null; onC
                   throw new Error("Navigation is unavailable in this permissions dialog")
                 })
               },
-              onRevealPath: revealItemsInDir,
+              onRevealPath: revealInFileManager,
               onOpenExternal: openExternal,
               pinnedDocs: [],
               onPinnedDocsChange: () => {
@@ -211,7 +226,7 @@ export function DriveSharingDialog({ path, onClose }: { path: string | null; onC
               }
             }}
             controls={driveControls}
-            confirm={(message) => confirm(message, { title: i18n.t("drive.sharingTitle"), kind: "warning" })}
+            confirm={(message) => confirm(message, { title: "Drive sharing", kind: "warning" })}
           />
         )}
       </DialogContent>
@@ -220,7 +235,7 @@ export function DriveSharingDialog({ path, onClose }: { path: string | null; onC
 }
 
 function openDriveSettings(): void {
-  void openSettingsWindow("drive").catch((error: unknown) => toast.error(describeError(error)))
+  void openSettingsWindow("drive").catch((error: unknown) => toast.error(String(error)))
 }
 
 export function DriveSettings(): ReactNode {
@@ -244,7 +259,7 @@ export function DriveSettings(): ReactNode {
           throw new Error("Project browsing belongs to the main window")
         })
       },
-      onRevealPath: (path) => revealItemsInDir(path),
+      onRevealPath: (path) => revealInFileManager(path),
       onOpenExternal: openExternal,
       pinnedDocs: [],
       onPinnedDocsChange: () => {
@@ -283,7 +298,7 @@ export function DriveStatus(): ReactNode {
   const { i18n } = useTranslation()
   const locale = i18n.language.startsWith("zh") ? "zh-CN" : "en"
   const t = driveTranslator(locale)
-  const { connected, snapshot } = useDrive(drive)
+  const { connected, snapshot, error: connectionError } = useDrive(drive)
   const [failures, setFailures] = useState<FailedUpload[]>([])
   useEffect(() => {
     let active = true
@@ -298,21 +313,22 @@ export function DriveStatus(): ReactNode {
         if (active) setFailures(response.data)
       })
       .catch((error: unknown) => {
-        if (active) toast.error(describeError(error))
+        if (active) logBackgroundError("drive-status", error)
       })
     return () => {
       active = false
     }
-  }, [connected, snapshot?.running, snapshot?.status])
+  }, [connected, snapshot?.generation, snapshot?.running, snapshot?.status?.failed, snapshot?.status?.lastSyncAt])
   if (!visible || !snapshot?.configured) return null
   const summary = summarize(snapshot.status, failures)
+  const summaryKey = connectionError || snapshot.error ? "drive.summary.error" : summary.key
   return (
     <Popover>
       <PopoverTrigger
         render={
           <Button variant="ghost" size="sm" className="pointer-events-auto h-6 text-xs" aria-label={t("title")}>
             <CloudIcon />
-            {t(summary.key, { count: summary.count })}
+            {t(summaryKey, { count: summary.count })}
           </Button>
         }
       />
@@ -339,7 +355,7 @@ export function DriveStatus(): ReactNode {
                 throw new Error("Project navigation belongs to the launcher")
               })
             },
-            onRevealPath: (path) => revealItemsInDir(path),
+            onRevealPath: (path) => revealInFileManager(path),
             onOpenExternal: openExternal,
             pinnedDocs: [],
             onPinnedDocsChange: () => {
@@ -353,99 +369,20 @@ export function DriveStatus(): ReactNode {
               throw new Error("Projects cannot be opened from sync status")
             })
           }}
-          confirm={(message) => confirm(message, { title: i18n.t("drive.confirmTitle"), kind: "warning" })}
+          confirm={(message) => confirm(message, { title: "YUP Drive", kind: "warning" })}
         />
       </PopoverContent>
     </Popover>
   )
 }
 
-/**
- * Bulk-delete confirmation owned by the app.
- *
- * The vendored DriveMassDeleteDialog hardcodes `open={true}` and only closes after a successful
- * `cancelDeletes`/`confirmDeletes` round trip. While the sync engine is busy restoring files that
- * request can queue indefinitely, which leaves a modal whose X, Cancel and Confirm are all
- * disabled — the "卡住了关闭不了" report. Closing here is local and unconditional; the cloud
- * request keeps running in the background and reports failure through a toast.
- *
- * Deadlines live in `drive/controller.ts` at the IPC boundary. A timeout there also releases the
- * controller's shared `refresh()` promise, which is what used to wedge the whole Drive panel.
- */
 export function DriveDeleteConfirmation(): ReactNode {
   const { i18n } = useTranslation()
-  const locale = i18n.language.startsWith("zh") ? "zh-CN" : "en"
-  const t = driveTranslator(locale)
-  const { snapshot } = useDrive(drive)
-  const pending = snapshot?.pendingDeletes ?? []
-  const [dismissed, setDismissed] = useState<string[]>([])
-  const identity = (entry: (typeof pending)[number]): string => `${entry.projectId}:${entry.count}`
-  // A generation bump used to reopen a dialog the user had just dismissed. Only a genuinely new
-  // batch — signaled by the pending list emptying in between — may surface again.
-  useEffect(() => {
-    if (pending.length === 0) setDismissed([])
-  }, [pending.length])
-  const remaining = pending.filter((entry) => !dismissed.includes(identity(entry)))
-  const current = remaining[0]
-  if (current === undefined) return null
-
-  const close = (): void => {
-    const key = identity(current)
-    setDismissed((previous) => (previous.includes(key) ? previous : [...previous, key]))
-  }
-  const cancel = (): void => {
-    const { projectId, count } = current
-    close()
-    void info(`[drive-delete] cancel project=${projectId} count=${count}`)
-    void drive
-      .request({ type: "cancelDeletes", projectId })
-      .then(() => void info(`[drive-delete] cancel ok project=${projectId}`))
-      .catch((error: unknown) => {
-        void info(`[drive-delete] cancel failed project=${projectId} error=${String(error)}`)
-        toast.error(
-          i18n.language.startsWith("zh")
-            ? "云端恢复仍在后台进行，请稍后在云盘状态里确认"
-            : "Restore is still running in the background; check Drive status shortly."
-        )
-      })
-  }
-  const confirmDeletion = (): void => {
-    const { projectId, count } = current
-    close()
-    void info(`[drive-delete] confirm project=${projectId} count=${count}`)
-    void drive
-      .request({ type: "confirmDeletes", projectId })
-      .then(() => void info(`[drive-delete] confirm ok project=${projectId}`))
-      .catch((error: unknown) => {
-        void info(`[drive-delete] confirm failed project=${projectId} error=${String(error)}`)
-        toast.error(
-          i18n.language.startsWith("zh")
-            ? "云端删除请求还没响应，已在后台继续，请稍后在云盘状态里确认结果"
-            : "The cloud deletion is still running in the background; check Drive status shortly."
-        )
-      })
-  }
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) cancel() }}>
-      <DialogContent className={driveDialogClassName}>
-        <DialogHeader>
-          <DialogTitle>{t("massDelete.title", { count: current.count })}</DialogTitle>
-          <DialogDescription>{t("massDelete.desc", { count: current.count, project: current.drivePath })}</DialogDescription>
-        </DialogHeader>
-        {remaining.length > 1 && (
-          <p className="text-muted-foreground text-xs">
-            {i18n.language.startsWith("zh")
-              ? `还有 ${remaining.length - 1} 个项目待确认，关闭后会继续显示。`
-              : `${remaining.length - 1} more projects are waiting for confirmation.`}
-          </p>
-        )}
-        <div className="alwith-drive-actions">
-          <Button type="button" variant="outline" onClick={cancel}>{t("massDelete.cancel")}</Button>
-          <Button type="button" variant="destructive" onClick={confirmDeletion}>
-            {t("massDelete.confirm")}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
+    <DriveMassDeleteDialog
+      controller={drive}
+      controls={driveControls}
+      locale={i18n.language.startsWith("zh") ? "zh-CN" : "en"}
+    />
   )
 }

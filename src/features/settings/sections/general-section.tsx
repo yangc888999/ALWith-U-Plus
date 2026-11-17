@@ -24,7 +24,7 @@ import { loadPreferences, savePreference } from "@/lib/preferences"
 
 import { AutostartRow } from "./autostart-row"
 import { useDriveVisible } from "@/features/drive/use-drive-visible"
-import { setYupDriveEnabled, useYupDriveEnabled } from "@/features/drive/yup-drive-preference"
+import { setDriveEnabled, useDriveEnabled } from "@/lib/drive-visible-preference"
 import { MemoryInjectionRow } from "./memory-injection-row"
 import { PreventSleepRow } from "./prevent-sleep-row"
 import { SandboxRow } from "./sandbox-row"
@@ -35,13 +35,13 @@ import { SettingRow, SettingsCard } from "./shared"
  *  Closing asks for confirmation because it halts every sync and releases the drive client. */
 function YupDriveRow() {
   const { t } = useTranslation()
-  const enabled = useYupDriveEnabled()
+  const enabled = useDriveEnabled()
   const [confirmClose, setConfirmClose] = useState(false)
   const [busy, setBusy] = useState(false)
 
   const onTurnOn = () => {
     setBusy(true)
-    void setYupDriveEnabled(true)
+    void setDriveEnabled(true)
       .catch((error: unknown) => toast.error(String(error)))
       .finally(() => setBusy(false))
   }
@@ -49,7 +49,7 @@ function YupDriveRow() {
   const onConfirmClose = async () => {
     setBusy(true)
     try {
-      await setYupDriveEnabled(false)
+      await setDriveEnabled(false)
       setConfirmClose(false)
     } catch (error: unknown) {
       toast.error(String(error))

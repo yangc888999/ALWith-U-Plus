@@ -295,7 +295,7 @@ export function AppearanceSection() {
                   )}
                 >
                   <span
-                    className="grid size-9 place-items-center rounded-full transition-transform"
+                    className="grid size-9 place-items-center rounded-full ring-1 ring-border/70 transition-transform"
                     style={{
                       // Live token, not the light-only constant: the swatch shows what the
                       // preset looks like under the current appearance (see --accent-preset-*).

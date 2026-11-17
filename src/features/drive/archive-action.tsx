@@ -1,23 +1,26 @@
 import { HoverInfoAction } from "@alwith/module-chat/session-list"
-import { useDrive } from "@alwith/module-drive/react"
+import { useDriveSelector } from "@alwith/module-drive/react"
 import { ShieldCheckIcon } from "lucide-react"
 import { type ReactNode, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
-
-import { describeError } from "@/lib/error-text"
+import { shallow } from "zustand/shallow"
 
 import { drive } from "./controller"
 import { useDriveVisible } from "./use-drive-visible"
 
 export function DriveArchiveAction({ sessionId }: { sessionId: string }): ReactNode {
   const visible = useDriveVisible()
-  const { connected, snapshot } = useDrive(drive)
+  const { connected, configured, generation } = useDriveSelector(
+    drive,
+    ({ connected, snapshot }) => ({ connected, configured: snapshot?.configured, generation: snapshot?.generation }),
+    shallow
+  )
   const { i18n } = useTranslation()
   const [excluded, setExcluded] = useState<boolean | null>(null)
   const [busy, setBusy] = useState(false)
   useEffect(() => {
-    if (!connected || !visible || !snapshot?.configured) {
+    if (!connected || !visible || !configured) {
       setExcluded(null)
       return
     }
@@ -29,13 +32,13 @@ export function DriveArchiveAction({ sessionId }: { sessionId: string }): ReactN
         if (active) setExcluded(response.data.includes(sessionId))
       })
       .catch((error: unknown) => {
-        if (active) toast.error(describeError(error))
+        if (active) toast.error(String(error))
       })
     return () => {
       active = false
     }
-  }, [connected, visible, snapshot?.configured, snapshot?.generation, sessionId])
-  if (!visible || !snapshot?.configured) return null
+  }, [connected, visible, configured, generation, sessionId])
+  if (!visible || !configured) return null
   const zh = i18n.language.startsWith("zh")
   const label = excluded
     ? zh
@@ -54,7 +57,7 @@ export function DriveArchiveAction({ sessionId }: { sessionId: string }): ReactN
         void drive
           .request({ type: "setArchivePrivate", sessionId, private: !excluded })
           .then(() => setExcluded(!excluded))
-          .catch((error: unknown) => toast.error(describeError(error)))
+          .catch((error: unknown) => toast.error(String(error)))
           .finally(() => setBusy(false))
       }}
     />

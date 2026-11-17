@@ -32,7 +32,7 @@ import { Pane } from "@/components/alwith-ui/pane"
 import { AutomationSection } from "@/features/automation/automation-section"
 import { DriveSettings } from "@/features/drive/drive"
 import { useDriveVisible } from "@/features/drive/use-drive-visible"
-import { useYupDriveEnabled } from "@/features/drive/yup-drive-preference"
+import { useDriveEnabledPreference } from "@/lib/drive-visible-preference"
 import { ExtensionSettingsContent, ExtensionSettingsNavigation } from "@/features/extensions/extension-outlets"
 import { ExtensionMount } from "@/features/extensions/extension-view"
 import { ExtensionsSection } from "@/features/extensions/extensions-section"
@@ -99,7 +99,7 @@ function normalizeSection(value: string | null): SettingsSection | null {
 
 export function SettingsPage() {
   const driveVisible = useDriveVisible()
-  const driveEnabled = useYupDriveEnabled()
+  const driveEnabled = useDriveEnabledPreference()
   const { host, state } = useExtensions()
   const [extensionSection, setExtensionSection] = useState<string | null>(null)
   const { t } = useTranslation()

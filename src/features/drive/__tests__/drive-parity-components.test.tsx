@@ -1,3 +1,4 @@
+import { CONTRACT_VERSION } from "@alwith/module-drive"
 import type { DriveController, DriveRequest, DriveResponse, Job, Snapshot } from "@alwith/module-drive"
 import { DriveCondense, DriveMoveDialog } from "@alwith/module-drive/content"
 import {
@@ -8,7 +9,7 @@ import {
   DriveNotificationProvider,
   DrivePanel
 } from "@alwith/module-drive/react"
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { expect, test, vi } from "vitest"
 
 import { mockOf } from "@/test/mock-of"
@@ -58,7 +59,7 @@ function fixture(
   handle?: (request: DriveRequest) => Promise<DriveResponse>
 ): { controller: DriveController; requests: DriveRequest[]; update: (patch: Partial<Snapshot>) => void } {
   const snapshot: Snapshot = {
-    version: 2,
+    version: CONTRACT_VERSION,
     generation: 1,
     sequence: 0,
     configured: true,
@@ -126,6 +127,32 @@ test("sync status exposes its settings action", () => {
   )
   fireEvent.click(screen.getByRole("button", { name: "Open settings" }))
   expect(open).toHaveBeenCalledOnce()
+})
+
+test("launcher search follows the sidebar toggle and clears its hidden query", () => {
+  const f = fixture()
+  const host: DriveHost = {
+    searchShortcut: false,
+    searchVisible: false,
+    readDirectory: async () => [],
+    pathExists: async () => true,
+    onOpenEntry: async () => {},
+    onRevealPath: async () => {},
+    onOpenExternal: async () => {},
+    pinnedDocs: [],
+    onPinnedDocsChange: async () => {}
+  }
+  const props = { controller: f.controller, controls, onOpenProject: async () => {}, confirm: async () => false }
+  const view = render(<DrivePanel {...props} host={host} mode="launcher" />)
+  expect(screen.queryByRole("textbox", { name: "Search all projects" })).toBeNull()
+  view.rerender(<DrivePanel {...props} host={{ ...host, searchVisible: true }} mode="launcher" />)
+  const input = screen.getByRole("textbox", { name: "Search all projects" })
+  expect(input).toHaveFocus()
+  fireEvent.change(input, { target: { value: "report" } })
+  view.rerender(<DrivePanel {...props} host={host} mode="launcher" />)
+  expect(screen.queryByRole("textbox", { name: "Search all projects" })).toBeNull()
+  view.rerender(<DrivePanel {...props} host={{ ...host, searchVisible: true }} mode="launcher" />)
+  expect(screen.getByRole("textbox", { name: "Search all projects" })).toHaveValue("")
 })
 test("missing pins retain their identity and expose context-menu unpin", async () => {
   const f = fixture()
@@ -243,6 +270,52 @@ test("failed mass deletion retains the dialog and never advances to another batc
   expect(f.requests).toEqual([{ type: "confirmDeletes", projectId: 1 }])
 })
 
+test("sync icon spins immediately, throughout engine work, and stops when idle", async () => {
+  const request = Promise.withResolvers<DriveResponse>()
+  const f = fixture({}, async (value) => {
+    if (value.type === "sync") return request.promise
+    if (value.type === "failedUploads") return { type: "failedUploads", data: [] }
+    throw new Error(`Unexpected request: ${value.type}`)
+  })
+  render(
+    <DrivePanel
+      {...f}
+      controls={controls}
+      mode="status"
+      onOpenProject={async () => {}}
+      confirm={() => Promise.resolve(true)}
+    />
+  )
+  const button = screen.getByRole("button", { name: "Sync now" })
+  const icon = button.querySelector("svg")
+  expect(icon).not.toHaveClass("alwith-drive-spin")
+  fireEvent.click(button)
+  expect(icon).toHaveClass("alwith-drive-spin")
+  expect(button).toBeDisabled()
+  const status = {
+    state: { kind: "scanning" as const },
+    pending: 0,
+    uploading: 0,
+    downloading: 0,
+    synced: 0,
+    failed: 0,
+    conflicts: [],
+    errors: [],
+    lastSyncAt: null,
+    pushConnected: false
+  }
+  await act(async () => {
+    f.update({ status })
+    request.resolve({ type: "done" })
+    await request.promise
+  })
+  expect(icon).toHaveClass("alwith-drive-spin")
+  await act(() => Promise.resolve(f.update({ status: { ...status, state: { kind: "syncing" } } })))
+  expect(icon).toHaveClass("alwith-drive-spin")
+  await act(() => Promise.resolve(f.update({ status: { ...status, state: { kind: "idle" } } })))
+  expect(icon).not.toHaveClass("alwith-drive-spin")
+})
+
 test("status panel uses a state row and disables the sync icon while paused", async () => {
   const f = fixture({
     status: {
@@ -318,13 +391,12 @@ test("status panel exposes conflicts immediately and keeps re-check available fo
       confirm={() => Promise.resolve(true)}
     />
   )
-  // Module 0.6 folds the error list into a disclosure: the summary is what the panel shows up
-  // front, and the messages (including the engine's own "Sync unavailable") live inside it.
-  expect(screen.getByText("Sync issues (1)")).toBeVisible()
-  expect(screen.getByText("Sync unavailable")).toBeInTheDocument()
-  expect(within(screen.getByRole("list")).getByText("report.md", { exact: false })).toBeVisible()
+  expect(screen.getByText("Sync unavailable", { exact: false })).not.toBeVisible()
+  expect(screen.getByText("report.md", { selector: ".alwith-drive-status-filename" })).toBeVisible()
   fireEvent.click(screen.getByRole("button", { name: "Reveal" }))
   await waitFor(() => expect(reveal).toHaveBeenCalledWith("/drive/report.conflict.md"))
+  fireEvent.click(screen.getByText("View details"))
+  expect(screen.getByText("Sync unavailable", { exact: false })).toBeVisible()
   fireEvent.click(screen.getByRole("button", { name: "Re-check" }))
   await waitFor(() => expect(f.requests).toContainEqual({ type: "reconcile", projectId: null }))
 })
@@ -743,11 +815,11 @@ test("launcher keeps synchronization errors out of navigation while status retai
   )
   await act(async () => {})
   expect(screen.queryByText("Conflict: /drive/report.md")).not.toBeInTheDocument()
-  // Module 0.6 keeps synchronization errors inside the panel — the launcher renders no notice and
-  // pushes nothing into the app-wide toasts — so navigation stays free of engine noise.
   expect(notify.error).not.toHaveBeenCalled()
   view.rerender(<DrivePanel {...props} mode="status" />)
-  expect(screen.getByText("Conflict: /drive/report.md")).toBeInTheDocument()
+  expect(screen.getByText("Conflict: /drive/report.md")).not.toBeVisible()
+  fireEvent.click(screen.getByText("View details"))
+  expect(screen.getByText("Conflict: /drive/report.md")).toBeVisible()
 })
 
 test("a conflict during preflight stays in the dialog and does not include another project", async () => {
@@ -876,7 +948,7 @@ test("a rejected knowledge source remains actionable inside the dialog", async (
   expect(screen.getByRole("button", { name: "重试" })).toBeEnabled()
 })
 
-test("repeated background synchronization errors cannot spam notifications", async () => {
+test("repeated background synchronization errors never produce a toast", async () => {
   const f = fixture({ error: "Conflict: report.md" })
   const notify = { error: vi.fn(), success: vi.fn() }
   render(
@@ -893,10 +965,101 @@ test("repeated background synchronization errors cannot spam notifications", asy
   await act(async () => {})
   act(() => f.update({ error: null }))
   act(() => f.update({ error: "Conflict: report.md" }))
-  act(() => f.update({ error: null }))
-  act(() => f.update({ error: "Conflict: report.md" }))
-  // Module 0.6 stopped pushing synchronization errors through the notification provider: the
-  // launcher renders no notice at all, so a flapping engine can never duplicate a toast.
   expect(notify.error).not.toHaveBeenCalled()
   expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+})
+
+test("sync status deduplicates raw errors and reveals them only on request", () => {
+  const message = "Cannot move /drive/Department/Risk/reports/strategy.md: Directory not empty"
+  const f = fixture({
+    error: message,
+    status: {
+      state: { kind: "error", message },
+      downloading: 0,
+      uploading: 0,
+      pending: 0,
+      synced: 2,
+      failed: 0,
+      lastSyncAt: null,
+      pushConnected: false,
+      conflicts: [],
+      errors: [{ projectId: 1, path: null, message, at: "2026-11-03T00:00:00Z" }]
+    }
+  })
+  render(
+    <DrivePanel
+      controller={f.controller}
+      controls={controls}
+      mode="status"
+      locale="en"
+      onOpenProject={async () => {}}
+      confirm={async () => false}
+    />
+  )
+  expect(screen.getAllByText(message)).toHaveLength(1)
+  expect(screen.getByText(message)).not.toBeVisible()
+  expect(screen.getByRole("status")).toHaveTextContent(/^Error$/)
+  fireEvent.click(screen.getByText("View details"))
+  expect(screen.getByText(message)).toBeVisible()
+  expect(screen.getByRole("button", { name: "Re-check" })).toBeVisible()
+})
+
+test("failed transfer keeps retry visible while paths and diagnostics are collapsed", async () => {
+  const message = "Local operation failed: /drive/Department/Risk/reports/strategy.md: Directory not empty"
+  const path = "Department/Risk/reports/strategy.md"
+  const f = fixture(
+    {
+      status: {
+        state: { kind: "idle" },
+        downloading: 0,
+        uploading: 0,
+        pending: 0,
+        synced: 2,
+        failed: 1,
+        lastSyncAt: null,
+        pushConnected: false,
+        conflicts: [],
+        errors: []
+      }
+    },
+    async (request) => {
+      if (request.type === "failedUploads")
+        return {
+          type: "failedUploads",
+          data: [
+            {
+              projectId: 1,
+              path,
+              name: "strategy.md",
+              localPath: `/drive/${path}`,
+              state: "error",
+              direction: "download",
+              message,
+              attempts: 2,
+              retryable: true,
+              firstAt: "2026-11-03T00:00:00Z",
+              lastAt: "2026-11-03T00:00:01Z",
+              nextAttemptAt: "2026-11-03T00:00:02Z"
+            }
+          ]
+        }
+      return { type: "done" }
+    }
+  )
+  render(
+    <DrivePanel
+      controller={f.controller}
+      controls={controls}
+      mode="status"
+      locale="en"
+      onOpenProject={async () => {}}
+      confirm={async () => false}
+    />
+  )
+  expect(await screen.findByRole("button", { name: "Retry" })).toBeVisible()
+  expect(screen.getByText(message)).not.toBeVisible()
+  expect(screen.getByText(path)).not.toBeVisible()
+  fireEvent.click(screen.getByText("View details"))
+  expect(screen.getByText(message)).toBeVisible()
+  expect(screen.getByText(path)).toBeVisible()
 })

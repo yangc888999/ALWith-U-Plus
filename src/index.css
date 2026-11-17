@@ -1103,8 +1103,7 @@ html[data-appearance="solid"] [data-wallpaper="active"] [data-slot="sidebar-wrap
 html[data-appearance="solid"] [data-wallpaper="active"] [data-slot="sidebar"] {
   background: var(--sidebar);
 }
-html[data-appearance="solid"] [data-wallpaper="active"] .main-chat-surface,
-html[data-appearance="solid"] [data-wallpaper="active"] .main-screen-trailing {
+html[data-appearance="solid"] [data-wallpaper="active"] .main-chat-surface {
   background: var(--background);
 }
 html[data-appearance="solid"]
@@ -1409,6 +1408,15 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   --accent-active: 14%; /* 侧栏选中项 */
 }
 
+:root {
+  /* 纯色档配套的两档中性配色：色块用可辨识的近白 / 近黑，不是 #fff / #000 本身。 */
+  --accent-preset-snow-white: oklch(0.94 0.004 250);
+  --accent-preset-elegant-black: oklch(0.26 0.006 265);
+}
+.dark {
+  --accent-preset-snow-white: oklch(0.97 0.003 250);
+  --accent-preset-elegant-black: oklch(0.30 0.008 265);
+}
 :root[data-accent="snow-white"] {
   --settings-accent: oklch(0.55 0.012 255);
   --settings-accent-ink: oklch(0.28 0.012 255);
