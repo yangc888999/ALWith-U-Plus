@@ -22,6 +22,7 @@ import { openStore } from "@/lib/store"
 import { bumpAuthGeneration, createAuthTransport, readAuthGeneration } from "./http"
 import { assertActiveLogin } from "./login-response"
 import { createEnterpriseEventHandler } from "./enterprise-events"
+import { logEnterpriseError, logEnterpriseResponse } from "./enterprise-diagnostics"
 import { createAccountTransition, createManagedProviders } from "./managed-providers"
 import { createProviderRefreshClient, serveProviderRefresh } from "./provider-refresh-bridge"
 
@@ -41,7 +42,26 @@ const expiredListeners = new Set<() => void>()
 const stateListeners = new Set<(event: AuthStateEvent) => void>()
 const transport = createAuthTransport({
   baseUrl: API_BASE_URL,
-  fetch,
+  // Rejected account-gateway calls are the one place a real server answer explains a failure
+  // ("enterprise_session_expired", a 401 on refresh, a 5xx on provider discovery). The response is
+  // logged from a bounded clone so the transport still gets to read — and retry — the original.
+  fetch: async (input, init) => {
+    const started = performance.now()
+    let path = "unknown"
+    try {
+      path = new URL(String(input)).pathname
+    } catch {
+      // A non-absolute URL still gets logged; only the path is missing.
+    }
+    try {
+      const response = await fetch(input, init)
+      if (!response.ok) await logEnterpriseResponse(`${init?.method ?? "GET"} ${path}`, response)
+      return response
+    } catch (reason) {
+      logEnterpriseError(`http ${path} elapsed_ms=${Math.round(performance.now() - started)}`, reason)
+      throw reason
+    }
+  },
   storage,
   refresh: (refreshToken) => commands.refreshTokens({ apiBaseUrl: API_BASE_URL, refreshToken }),
   expired: async (generation) => {

@@ -39,7 +39,6 @@ vi.mock("@/features/auth/store", () => ({
   requestAccountProviderRefresh: host.refresh
 }))
 import { EnterpriseSection } from "../enterprise-section"
-import { resetEnterpriseStatusCache } from "@/features/auth/use-enterprise-login"
 
 function emit(name: string, payload: Record<string, unknown>) {
   host.handlers[name]?.({ payload })
@@ -47,9 +46,6 @@ function emit(name: string, payload: Record<string, unknown>) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  // The hook reuses a server answer across mounts on purpose; a test needs a cold cache so each
-  // case starts from the answer it just mocked.
-  resetEnterpriseStatusCache()
   host.handlers = {}
   host.user = { user_uuid: "alice" }
   host.status.mockResolvedValue({ generation: 7, automatic_renewal: false, requires_login: false, error: null })
@@ -97,26 +93,33 @@ test("status is checked once on mount instead of polling every three seconds", a
       await Promise.resolve()
       await Promise.resolve()
     })
-    const afterMount = host.request.mock.calls.length
+    const afterMount = host.status.mock.calls.length
     expect(afterMount).toBe(1)
     await act(async () => {
       vi.advanceTimersByTime(30_000)
     })
-    // No steady-state polling: the account service is not hit again while the page sits idle.
-    expect(host.request.mock.calls.length).toBe(afterMount)
+    // No steady-state polling: the native read is local, and the page sitting idle costs nothing.
+    expect(host.status.mock.calls.length).toBe(afterMount)
     // A window focus without a pending OAuth login must not trigger a refresh either.
     await act(async () => {
       fireEvent.focus(window)
     })
-    expect(host.request.mock.calls.length).toBe(afterMount)
+    expect(host.status.mock.calls.length).toBe(afterMount)
+    // The account service is never asked: sign-in is decided by the native layer alone.
+    expect(host.request).not.toHaveBeenCalled()
   } finally {
     vi.useRealTimers()
   }
 })
 
-test("ten visits to the account page cost one request, not ten", async () => {
-  host.status.mockResolvedValue({ generation: 7, automatic_renewal: true, requires_login: false, error: null })
-  host.request.mockResolvedValue({ enabled: true, authorization_status: "authorized" })
+test("visiting the account page reads the local status and never calls the account service", async () => {
+  host.status.mockResolvedValue({
+    generation: 7,
+    authorization_status: "authorized",
+    automatic_renewal: true,
+    requires_login: false,
+    error: null
+  })
   // Each render is a fresh mount of the section, which is what navigating away and back does. The
   // last one stays mounted so its event listener is still live.
   for (let visit = 0; visit < 10; visit += 1) {
@@ -129,24 +132,28 @@ test("ten visits to the account page cost one request, not ten", async () => {
       await act(async () => {})
     }
   }
-  expect(host.request).toHaveBeenCalledTimes(1)
-  // A native event is itself a reason to ask again, so the cached answer is not permanent.
+  // One local read per mount: `enterprise_status` answers from the gateway session and caches its
+  // own healthy answer, so ten visits are ten IPC calls and zero network calls.
+  expect(host.status).toHaveBeenCalledTimes(10)
+  expect(host.request).not.toHaveBeenCalled()
+  // A native event is itself a reason to ask again, so the last answer is still refreshed live.
+  const before = host.status.mock.calls.length
   host.handlers["enterprise:models-changed"]?.({ payload: {} })
-  await waitFor(() => expect(host.request).toHaveBeenCalledTimes(2))
+  await waitFor(() => expect(host.status.mock.calls.length).toBe(before + 1))
 })
 
-test("a healthy renewal off the company network is signed in, not signed out", async () => {
+test("a native authorization with a healthy renewal is signed in", async () => {
   host.status.mockResolvedValue({
     generation: 7,
+    authorization_status: "authorized",
     automatic_renewal: true,
     requires_login: false,
     error: null,
-    email: "chen.yang@finture.id"
+    email: "user@example.com"
   })
-  host.request.mockRejectedValue(new Error("offline"))
   render(<EnterpriseSection />)
-  // The address comes from the native status, so it survives an unreachable account service.
-  await screen.findByText("chen.yang@finture.id")
+  // The address comes from the native status, which is the same answer that authorizes.
+  await screen.findByText("user@example.com")
   expect(screen.getByRole("button", { name: "enterprise.logout" })).toBeInTheDocument()
   expect(screen.queryByText("enterprise.signedOut")).not.toBeInTheDocument()
 })
@@ -154,23 +161,35 @@ test("a healthy renewal off the company network is signed in, not signed out", a
 test("an expired token announced by the native renewal loop flips the section to signed-out", async () => {
   // Start authorized, then the renewal loop reports the token needs a fresh login. The section
   // must re-read on that event and stop claiming authorization — no focus or timer required.
-  host.status.mockResolvedValue({ generation: 7, automatic_renewal: true, requires_login: false, error: null })
-  host.request.mockResolvedValue({ enabled: true, authorization_status: "authorized", email: "chen.yang@finture.id" })
+  host.status.mockResolvedValue({
+    generation: 7,
+    authorization_status: "authorized",
+    automatic_renewal: true,
+    requires_login: false,
+    error: null,
+    email: "user@example.com"
+  })
   render(<EnterpriseSection />)
-  await screen.findByText("chen.yang@finture.id")
+  await screen.findByText("user@example.com")
   expect(screen.getByRole("button", { name: "enterprise.logout" })).toBeInTheDocument()
 
-  host.status.mockResolvedValue({ generation: 7, automatic_renewal: true, requires_login: true, error: "invalid_grant" })
+  host.status.mockResolvedValue({
+    generation: 7,
+    authorization_status: "unauthorized",
+    automatic_renewal: true,
+    requires_login: true,
+    error: "invalid_grant"
+  })
   await act(async () => {
     emit("enterprise:event", { type: "enterpriseRenewalStatus", accountId: "alice", generation: 7 })
   })
   await screen.findByText("enterprise.signedOut")
-  expect(screen.queryByText("chen.yang@finture.id")).not.toBeInTheDocument()
+  expect(screen.queryByText("user@example.com")).not.toBeInTheDocument()
   expect(screen.getByRole("button", { name: "enterprise.login" })).toBeInTheDocument()
 })
 
 test("status errors expose retry without claiming enterprise authorization", async () => {
-  host.request.mockRejectedValue(new Error("offline"))
+  host.status.mockRejectedValue(new Error("engine not ready"))
   render(<EnterpriseSection />)
   await screen.findByRole("alert")
   expect(screen.getByRole("button", { name: "actions.retry" })).toBeInTheDocument()

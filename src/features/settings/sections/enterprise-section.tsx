@@ -1,5 +1,4 @@
 import { listen } from "@tauri-apps/api/event"
-import { info } from "@tauri-apps/plugin-log"
 import { Loader2 } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
@@ -14,6 +13,7 @@ import {
   DialogHeader,
   DialogTitle
 } from "@/components/ui/dialog"
+import { logEnterpriseError, traceEnterprise } from "@/features/auth/enterprise-diagnostics"
 import { useEnterpriseLogin } from "@/features/auth/use-enterprise-login"
 import { requestAccountProviderRefresh, usePlatformAuth } from "@/features/auth/store"
 import { openExternal } from "@/lib/open"
@@ -79,12 +79,12 @@ export function EnterpriseSection() {
     setBusy(true)
     try {
       if (action === "login") {
-        await requestAccountProviderRefresh()
+        await traceEnterprise("refresh-enterprise", requestAccountProviderRefresh)
         if (!current()) return
         const fresh = await commands.enterpriseStatus()
         if (!current()) return
         const generation = enterpriseGeneration(fresh)
-        const result = await commands.enterpriseBegin({ generation })
+        const result = await traceEnterprise("begin-browser", () => commands.enterpriseBegin({ generation }))
         if (
           typeof result !== "object" ||
           result === null ||
@@ -95,42 +95,45 @@ export function EnterpriseSection() {
           throw new Error("Invalid enterprise login response")
         if (!current()) return
         setPending({ state: result.state, generation })
-        await openExternal(result.authorization_url)
+        // Only the URL is handed to the browser; diagnostics never see it.
+        const authorizationUrl = result.authorization_url
+        await traceEnterprise("open-browser", () => openExternal(authorizationUrl))
       } else if (action === "cancel") {
         if (!current()) return
-        if (pending !== null) await commands.enterpriseCancel({ generation: pending.generation, state: pending.state })
+        if (pending !== null)
+          await traceEnterprise("cancel-browser", () =>
+            commands.enterpriseCancel({ generation: pending.generation, state: pending.state })
+          )
         setPending(null)
       } else {
         const fresh = await commands.enterpriseStatus()
         if (!current()) return
-        await commands.enterpriseLogout({ generation: enterpriseGeneration(fresh) })
+        await traceEnterprise("logout", () => commands.enterpriseLogout({ generation: enterpriseGeneration(fresh) }))
         if (!current()) return
         setConfirm(false)
         recheck()
       }
     } catch (reason) {
       // The hook surfaces *status* errors, but a failed action used to stop at the spinner: the
-      // reader clicked 登录 and nothing happened, with no way to tell why (2026-11-17). Log the
-      // stage and the reason so the next attempt leaves a trace — never the URL or its ticket.
-      const detail = reason instanceof Error ? reason.message : String(reason)
-      void info(`[enterprise] ${action} failed: ${detail.replaceAll(/https?:\/\/[^\s"']+/g, "[redacted-url]")}`)
+      // reader clicked 登录 and nothing happened, with no way to tell why (2026-11-17). The stage
+      // and a redacted reason go to the log; the URL, its ticket and any browser proof never do.
+      logEnterpriseError(`login/${action}`, reason)
     } finally {
       if (current()) setBusy(false)
     }
   }
-  // A healthy renewal is a known state even when the account service cannot be reached, so it is
+  // A healthy renewal is a known state even when the native status cannot be read, so it is
   // answered first: "unknown" belongs to the case where nothing can vouch for the account.
   const label = authorized
-    ? // The service is not asked on every visit, so the signed-in address comes from the native
-      // status when there is no server answer to read it from.
-      (status?.email ?? email ?? t("enterprise.authorized"))
+    ? // The signed-in address comes from the native status: the account service is not consulted.
+      (email ?? t("enterprise.authorized"))
     : error
       ? t("enterprise.unknown")
       : pending !== null
         ? t("enterprise.pending")
         : login.checking || status === null
           ? t("enterprise.checking")
-          : !status.enabled
+          : status.enabled === false
             ? t("enterprise.disabled")
             : t("enterprise.signedOut")
   return (

@@ -20,7 +20,6 @@ vi.mock("@/features/auth/store", () => ({
 vi.mock("@/lib/window-manager", () => ({ openSettingsWindow: host.openSettings }))
 
 import { CompanyProviderCard } from "../company-provider-card"
-import { resetEnterpriseStatusCache } from "@/features/auth/use-enterprise-login"
 
 const provider = {
   id: "custom_alwith_enterprise_abc",
@@ -31,24 +30,24 @@ const provider = {
 
 const authorizedNative = {
   generation: 7,
-  email: "chen.yang@finture.id",
+  email: "user@example.com",
+  authorization_status: "authorized",
   automatic_renewal: true,
   requires_login: false,
   error: null
 }
-const authorizedServer = { enabled: true, authorization_status: "authorized", email: "chen.yang@finture.id" }
+/** The account service's record from 2026-11-17: a gateway login never writes it back. */
+const staleServer = { enabled: true, authorization_status: "unauthorized", error_code: "enterprise_session_expired" }
 
 beforeEach(() => {
   vi.clearAllMocks()
-  resetEnterpriseStatusCache()
   host.user = { user_uuid: "alice" }
   host.status.mockResolvedValue(authorizedNative)
-  host.request.mockResolvedValue(authorizedServer)
+  host.request.mockResolvedValue(staleServer)
 })
 
 test("the company card asks for a sign-in instead of for a URL and a key", async () => {
   host.status.mockResolvedValue({ generation: 7, automatic_renewal: false, requires_login: false, error: null })
-  host.request.mockResolvedValue({ enabled: true, authorization_status: "none" })
   const view = render(<CompanyProviderCard provider={null} />)
   await waitFor(() => expect(view.getByTestId("company-provider-state").textContent).toBe("provider.companySignedOut"))
   expect(view.getByText("provider.companySignedOutHint")).toBeTruthy()
@@ -71,11 +70,25 @@ test("a signed-in company account lists the models it issued and keeps effort ed
   expect(view.queryByLabelText("Base URL")).toBeNull()
 })
 
+test("a fresh gateway login reads as signed in even while the account service still says expired", async () => {
+  // The regression this pins: the record lags every gateway login, so consulting it as a second
+  // opinion vetoed a session the native layer had renewed seconds earlier — 未登录 with working
+  // internal models. The native answer alone decides; the account service is not even asked.
+  const view = render(<CompanyProviderCard provider={provider} />)
+  await waitFor(() => expect(view.getByTestId("company-provider-state").textContent).toBe("provider.companySignedInAs"))
+  expect(host.request).not.toHaveBeenCalled()
+})
+
 test("a cached provider with an expired token must NOT look signed in", async () => {
   // The provider list survives offline; the renewal is what proves sign-in. This is the regression
   // that kept showing 已登录 after the enterprise token had expired.
-  host.status.mockResolvedValue({ generation: 7, automatic_renewal: true, requires_login: true, error: "invalid_grant" })
-  host.request.mockResolvedValue({ enabled: true, authorization_status: "authorized" })
+  host.status.mockResolvedValue({
+    generation: 7,
+    authorization_status: "unauthorized",
+    automatic_renewal: true,
+    requires_login: true,
+    error: "invalid_grant"
+  })
   const view = render(<CompanyProviderCard provider={provider} />)
   await waitFor(() => expect(view.getByTestId("company-provider-state").textContent).toBe("provider.companyExpired"))
   expect(view.queryByText("provider.companySignedIn")).toBeNull()
@@ -86,24 +99,22 @@ test("a cached provider with an expired token must NOT look signed in", async ()
 
 test("a cached provider with no renewal at all must NOT look signed in", async () => {
   host.status.mockResolvedValue({ generation: 7, automatic_renewal: false, requires_login: false, error: null })
-  host.request.mockResolvedValue({ enabled: true, authorization_status: "none" })
   const view = render(<CompanyProviderCard provider={provider} />)
   await waitFor(() => expect(view.getByTestId("company-provider-state").textContent).toBe("provider.companySignedOut"))
   expect(view.queryByText("provider.companySignedIn")).toBeNull()
   expect(view.getByRole("button", { name: "provider.companyLogin" })).toBeTruthy()
 })
 
-test("a healthy renewal off the company network reads as signed-in offline, not signed out", async () => {
-  host.request.mockRejectedValue(new Error("offline"))
-  const view = render(<CompanyProviderCard provider={provider} />)
-  await waitFor(() => expect(view.getByTestId("company-provider-state").textContent).toBe("provider.companyOffline"))
-  expect(view.getByText("DeepSeek V4.1 Flash")).toBeTruthy()
-  expect(view.queryByRole("button", { name: "provider.companyLogin" })).toBeNull()
-})
-
-test("the server can revoke an otherwise healthy local renewal", async () => {
-  host.request.mockResolvedValue({ enabled: false, authorization_status: "authorized" })
+test("a native answer that revokes the session drops it even with a healthy renewal", async () => {
+  host.status.mockResolvedValue({ ...authorizedNative, authorization_status: "unauthorized" })
   const view = render(<CompanyProviderCard provider={provider} />)
   await waitFor(() => expect(view.getByTestId("company-provider-state").textContent).toBe("provider.companySignedOut"))
   expect(view.queryByText("provider.companySignedIn")).toBeNull()
+})
+
+test("an unreadable native status says so instead of claiming signed out", async () => {
+  host.status.mockRejectedValue(new Error("engine not ready"))
+  const view = render(<CompanyProviderCard provider={provider} />)
+  await waitFor(() => expect(view.getByTestId("company-provider-state").textContent).toBe("provider.companyUnknown"))
+  expect(view.queryByText("provider.companySignedOut")).toBeNull()
 })

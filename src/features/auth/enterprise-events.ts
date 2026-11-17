@@ -1,3 +1,5 @@
+import { logEnterpriseError } from "./enterprise-diagnostics"
+
 interface EnterpriseEventHost {
   account(): string | null
   status(): Promise<unknown>
@@ -38,12 +40,17 @@ export function createEnterpriseEventHandler(host: EnterpriseEventHost) {
       if (value.type === "enterpriseAccountRefreshRequested") {
         await host.renewAccount(value.generation, value.requestId as string)
       } else if (value.type === "enterpriseConfigurationFailed") {
+        logEnterpriseError(`event/${value.type} generation=${value.generation}`, value.error ?? value)
         host.failed("configuration")
       } else {
-        if (value.error || value.type === "enterpriseEventStreamInterrupted") host.failed("authorization")
+        if (value.error || value.type === "enterpriseEventStreamInterrupted") {
+          logEnterpriseError(`event/${String(value.type)} generation=${value.generation}`, value.error ?? value)
+          host.failed("authorization")
+        }
         await host.refreshModels()
       }
-    } catch {
+    } catch (reason) {
+      logEnterpriseError(`event-refresh/${String(value.type)} generation=${value.generation}`, reason)
       if (host.account() === account) host.failed("refresh")
     }
   }

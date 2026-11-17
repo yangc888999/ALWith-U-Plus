@@ -1,20 +1,58 @@
 import { expect, test } from "vitest"
 
-import { enterpriseLoginAvailable, enterpriseSignedIn, parseEnterpriseRenewal } from "../enterprise-status"
+import { enterpriseSignedIn, nativeEnterpriseStatus, parseEnterpriseRenewal } from "../enterprise-status"
 
-test("server authorization requires local automatic renewal before models are usable", () => {
-  const server = { enabled: true, authorization_status: "authorized" }
-  expect(enterpriseLoginAvailable(server, { automatic_renewal: true, requires_login: false, error: null })).toBe(true)
-  expect(enterpriseLoginAvailable(server, { automatic_renewal: false, requires_login: false, error: null })).toBe(false)
+const renewal = { automatic_renewal: true, requires_login: false, error: null }
+
+test("the native authorization is the sign-in signal, gated by the local renewal", () => {
+  // The reported state on 2026-11-17: the gateway session was fresh while the account service still
+  // carried `enterprise_session_expired`, so the card said 未登录 with working internal models.
   expect(
-    enterpriseLoginAvailable(server, { automatic_renewal: true, requires_login: true, error: "invalid_grant" })
+    enterpriseSignedIn({ native: nativeEnterpriseStatus({ authorization_status: "authorized" }), renewal })
+  ).toBe(true)
+  expect(
+    enterpriseSignedIn({ native: nativeEnterpriseStatus({ authorization_status: "unauthorized" }), renewal })
+  ).toBe(false)
+  // A native answer cannot outlive the renewal it depends on.
+  expect(
+    enterpriseSignedIn({
+      native: nativeEnterpriseStatus({ authorization_status: "authorized" }),
+      renewal: { automatic_renewal: false, requires_login: false, error: null }
+    })
   ).toBe(false)
   expect(
-    enterpriseLoginAvailable(
-      { ...server, enabled: false },
-      { automatic_renewal: true, requires_login: false, error: null }
-    )
+    enterpriseSignedIn({
+      native: nativeEnterpriseStatus({ authorization_status: "authorized" }),
+      renewal: { automatic_renewal: true, requires_login: true, error: "invalid_grant" }
+    })
   ).toBe(false)
+  // The channel being switched off for this account still wins.
+  expect(
+    enterpriseSignedIn({
+      native: nativeEnterpriseStatus({ enabled: false, authorization_status: "authorized" }),
+      renewal
+    })
+  ).toBe(false)
+})
+
+test("a native status that omits fields never reads as authorized", () => {
+  for (const value of [{}, null, "authorized", { authorization_status: "" }, { authorization_status: 42 }]) {
+    expect(enterpriseSignedIn({ native: nativeEnterpriseStatus(value), renewal })).toBe(false)
+  }
+})
+
+test("native fields that are absent read as null instead of a guess", () => {
+  expect(nativeEnterpriseStatus({})).toEqual({ enabled: null, authorization_status: null, email: null })
+  expect(nativeEnterpriseStatus({ enabled: false, email: "user@example.com" })).toEqual({
+    enabled: false,
+    authorization_status: null,
+    email: "user@example.com"
+  })
+  expect(nativeEnterpriseStatus({ enabled: "no", email: "  " })).toEqual({
+    enabled: null,
+    authorization_status: null,
+    email: null
+  })
 })
 
 test("invalid native status is reported instead of looking like a signed-out account", () => {
@@ -24,33 +62,4 @@ test("invalid native status is reported instead of looking like a signed-out acc
     requires_login: false,
     error: null
   })
-})
-
-test("a gateway login the native layer vouches for beats a stale 'expired' record in the account service", () => {
-  const renewal = { automatic_renewal: true, requires_login: false, error: null }
-  const stale = { enabled: true, authorization_status: "unauthorized" }
-  // The reported state: the gateway session was refreshed seconds ago while the account service
-  // still carried the old expired session, so the card said 未登录 with working internal models.
-  expect(enterpriseSignedIn({ nativeAuthorization: "authorized", renewal, status: stale })).toBe(true)
-  // Nothing vouches for it: the stale record stands.
-  expect(enterpriseSignedIn({ nativeAuthorization: "unauthorized", renewal, status: stale })).toBe(false)
-  // The native layer being silent is not a sign-in.
-  expect(enterpriseSignedIn({ nativeAuthorization: null, renewal, status: stale })).toBe(false)
-  // No server answer at all is offline, not signed out.
-  expect(enterpriseSignedIn({ nativeAuthorization: null, renewal, status: null })).toBe(true)
-  // A native verdict cannot outlive the renewal it depends on.
-  expect(
-    enterpriseSignedIn({
-      nativeAuthorization: "authorized",
-      renewal: { automatic_renewal: false, requires_login: false, error: null },
-      status: stale
-    })
-  ).toBe(false)
-  expect(
-    enterpriseSignedIn({
-      nativeAuthorization: "authorized",
-      renewal: { automatic_renewal: true, requires_login: true, error: "invalid_grant" },
-      status: stale
-    })
-  ).toBe(false)
 })

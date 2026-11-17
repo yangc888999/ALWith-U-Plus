@@ -43,32 +43,28 @@ export function CompanyProviderCard({ provider }: { provider: CustomProvider | n
     toast.success(t("provider.companyDisplayNameSaved"))
   }
 
-  // A healthy local renewal is the sign-in signal. The server check is confirmation on top: when
-  // it cannot be reached (off the company network) the channel is "signed in, offline" rather
-  // than signed out, and the cached models stay listed.
-  const disabledByServer = login.status !== null && !login.status.enabled
-  const signedIn = login.renewalAvailable && !disabledByServer
-  const offline = signedIn && login.error
+  // The native layer owns the gateway session and is the only judge (see `enterpriseSignedIn`).
+  // The account service used to be consulted as a second opinion, and its stale record — it does
+  // not learn about a gateway login — is what kept saying 未登录 while the models worked.
+  const signedIn = login.authorized
   const needsLogin = !login.checking && !signedIn
   const expired = login.renewal !== null && (login.renewal.requires_login || login.renewal.error !== null)
 
   const state = login.checking
     ? t("provider.companyChecking")
     : signedIn
-      ? offline
-        ? t("provider.companyOffline")
-        : login.email === null
-          ? t("provider.companySignedIn")
-          : t("provider.companySignedInAs", { email: login.email })
+      ? login.email === null
+        ? t("provider.companySignedIn")
+        : t("provider.companySignedInAs", { email: login.email })
       : expired
         ? t("provider.companyExpired")
-        : t("provider.companySignedOut")
+        : login.error
+          ? t("provider.companyUnknown")
+          : t("provider.companySignedOut")
   const dot = login.checking
     ? "bg-muted-foreground/30 animate-pulse"
     : signedIn
-      ? offline
-        ? "bg-amber-500"
-        : "bg-emerald-500"
+      ? "bg-emerald-500"
       : "bg-muted-foreground/30"
 
   return (
@@ -98,7 +94,7 @@ export function CompanyProviderCard({ provider }: { provider: CustomProvider | n
       ) : (
         <>
           <p className="text-xs leading-5 text-muted-foreground">
-            {offline ? t("provider.companyOfflineHint") : t("provider.companyHint")}
+            {login.error ? t("provider.companyUnknownHint") : t("provider.companyHint")}
           </p>
           <div className="space-y-1.5">
             <p className="text-xs font-medium text-muted-foreground">{t("provider.companyModels")}</p>
