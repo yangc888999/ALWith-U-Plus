@@ -359,6 +359,12 @@ const RULES: Rule[] = [
     key: "error.activeWriter"
   },
   {
+    // The engine process itself is gone (`agent codex exited`). The connection owner reconnects on
+    // this on its own; reaching the reader means the automatic pass did not land either.
+    match: /agent \S+ exited/i,
+    key: "error.agentExited"
+  },
+  {
     // The Runtime replaced its engine process; the agent it used to run belongs to the old one.
     // The plugins page heals this by reconnecting, so reaching the reader means the reconnect did
     // not happen or did not help — say what changed instead of printing the runtime's English.

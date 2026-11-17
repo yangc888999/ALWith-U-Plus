@@ -727,6 +727,27 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     if (connection === "ready") return watchSessionList(client)
   }, [connection])
 
+  // The engine process can exit on its own (a crash, a killed child). The connection then drops to
+  // "disconnected" and every surface that reads the agent goes red until somebody reconnects — the
+  // reader had to press "重新连接" for something the app knows how to fix. This is THE connection
+  // owner reconnecting: one attempt at a time, bounded backoff, and it stops the moment a connect
+  // lands (`connection` leaves "disconnected"). It cannot loop: a failing connect keeps the state
+  // "failed", and the attempt budget is per drop, not per render.
+  useEffect(() => {
+    if (connection !== "disconnected") return
+    let cancelled = false
+    const run = async (round: number): Promise<void> => {
+      if (cancelled) return
+      await connect()
+      if (cancelled || client.state.connection !== "disconnected" || round >= 3) return
+      window.setTimeout(() => void run(round + 1), 600 * 2 ** round)
+    }
+    window.setTimeout(() => void run(0), 400)
+    return () => {
+      cancelled = true
+    }
+  }, [connection, connect])
+
   // Reopen the conversation that was on screen when the app quit, in its own project. The client
   // restores that conversation's model and effort as part of the replay, so launch lands exactly
   // where the last session left off instead of an empty draft in the wrong folder.

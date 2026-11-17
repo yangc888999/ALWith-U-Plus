@@ -485,3 +485,16 @@ fn auto_update_defaults_to_disabled_and_only_accepts_booleans() {
     let restarted = SettingsStore::load(dir.path().into()).unwrap();
     assert_eq!(restarted.values["updater.autoUpdate"], true);
 }
+#[test]
+fn the_drive_master_switch_is_a_registered_boolean_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = SettingsStore::load(dir.path().into()).unwrap();
+    // Settings → 通用 → 关闭云盘 writes this key. Unregistered, the confirm dialog answered
+    // 「这个设置项未被识别」 and the drive never turned off (2026-11-18).
+    s.update(changes(json!({"drive.yupEnabled": false})), None).unwrap();
+    assert_eq!(s.values["drive.yupEnabled"], false);
+    let (known, private) = partition_settings(s.values.clone());
+    assert_eq!(known["drive.yupEnabled"], false);
+    assert!(!private.contains_key("drive.yupEnabled"));
+    assert!(s.update(changes(json!({"drive.yupEnabled": "no"})), None).is_err());
+}

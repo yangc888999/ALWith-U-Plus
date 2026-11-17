@@ -421,6 +421,13 @@ pub async fn runtime_start(
                         crate::providers::managed::observe_event(&app, &event);
                         crate::enterprise::observe_event(&app, &event);
                         crate::mobile::publish(&event);
+                        if let alwith_api::RuntimeEvent::Exit { agent_id } = &event {
+                            // The frontend loses its agent handle the moment this arrives, and every
+                            // reconnect that follows re-asks the Runtime for the same agent. Without
+                            // this line the exit is invisible in the app log — the trace that
+                            // identifies a reconnect loop has to include the exit that starts it.
+                            log::warn!("agent exited: agent={agent_id}");
+                        }
                         if matches!(&event, alwith_api::RuntimeEvent::Exit { agent_id } if agent_id == "codex")
                             && let Err(error) = app.state::<alwith_computer::ComputerHost>().stop_current().await
                         {

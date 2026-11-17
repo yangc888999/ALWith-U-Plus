@@ -94,9 +94,9 @@ export function DraftChat({
   const { t } = useTranslation()
   const sessionRows = useApp((state) => state.sessionList)
   const connection = useApp((state) => state.connection)
-  // 只关心"连上了没有"这个布尔量：以前直接把 connection 放进准备 effect 的依赖里，
-  // connecting → failed 的每一次翻转都会重跑一遍、把 error 清空再设回去，卡片就这么闪（2026-11-08）。
-  const connected = connection === "ready"
+  // 准备 effect 不再观察"连上了没有"：连接抖动重跑它会顺手调 connect()，
+  // 而 SDK 的 hold() 在 adopt 失败时会停掉健康引擎，于是抖动变成 1~3 秒一轮的互踢（2026-11-18）。
+  // 连接状态仍供错误卡与输入框使用，见下方 `connection === "ready"`。
   const silent = useStartupSilent()
   // 热启动下始终 false：连灰字都不画，避免"闪一下"。
   const stalled = useStartupStalled()
@@ -154,7 +154,11 @@ export function DraftChat({
   )
 
   useEffect(() => {
-    // Explicit retries and provider revisions invalidate preparation.
+    // Explicit retries and provider revisions invalidate preparation. `connected` is deliberately
+    // NOT a dependency: a dropped agent handle flips it, and re-running this effect on that flip
+    // called `connect()` again, which the SDK answered by stopping and restarting the engine —
+    // a 1-3 second reconnect storm that no page ever asked for (2026-11-18). The connection banner
+    // and the error card (both explicit) own reconnection; preparation only re-runs on real input.
     void attempt
     void providerRevision
     void providerSnapshot?.status
@@ -225,7 +229,7 @@ export function DraftChat({
     return () => {
       active = false
     }
-  }, [owner, cwd, providerRevision, providerSnapshot?.status, attempt, model, connected])
+  }, [owner, cwd, providerRevision, providerSnapshot?.status, attempt, model])
 
   // An engine that is already ready disproves a startup-class error: whatever it described is no
   // longer true, and leaving the card up only sends the reader to press a 「重试」 that has nothing

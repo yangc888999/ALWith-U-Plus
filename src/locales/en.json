@@ -2348,6 +2348,7 @@
     "streamClosed": "The upstream closed the connection before finishing. Retry, or switch models.",
     "streamReadFailed": "Reading the upstream response failed: {{reason}}",
     "agentReplaced": "The engine was replaced and no longer owns the agent this request named. The app reconnected itself; press Retry if it is still shown.",
+    "agentExited": "The engine process exited; the app is reconnecting. If this stays on screen, press Reconnect.",
     "threadNotLoaded": "The engine restarted and has not loaded this chat into memory yet. Reopen the chat to continue."
   },
   "groups": {

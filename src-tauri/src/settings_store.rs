@@ -313,6 +313,10 @@ fn partition_settings(values: BTreeMap<String, Value>) -> (BTreeMap<String, Valu
 fn setting_validity(key: &str, value: &Value) -> Option<bool> {
     Some(match key {
         "mobile.bridgeEnabled"
+        // The product-level YUP Drive master switch (settings → 通用 → 关闭云盘). Unregistered it
+        // was rejected with "Unknown or private settings key", so confirming the dialog showed
+        // 「这个设置项未被识别」 and the drive never actually turned off (2026-11-18).
+        | "drive.yupEnabled"
         | "appearance.trackpadEnabled"
         | "updater.autoUpdate"
         | "system.preventSleep"
