@@ -44,7 +44,7 @@ function WindowsTitleBar({
         className="flex h-full shrink-0 items-center"
         style={{ paddingInline: 12 / zoom }}
         title={t("app.name")}
-        data-tauri-drag-region
+        data-tauri-drag-region="deep"
       >
         <img
           src={appIcon}
@@ -55,7 +55,7 @@ function WindowsTitleBar({
         />
       </div>
       <div ref={mountControls} className="flex h-full shrink-0 items-center" />
-      <div className="relative h-full min-w-0 flex-1" data-tauri-drag-region>
+      <div className="relative h-full min-w-0 flex-1" data-tauri-drag-region="deep">
         <div
           ref={mountExtensionControls}
           className="windows-extension-controls pointer-events-none absolute inset-0 flex items-center px-2"

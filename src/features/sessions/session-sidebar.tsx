@@ -590,9 +590,9 @@ function SidebarPanels({
         // Keep spacing aligned with the panel's pixel gutters when WebKit clamps rem-based fonts at low zoom.
         className="h-full min-h-0 shrink-0 bg-transparent [--navigation-row-height:30px] [--spacing:4px]"
       >
-        <SidebarHeader className="shrink-0 gap-1 p-1 px-2" data-tauri-drag-region>
-          <div className="flex h-8 items-center gap-0.5 px-1" data-tauri-drag-region>
-            <span className="flex min-w-0 flex-1 items-center gap-1.5" data-tauri-drag-region>
+        <SidebarHeader className="shrink-0 gap-1 p-1 px-2" data-tauri-drag-region="deep">
+          <div className="flex h-8 items-center gap-0.5 px-1" data-tauri-drag-region="deep">
+            <span className="flex min-w-0 flex-1 items-center gap-1.5" data-tauri-drag-region="deep">
               <span className="truncate text-sm font-semibold">{t("app.wordmark")}</span>
               {/* The edition reads as a badge, not as part of the name: red pill, white lettering. */}
               <span className="shrink-0 rounded-full bg-red-500 px-1.5 py-[1px] text-[10px] leading-[1.2] font-semibold text-white">

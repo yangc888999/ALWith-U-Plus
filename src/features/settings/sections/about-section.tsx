@@ -21,6 +21,17 @@ import { parseChangeLog } from "./changelog"
 import { SettingRow, SettingsCard } from "./shared"
 
 const UPSTREAM_PROJECT_URL = "https://github.com/ALwith-ai/alwith-u"
+// Where a failed check sends people: the releases page of *this* build's repository, not the
+// upstream project. It is also the fallback when the in-app feed is unreachable.
+const RELEASE_URL = "https://github.com/yangc888999/ALWith-U-Plus/releases/latest"
+
+/** One sentence per failure reason; the updater's own message never reaches the screen. */
+const CHECK_FAILURE_KEYS = {
+  network: "updater.checkFailedNetwork",
+  unavailable: "updater.checkFailedUnavailable",
+  invalidRelease: "updater.checkFailedInvalidRelease",
+  unknown: "updater.checkFailedUnknown"
+} as const
 
 export function AboutSection() {
   const [clientVersion, setClientVersion] = useState<string | null>(null)
@@ -72,7 +83,7 @@ export function AboutSection() {
   const updaterText = (() => {
     switch (state.type) {
       case "ready":
-        return t("updater.readyDesc", { version: state.update.version })
+        return t("updater.readyDesc")
       case "restarting":
         return t("updater.installing")
       // `availableForDownload` is stored but never emitted (a hit downloads straight away), so it only
@@ -89,7 +100,7 @@ export function AboutSection() {
       case "disabled":
         return t("updater.disabled")
       case "checkFailed":
-        return t("updater.checkFailed", { message: state.message })
+        return t(CHECK_FAILURE_KEYS[state.reason])
       default:
         return t("updater.upToDate")
     }
@@ -151,13 +162,11 @@ export function AboutSection() {
                 className="max-w-full rounded-full font-normal text-muted-foreground"
                 title={updaterText}
                 onClick={() => {
-                  confirmInstallAndRelaunch().catch((error: unknown) =>
-                    toast.error(error instanceof Error ? error.message : String(error))
-                  )
+                  confirmInstallAndRelaunch().catch(() => toast.error(t("updater.installFailed")))
                 }}
               >
                 <span className={`size-1.5 shrink-0 rounded-full ${statusDot}`} aria-hidden="true" />
-                <span className="truncate">{t("updater.ready", { version: state.update.version })}</span>
+                <span className="truncate">{t("updater.ready")}</span>
               </Button>
             ) : (
               <span
@@ -168,6 +177,17 @@ export function AboutSection() {
                 <span className={`size-1.5 shrink-0 rounded-full ${statusDot}`} aria-hidden="true" />
                 <span className="min-w-0">{updaterText}</span>
               </span>
+            )}
+            {/* A failed check is not a dead end: the browser can reach the release page even when
+                the app's own request to GitHub is blocked or the feed has no metadata yet. */}
+            {state.type === "checkFailed" && (
+              <button
+                type="button"
+                onClick={() => void openExternal(RELEASE_URL).catch(() => undefined)}
+                className="shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium text-foreground/80 transition-colors hover:bg-muted hover:text-foreground"
+              >
+                {t("updater.manualDownload")}
+              </button>
             )}
           </div>
         </section>

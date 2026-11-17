@@ -40,6 +40,17 @@ pub async fn updater_install_and_relaunch(
     svc.install_and_relaunch(&installer, &updater_dir).await
 }
 
+/// One check on demand. Turning the switch on in Settings calls this, so the user does not wait
+/// for the hourly tick (or the 30s startup delay) before seeing whether a release exists.
+#[tauri3_specta::command]
+pub async fn updater_check_now(
+    app: AppHandle, svc: TauriState<'_, Arc<UpdaterService>>,
+) -> Result<(), String> {
+    let service = svc.inner().clone();
+    check_and_autodownload(app, service).await;
+    Ok(())
+}
+
 pub(crate) fn updater_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     let base = app.path().app_cache_dir().map_err(|e| e.to_string())?;
     Ok(base.join("updater"))

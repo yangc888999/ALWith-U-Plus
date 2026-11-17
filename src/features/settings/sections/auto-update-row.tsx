@@ -3,6 +3,7 @@ import { openExternal } from "@/lib/open"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
+import { commands } from "@/bindings"
 import { Switch } from "@/components/ui/switch"
 import { settingsStore, updateSettings } from "@/lib/settings-store"
 
@@ -21,13 +22,16 @@ export function AutoUpdateRow({ compact = false }: { compact?: boolean }) {
       compact={compact}
       title={t("settings.autoUpdate")}
       desc={
-        <button
-          type="button"
-          className="text-left text-muted-foreground transition-colors hover:text-foreground"
-          onClick={() => void openExternal(PROJECT_URL).catch(() => undefined)}
-        >
-          {t("settings.autoUpdateDesc")}
-        </button>
+        <span className="flex flex-col gap-0.5">
+          <span>{t("settings.autoUpdateDesc")}</span>
+          <button
+            type="button"
+            className="w-fit text-left text-muted-foreground transition-colors hover:text-foreground"
+            onClick={() => void openExternal(PROJECT_URL).catch(() => undefined)}
+          >
+            {t("settings.autoUpdateFeed")}
+          </button>
+        </span>
       }
     >
       <Switch
@@ -36,9 +40,18 @@ export function AutoUpdateRow({ compact = false }: { compact?: boolean }) {
         disabled={pending}
         onCheckedChange={(value) => {
           setPending(true)
-          void updateSettings({ "updater.autoUpdate": value })
-            .catch((error: unknown) => toast.error(String(error)))
-            .finally(() => setPending(false))
+          void (async () => {
+            try {
+              await updateSettings({ "updater.autoUpdate": value })
+              // Turning it on checks right away instead of waiting for the hourly tick; a failed
+              // check lands in the updater state, which the About page already explains.
+              if (value) await commands.updaterCheckNow().catch(() => undefined)
+            } catch (error) {
+              toast.error(error instanceof Error ? error.message : String(error))
+            } finally {
+              setPending(false)
+            }
+          })()
         }}
       />
     </SettingRow>

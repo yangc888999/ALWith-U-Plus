@@ -612,8 +612,9 @@
       "unreadable": "That image could not be read; try another one"
     },
     "updates": "Updates",
-    "autoUpdate": "Download updates automatically",
-    "autoUpdateDesc": "The update feed now points at this project's own GitHub releases, not the upstream ALwith service.",
+    "autoUpdate": "Automatic updates",
+    "autoUpdateDesc": "Checks for the latest version once an hour when on.",
+    "autoUpdateFeed": "Updates come from this project's GitHub releases >>",
     "engine": "Engine",
     "licensesTitle": "Licences",
     "title": "Settings",
@@ -1439,21 +1440,26 @@
     "note": "This level is written into the engine model catalog as the model's own default; you can still change it per chat. Defaults to Max."
   },
   "updater": {
-    "installing": "Installing update… The app will restart automatically.",
-    "readyDesc": "Version {{version}} is downloaded and ready to install.",
+    "installing": "Installing…",
+    "readyDesc": "Downloaded — click to update",
     "upToDate": "Up to date",
-    "checkFailed": "Update check failed: {{message}}",
-    "checking": "Checking for updates",
-    "downloading": "Downloading update {{percent}}%",
-    "ready": "Relaunch to update to {{version}}",
-    "disabled": "Automatic updates are not configured",
+    "checkFailedNetwork": "Can't reach the update service",
+    "checkFailedUnavailable": "The update service is unavailable",
+    "checkFailedInvalidRelease": "This build can't auto-update",
+    "checkFailedUnknown": "Update check failed",
+    "installFailed": "Couldn't install the update",
+    "manualDownload": "Download",
+    "checking": "Checking…",
+    "downloading": "Downloaded {{percent}}%",
+    "ready": "Downloaded — click to update",
+    "disabled": "Updates unavailable",
     "relaunchConfirmTitle": "Relaunch to update?",
     "relaunchConfirmDesc": "The app will close and restart to apply the update.",
     "relaunchNow": "Relaunch now",
     "relaunchLater": "Update later",
-    "install": "Relaunch to update",
+    "install": "Downloaded — click to update",
     "dismiss": "Dismiss update",
-    "updateHint": "Click to review and install"
+    "updateHint": "v{{version}}"
   },
   "plugins": {
     "error": {

@@ -10,7 +10,7 @@ pub mod persist;
 pub mod scheduler;
 pub mod state;
 
-use crate::updater::state::{State, UpdateInfo};
+use crate::updater::state::{CheckFailureReason, State, UpdateInfo};
 use base64::Engine;
 use minisign_verify::{PublicKey, Signature};
 use semver::Version;
@@ -28,6 +28,45 @@ fn is_newer_version(candidate: &str, current: &str) -> Result<bool, String> {
 
 pub fn is_same_release(remote: Option<&UpdateInfo>, ready: &UpdateInfo) -> bool {
     remote.is_some_and(|remote| remote.version == ready.version && remote.signature == ready.signature)
+}
+
+/// Turns a plugin error into a reason the UI can phrase in the user's language.
+///
+/// The raw text never reaches the webview: it is English, it embeds URLs and HTTP status codes and
+/// it changes between plugin releases, so it is only ever logged. Order matters — a transport
+/// failure often mentions the URL, and a feed problem can mention "fetch", so the transport check
+/// runs first.
+pub fn classify_check_error(message: &str) -> CheckFailureReason {
+    let text = message.to_ascii_lowercase();
+    const NETWORK: [&str; 12] = [
+        "error sending request",
+        "connection",
+        "connect",
+        "dns",
+        "timed out",
+        "timeout",
+        "handshake",
+        "tls",
+        "certificate",
+        "network",
+        "unreachable",
+        "proxy",
+    ];
+    const UNAVAILABLE: [&str; 7] =
+        ["release json", "not found", "404", "status code", "http error", "expected value", "eof while parsing"];
+    const INVALID_RELEASE: [&str; 3] = ["filename", "download url", "signature"];
+
+    let has = |needles: &[&str]| needles.iter().any(|needle| text.contains(needle));
+    if has(&NETWORK) {
+        return CheckFailureReason::Network;
+    }
+    if has(&UNAVAILABLE) {
+        return CheckFailureReason::Unavailable;
+    }
+    if has(&INVALID_RELEASE) {
+        return CheckFailureReason::InvalidRelease;
+    }
+    CheckFailureReason::Unknown
 }
 
 pub struct UpdaterService {
@@ -75,8 +114,10 @@ impl UpdaterService {
             Ok(Some(update)) => self.set_state_silent(State::AvailableForDownload { update }),
             Ok(None) => self.set_state(State::Idle),
             Err(error) => {
+                // The raw message is diagnostics only: it names the feed URL and the plugin's
+                // internals, which is not something the About page should ever print.
                 log::warn!("automatic update check failed: {error}");
-                self.set_state(State::CheckFailed { message: error });
+                self.set_state(State::CheckFailed { reason: classify_check_error(&error) });
             }
         }
     }
@@ -383,18 +424,18 @@ impl SignatureVerifier for MinisignVerifier {
     }
 }
 
-/// Automatic checks are on unless the user turned them off: the feed now points at this fork's own
-/// GitHub releases, so there is no upstream feed to surprise anyone with. A missing value means on;
-/// an explicit `false` keeps the old manual-only behaviour.
+/// Off unless the user turned it on: a background process that reaches out to GitHub every hour
+/// is something people opt into, and the switch in Settings says exactly that. An explicit `true`
+/// enables the startup recovery, the 30s/1h loop and the 5-minute overwrite check.
 pub fn auto_update_enabled(app: &AppHandle) -> bool {
     use tauri::Manager;
     app.try_state::<crate::settings::SharedSettings>()
         .and_then(|settings| {
             settings.0.lock().ok().map(|store| {
-                store.values.get("updater.autoUpdate").and_then(serde_json::Value::as_bool).unwrap_or(true)
+                store.values.get("updater.autoUpdate").and_then(serde_json::Value::as_bool).unwrap_or(false)
             })
         })
-        .unwrap_or(true)
+        .unwrap_or(false)
 }
 
 /// Wires the service into the app: state changes reach the webview as `updater:state`; startup
@@ -598,7 +639,10 @@ mod tests {
 
         emitted.lock().unwrap().clear();
         svc.check_for_updates(&MockChecker(Err("net down".into())));
-        assert!(matches!(svc.state(), State::CheckFailed { ref message } if message == "net down"));
+        assert!(matches!(
+            svc.state(),
+            State::CheckFailed { reason: CheckFailureReason::Unknown }
+        ));
         assert!(emitted.lock().unwrap().iter().any(|s| matches!(s, State::CheckFailed { .. })));
 
         svc.set_state(State::Downloading { update: sample_update("0.2.0"), downloaded_bytes: None, total_bytes: None });
@@ -609,9 +653,34 @@ mod tests {
     #[test]
     fn check_can_retry_from_failed_state_so_the_hourly_loop_is_not_stuck() {
         let (svc, _) = recording_service();
-        svc.set_state(State::CheckFailed { message: "net down".into() });
+        svc.set_state(State::CheckFailed { reason: CheckFailureReason::Network });
         svc.check_for_updates(&MockChecker(Ok(Some(sample_update("0.3.0")))));
         assert!(matches!(svc.state(), State::AvailableForDownload { .. }));
+    }
+
+    // The About page must never print the plugin's own wording: these are the two strings users
+    // actually hit (no route to GitHub, and a release feed without latest.json).
+    #[test]
+    fn transport_and_feed_failures_are_told_apart() {
+        assert_eq!(
+            classify_check_error(
+                "error sending request for url (https://github.com/x/y/releases/latest/download/latest.json)"
+            ),
+            CheckFailureReason::Network
+        );
+        assert_eq!(
+            classify_check_error("Could not fetch a valid release JSON from the remote"),
+            CheckFailureReason::Unavailable
+        );
+        assert_eq!(
+            classify_check_error("HTTP status client error (404 Not Found)"),
+            CheckFailureReason::Unavailable
+        );
+        assert_eq!(
+            classify_check_error("cannot extract filename from download URL"),
+            CheckFailureReason::InvalidRelease
+        );
+        assert_eq!(classify_check_error("something else entirely"), CheckFailureReason::Unknown);
     }
 
     // ── download ──

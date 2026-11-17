@@ -74,11 +74,11 @@ test("a failed Codex version check reports the error and still displays the app 
   }
 })
 
-test("a failed update check shows the error instead of claiming the app is up to date", async () => {
+test("a failed update check explains itself in plain words and offers a manual download", async () => {
   const native = vi.spyOn(core, "isTauri").mockReturnValue(true)
   const init = vi.spyOn(useUpdaterStore.getState(), "init").mockResolvedValue()
   const originalState = useUpdaterStore.getState()
-  useUpdaterStore.setState({ state: { type: "checkFailed", message: "network unreachable" } })
+  useUpdaterStore.setState({ state: { type: "checkFailed", reason: "network" } })
   mockIPC((command) => {
     if (command === "plugin:app|version") return "0.2.0"
     if (command === "codex_version") return "0.159.2"
@@ -87,9 +87,12 @@ test("a failed update check shows the error instead of claiming the app is up to
   const view = render(<AboutSection />)
   try {
     await waitFor(() => {
-      expect(view.getByText("Update check failed: network unreachable")).toBeDefined()
+      expect(view.getByText("Can't reach the update service")).toBeDefined()
     })
     expect(view.queryByText("Up to date")).toBeNull()
+    // The plugin's own wording (URLs, "release JSON") is diagnostics, never UI copy.
+    expect(view.queryByText(/release JSON/)).toBeNull()
+    expect(view.getByRole("button", { name: "Download" })).toBeDefined()
   } finally {
     view.unmount()
     useUpdaterStore.setState(originalState, true)
@@ -131,8 +134,8 @@ test("the update log opens from the version row instead of sitting on the page",
 
 // The update state is one slot on the About page: a status capsule, or — in `ready` — the install
 // button. A second element repeating the same sentence is the 1.0.2 bug this suite pins down.
-const INSTALLING = "Installing update… The app will restart automatically."
-const READY_DESC = "Version 1.0.3 is downloaded and ready to install."
+const INSTALLING = "Installing…"
+const READY_DESC = "Downloaded — click to update"
 const update = { version: "1.0.3", filename: "update.tar.gz", signature: "sig", contentLength: 100 }
 const pristine = useUpdaterStore.getState()
 
@@ -163,21 +166,20 @@ function renderAbout(state: UpdaterState) {
 
 test.each<[string, UpdaterState, string]>([
   ["idle", { type: "idle" }, "Up to date"],
-  ["checkingForUpdates", { type: "checkingForUpdates" }, "Checking for updates"],
-  ["downloading", { type: "downloading", update, downloadedBytes: 42, totalBytes: 100 }, "Downloading update 42%"],
-  ["availableForDownload", { type: "availableForDownload", update }, "Downloading update 0%"],
-  ["ready", { type: "ready", update }, "Relaunch to update to 1.0.3"],
+  ["checkingForUpdates", { type: "checkingForUpdates" }, "Checking…"],
+  ["downloading", { type: "downloading", update, downloadedBytes: 42, totalBytes: 100 }, "Downloaded 42%"],
+  ["availableForDownload", { type: "availableForDownload", update }, "Downloaded 0%"],
+  ["ready", { type: "ready", update }, "Downloaded — click to update"],
   ["restarting", { type: "restarting", update }, INSTALLING],
-  ["checkFailed", { type: "checkFailed", message: "network unreachable" }, "Update check failed: network unreachable"]
+  ["checkFailed", { type: "checkFailed", reason: "unavailable" }, "The update service is unavailable"]
 ])("the %s state is stated exactly once on the About page", (_name, state, expected) => {
   const { view, dispose } = renderAbout(state)
   try {
     expect(view.getAllByText(expected)).toHaveLength(1)
     // One slot only: either the live status capsule or the single install button.
-    const installButtons = view.queryAllByRole("button", { name: /Relaunch to update to/ })
+    const installButtons = view.queryAllByRole("button", { name: /Downloaded — click to update/ })
     const statuses = view.queryAllByRole("status")
     expect(statuses.length + installButtons.length).toBe(1)
-    expect(view.queryByText(READY_DESC)).toBeNull()
   } finally {
     dispose()
   }
@@ -190,7 +192,7 @@ test("installing is reported once — no second capsule or button repeats it", (
   try {
     expect(view.getAllByText(INSTALLING)).toHaveLength(1)
     expect(view.getAllByRole("status")).toHaveLength(1)
-    expect(view.queryAllByRole("button", { name: /Installing update|Relaunch to update to/ })).toHaveLength(0)
+    expect(view.queryAllByRole("button", { name: /Installing|Downloaded — click to update/ })).toHaveLength(0)
   } finally {
     dispose()
   }
@@ -201,10 +203,9 @@ test("a ready update turns the single slot into the install action", async () =>
   useUpdaterStore.setState({ confirmInstallAndRelaunch: confirm })
   const { view, dispose } = renderAbout({ type: "ready", update })
   try {
-    const button = view.getByRole("button", { name: "Relaunch to update to 1.0.3" })
+    const button = view.getByRole("button", { name: "Downloaded — click to update" })
     // The download confirmation is the tooltip, not a second visible line above the button.
     expect(button).toHaveAttribute("title", READY_DESC)
-    expect(view.queryByText(READY_DESC)).toBeNull()
     await act(() => Promise.try(() => fireEvent.click(button)))
     expect(confirm).toHaveBeenCalledOnce()
   } finally {
@@ -218,7 +219,7 @@ test("an install that fails drops back to the single ready action so it can be r
     expect(view.getAllByText(INSTALLING)).toHaveLength(1)
     // Rust restores `ready` when the installer reports an error, so the row must not stay busy.
     await act(() => Promise.try(() => useUpdaterStore.setState({ state: { type: "ready", update } })))
-    expect(view.getAllByText("Relaunch to update to 1.0.3")).toHaveLength(1)
+    expect(view.getAllByText("Downloaded — click to update")).toHaveLength(1)
     expect(view.queryByText(INSTALLING)).toBeNull()
     expect(view.queryAllByRole("status")).toHaveLength(0)
   } finally {

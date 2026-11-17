@@ -73,7 +73,7 @@ test("footer arrows switch screens, plugins are selected only on the leading scr
   // 插件 / 扩展 / 技能 share one row whose flyout lists them; a plain click opens the first one.
   const plugins = sidebarButton(view, { name: "Plugins · Extensions · Skills" })
   const arrow = sidebarButton(view, { name: "Open -1 screen" })
-  const updateCard = sidebarButton(view, { name: /Relaunch to update/ })
+  const updateCard = sidebarButton(view, { name: /Downloaded — click to update/ })
   expect(updateCard.closest('[data-slot="sidebar-footer"]')).toBe(arrow.closest('[data-slot="sidebar-footer"]'))
   expect(arrow.closest('[data-slot="sidebar-footer"]')).not.toBeNull()
   expect(arrow.querySelector(".lucide-arrow-left")).toBeTruthy()

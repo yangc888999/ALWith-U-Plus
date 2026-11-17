@@ -41,6 +41,8 @@ import { hydrateZoom } from "@/lib/zoom"
 import { startZoomViewport } from "@/lib/zoom-viewport"
 import "./index.css"
 import { installScrollActivity } from "@/lib/scroll-activity"
+import { watchWindowMovement } from "@/lib/window-moving"
+import { installWindowDrag } from "@/lib/window-drag"
 import { primeQuickChatRoot } from "@/lib/quick-chat"
 import { clampWindowToScreen } from "@/lib/window-fit"
 // Install before anything can toast: early startup rejections were the last raw-English path.
@@ -240,6 +242,11 @@ async function bootstrap(): Promise<void> {
   void primeQuickChatRoot()
 
   installScrollActivity()
+  // Window moves repaint the whole transparent webview; this keeps that frame cheap.
+  watchWindowMovement()
+  // Drag regions are driven here instead of by Tauri's injected script, which only fires when the
+  // pointer hits the region element itself.
+  installWindowDrag()
   createRoot(root).render(
     <StrictMode>
       <AppDirectionProvider>

@@ -307,8 +307,8 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
       data-chat-window=""
     >
       <WindowResizeEdges />
-      <header className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-3" data-tauri-drag-region>
-        <div ref={setHeaderTarget} className="flex min-w-0 flex-1 items-center gap-1" data-tauri-drag-region />
+      <header className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-3" data-tauri-drag-region="deep">
+        <div ref={setHeaderTarget} className="flex min-w-0 flex-1 items-center gap-1" data-tauri-drag-region="deep" />
         <Button
           variant="ghost"
           size="icon-sm"

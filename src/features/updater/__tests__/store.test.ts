@@ -59,12 +59,12 @@ test("state events update the store", async () => {
   })
 })
 
-test("a failed check is mirrored as checkFailed state instead of being hidden", async () => {
+test("a failed check is mirrored as a localizable reason instead of being hidden", async () => {
   const { io, emit } = fakeIo({ type: "idle" })
   const store = createUpdaterStore(io)
   await store.getState().init(false)
-  emit({ type: "checkFailed", message: "network unreachable" })
-  expect(store.getState().state).toEqual({ type: "checkFailed", message: "network unreachable" })
+  emit({ type: "checkFailed", reason: "network" })
+  expect(store.getState().state).toEqual({ type: "checkFailed", reason: "network" })
 })
 
 test("a ready update is mirrored without prompting and installs only after an explicit confirm", async () => {

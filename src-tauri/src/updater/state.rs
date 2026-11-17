@@ -6,6 +6,22 @@ pub enum DisablementReason {
     InvalidConfiguration,
 }
 
+/// Why a check failed, in a form the webview can translate. The updater plugin's own message is
+/// developer-facing (URLs, HTTP status, English error chains), so it stays in the log: only this
+/// reason crosses the IPC boundary and reaches the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum CheckFailureReason {
+    /// No usable path to the feed: offline, DNS failure, TLS reset, timeout or refused proxy.
+    Network,
+    /// The feed answered with something that is not release metadata (missing `latest.json`,
+    /// a 404 page, truncated JSON).
+    Unavailable,
+    /// A release was published but this build cannot use it (missing signature or filename).
+    InvalidRelease,
+    Unknown,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateInfo {
@@ -30,7 +46,7 @@ pub enum State {
     CheckingForUpdates,
     /// A check failed; keep the reason so the UI can report it instead of claiming "up to date".
     CheckFailed {
-        message: String,
+        reason: CheckFailureReason,
     },
     AvailableForDownload {
         update: UpdateInfo,
@@ -81,11 +97,10 @@ mod tests {
     }
 
     #[test]
-    fn check_failed_serializes_type_tag_and_message() {
-        let state = State::CheckFailed { message: "network unreachable".into() };
+    fn check_failed_serializes_type_tag_and_reason_only() {
+        let state = State::CheckFailed { reason: CheckFailureReason::Network };
         let json = serde_json::to_string(&state).unwrap();
-        assert!(json.contains("\"type\":\"checkFailed\""));
-        assert!(json.contains("\"message\":\"network unreachable\""));
+        assert_eq!(json, r#"{"type":"checkFailed","reason":"network"}"#);
         let back: State = serde_json::from_str(&json).unwrap();
         assert_eq!(state, back);
     }

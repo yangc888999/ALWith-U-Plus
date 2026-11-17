@@ -612,8 +612,9 @@
       "unreadable": "这张图片读不出来，换一张试试"
     },
     "updates": "更新",
-    "autoUpdate": "自动下载更新",
-    "autoUpdateDesc": "更新源为 GitHub，项目地址 >>",
+    "autoUpdate": "自动更新",
+    "autoUpdateDesc": "打开后自动检查最新版本，每小时一次。",
+    "autoUpdateFeed": "更新源：GitHub 项目地址 >>",
     "engine": "引擎",
     "licensesTitle": "许可",
     "title": "设置",
@@ -1439,21 +1440,26 @@
     "note": "该级别会写入引擎模型目录，成为模型自身的默认思考深度；在单个对话里仍可随时改。默认 Max。"
   },
   "updater": {
-    "installing": "正在安装更新…完成后将自动重启。",
-    "readyDesc": "版本 {{version}} 已下载,可以安装。",
+    "installing": "正在安装…",
+    "readyDesc": "下载完成，点击更新",
     "upToDate": "已是最新版本",
-    "checkFailed": "检查更新失败：{{message}}",
-    "checking": "正在检查更新",
-    "downloading": "正在下载更新 {{percent}}%",
-    "ready": "重新启动以更新到 {{version}}",
-    "disabled": "未配置自动更新",
+    "checkFailedNetwork": "连不上更新服务",
+    "checkFailedUnavailable": "更新服务暂不可用",
+    "checkFailedInvalidRelease": "这个版本不支持自动升级",
+    "checkFailedUnknown": "检查更新失败",
+    "installFailed": "更新安装失败",
+    "manualDownload": "去下载",
+    "checking": "检查中…",
+    "downloading": "已下载 {{percent}}%",
+    "ready": "下载完成，点击更新",
+    "disabled": "更新服务不可用",
     "relaunchConfirmTitle": "重新启动以更新?",
     "relaunchConfirmDesc": "应用将关闭并重新启动以应用更新。",
     "relaunchNow": "立即重启",
     "relaunchLater": "稍后更新",
-    "install": "重新启动以更新",
+    "install": "下载完成，点击更新",
     "dismiss": "关闭更新提醒",
-    "updateHint": "点击查看并安装更新"
+    "updateHint": "v{{version}}"
   },
   "plugins": {
     "error": {

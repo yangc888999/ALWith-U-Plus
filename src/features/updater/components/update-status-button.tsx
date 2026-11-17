@@ -56,9 +56,8 @@ export function UpdateStatusButton() {
   if (state.type !== "ready") return null
 
   const install = () => {
-    void confirmInstallAndRelaunch().catch((error: unknown) =>
-      toast.error(error instanceof Error ? error.message : String(error))
-    )
+    // The native error names signatures and archive paths; the toast only says what to do next.
+    void confirmInstallAndRelaunch().catch(() => toast.error(t("updater.installFailed")))
   }
   return (
     <div className="relative w-full rounded-xl border border-primary/25 bg-primary/5 px-3 py-2 shadow-sm">
@@ -76,8 +75,10 @@ export function UpdateStatusButton() {
       <button type="button" className="flex w-full items-start gap-2 pr-5 text-left" onClick={install}>
         <RocketIcon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
         <span className="min-w-0 flex-1">
-          <span className="block text-xs font-semibold text-foreground">{t("updater.install")} v{state.update.version}</span>
-          <span className="mt-0.5 block text-[11px] text-muted-foreground">{t("updater.updateHint")}</span>
+          <span className="block text-xs font-semibold text-foreground">{t("updater.install")}</span>
+          <span className="mt-0.5 block text-[11px] text-muted-foreground">
+            {t("updater.updateHint", { version: state.update.version })}
+          </span>
         </span>
         <ArrowRightIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground rtl:-scale-x-100" aria-hidden="true" />
       </button>

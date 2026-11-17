@@ -1922,3 +1922,16 @@ html[data-appearance="aero"] [data-settings-surface],
 html[data-appearance="aero"] [data-radix-popper-content-wrapper] > * {
   backdrop-filter: blur(18px) saturate(1.35);
 }
+
+/* 拖动窗口时 macOS 会逐帧重绘整个透明 webview，模糊是最贵的部分。拖动期间直接关掉模糊与
+   侧栏过渡，松手 240ms 后恢复——否则第一下拖动常被看成「卡住了、拖不动」。 */
+html[data-window-moving] [data-settings-surface],
+html[data-window-moving] [data-radix-popper-content-wrapper] > * {
+  backdrop-filter: none !important;
+}
+html[data-window-moving] .main-sidebar-viewport,
+html[data-window-moving] .main-sidebar-rail,
+html[data-window-moving] .main-screen-content > .main-chat-surface {
+  transition: none !important;
+}
+

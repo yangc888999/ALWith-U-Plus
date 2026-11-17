@@ -557,6 +557,7 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 enterprise::enterprise_logout,
                 updater::commands::updater_get_state,
                 updater::commands::updater_install_and_relaunch,
+                updater::commands::updater_check_now,
                 window::attach_window_to_main,
                 installed_apps::read_apps_info,
                 browser_bridge::chrome_extension_installed,

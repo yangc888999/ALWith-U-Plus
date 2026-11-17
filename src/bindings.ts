@@ -780,6 +780,7 @@ export const commands = {
   enterpriseLogout: (args: { generation: number }): Promise<null> => __t3Invoke<null>("enterprise_logout", args),
   updaterGetState: (): Promise<State_Serialize> => __t3Invoke<State_Serialize>("updater_get_state"),
   updaterInstallAndRelaunch: (): Promise<null> => __t3Invoke<null>("updater_install_and_relaunch"),
+  updaterCheckNow: (): Promise<null> => __t3Invoke<null>("updater_check_now"),
   /**
    *  Makes `label` a child window of `main` (macOS only): it floats above the main window,
    *  follows it between Spaces and never becomes its own Stage Manager stage. Called on every
@@ -989,6 +990,7 @@ export type CommandErrors = {
   enterpriseLogout: Value
   updaterGetState: null
   updaterInstallAndRelaunch: string
+  updaterCheckNow: null
   attachWindowToMain: string
   readAppsInfo: Value
   chromeExtensionInstalled: string
@@ -1338,6 +1340,13 @@ export type ChatImage = {
   data: string
   mimeType: string
 }
+
+/**
+ *  Why a check failed, in a form the webview can translate. The updater plugin's own message is
+ *  developer-facing (URLs, HTTP status, English error chains), so it stays in the log: only this
+ *  reason crosses the IPC boundary and reaches the user.
+ */
+export type CheckFailureReason = "network" | "unavailable" | "invalidRelease" | "unknown"
 
 export type CloseTab = null
 
@@ -2368,7 +2377,7 @@ export type State_Deserialize =
   | { type: "idle" }
   | { type: "checkingForUpdates" }
   /**  A check failed; keep the reason so the UI can report it instead of claiming "up to date". */
-  | { type: "checkFailed"; message: string }
+  | { type: "checkFailed"; reason: CheckFailureReason }
   | { type: "availableForDownload"; update: UpdateInfo_Deserialize }
   | { type: "downloading"; update: UpdateInfo_Deserialize; downloadedBytes?: number | null; totalBytes?: number | null }
   | { type: "ready"; update: UpdateInfo_Deserialize }
@@ -2384,7 +2393,7 @@ export type State_Serialize =
   | { type: "idle" }
   | { type: "checkingForUpdates" }
   /**  A check failed; keep the reason so the UI can report it instead of claiming "up to date". */
-  | { type: "checkFailed"; message: string }
+  | { type: "checkFailed"; reason: CheckFailureReason }
   | { type: "availableForDownload"; update: UpdateInfo_Serialize }
   | { type: "downloading"; update: UpdateInfo_Serialize; downloadedBytes: number | null; totalBytes: number | null }
   | { type: "ready"; update: UpdateInfo_Serialize }

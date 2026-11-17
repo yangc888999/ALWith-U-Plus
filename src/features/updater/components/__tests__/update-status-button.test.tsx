@@ -35,7 +35,7 @@ test.each([
   useUpdaterStore.setState({ state: { type: "downloading", update, downloadedBytes, totalBytes } })
   const view = render(<UpdateStatusButton />)
   expect(view.getByRole("progressbar")).toHaveAttribute("aria-valuenow", String(percent))
-  expect(view.getByText(`Downloading update ${percent}%`)).toBeInTheDocument()
+  expect(view.getByText(`Downloaded ${percent}%`)).toBeInTheDocument()
   expect(view.queryByRole("button")).toBeNull()
 })
 
@@ -44,24 +44,26 @@ test("ready card displays the version and opens the existing confirmation", asyn
   useUpdaterStore.setState({ state: { type: "ready", update }, confirmInstallAndRelaunch: confirm })
   const view = render(<UpdateStatusButton />)
   expect(view.getByText(/v0.2.5/)).toBeInTheDocument()
-  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: /Click to review and install|Install/ }))))
+  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: /Downloaded — click to update/ }))))
   expect(confirm).toHaveBeenCalledOnce()
 })
 
-test("reports installation errors", async () => {
+test("reports installation errors without echoing the native error", async () => {
   const error = vi.spyOn(toast, "error").mockReturnValue("error-toast")
   useUpdaterStore.setState({
     state: { type: "ready", update },
-    confirmInstallAndRelaunch: vi.fn<() => Promise<void>>().mockRejectedValue(new Error("Install failed"))
+    confirmInstallAndRelaunch: vi.fn<() => Promise<void>>().mockRejectedValue(new Error("minisign: bad signature"))
   })
   const view = render(<UpdateStatusButton />)
   fireEvent.click(view.getAllByRole("button").find((button) => button.textContent?.includes("v0.2.5"))!)
-  await waitFor(() => expect(error).toHaveBeenCalledWith("Install failed"))
+  await waitFor(() =>
+    expect(error).toHaveBeenCalledWith("Couldn't install the update")
+  )
 })
 
 test("keeps installation feedback visible until restart", () => {
   useUpdaterStore.setState({ state: { type: "restarting", update } })
   const view = render(<UpdateStatusButton />)
-  expect(view.getByRole("status")).toHaveTextContent("Installing update")
+  expect(view.getByRole("status")).toHaveTextContent("Installing…")
   expect(view.queryByRole("button")).toBeNull()
 })

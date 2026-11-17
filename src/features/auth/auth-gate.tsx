@@ -174,7 +174,7 @@ export function PlatformLogin({ onPassphrase, embedded = false }: { onPassphrase
     <div
       className={embedded ? "flex flex-col gap-4" : "flex h-dvh flex-col overflow-auto bg-background text-foreground"}
     >
-      {embedded ? null : <div data-tauri-drag-region className="h-10 shrink-0" />}
+      {embedded ? null : <div data-tauri-drag-region="deep" className="h-10 shrink-0" />}
       <div className={embedded ? "flex w-full flex-col gap-4" : "m-auto flex w-full max-w-md flex-col gap-6 px-6 py-8"}>
         <header className="flex flex-col gap-2">
           <h1 className="text-xl font-semibold">{t("app.name")}</h1>

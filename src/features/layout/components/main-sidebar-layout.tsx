@@ -265,7 +265,10 @@ export function MainSidebarLayout({
           } as CSSProperties
         }
       >
-        <header className="main-window-titlebar" data-tauri-drag-region>
+        {/* `deep` lets the whole 32px strip drag, including the gaps between the traffic
+            lights and the trailing actions. A bare attribute only drags when the pointer hits
+            the header element itself, which is exactly the "sometimes it won't move" case. */}
+        <header className="main-window-titlebar" data-tauri-drag-region="deep">
           {showMainControls && !titlebar && sidebarToggle}
           {/* The floating-window launcher (a copy of the leading action) docks to the top-right corner. */}
           {onChatScreen && !titlebar && headerTrailing && (

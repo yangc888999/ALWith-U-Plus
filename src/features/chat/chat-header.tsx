@@ -26,7 +26,7 @@ export function ChatHeader({
   const floating = target !== undefined
   const content = (
     <>
-      <div className="flex min-w-0 flex-1 items-center gap-1.5" data-tauri-drag-region>
+      <div className="flex min-w-0 flex-1 items-center gap-1.5" data-tauri-drag-region="deep">
         {project}
         <OverflowMarquee
           className={cn(
@@ -56,7 +56,7 @@ export function ChatHeader({
     <header
       className="@container relative flex min-h-10 shrink-0 flex-wrap items-center gap-1 border-b border-border px-1"
       data-main-chat-header
-      data-tauri-drag-region
+      data-tauri-drag-region="deep"
     >
       {content}
     </header>
