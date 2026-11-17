@@ -1106,6 +1106,14 @@ html[data-appearance="solid"] [data-wallpaper="active"] [data-slot="sidebar"] {
 html[data-appearance="solid"] [data-wallpaper="active"] .main-chat-surface {
   background: var(--background);
 }
+
+/* 纯色档关掉主题色光带。
+   `body::after` 是「常驻 accent 底 + 顶部 11% 光带、420px 散尽」的装饰层，本来就是给玻璃/雾面档
+   加氛围的；但在纯色档里它把整窗压成一条上浅下深的渐变——像素采样是顶 13、底 7（近黑里差 6 级，
+   肉眼就是「顶部一层层的」。纯色的定义是不分层，所以这一档直接不画。 */
+html[data-appearance="solid"] body::after {
+  display: none;
+}
 html[data-appearance="solid"]
   [data-wallpaper="active"]
   :is(.settings-card, [data-slot="popover"], [data-slot="dialog-content"]) {

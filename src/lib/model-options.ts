@@ -299,6 +299,33 @@ function signatureOf(groups: readonly ModelOptionGroup[]): string {
     .join("||")
 }
 
+
+/**
+ * 引擎实际提供的原生模型 id 集合。
+ *
+ * 为什么需要它（2026-11-17 实证）：引擎二进制（codex-acp-v2 0.7.39）里的 GPT 只有
+ * `gpt-6.1-sol` / `gpt-6-luna` / `gpt-6-astra` / `gpt-6-pro`，**没有 `gpt-6.1-terra`**；
+ * 而「可用模型」shortlist 里仍可能留着 terra（旧版本写入或手动添加）。于是选择器把它画出来、
+ * 用户选得中、写下去引擎静默忽略——实际跑的是上一次的模型，界面上却显示 Terra。
+ *
+ * 规则：shortlist 只决定**顺序与开关**，不能凭空扩充引擎并不提供的模型。引擎目录已知时，
+ * 原生组取两者交集；引擎目录为空（首启、或该窗口没有 live session）时不裁剪，保留原 shortlist，
+ * 避免「某个窗口拿不到目录就把列表清空」。
+ */
+function engineNativeIds(source: ModelOptionsSource): Set<string> | null {
+  const ids = new Set<string>()
+  for (const entry of nativeModelCatalogSafe(source)) {
+    if (entry.id !== "" && !entry.id.startsWith("gateway:")) ids.add(entry.id)
+  }
+  return ids.size === 0 ? null : ids
+}
+
+function nativeModelCatalogSafe(source: ModelOptionsSource): Array<{ id: string }> {
+  const native = source.native
+  if (Array.isArray(native)) return native.filter((entry) => typeof entry?.id === "string")
+  return []
+}
+
 /**
  * 四处模型选择器的唯一入口。
  *
@@ -313,10 +340,19 @@ function signatureOf(groups: readonly ModelOptionGroup[]): string {
  */
 export function resolveModelOptions(source: ModelOptionsSource): ModelOptionsResult {
   const shortlist = pickShortlist(source)
+  // 用引擎目录校正 shortlist：短名单只能填顺序 / 开关 / 别名，不能保留引擎不提供的原生模型。
+  const engineIds = engineNativeIds(source)
+  const corrected =
+    engineIds === null
+      ? shortlist
+      : shortlist.filter((model) => model.api_id.startsWith("gateway:") || engineIds.has(model.api_id))
   // 区分「首启，还没有任何可用模型」与「用户明确把模型全关了」：前者才允许引擎目录做初始清单。
   const fromSnapshot = source.providerSnapshot === null ? [] : providerBuiltInModels(source.providerSnapshot, "openai")
   const shortlistConfigured =
-    source.savedOverrides !== undefined || fromSnapshot.length > 0 || (nativeModelOverrides()?.length ?? 0) > 0
+    corrected.length > 0 ||
+    source.savedOverrides !== undefined ||
+    fromSnapshot.length > 0 ||
+    (nativeModelOverrides()?.length ?? 0) > 0
   // 只有「首启、还没维护过可用模型」才允许引擎目录进入裁决。一旦用户维护过 shortlist，
   // 哪怕把每一行都关掉（没有任何 enabled 行），也必须把引擎目录彻底挡在外面：底层
   // `resolveModelConfig` 在 saved 为空时会回落到 `catalogRows(catalog)`，把会话推荐子集里的
@@ -328,7 +364,7 @@ export function resolveModelOptions(source: ModelOptionsSource): ModelOptionsRes
     providerSnapshot: source.providerSnapshot,
     native: useEngineCatalog ? source.native : undefined,
     sessionOptions: useEngineCatalog ? source.sessionOptions : undefined,
-    savedOverrides: shortlist,
+    savedOverrides: corrected,
     tombstones: source.tombstones ?? undefined
   })
 
