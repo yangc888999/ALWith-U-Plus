@@ -272,6 +272,44 @@ function plannerInstruction(): acp.ContentBlock {
  * 更改为 B（新会话才会使用 B 的身份说明）". The parenthetical is noise, but the switch itself is
  * worth keeping, so the line is rewritten as "—— 模型已从 A 更改为 B ——" instead of being dropped.
  */
+
+/**
+ * 引擎会在正文里写一条「模型已从 A 更改为 B」的元信息，A/B 用的是**内部 id**：
+ * `gateway:custom-637573746f6d5f…:deepseek-V4.1-flash`。那串十六进制是 provider 的编码，
+ * 读者既读不出是什么模型，也会误以为是乱码（2026-11-17 现场）。
+ *
+ * 这里只做**显示层**规范化，不改任何落盘内容：
+ *   * `gateway:<runtime>:<model>` → `<model>`（model 里的 %XX 解码，`{max}` 这类 effort 后缀保留）
+ *   * 句子本身改写成一行可读说明，末尾括号里的「新会话才会使用…」不再重复。
+ */
+export function readableModelId(value: string): string {
+  const trimmed = value.trim()
+  const gateway = /^gateway:[^:]+:(.+)$/.exec(trimmed)
+  const bare = gateway?.[1] ?? trimmed
+  let decoded = bare
+  try {
+    decoded = decodeURIComponent(bare)
+  } catch {
+    // 保留原样：%XX 不完整时解码会抛错，这时原字符串仍然是可读的。
+  }
+  // `{max}` / `{high}` 是 effort 标记，保留它（读者靠它区分同名的两档）。
+  return decoded.replace(/%7B/g, "{").replace(/%7D/g, "}")
+}
+
+/** 把正文里的模型切换元信息换成可读的一行；其余文本原样返回。 */
+export function readableModelSwitchNotes(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => {
+      const zh = line.match(/(?:模型已从|已从)\s*(.+?)\s*更改为\s*(.+?)\s*(?:（[^）]*）|\([^)]*\))?\s*$/)
+      if (zh !== null) return `—— 模型切换到 ${readableModelId(zh[2] ?? "")}，下次会话开始生效 ——`
+      const en = line.match(/(?:model\s+)?switched from\s+(.+?)\s+to\s+(.+?)\s*(?:\([^)]*\))?\s*$/i)
+      if (en !== null) return `—— switched to ${readableModelId(en[2] ?? "")}; takes effect next session ——`
+      return line
+    })
+    .join("\n")
+}
+
 export function withoutModelSwitchNotes(text: string): string {
   return text
     .split("\n")

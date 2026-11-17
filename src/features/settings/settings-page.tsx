@@ -53,7 +53,7 @@ import { SettingsPageHeader } from "./sections/shared"
 import { TrackpadRow } from "./sections/trackpad-row"
 import { UsageSection } from "./sections/usage-section"
 import { VoiceSection } from "./sections/voice-section"
-import { syncNeutralAccentWithTheme, useAccentDataAttribute } from "./accent-store"
+import { useAccentDataAttribute } from "./accent-store"
 import "./settings.css"
 
 const ICONS: Record<SettingsSection, typeof InfoIcon> = {
@@ -104,7 +104,6 @@ export function SettingsPage() {
   const [extensionSection, setExtensionSection] = useState<string | null>(null)
   const { t } = useTranslation()
   useAccentDataAttribute()
-  useEffect(() => syncNeutralAccentWithTheme(), [])
   const [section, setSection] = useState<SettingsSection>(() => {
     const tab = new URLSearchParams(window.location.search).get("tab")
     return normalizeSection(tab) ?? "general"

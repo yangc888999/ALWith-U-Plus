@@ -88,29 +88,41 @@ export function useAccentDataAttribute(): void {
 }
 
 /**
- * 纯色档的两个中性配色要跟着「实际明暗」走，而不是只在你点「纯色」的那一下决定。
+ * 纯色档的两个中性配色跟着「实际明暗」走。
  *
- * 主题选「系统」时，明暗由 macOS 决定，切换发生时 `<html class="dark">` 会变，但配色不会自己
- * 跟着变——之前就是在点击时读一次 class，于是系统从浅色切到深色后还停在雪域白。
+ * 两个必须遵守的约束（2026-11-17 现场踩过）：**唯一写入者**与**合并瞬态**。
  *
- * 这里监听 class 变化，只在「纯色档 + 当前配色是自动挑的」时才改；用户手动点过其它配色
- * （`autoPair=false`）就不再干预。
+ * 1. 唯一写入者：主窗口（`app.tsx`）传入 `writer: true`，设置窗口只读。
+ *    两个窗口各按自己的 `html.dark` 决定「该用雪域白还是极致黑」时，一旦明暗不一致就会
+ *    互相覆盖——A 写雪域白、B 读到来又写回极致黑、A 再写……配色就这样一直跳。
+ *    设置窗口通过 accent-store 的 storage 事件同步主窗口的结论即可。
+ *
+ * 2. 合并瞬态：`ThemeProvider` 应用主题时是 `classList.remove("light","dark")` 再 `add()`，
+ *    这一瞬间没有任何 dark class。逐次读会先判成「浅色 → 雪域白」，再判回深色，视觉上闪一下。
+ *    所以回调统一推迟到下一帧，只认最终态。
  */
-export function syncNeutralAccentWithTheme(): void {
+export function syncNeutralAccentWithTheme(options?: { writer?: boolean }): void {
   if (typeof document === "undefined" || typeof MutationObserver === "undefined") return
+  if (options?.writer !== true) return
+  let queued = false
   const apply = (): void => {
     const root = document.documentElement
     const state = useAccentStore.getState()
     if (root.dataset.appearance !== "solid") return
-    // 不再要求 `autoPair`：纯色档下这两个中性色**就是**「跟着明暗走的默认值」。
-    // 旧实现只在点击「纯色」的那一下读一次 class（且记了一个 auto 标记），升级过设置、
-    // 或系统在之后切了明暗，就会停在雪域白——这正是用户截图里的现象。
-    // 彩色配色不受影响：它们不是中性对，进来就返回。
+    // 纯色档下这两个中性色**就是**跟着明暗走的默认值；彩色强调色不是中性对，不干预。
     if (state.accent !== "snow-white" && state.accent !== "elegant-black") return
     const want: AccentId = root.classList.contains("dark") ? "elegant-black" : "snow-white"
     if (state.accent !== want) state.setAccent(want, { auto: true })
   }
-  new MutationObserver(apply).observe(document.documentElement, {
+  const schedule = (): void => {
+    if (queued) return
+    queued = true
+    requestAnimationFrame(() => {
+      queued = false
+      apply()
+    })
+  }
+  new MutationObserver(schedule).observe(document.documentElement, {
     attributes: true,
     attributeFilter: ["class", "data-appearance"]
   })

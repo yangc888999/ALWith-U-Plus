@@ -1,5 +1,6 @@
 import { type MarkdownHost, CodexMarkdownRenderer as SharedMarkdown } from "@alwith/module-chat/markdown"
 import { createChatMarkdown } from "@alwith/module-chat/markdown-rules"
+import { readableModelSwitchNotes } from "@/agent/client"
 import type { Token, Tokens } from "marked"
 import { type SyntheticEvent, useContext, useMemo } from "react"
 import { useTranslation } from "react-i18next"
@@ -60,6 +61,9 @@ function segments(text: string, streaming?: boolean): Segment[] {
 }
 
 export function CodexMarkdownRenderer({ text, streaming }: { text: string; streaming?: boolean }) {
+  // 引擎会在正文里写「模型已从 gateway:custom-<hex>:xxx 更改为 …」这类元信息。十六进制是
+  // provider 的编码，读者读不出是什么模型；这里只替换显示文本，落盘内容一字不动。
+  text = readableModelSwitchNotes(text)
   const openLink = useOpenChatLink()
   const cwd = useContext(ChatDirectoryContext)
   const { resolvedTheme } = useTheme()

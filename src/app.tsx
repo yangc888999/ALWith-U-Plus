@@ -141,8 +141,8 @@ const AutomationPage = lazy(() =>
 
 export function App({ initialPreferences }: { initialPreferences: Preferences }) {
   useAccentDataAttribute()
-  // 纯色 + 系统主题：明暗切换时让中性配色跟着走（两处窗口各自挂一次）。
-  useEffect(() => syncNeutralAccentWithTheme(), [])
+  // 纯色 + 系统主题：只有主窗口是配色写入者，设置窗口靠 storage 事件跟随。
+  useEffect(() => syncNeutralAccentWithTheme({ writer: true }), [])
   useDriveConnection()
   useDrivePluginBridge()
   useDriveArchive()
