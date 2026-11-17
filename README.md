@@ -1,4 +1,4 @@
-# ALWith L
+# ALWith U Plus
 
 一个本地优先的 AI Agent 桌面客户端：多模型对话、项目工作区、云盘同步、自动化任务，全部跑在自己的 Mac 上。
 
