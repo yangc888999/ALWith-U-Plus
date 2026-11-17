@@ -9,16 +9,18 @@ function textOf(error: unknown): string {
 }
 
 /**
- * The Runtime no longer associates the named agent with the connection that asked for it.
+ * The Runtime no longer answers for the agent this connection asks about.
  *
- * Ownership dies with the engine process: once the Runtime is replaced, a request that names the
- * agent it used to run is refused instead of being answered by a different process. Every catalog
- * request the plugins page fires (`plugin/list`, `plugin/installed`, `skills/list`) is per-agent,
- * so that page is normally the first surface to see it — and it stayed red forever, because
- * nothing in the app recognised the sentence (2026-11-17).
+ * Two sentences describe the same state. `agent is not owned by this connection` is a Runtime that
+ * was replaced under a live connection; `agent codex exited` is the engine process itself being
+ * gone. Both leave every per-agent request refused until the connection reconnects, and the
+ * plugins page (`plugin/list`, `plugin/installed`, `skills/list`) is normally the first surface to
+ * see it — and it stayed red forever, because nothing in the app recognised either sentence
+ * (2026-11-17).
  */
 export function isAgentOwnershipError(error: unknown): boolean {
-  return /agent is not owned by this connection/i.test(textOf(error))
+  const text = textOf(error)
+  return /agent is not owned by this connection/i.test(text) || /agent \S+ exited/i.test(text)
 }
 
 /**

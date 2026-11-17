@@ -739,7 +739,10 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
         setSelectedId(saved.id)
         setView("chat")
       } catch {
-        // The conversation may have been deleted since; the home screen is still correct.
+        // The conversation may have been deleted since; the home screen is still correct. Forget
+        // it here: a stored id whose rollout is gone fails every launch, and the card it leaves
+        // behind ("reopen the chat") would be advice that can never work (2026-11-17).
+        void savePreference("lastSession", null).catch(() => undefined)
       }
     })()
   }, [connection, initialPreferences.lastSession])

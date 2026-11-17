@@ -22,11 +22,13 @@ export function AutoUpdateRow({ compact = false }: { compact?: boolean }) {
       compact={compact}
       title={t("settings.autoUpdate")}
       desc={
-        <span className="flex flex-col gap-0.5">
-          <span>{t("settings.autoUpdateDesc")}</span>
+        // One sentence, not two rows: the source is part of "how this works", and stacking it on a
+        // second line read as an unrelated item under the switch (2026-11-17).
+        <span>
+          {t("settings.autoUpdateDesc")}{" "}
           <button
             type="button"
-            className="w-fit text-left text-muted-foreground transition-colors hover:text-foreground"
+            className="w-fit text-left text-muted-foreground underline decoration-current/30 underline-offset-2 transition-colors hover:text-foreground hover:decoration-current"
             onClick={() => void openExternal(PROJECT_URL).catch(() => undefined)}
           >
             {t("settings.autoUpdateFeed")}

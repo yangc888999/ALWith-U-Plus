@@ -154,9 +154,11 @@
   font-weight: 400;
 }
 
-/* Composer controls share a single subtle fill in both themes. */
+/* Composer controls share a single subtle fill in both themes. The project capsule is not one of
+   them: it carries a resting fill of its own (see draft-project-picker), and this 5% wash would
+   replace that fill on hover instead of deepening it. */
 @media (hover: hover) {
-  :is(.chat-composer-toolbar button:not([type="submit"]), .chat-project-picker):not(:disabled):not([aria-disabled="true"]):not([data-disabled]):hover {
+  .chat-composer-toolbar button:not([type="submit"]):not(:disabled):not([aria-disabled="true"]):not([data-disabled]):hover {
     background-color: color-mix(in srgb, var(--foreground) 5%, transparent);
     background-image: none;
   }

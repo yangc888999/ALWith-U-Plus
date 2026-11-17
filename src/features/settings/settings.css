@@ -335,6 +335,13 @@
   width: auto;
 }
 
+/* A switch belongs on its title's line. Centring the control against a two-line description put it
+   visually below the label it belongs to (2026-11-17); `align-self` also covers the grid rows that
+   `.settings-row-aligned` and the switch override turn back into flex. */
+.settings-row:has(.settings-row-description) > .settings-row-control {
+  align-self: start;
+}
+
 .settings-row-description {
   overflow-wrap: anywhere;
 }

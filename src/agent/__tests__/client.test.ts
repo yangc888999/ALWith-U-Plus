@@ -4142,3 +4142,34 @@ test.each(["main", "chat"] as const)(
     expect(fake.modelHints.get(next)).not.toBe(accountModel)
   }
 )
+
+test("a refused replay is remembered instead of replayed on every attempt", async () => {
+  let resumes = 0
+  const { client } = await make((fake) => {
+    fake.resumeResponse.current = () => {
+      resumes += 1
+      return Promise.reject(new Error("thread not loaded: 01a1e9e4"))
+    }
+  })
+  const id = await client.newSession("/tmp/refused-replay")
+  // A stopped session is the shape a restart leaves behind: the conversation exists, the engine
+  // does not hold it. Reopening it is the only path that replays the rollout.
+  await client.stopSession(id)
+  // The agent wraps the app-server reason on the way out, so the test asserts "this replay failed"
+  // and the replay count, not the wording — the wording is what `describeError` renders.
+  const failure = await client.open(id, "/tmp/refused-replay", "main").catch((error: unknown) => error)
+  expect(failure).toBeInstanceOf(Error)
+  expect(resumes).toBe(1)
+  // `prepareDraft` replays whenever a session is not attached, and a store change is enough to run
+  // it again. The second ask must be answered, not replayed: the rollout cannot become replayable.
+  const again = await client.open(id, "/tmp/refused-replay", "main").catch((error: unknown) => error)
+  expect((again as Error).message).toBe((failure as Error).message)
+  expect(resumes).toBe(1)
+  expect(client.state.sessions[id]?.restoring).toBe(false)
+  // Leaving the chat is the reopen the recovery card asks for, so the next attempt is real.
+  const other = await client.newSession("/tmp/refused-replay-other")
+  await client.open(other, "/tmp/refused-replay-other", "main")
+  const reopened = await client.open(id, "/tmp/refused-replay", "main").catch((error: unknown) => error)
+  expect(reopened).toBeInstanceOf(Error)
+  expect(resumes).toBe(2)
+})

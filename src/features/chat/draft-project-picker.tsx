@@ -69,8 +69,14 @@ export function DraftProjectPicker({
       <div
         aria-busy={preparing}
         className={cn(
-          "chat-project-picker group/project inline-flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-full px-2",
-          hasProject ? "text-foreground" : "text-foreground/65"
+          // A capsule, not a caption: the folder this draft will work in is a control the reader
+          // is meant to change, and a bare glyph + text on the composer's background read as a
+          // label (2026-11-17). A resting fill and a hairline give it the same weight as the
+          // composer's other chips without competing with them.
+          "chat-project-picker group/project inline-flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-full px-2.5 ring-1 ring-inset transition-colors",
+          hasProject
+            ? "bg-muted/70 text-foreground ring-border/70 hover:bg-muted"
+            : "bg-muted/40 text-foreground/70 ring-border/50 hover:bg-muted/70"
         )}
       >
         {hasProject && (

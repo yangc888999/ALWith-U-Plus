@@ -394,6 +394,18 @@ export class CodexClient extends CodexAcpClient<AppState> {
   private readonly configOwners = new Map<string, DraftOwner>()
   /** Which slot is opening a session, so its replay resolves that slot's model once the replay has started. */
   private readonly openingOwners = new Map<string, DraftOwner>()
+  /**
+   * Replays that failed for a session in a slot, keyed `<owner>:<session>`.
+   *
+   * A refused replay publishes `restoring: false` so the surface can leave the spinner. A view that
+   * reads "not restoring, not attached" as "try again" then replays on every store tick — that is
+   * the loop a refused rollout produced on 2026-11-17: 62 replays in two minutes, each one a fresh
+   * `session/new`, each one printing another toast. The rollout on disk cannot become replayable by
+   * being asked again, so the same slot asking for the same session again gets the failure it
+   * already knows. Leaving the session (another session in that slot, or another slot) clears the
+   * entry — which is exactly the "reopen the chat" the card tells the reader to do.
+   */
+  private readonly replayFailures = new Map<string, string>()
   private readonly resolveModelOption: ClientOptions["resolveModel"]
   private readonly defaultEffortOption: ClientOptions["defaultEffort"]
   private readonly defaultModelOption: ClientOptions["defaultModel"]
@@ -1002,11 +1014,30 @@ export class CodexClient extends CodexAcpClient<AppState> {
       this.followModel(owner, existing)
       return
     }
+    // A rollout Codex already refused is refused again: answer with that failure instead of
+    // starting another replay. Without this the surface re-asks on every store tick and the app
+    // spins on a conversation that needs the reader to reopen it (or switch its model).
+    const refused = this.replayFailures.get(`${owner}:${id}`)
+    if (refused !== undefined) {
+      if (existing !== undefined) this.publishSession({ ...existing, cwd, restoring: false })
+      throw new Error(refused)
+    }
     await this.replayForOwner(id, cwd, owner)
   }
 
   /** A replay a slot asked for resolves the slot's model after the replay has started, so the session shows as restoring meanwhile. */
   private async replayForOwner(id: string, cwd: string, owner: DraftOwner): Promise<void> {
+    // A refusal is final for this slot: `prepareDraft` replays whenever the session is not attached,
+    // so a refused rollout — plus one store change — is an endless replay loop on one conversation
+    // (2026-11-17: 62 replays in two minutes, each printing the same toast). Answer with the failure
+    // it already produced instead. `bindSlot` clears the entry when the slot moves to another chat,
+    // which is the reopen the card asks for.
+    const slot = `${owner}:${id}`
+    const refused = this.replayFailures.get(slot)
+    if (refused !== undefined) {
+      if (this.holds(id)) this.publishSession({ ...this.session(id), cwd, restoring: false })
+      throw new Error(refused)
+    }
     // Snapshot before replay: replay's noteModel seeds the live config into the same map, which
     // would otherwise overwrite the selection we are about to restore.
     const saved = this.sessionModels.get(id)
@@ -1128,12 +1159,18 @@ export class CodexClient extends CodexAcpClient<AppState> {
           // Whatever happened, the surface must not keep a spinner up: this replay is over, so
           // say so before the error travels.
           this.publishSession({ ...this.session(id), cwd, restoring: false })
+          // Remember the refusal for this slot so the next attempt cannot start another replay.
+          // Only the reason the agent gave is kept: it is what the card and the toast show.
+          this.replayFailures.set(slot, text)
           throw error
         }
       }
     } finally {
       if (this.openingOwners.get(id) === owner) this.openingOwners.delete(id)
     }
+    // The replay landed: this conversation is open in this slot again, so a stale refusal must not
+    // outlive it (a model switch can make the same rollout replayable).
+    this.replayFailures.delete(slot)
     // Only after the replay has fully landed: re-applying a saved model from inside a config
     // callback would enqueue a second write while the first transaction is still pending, which
     // deadlocks the draft/replacement hand-off.
@@ -1468,11 +1505,16 @@ export class CodexClient extends CodexAcpClient<AppState> {
         // so a vendor refusing a model id was reported as a broken transcript. Match the two
         // shapes the Responses API uses for a refused replay, and name the model case separately.
         if (/This chat uses|no longer configured/i.test(message) || replayRefusal(message)) {
+          // The switch is refused, not deferred: drop a parked pick for this value or the two
+          // second retry in `applyParkedModel` replays the refusal forever — one toast per pass,
+          // and 「本轮后切换」 stuck on a conversation that will never accept it (2026-11-17).
+          if (typeof value === "string") this.clearParkedModel(id, value)
           toast.error(i18n.t("chat.historyUnreplayable"), { duration: 12_000 })
           return
         }
         const served = /supported API model names are (.+?), but you passed (\S+?)[.\s]*$/i.exec(message)
         if (served !== null) {
+          if (typeof value === "string") this.clearParkedModel(id, value)
           toast.error(i18n.t("error.gatewayModel", { model: served[2], served: served[1] }), {
             duration: 12_000
           })
@@ -3175,6 +3217,14 @@ export class CodexClient extends CodexAcpClient<AppState> {
   }
 
   private bindSlot(owner: DraftOwner, id: string): void {
+    // Moving a slot to a different conversation is the reader reopening a chat, which is the one
+    // action that can make a refused replay succeed. Forget what that slot was told before, so the
+    // new attempt is real instead of an echo of the last one.
+    if (this.slotTargets[owner] !== id) {
+      for (const key of this.replayFailures.keys()) {
+        if (key.startsWith(`${owner}:`)) this.replayFailures.delete(key)
+      }
+    }
     // A conversation is handed between surfaces, never displayed in both at once.
     const other = owner === "main" ? "chat" : "main"
     if (this.slotTargets[other] === id) {
