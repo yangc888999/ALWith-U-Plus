@@ -358,7 +358,12 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           },
           importDraft,
           include: (sessionRow) => client.includeSession(sessionRow),
-          open: (id, cwd) => client.open(id, cwd),
+          open: (id, cwd) => {
+            // Clicking a conversation is an explicit open: the replay breaker must not answer it
+            // with a cached refusal from an earlier attempt (the reader saw a dead click).
+            client.retryReplay("main")
+            return client.open(id, cwd)
+          },
           show: (id) => {
             setOpeningSessionId(id)
             setSurfaceGeneration((value) => value + 1)

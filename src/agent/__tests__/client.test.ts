@@ -4173,3 +4173,46 @@ test("a refused replay is remembered instead of replayed on every attempt", asyn
   expect(reopened).toBeInstanceOf(Error)
   expect(resumes).toBe(2)
 })
+
+test("the reader's explicit retry replays for real instead of echoing the cached refusal", async () => {
+  let resumes = 0
+  let refuse = true
+  const { client } = await make((fake) => {
+    fake.resumeResponse.current = () => {
+      resumes += 1
+      if (refuse) return Promise.reject(new Error("thread not loaded: 01a1ea2a"))
+      return Promise.resolve({ configOptions: [], availableCommands: [] }) as never
+    }
+  })
+  const id = await client.newSession("/tmp/retry-replay")
+  await client.stopSession(id)
+  const failure = await client.open(id, "/tmp/retry-replay", "main").catch((error: unknown) => error)
+  expect(failure).toBeInstanceOf(Error)
+  expect(resumes).toBe(1)
+  // Automatic re-ask: still the cached answer, no new replay.
+  await client.open(id, "/tmp/retry-replay", "main").catch(() => {})
+  expect(resumes).toBe(1)
+  // The card's 「重试」 marks the slot; the next open is a real attempt and can succeed.
+  refuse = false
+  client.retryReplay("main")
+  await client.open(id, "/tmp/retry-replay", "main")
+  expect(resumes).toBe(2)
+  expect(client.state.sessions[id]?.attached).toBe(true)
+})
+
+test("a draft whose rollout the engine lost is replaced by a fresh draft, not stranded", async () => {
+  const { client } = await make((fake) => {
+    // The adapter answers a missing rollout with a resource-not-found RequestError, whose message
+    // survives the runtime wrapper; a bare Error would be flattened to "Internal error".
+    fake.resumeResponse.current = () => {
+      throw RequestError.resourceNotFound("Session not found: 01a1ea2a")
+    }
+  })
+  const first = await client.prepareDraft("main", "/tmp/dead-draft")
+  await client.stopSession(first)
+  // prepareDraft re-asks the unattached draft; the missing rollout must not strand the slot.
+  const next = await client.prepareDraft("main", "/tmp/dead-draft")
+  expect(next).not.toBe(first)
+  expect(client.state.draftSessions[next]).toBe("main")
+  expect(client.state.sessions[first]).toBeUndefined()
+})

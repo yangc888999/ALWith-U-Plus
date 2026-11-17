@@ -74,9 +74,13 @@ export function DraftProjectPicker({
           // label (2026-11-17). A resting fill and a hairline give it the same weight as the
           // composer's other chips without competing with them.
           "chat-project-picker group/project inline-flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-full px-2.5 ring-1 ring-inset transition-colors",
+          // The header strip behind the capsule is nearly the same colour as a muted fill (solid
+          // dark: #141414 on black, glass: translucent muted on translucent card), so the capsule
+          // read as bare text. The input token is the visible boundary the composer itself uses;
+          // a full-strength ring plus a hair more fill keeps the chip legible in every theme.
           hasProject
-            ? "bg-muted/70 text-foreground ring-border/70 hover:bg-muted"
-            : "bg-muted/40 text-foreground/70 ring-border/50 hover:bg-muted/70"
+            ? "bg-muted text-foreground ring-input hover:bg-accent"
+            : "bg-muted/60 text-foreground/80 ring-input/70 hover:bg-muted"
         )}
       >
         {hasProject && (

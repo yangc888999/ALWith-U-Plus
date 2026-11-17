@@ -340,7 +340,16 @@ export function DraftChat({
         {!silent && !preparing && (error !== null || connection !== "ready") && (
           <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-2 px-6 py-2 text-sm" role="status">
             <span>{error !== null ? describeError(error) : t("connection.disconnected")}</span>
-            <Button variant="outline" size="sm" onClick={() => setAttempt((value) => value + 1)}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                // An explicit press must reach the engine: the replay breaker answers automatic
+                // re-asks with the cached failure, and without this the button looked dead.
+                client.retryReplay(owner)
+                setAttempt((value) => value + 1)
+              }}
+            >
               {t("actions.retry")}
             </Button>
             {/* The picker belongs to the composer's bottom-right slot, never to this row: the

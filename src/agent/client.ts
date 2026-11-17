@@ -406,6 +406,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * entry — which is exactly the "reopen the chat" the card tells the reader to do.
    */
   private readonly replayFailures = new Map<string, string>()
+  /** Slots whose next replay is an explicit reader Retry: the refusal is answered once more, for real. */
+  private readonly replayRetryOwners = new Set<DraftOwner>()
   private readonly resolveModelOption: ClientOptions["resolveModel"]
   private readonly defaultEffortOption: ClientOptions["defaultEffort"]
   private readonly defaultModelOption: ClientOptions["defaultModel"]
@@ -1019,10 +1021,23 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // spins on a conversation that needs the reader to reopen it (or switch its model).
     const refused = this.replayFailures.get(`${owner}:${id}`)
     if (refused !== undefined) {
-      if (existing !== undefined) this.publishSession({ ...existing, cwd, restoring: false })
-      throw new Error(refused)
+      if (this.replayRetryOwners.delete(owner)) this.replayFailures.delete(`${owner}:${id}`)
+      else {
+        if (existing !== undefined) this.publishSession({ ...existing, cwd, restoring: false })
+        throw new Error(refused)
+      }
     }
     await this.replayForOwner(id, cwd, owner)
+  }
+
+  /**
+   * The error card's 「重试」: the next replay this slot asks for is a real attempt, even if the
+   * same conversation was refused before. The breaker exists to stop *automatic* re-asks (store
+   * ticks, effect re-runs); an explicit press is the reader doing exactly what the card asks, and
+   * answering it with the cached failure made the button look dead (2026-11-17).
+   */
+  retryReplay(owner: DraftOwner): void {
+    this.replayRetryOwners.add(owner)
   }
 
   /** A replay a slot asked for resolves the slot's model after the replay has started, so the session shows as restoring meanwhile. */
@@ -1035,8 +1050,14 @@ export class CodexClient extends CodexAcpClient<AppState> {
     const slot = `${owner}:${id}`
     const refused = this.replayFailures.get(slot)
     if (refused !== undefined) {
-      if (this.holds(id)) this.publishSession({ ...this.session(id), cwd, restoring: false })
-      throw new Error(refused)
+      // The card's 「重试」 is an explicit request to try again, not a store tick: honour it once.
+      // Without this the breaker answered the retry with the cached failure and the button looked
+      // dead (2026-11-17: "点了压根没反应"). Automatic re-asks still get the cached answer.
+      if (this.replayRetryOwners.delete(owner)) this.replayFailures.delete(slot)
+      else {
+        if (this.holds(id)) this.publishSession({ ...this.session(id), cwd, restoring: false })
+        throw new Error(refused)
+      }
     }
     // Snapshot before replay: replay's noteModel seeds the live config into the same map, which
     // would otherwise overwrite the selection we are about to restore.
@@ -3022,7 +3043,24 @@ export class CodexClient extends CodexAcpClient<AppState> {
           : selectedModel(this.session(existing).configOptions) === resolved)
       ) {
         this.activateSlot(owner, existing, version)
-        if (!this.session(existing).attached) await this.replayForOwner(existing, cwd, owner)
+        if (!this.session(existing).attached) {
+          try {
+            await this.replayForOwner(existing, cwd, owner)
+          } catch (error) {
+            // A draft whose rollout the engine no longer has (`Session not found`) can never
+            // replay: it was never sent, so nothing is lost by starting over. Drop it and fall
+            // through to the fresh-draft path below instead of stranding the slot on a dead
+            // conversation whose 「重试」 re-asks the same missing rollout forever (2026-11-17).
+            if (!/session not found/i.test(error instanceof Error ? error.message : String(error))) throw error
+            await this.deleteEmptyDraft(existing).catch(() => {})
+            this.replayFailures.delete(`${owner}:${existing}`)
+            const fresh = await this.createNativeSession(cwd, resolved, owner)
+            this.activateSlot(owner, fresh, version)
+            if (model !== null || nativeDefault || (inherited !== null && inherited !== resolved))
+              this.confirmModel(owner, this.session(fresh))
+            return fresh
+          }
+        }
         if (model !== null) this.confirmModel(owner, this.session(existing))
         return existing
       }
