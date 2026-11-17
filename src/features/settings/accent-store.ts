@@ -44,14 +44,17 @@ export const DEFAULT_ACCENT: AccentId = "yup-red"
 
 type AccentState = {
   accent: AccentId
-  setAccent: (accent: AccentId) => void
+  /** 当前配色是「跟着纯色 + 明暗自动挑的」，还是用户自己点的。 */
+  autoPair: boolean
+  setAccent: (accent: AccentId, options?: { auto?: boolean }) => void
 }
 
 export const useAccentStore = create<AccentState>()(
   persist(
     (set) => ({
       accent: DEFAULT_ACCENT,
-      setAccent: (accent) => set({ accent })
+      autoPair: false,
+      setAccent: (accent, options) => set({ accent, autoPair: options?.auto === true })
     }),
     { name: "alwith-settings-accent" }
   )
@@ -82,4 +85,34 @@ export function useAccentDataAttribute(): void {
   useEffect(() => {
     document.documentElement.setAttribute("data-accent", accent)
   }, [accent])
+}
+
+/**
+ * 纯色档的两个中性配色要跟着「实际明暗」走，而不是只在你点「纯色」的那一下决定。
+ *
+ * 主题选「系统」时，明暗由 macOS 决定，切换发生时 `<html class="dark">` 会变，但配色不会自己
+ * 跟着变——之前就是在点击时读一次 class，于是系统从浅色切到深色后还停在雪域白。
+ *
+ * 这里监听 class 变化，只在「纯色档 + 当前配色是自动挑的」时才改；用户手动点过其它配色
+ * （`autoPair=false`）就不再干预。
+ */
+export function syncNeutralAccentWithTheme(): void {
+  if (typeof document === "undefined" || typeof MutationObserver === "undefined") return
+  const apply = (): void => {
+    const root = document.documentElement
+    const state = useAccentStore.getState()
+    if (root.dataset.appearance !== "solid") return
+    // 不再要求 `autoPair`：纯色档下这两个中性色**就是**「跟着明暗走的默认值」。
+    // 旧实现只在点击「纯色」的那一下读一次 class（且记了一个 auto 标记），升级过设置、
+    // 或系统在之后切了明暗，就会停在雪域白——这正是用户截图里的现象。
+    // 彩色配色不受影响：它们不是中性对，进来就返回。
+    if (state.accent !== "snow-white" && state.accent !== "elegant-black") return
+    const want: AccentId = root.classList.contains("dark") ? "elegant-black" : "snow-white"
+    if (state.accent !== want) state.setAccent(want, { auto: true })
+  }
+  new MutationObserver(apply).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["class", "data-appearance"]
+  })
+  apply()
 }

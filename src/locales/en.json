@@ -534,7 +534,8 @@
     "openingSession": "Opening conversation…",
     "retryAlertTitle": "“{{model}}” has been retried {{count}} times with no response; the system is still retrying in the background.",
     "retryAlertJump": "Open conversation",
-    "retryAlertDescription": "Open the conversation to check progress, or switch to another model."
+    "retryAlertDescription": "Open the conversation to check progress, or switch to another model.",
+    "modelNotInCatalog": "This chat's model list no longer includes “{{from}}”; it is temporarily using “{{to}}”. Check 可用模型 in settings to confirm."
   },
   "composer": {
     "mode": "Permissions",

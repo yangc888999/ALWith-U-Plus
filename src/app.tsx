@@ -46,7 +46,7 @@ import { selectSession } from "@/features/sessions/select-session"
 import { SessionSidebar } from "@/features/sessions/session-sidebar"
 import { TitleBarLeadingActions } from "@/features/sessions/title-bar-leading"
 import { HotkeysDialog } from "@/features/settings/hotkeys-dialog"
-import { useAccentDataAttribute } from "@/features/settings/accent-store"
+import { syncNeutralAccentWithTheme, useAccentDataAttribute } from "@/features/settings/accent-store"
 import { serveAutomationBridge } from "@/features/automation/automation-bridge"
 import {
   executeAutomationRun,
@@ -141,6 +141,8 @@ const AutomationPage = lazy(() =>
 
 export function App({ initialPreferences }: { initialPreferences: Preferences }) {
   useAccentDataAttribute()
+  // 纯色 + 系统主题：明暗切换时让中性配色跟着走（两处窗口各自挂一次）。
+  useEffect(() => syncNeutralAccentWithTheme(), [])
   useDriveConnection()
   useDrivePluginBridge()
   useDriveArchive()

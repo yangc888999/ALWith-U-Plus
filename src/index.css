@@ -1211,12 +1211,25 @@ html[data-appearance="solid"] {
      也不依赖窗口是否真透明。三处（html / body / #root）都写死，避免某一层没铺到
      而露出桌面——用户看到的「选了纯色还是透」就是这种漏层。 */
   --background: #fff;
+  /* 纯色档**只有一个层面**：侧栏、卡片、菜单都取同一个底色，区域之间只用 1px 边框划分。
+     此前侧栏 #101010、卡片 oklch(.205)、正文 #000 三层灰摞在一起，观感上就是「一层层的色层」，
+     与「纯色」相反。悬停/选中这类临时态才允许高一档（--muted）。 */
+  --sidebar: #fff;
+  --card: #fff;
+  --popover: #fff;
+  --muted: #f4f4f5;
+  --secondary: #f4f4f5;
+  --accent: #f4f4f5;
   background-color: #fff;
 }
 html.dark[data-appearance="solid"] {
   --background: #000;
-  --card: oklch(0.205 0 0);
-  --sidebar: #101010;
+  --sidebar: #000;
+  --card: #000;
+  --popover: #000;
+  --muted: #141414;
+  --secondary: #141414;
+  --accent: #141414;
   background-color: #000;
 }
 html[data-appearance="solid"] body,

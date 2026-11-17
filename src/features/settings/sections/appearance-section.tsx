@@ -344,7 +344,7 @@ export function AppearanceSection() {
                 // 生效——用户之后仍可以自己改回彩色的强调色。
                 if (next === "solid") {
                   const dark = document.documentElement.classList.contains("dark")
-                  setAccent(dark ? "elegant-black" : "snow-white")
+                  setAccent(dark ? "elegant-black" : "snow-white", { auto: true })
                 }
               }}
             />

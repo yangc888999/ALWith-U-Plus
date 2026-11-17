@@ -1333,7 +1333,12 @@ export class CodexClient extends CodexAcpClient<AppState> {
         if (nativeId && known.length > 0 && !known.includes(value)) {
           const sibling = fallbackModel(live.configOptions, value)
           if (sibling !== null) {
-            toast.info(i18n.t("chat.modelRetired", { from: value, to: sibling }), { duration: 8000 })
+            // 这里**不能**说「已被服务方下架」：本条只是「本会话的 configOptions 里没有这个 id」，
+            // 可能是目录还没刷到、也可能只是该会话开在了旧目录上。2026-11-17 的日志里
+            // `setConfig ok` 证明引擎照写不误，说明 terra 并没有被下架——用下架措辞是误报。
+            // 真正的下架由下面 `unsupportedModel(error)` 那条（引擎明确拒绝）负责。
+            void info(`[pending-model] not in session catalog, hopping ${value} -> ${sibling}`)
+            toast.info(i18n.t("chat.modelNotInCatalog", { from: value, to: sibling }), { duration: 8000 })
             value = sibling
           }
         }

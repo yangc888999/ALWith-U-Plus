@@ -534,7 +534,8 @@
     "openingSession": "正在打开会话…",
     "retryAlertTitle": "「{{model}}」已自动重试 {{count}} 次仍无响应，系统仍在后台继续重试。",
     "retryAlertJump": "跳转到会话",
-    "retryAlertDescription": "可在对应会话中查看进度，或切换其他模型。"
+    "retryAlertDescription": "可在对应会话中查看进度，或切换其他模型。",
+    "modelNotInCatalog": "此会话的模型列表里没有「{{from}}」，已临时切到「{{to}}」。可在 设置 → 可用模型 里确认它是否仍然可用。"
   },
   "composer": {
     "mode": "权限",
