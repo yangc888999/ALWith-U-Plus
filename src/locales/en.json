@@ -2346,7 +2346,9 @@
     "streamHardCap": "This turn hit the 60-minute cap and the stream ended. Retry, or split the task into smaller steps.",
     "streamIdleTimeout": "The upstream sent nothing for over 20 minutes, so this stream ended. Retry, or switch models.",
     "streamClosed": "The upstream closed the connection before finishing. Retry, or switch models.",
-    "streamReadFailed": "Reading the upstream response failed: {{reason}}"
+    "streamReadFailed": "Reading the upstream response failed: {{reason}}",
+    "agentReplaced": "The engine was replaced and no longer owns the agent this request named. The app reconnected itself; press Retry if it is still shown.",
+    "threadNotLoaded": "The engine restarted and has not loaded this chat into memory yet. Reopen the chat to continue."
   },
   "groups": {
     "addRole": "Add role",

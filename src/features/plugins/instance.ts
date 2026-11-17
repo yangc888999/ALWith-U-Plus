@@ -3,4 +3,4 @@ import { client } from "@/lib/client"
 
 import { createPluginsStore } from "./store"
 
-export const pluginsStore = createPluginsStore(client)
+export const pluginsStore = createPluginsStore(client, () => client.recoverAgent())

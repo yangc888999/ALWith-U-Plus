@@ -71,10 +71,13 @@ export function ChatBody({ session }: { session: Session }) {
 }
 
 /** U's composer with U's host, as the conversation view mounts it. */
-export function Composer(props: ComponentProps<typeof ChatComposer>) {
+export function Composer({
+  modelSelector = null,
+  ...props
+}: Omit<ComponentProps<typeof ChatComposer>, "modelSelector"> & { modelSelector?: ReactNode }) {
   return (
     <ChatTimelineHost>
-      <ChatComposer {...props} />
+      <ChatComposer {...props} modelSelector={modelSelector} />
     </ChatTimelineHost>
   )
 }

@@ -1,7 +1,7 @@
 // A draft owns a real ACP session before the first send, as in Desktop.
 import type * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { createSession } from "@alwith/api"
-import { drafts, importDraft, ModelMenu, SessionActions } from "@alwith/module-chat/conversation"
+import { drafts, importDraft, SessionActions } from "@alwith/module-chat/conversation"
 import { invoke } from "@tauri-apps/api/core"
 import { MessageCircleIcon, SparklesIcon } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
@@ -24,8 +24,7 @@ import { ChatEdgeActions } from "./chat-edge-actions"
 import { ChatHeader } from "./chat-header"
 import { ChatHostProvider } from "./chat-host"
 import { ChatComposer } from "./composer"
-import { DraftModelSelect } from "./composer/draft-model-select"
-import { chatModelMenu } from "./composer/model-catalog"
+import { ModelEntry } from "./composer/model-entry"
 import { FilePreviewModal } from "./dialogs/file-preview-modal"
 import { DraftProjectPicker } from "./draft-project-picker"
 
@@ -344,19 +343,12 @@ export function DraftChat({
             <Button variant="outline" size="sm" onClick={() => setAttempt((value) => value + 1)}>
               {t("actions.retry")}
             </Button>
-            <>
-              <Button variant="outline" size="sm" onClick={onAuthRequired}>
-                {t("chat.draft.configureProvider")}
-              </Button>
-              <DraftModelSelect
-                snapshot={providerSnapshot}
-                model={model}
-                onChange={(value) => {
-                  setPreparing(true)
-                  setModel(value)
-                }}
-              />
-            </>
+            {/* The picker belongs to the composer's bottom-right slot, never to this row: the
+                composer always renders a model entry, so a second one here showed two controls
+                for the same choice (2026-11-17). */}
+            <Button variant="outline" size="sm" onClick={onAuthRequired}>
+              {t("chat.draft.configureProvider")}
+            </Button>
           </div>
         )}
         {id !== null && <SessionActions sessionId={id} />}
@@ -385,38 +377,34 @@ export function DraftChat({
           allowPendingInput
           preparing={preparing}
           modelSelector={
-            session ? (
-              <ModelMenu
-                {...chatModelMenu}
-                sessionId={session.id}
-                options={session.configOptions}
-                disabled={
-                  preparing ||
-                  error !== null ||
-                  connection !== "ready" ||
-                  !session.attached ||
-                  session.restoring ||
-                  session.readOnly
+            <ModelEntry
+              surface="draft"
+              session={session}
+              snapshot={providerSnapshot}
+              model={model}
+              preparing={preparing}
+              failure={error}
+              connected={connection === "ready"}
+              onChange={(value) => {
+                // A conversation that already started keeps its stream: park the choice for the
+                // next turn instead of re-preparing a draft, which would swap the surface out
+                // from under a running first turn. `null` is the picker's "native default" and
+                // only ever comes from the pre-session picker, which has no config option to write.
+                const started =
+                  session !== null &&
+                  value !== null &&
+                  (session.items.length > 0 ||
+                    session.state !== "idle" ||
+                    client.state.runStates[session.id]?.state === "running" ||
+                    client.state.draftSessions[session.id] === undefined)
+                if (started) {
+                  void client.setConfig(session.id, "model", value).catch(() => {})
+                  return
                 }
-                onModelChange={(value) => {
-                  // A conversation that already started keeps its stream: park the choice for the
-                  // next turn instead of re-preparing a draft, which would swap the surface out
-                  // from under a running first turn.
-                  const started =
-                    session !== null &&
-                    (session.items.length > 0 ||
-                      session.state !== "idle" ||
-                      client.state.runStates[session.id]?.state === "running" ||
-                      client.state.draftSessions[session.id] === undefined)
-                  if (started && session !== null) {
-                    void client.setConfig(session.id, "model", value).catch(() => {})
-                    return
-                  }
-                  setPreparing(true)
-                  setModel(value)
-                }}
-              />
-            ) : undefined
+                setPreparing(true)
+                setModel(value)
+              }}
+            />
           }
           disabled={session === null || preparing || error !== null || connection !== "ready"}
           onSubmit={runOperation ? (prompt, accept) => runOperation(() => send(prompt, accept)) : send}

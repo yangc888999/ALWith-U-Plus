@@ -2346,7 +2346,9 @@
     "streamHardCap": "本轮已达到 60 分钟上限，连接已结束。可以重试，或把任务拆小一些。",
     "streamIdleTimeout": "上游长时间没有输出（已超过 20 分钟），本次连接已结束。可以重试，或换一个模型再试。",
     "streamClosed": "上游提前断开了连接，没有收到结束标记。可以重试，或换一个模型再试。",
-    "streamReadFailed": "读取上游响应失败：{{reason}}"
+    "streamReadFailed": "读取上游响应失败：{{reason}}",
+    "agentReplaced": "内核换了一个进程，原来那个 agent 已经不属于这个连接了。已自动重连；如果还在，点重试即可。",
+    "threadNotLoaded": "内核刚重启，还没把这条会话读进内存。重新打开这条会话就能继续。"
   },
   "groups": {
     "addRole": "新增角色",

@@ -192,11 +192,21 @@ function ComposerFileDrop({ restoreRef }: { restoreRef: { current: ((content: ac
   )
 }
 
+/**
+ * `modelSelector` is **required**: the package composer renders its own menu whenever the slot is
+ * empty, and that menu is a different control (its own catalog, its own change handler) from the
+ * one each surface needs. A surface that forgot the slot therefore did not lose a picker — it got
+ * a second, differently-behaving one. Making it required turns that into a compile error instead
+ * of something the reader discovers on screen (2026-11-17).
+ */
 export function ChatComposer({
   voiceResume,
   onSubmit,
   ...props
-}: Omit<ComposerProps, "actions" | "children" | "attachmentPolicy" | "predictions"> & { voiceResume?: VoiceResume }) {
+}: Omit<ComposerProps, "actions" | "children" | "attachmentPolicy" | "predictions" | "modelSelector"> & {
+  modelSelector: ComposerProps["modelSelector"]
+  voiceResume?: VoiceResume
+}) {
   const predictions = useStore(predictionPreference, (state) => state.enabled)
   // A window/draft handoff is about to replace what is typed here. Lock only for those operations —
   // sending a message uses the same lock but must leave the input usable while the turn streams.

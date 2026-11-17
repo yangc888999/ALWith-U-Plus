@@ -59,6 +59,7 @@ import {
 } from "@nyssance/codex-acp-v2/client"
 
 import { getActivePreview } from "@/lib/active-preview"
+import { isThreadNotLoadedError } from "@/lib/agent-errors"
 import { getQueueSendMode } from "@/lib/chat-display-preferences"
 import { pendingPlanFor, setPendingPlan, type PendingPlan } from "@/lib/pending-plan"
 import {
@@ -1021,9 +1022,17 @@ export class CodexClient extends CodexAcpClient<AppState> {
       // only misleads the route.
       const options = undefined
       let currentModelFallbackAttempted = false
+      // A replay that never settles looks exactly like a slow one until it is far too late, and the
+      // reader is left on 「正在恢复聊天」 with no way out. Bound it: past this the session is
+      // published as not-restoring and the error explains itself. A large thread replays in a few
+      // seconds, so two minutes only ever fires on a genuine stall.
+      const deadline = () =>
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("replay timed out")), 120_000)
+        })
       for (let attempt = 0; ; attempt += 1) {
         try {
-          await this.replay(id, cwd, options)
+          await Promise.race([this.replay(id, cwd, options), deadline()])
           break
         } catch (error) {
           const text = error instanceof Error ? error.message : String(error)
@@ -1116,6 +1125,9 @@ export class CodexClient extends CodexAcpClient<AppState> {
               duration: 15_000
             })
           }
+          // Whatever happened, the surface must not keep a spinner up: this replay is over, so
+          // say so before the error travels.
+          this.publishSession({ ...this.session(id), cwd, restoring: false })
           throw error
         }
       }
@@ -1810,6 +1822,20 @@ export class CodexClient extends CodexAcpClient<AppState> {
   }
 
   /**
+   * Rebuilds the agent after the Runtime replaced the engine process under it.
+   *
+   * Agent ownership lives inside the Runtime process, so a replaced engine answers every per-agent
+   * request with `agent is not owned by this connection`. Dropping the connection and asking for a
+   * new one is the only recovery: `connect()` adopts the agent when the Runtime still runs it, and
+   * starts a fresh one when the previous process is gone. Sessions are re-attached by their normal
+   * replay afterwards, so this is safe to call from an error path.
+   */
+  async recoverAgent(): Promise<void> {
+    this.disconnect()
+    await this.connect()
+  }
+
+  /**
    * Sends a prompt and recovers once from a model the upstream retired.
    *
    * A thread pinned to an unsupported id rejects every prompt with `Unsupported model: '<id>'`,
@@ -1848,6 +1874,24 @@ export class CodexClient extends CodexAcpClient<AppState> {
     try {
       return await this.promptWithTimeout(id, prompt, options)
     } catch (error) {
+      // The engine was replaced under a live conversation: its app-server starts with no threads
+      // loaded, so the first turn on an open chat is refused with `thread not loaded: <id>`. The
+      // thread is still on disk — resuming it turns the failure into the turn the reader asked
+      // for. Replay rebuilds the transcript from the engine, so the optimistic echo of the refused
+      // prompt is dropped here and the retry adds exactly one (no duplicated bubble).
+      if (isThreadNotLoadedError(error)) {
+        const session = this.holds(id) ? this.session(id) : undefined
+        if (session !== undefined) {
+          try {
+            await this.replay(id, session.cwd)
+            return await this.promptWithTimeout(id, prompt, options)
+          } catch {
+            // Nothing to resume (a draft thread Codex never wrote a rollout for, say) or the retry
+            // failed for its own reason: keep the error the reader can act on.
+            throw error
+          }
+        }
+      }
       const unsupported = unsupportedModel(error)
       if (unsupported === null) throw error
       // Remember it: a saved 可用模型 row would otherwise keep sending the same dead id.
@@ -2830,67 +2874,27 @@ export class CodexClient extends CodexAcpClient<AppState> {
       !message.includes("The selected ALwith account model is unavailable")
     )
       return super.recoverReplay(id, cwd, error, scope)
-    await super.afterResume(id, cwd, scope)
-    scope.signal.throwIfAborted()
-    if (!this.current(scope) || !this.holds(id)) return true
+    void info(`[account-model] recovery start id=${id}`)
+    // This method must not make any engine call. It used to try an automatic switch, and that
+    // switch awaited a replay on a session the engine was already refusing: the log showed
+    // `recovery start` and never a second line, while the reader watched 「正在恢复聊天」 spin for
+    // ever (2026-11-17). Ending the replay is the whole job here — the composer already offers the
+    // model picker that fixes it, and `resumeAccountModel` replays properly when one is chosen.
     this.accountRevocations.set(id, (this.accountRevocations.get(id) ?? 0) + 1)
     this.setApp((state) => ({ accountModelRecovery: { ...state.accountModelRecovery, [id]: true } }))
-    // 兜底（2026-11-17）：账号/企业模型失效时，先把会话切到一个**确定可用**的模型，再把卡片
-    // 降级成一句说明。此前这里只挂恢复卡，读者必须自己挑模型、再点一次发送——而账号模型失效
-    // 大多发生在企业登录过期，读者此刻既不知道为什么，也不想研究选择器。
-    //
-    // 只切模型、不重放上一轮 prompt：重新执行用户没再确认的指令（可能已经在别处执行过）比
-    // 让读者自己按一次发送危险得多。
-    const fallback = this.accountModelFallback(id)
-    if (fallback !== null) {
-      try {
-        await this.landModelSwitch(id, "model", fallback.value, fallback.value)
-        this.accountRevocations.delete(id)
-        this.setApp((state) => {
-          const next = { ...state.accountModelRecovery }
-          delete next[id]
-          return { accountModelRecovery: next }
-        })
-        toast.info(i18n.t("chat.modelFallbackApplied", { to: fallback.label }), { duration: 8000 })
-        this.publishSession({ ...this.session(id), cwd, attached: false, restoring: false })
-        await super.afterResume(id, cwd, scope)
-        return true
-      } catch (reason) {
-        void info(`[account-model] fallback to ${fallback.value} failed: ${String(reason).slice(0, 200)}`)
-        toast.info(i18n.t("chat.modelFallbackManual"), { duration: 10000 })
-      }
-    }
-    // Recorded, not enforced. `readOnly` used to be written here as well, and that single flag is
-    // what disabled the input box: a model problem then looked like a broken composer with a dead
-    // picker. The recovery flag above plus the stop reason below are enough to explain it in one
-    // line, and the reader fixes it with the picker that is already there.
+    // `attached` is left alone: the composer's "can type" test is
+    // `attached && !restoring && !readOnly`, so clearing it would take the input box away while
+    // the notice tells the reader to pick a model — the dead end in the 拉会 screenshot.
     this.publishSession({
       ...this.session(id),
       cwd,
-      attached: false,
       restoring: false,
       error: { stopReason: ACCOUNT_MODEL_REQUIRED, error: null, meta: null }
     })
+    void info(`[account-model] recovery settled id=${id} restoring=false`)
     return true
   }
 
-  /** 会话模型失效时可安全顶替的选择：优先用户默认模型，其次目录里第一个非账号模型。 */
-  private accountModelFallback(id: string): { value: string; label: string } | null {
-    // 顺序很关键：先看用户自己配的默认模型（全局快照，不依赖这条会话的 configOptions）。
-    // 账号模型失效的会话，configOptions 里往往**只剩**那一个 gateway 模型——用会话候选过滤后
-    // 就没有任何可选项，兜底会静默失效，恢复卡照旧弹出来（2026-11-17 现场）。
-    const preferred = this.defaultModelOption?.() ?? null
-    if (preferred !== null && !preferred.startsWith("gateway:"))
-      return { value: preferred, label: preferred }
-    const session = this.holds(id) ? this.session(id) : undefined
-    if (session === undefined) return null
-    const candidates = nativeModelCatalog(session.configOptions ?? []).filter(
-      (entry) => !entry.id.startsWith("gateway:")
-    )
-    if (candidates.length === 0) return null
-    const hit = candidates.find((entry) => entry.id === preferred) ?? candidates[0]
-    return hit === undefined ? null : { value: hit.id, label: hit.label }
-  }
 
   /** Flag sessions whose account-owned model is no longer served so their surface offers a new pick. */
   markAccountModelsUnavailable(ids: readonly string[]): void {
@@ -2902,9 +2906,13 @@ export class CodexClient extends CodexAcpClient<AppState> {
       if (!this.holds(id)) continue
       // Same rule as `recoverReplay`: the flag and the stop reason record the state, `readOnly`
       // would take the input box away from the reader.
+      // `attached` is deliberately left alone. Writing `false` here is what killed the input box:
+      // the composer's "can type" test is `session.attached && !restoring && !readOnly`, so a
+      // revoked model turned the whole composer read-only while the notice told the reader to pick
+      // a model in a picker that had also been removed (2026-11-17, 拉会). Losing an account model
+      // does not detach the engine — the same session still answers once another model is chosen.
       this.publishSession({
         ...this.session(id),
-        attached: false,
         error: { stopReason: ACCOUNT_MODEL_REQUIRED, error: null, meta: null }
       })
     }

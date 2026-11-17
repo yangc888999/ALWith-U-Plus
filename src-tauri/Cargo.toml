@@ -81,10 +81,10 @@ uuid = { version = "1", features = ["v4"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 macos-privacy = "0.1"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSNotification", "NSGeometry"] }
+objc2-foundation = { version = "0.3", features = ["NSNotification", "NSGeometry", "NSRunLoop"] }
 # Tauri 3 adaptation of tauri-nspanel v2.1.1; see patches/tauri-nspanel/MIGRATION.md.
 tauri-nspanel = { path = "patches/tauri-nspanel" }
-objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSResponder", "NSGraphics"] }
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSResponder", "NSGraphics", "NSView", "NSEvent", "NSApplication"] }
 
 objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer", "CAShapeLayer", "CATransaction", "objc2-core-foundation", "objc2-core-graphics"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGAffineTransform", "CGGeometry", "CGPath"] }

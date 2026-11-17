@@ -30,6 +30,7 @@ import { snapshotProjectMemory } from "@/lib/project-memory"
 import { isTemporaryChatDir } from "@/lib/quick-chat"
 
 import { ChatActionsMenu } from "./chat-actions-menu"
+import { ModelEntry } from "./composer/model-entry"
 import { ChatBranchProvider } from "./chat-branches"
 import {
   ChatContextMenu,
@@ -141,6 +142,18 @@ function Conversation({
   // A conversation that lives in a group's directory discusses there: the roster takes the
   // session in turn once the user has spoken.
   useGroupDiscussion(session)
+  // A session whose own options carry no `model` entry makes the shared picker render nothing at
+  // all, while the composer keeps asking the reader to use it. That is the state a revoked account
+  // model leaves behind — and the 拉会 surface passes no picker of its own, so it had no way out.
+  //
+  // What must *not* happen is flashing it while a chat is still opening: `createSession` starts
+  // every chat at `configOptions: []` and the engine fills the list in during the replay. So the
+  // fallback is withheld only in that window — replaying, nothing loaded yet. A chat whose replay
+  // was *refused* (restoring gone, list still empty) needs it most of all: that is exactly the case
+  // where nothing else can be rendered and the reader has to pick a model to get going again.
+  //
+  // That decision now lives in `ModelEntry`, next to the draft surface's, so the two can never
+  // disagree about which control a conversation gets (2026-11-17).
   // A split saved with this chat may point at a provider that has since been closed.
   useOrchestrationProviderWarning(session.id)
   // Recount only when the transcript itself changes: a replayed session re-renders once per
@@ -333,7 +346,11 @@ function Conversation({
       composer={
         <div className="flex flex-col" data-chat-drop-zone>
           <GroupDiscussionBar session={session} />
-          <ChatComposer session={session} voiceResume={voiceResume} />
+          <ChatComposer
+            session={session}
+            voiceResume={voiceResume}
+            modelSelector={<ModelEntry surface="session" session={session} />}
+          />
         </div>
       }
     >

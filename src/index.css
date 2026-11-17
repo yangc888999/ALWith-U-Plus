@@ -274,7 +274,8 @@ html[data-window-backdrop="acrylic"]
   position: relative;
   flex: none;
   height: 32px;
-  -webkit-app-region: drag;
+  /* 故意不写 `-webkit-app-region: drag`：拖拽完全交给 window-drag.ts 的 mousedown。
+     CSS 拖动与 JS startDragging 同时存在时会互相抢手势，表现就是「一会儿能拖、一会儿不能」。 */
 }
 .windows-main-content .main-window-titlebar {
   display: none;

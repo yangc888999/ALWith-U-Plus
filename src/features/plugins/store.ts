@@ -27,6 +27,7 @@ import type {
   SkillsConfigWriteResponse,
   SkillsListResponse
 } from "@nyssance/codex-acp-v2/client"
+import { isAgentOwnershipError } from "@/lib/agent-errors"
 import i18n from "@/lib/i18n"
 
 /** The client methods the store needs; tests pass a fake. */
@@ -144,7 +145,12 @@ function readParams(entry: PluginEntry): PluginReadParams {
   }
 }
 
-export function createPluginsStore(api: PluginsApi): PluginsStore {
+/**
+ * `recover` rebuilds the engine-facing agent. Every catalog request here is per-agent, so a
+ * Runtime that replaced its engine process refuses all three with `agent is not owned by this
+ * connection`; reconnecting once is what turns that from a dead page into a reload.
+ */
+export function createPluginsStore(api: PluginsApi, recover?: () => Promise<void>): PluginsStore {
   const store = createStore<PluginsState>((set, get) => {
     let pendingRefresh: { cwds: string[]; forceRefetch: boolean } | null = null
     let refreshing: Promise<void> | null = null
@@ -193,30 +199,47 @@ export function createPluginsStore(api: PluginsApi): PluginsStore {
             const request = pendingRefresh
             pendingRefresh = null
             set({ error: null })
-            try {
-              const [skills, plugins, installed] = await Promise.all([
-                api.listSkills(request.cwds, request.forceRefetch),
-                api.listPlugins({
-                  ...(request.cwds.length > 0 ? { cwds: request.cwds } : {}),
-                  ...(request.forceRefetch ? { forceRefetch: true } : {})
-                }),
-                api.installedPlugins(request.cwds)
-              ])
-              // A newer scope or invalidation must settle before exposing a snapshot.
-              if (pendingRefresh) continue
-              const merged = mergeSkills(skills)
-              set({
-                loadedScope: JSON.stringify(request.cwds),
-                skills: merged.skills,
-                skillProjects: merged.projects,
-                skillErrors: merged.errors,
-                marketplaces: plugins.marketplaces,
-                marketplaceLoadErrors: plugins.marketplaceLoadErrors,
-                featuredPluginIds: plugins.featuredPluginIds,
-                installed: installedEntries(installed)
-              })
-            } catch (error) {
-              if (!pendingRefresh) set({ error: describe(error) })
+            // One recovery per refresh: the engine may have been replaced while this page was
+            // open. Reconnecting and asking again is the whole fix; a second failure is real and
+            // must reach the reader instead of looping.
+            let recovered = false
+            for (;;) {
+              try {
+                const [skills, plugins, installed] = await Promise.all([
+                  api.listSkills(request.cwds, request.forceRefetch),
+                  api.listPlugins({
+                    ...(request.cwds.length > 0 ? { cwds: request.cwds } : {}),
+                    ...(request.forceRefetch ? { forceRefetch: true } : {})
+                  }),
+                  api.installedPlugins(request.cwds)
+                ])
+                // A newer scope or invalidation must settle before exposing a snapshot.
+                if (pendingRefresh) break
+                const merged = mergeSkills(skills)
+                set({
+                  loadedScope: JSON.stringify(request.cwds),
+                  skills: merged.skills,
+                  skillProjects: merged.projects,
+                  skillErrors: merged.errors,
+                  marketplaces: plugins.marketplaces,
+                  marketplaceLoadErrors: plugins.marketplaceLoadErrors,
+                  featuredPluginIds: plugins.featuredPluginIds,
+                  installed: installedEntries(installed)
+                })
+                break
+              } catch (error) {
+                if (!recovered && recover !== undefined && isAgentOwnershipError(error)) {
+                  recovered = true
+                  try {
+                    await recover()
+                  } catch {
+                    // Reconnect failed for its own reason; the original failure is reported below.
+                  }
+                  continue
+                }
+                if (!pendingRefresh) set({ error: describe(error) })
+                break
+              }
             }
           }
         })().finally(() => {

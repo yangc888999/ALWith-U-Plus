@@ -1712,6 +1712,48 @@ fn complete_catalog_entry(entry: Option<&Value>) -> Value {
     merged
 }
 
+/// Rewrites the `Model identity:` paragraph so it names *this* entry's own model.
+///
+/// A catalog entry that is not spelled out in a bundled catalog is built by cloning a sibling
+/// (`complete_catalog_entry(Some(&bundled["models"][0]))`, `catalog_template()`), and
+/// `base_instructions` is a ~21KB prompt whose first paragraph claims "this session runs on X,
+/// served via Y". Cloning the whole blob therefore told GLM it was Qwen 4 Max, told every
+/// OpenRouter free model it was Kimi K3, and told the GPT models they were Claude Opus 5.5. The
+/// model then answered "I am Claude Opus 5.5" while the picker said "Ling 3.2 Flash", which reads
+/// exactly like a routing bug — the request was routed correctly, the prompt was lying.
+///
+/// Replaced rather than deleted: a model told nothing about itself announces whatever the Codex
+/// CLI prompt says, which is just as wrong in the other direction.
+fn retarget_identity(entry: &mut Value) {
+    let Some(object) = entry.as_object_mut() else { return };
+    let slug = object.get("slug").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    if slug.is_empty() {
+        return;
+    }
+    let display = object.get("display_name").and_then(Value::as_str).unwrap_or(&slug).trim().to_string();
+    let Some(text) = object.get("base_instructions").and_then(Value::as_str) else { return };
+    const MARKER: &str = "Model identity:";
+    let replacement = format!(
+        "Model identity: this session runs on {display} ({slug}). When the user asks which model you are, \
+         answer \"{display}\" — never name a different model, and do not treat the Codex CLI description \
+         below as your own identity."
+    );
+    let Some(start) = text.find(MARKER) else {
+        // No identity paragraph at all (an engine-native prompt, or a catalog written before the
+        // paragraph existed). `deepseek-V4.1-flash` opened with "You are Codex, an agent based on
+        // GPT-5", which the model then repeated verbatim. Prepend instead of leaving it silent.
+        object.insert("base_instructions".into(), json!(format!("{replacement}\n\n{text}")));
+        return;
+    };
+    // The paragraph ends at the blank line separating it from the Codex prompt below.
+    let end = text[start..].find("\n\n").map_or(text.len(), |offset| start + offset);
+    let mut updated = String::with_capacity(text.len() + replacement.len());
+    updated.push_str(&text[..start]);
+    updated.push_str(&replacement);
+    updated.push_str(&text[end..]);
+    object.insert("base_instructions".into(), json!(updated));
+}
+
 fn effort_description(effort: &str) -> &'static str {
     match effort {
         "none" => "Disable reasoning",
@@ -1792,6 +1834,7 @@ fn custom_catalog(provider: &CustomProvider) -> Result<Value, String> {
                 object.insert("context_window".into(), json!(1_000_000u64));
                 object.insert("max_context_window".into(), json!(1_000_000u64));
             }
+            retarget_identity(&mut entry);
             Ok(entry)
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -1931,6 +1974,23 @@ pub async fn set_company_model_reasoning(app: AppHandle, level: Option<String>) 
 /// account-managed one, the enterprise relay's tuned copy, one per built-in provider carrying
 /// overrides, and one per custom provider. The newest file per provider prefix wins so a stale
 /// hash left behind by an older build can never shadow the current entry.
+/// Writes the merged catalog at startup and reports what happened.
+///
+/// `merged_catalog_path` used to run only from `persist` (a settings save), so a launch after an
+/// upgrade kept whatever file the previous build left behind — or, when the file was absent, gave
+/// the engine an empty `ALWITH_U_MODEL_CATALOG` and let it use its own catalog. Both paths ended in
+/// the same user-visible bug: the picker said one model and the prompt claimed another.
+pub fn prepare_merged_catalog(app: &tauri::AppHandle) {
+    let Some(directory) = app.path().app_data_dir().ok() else {
+        log::warn!("merged catalog: no app data directory");
+        return;
+    };
+    match merged_catalog_path(&directory) {
+        Some(path) => log::info!("merged catalog: ready at {}", path.display()),
+        None => log::warn!("merged catalog: nothing to write under {}", directory.display()),
+    }
+}
+
 pub(crate) fn merged_catalog_path(app_data: &std::path::Path) -> Option<std::path::PathBuf> {
     let catalog = merged_catalog(app_data)?;
     let bytes = serde_json::to_vec(&catalog).ok()?;
@@ -1969,6 +2029,9 @@ fn merged_catalog(app_data: &std::path::Path) -> Option<Value> {
             if let Some(object) = entry.as_object_mut() {
                 object.remove("auto_compact_token_limit");
             }
+            // 最终闸门：上游目录（内置、自定义、公司下发）都可能带着克隆来的错误身份，
+            // 而引擎真正读的就是这个文件。
+            retarget_identity(&mut entry);
             entries.push(entry);
         }
     }
@@ -2003,6 +2066,8 @@ fn merged_catalog(app_data: &std::path::Path) -> Option<Value> {
                 object.insert("context_window".into(), json!(window));
                 object.insert("max_context_window".into(), json!(window));
             }
+            // 模板来自 sol，身份段会写着 sol——必须换成它自己，否则 terra 会说自己是 sol。
+            retarget_identity(&mut entry);
             entry
         }) {
             log::info!("merged catalog: added bridge-only model {slug}");
@@ -2179,6 +2244,7 @@ fn write_built_in_catalog(
                 object.insert("max_context_window".into(), json!(1_000_000u64));
             }
         }
+        retarget_identity(&mut entry);
         entries.insert(model.api_id.clone(), entry);
     }
     let models: Vec<Value> = ordered
@@ -3566,6 +3632,48 @@ mod tests {
             assert!(model.get("comp_hash").is_none());
             assert!(model["base_instructions"].as_str().unwrap().contains("Codex"));
         }
+
+    /// The regression behind "我选的 Ling 3.2 Flash，它说自己是 Claude Opus 5.5": a catalog entry
+    /// cloned from a sibling kept the sibling's identity paragraph, so the prompt told the model it
+    /// was a different product. Every entry must name itself.
+    #[test]
+    fn a_cloned_catalog_entry_never_keeps_another_models_identity() {
+        let mut cloned = catalog_template().clone();
+        {
+            let object = cloned.as_object_mut().unwrap();
+            object.insert("slug".into(), json!("inclusionai/ling-3.2-flash:free"));
+            object.insert("display_name".into(), json!("Ling 3.2 Flash"));
+        }
+        // Before: the template's paragraph claims Qwen's first model.
+        assert!(cloned["base_instructions"].as_str().unwrap().contains("qwen4-max-preview"));
+
+        retarget_identity(&mut cloned);
+        let text = cloned["base_instructions"].as_str().unwrap();
+        assert!(text.contains("Ling 3.2 Flash"));
+        assert!(text.contains("inclusionai/ling-3.2-flash:free"));
+        assert!(!text.contains("qwen4-max-preview"));
+        // The rest of the prompt (the Codex CLI description) survives untouched.
+        assert!(text.contains("Codex"));
+        // Only one identity paragraph remains.
+        assert_eq!(text.matches("Model identity:").count(), 1);
+    }
+
+    /// An entry with no identity paragraph at all must get one: `deepseek-V4.1-flash` opened with
+    /// "You are Codex, an agent based on GPT-5" and the model repeated that verbatim.
+    #[test]
+    fn an_entry_without_an_identity_paragraph_gets_one_prepended() {
+        let mut entry = json!({
+            "slug": "deepseek-V4.1-flash",
+            "display_name": "DeepSeek V4.1 Flash",
+            "base_instructions": "You are Codex, an agent based on GPT-5."
+        });
+        retarget_identity(&mut entry);
+        let text = entry["base_instructions"].as_str().unwrap();
+        assert!(text.starts_with("Model identity: this session runs on DeepSeek V4.1 Flash"));
+        // The original prompt survives below it.
+        assert!(text.contains("You are Codex, an agent based on GPT-5."));
+        assert_eq!(text.matches("Model identity:").count(), 1);
+    }
         inner.saved = remove_custom(&inner.saved, "custom_private", 1).unwrap();
         reconcile_test(&mut inner, &client).await.unwrap();
         let calls = calls.lock().unwrap();

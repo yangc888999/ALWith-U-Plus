@@ -359,6 +359,18 @@ const RULES: Rule[] = [
     key: "error.activeWriter"
   },
   {
+    // The Runtime replaced its engine process; the agent it used to run belongs to the old one.
+    // The plugins page heals this by reconnecting, so reaching the reader means the reconnect did
+    // not happen or did not help — say what changed instead of printing the runtime's English.
+    match: /agent is not owned by this connection/i,
+    key: "error.agentReplaced"
+  },
+  {
+    // A fresh Codex app-server holds no threads until one is resumed.
+    match: /thread not loaded: \S+/i,
+    key: "error.threadNotLoaded"
+  },
+  {
     // The engine re-reads a file between preparing a patch and writing it. Inside a cloud-synced
     // folder (YUP Drive, iCloud, OneDrive) the sync daemon rewrites the file in that window, so the
     // engine refuses the edit instead of clobbering a concurrent change. Nothing is broken — the

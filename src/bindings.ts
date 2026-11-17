@@ -193,6 +193,7 @@ export const commands = {
     __t3Invoke<null>("computer_request_permissions", args),
   autostartSet: (args: { enabled: boolean }): Promise<null> => __t3Invoke<null>("autostart_set", args),
   showMainWindow: (): Promise<null> => __t3Invoke<null>("show_main_window"),
+  windowDrag: (): Promise<null> => __t3Invoke<null>("window_drag"),
   extensionInboxScan: (): Promise<Scan_Serialize> => __t3Invoke<Scan_Serialize>("extension_inbox_scan"),
   extensionInboxScanExtension: (args: { extensionId: string }): Promise<Scan_Serialize> =>
     __t3Invoke<Scan_Serialize>("extension_inbox_scan_extension", args),
@@ -853,6 +854,7 @@ export type CommandErrors = {
   computerRequestPermissions: string
   autostartSet: string
   showMainWindow: string
+  windowDrag: string
   extensionInboxScan: string
   extensionInboxScanExtension: string
   extensionInboxFinish: string

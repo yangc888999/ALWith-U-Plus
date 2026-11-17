@@ -22,7 +22,8 @@
         "hiddenTitle": true,
         "titleBarStyle": "Overlay",
         "transparent": true,
-        "backgroundThrottling": "disabled"
+        "backgroundThrottling": "disabled",
+        "acceptFirstMouse": true
       }
     ],
     "security": {

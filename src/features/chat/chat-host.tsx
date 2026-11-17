@@ -39,6 +39,11 @@ function reportError(error: unknown) {
   if (isQueueCancelled(error)) return
   const description = (error as ReportedError | null)?.description
   const message = describeError(error)
+  // A revoked account model already has a permanent one-line notice above the composer, worded in
+  // the reader's language and pointing at the picker that fixes it. Toasting the same sentence on
+  // top of it showed two boxes saying the same thing at once (2026-11-17 screenshot), so this code
+  // is deliberately silent here — the notice is the only surface for it.
+  if (/account_model_required/i.test(error instanceof Error ? error.message : String(error))) return
   // One engine failure reaches both the chat package's inline card and this toast. The formatter
   // is idempotent now, so they read the same — collapse the pair anyway, or two identical cards
   // still look like two separate interruptions.
