@@ -1864,20 +1864,6 @@ export class CodexClient extends CodexAcpClient<AppState> {
   }
 
   /**
-   * Rebuilds the agent after the Runtime replaced the engine process under it.
-   *
-   * Agent ownership lives inside the Runtime process, so a replaced engine answers every per-agent
-   * request with `agent is not owned by this connection`. Dropping the connection and asking for a
-   * new one is the only recovery: `connect()` adopts the agent when the Runtime still runs it, and
-   * starts a fresh one when the previous process is gone. Sessions are re-attached by their normal
-   * replay afterwards, so this is safe to call from an error path.
-   */
-  async recoverAgent(): Promise<void> {
-    this.disconnect()
-    await this.connect()
-  }
-
-  /**
    * Sends a prompt and recovers once from a model the upstream retired.
    *
    * A thread pinned to an unsupported id rejects every prompt with `Unsupported model: '<id>'`,

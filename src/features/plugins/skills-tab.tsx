@@ -77,7 +77,8 @@ export function SkillsTab({
   const { t } = useTranslation()
   const skills = useStore(pluginsStore, (state) => state.skills)
   const errors = useStore(pluginsStore, (state) => state.skillErrors)
-  const loading = useStore(pluginsStore, (state) => state.loading) || !ready
+  const failed = useStore(pluginsStore, (state) => state.error !== null)
+  const loading = useStore(pluginsStore, (state) => state.loading) || (!ready && !failed)
   const installed = useStore(pluginsStore, (state) => state.installed)
   const projects = useStore(pluginsStore, (state) => state.skillProjects)
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null)

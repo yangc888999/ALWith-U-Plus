@@ -1427,8 +1427,8 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
      浅色此前完全没有标尺：所有引用 --accent-surface/edge/strong/active 的消费点取值落空，
      徽标、选中描边、hover 环在浅色下整体失效，只剩 2.2% 的整窗底色——读起来就是“没有主题色”。
      白底比深底更容易把彩度冲淡，所以浅色各档取值比深色低一档，而不是照抄深色。 */
-  --accent-wash: 4%; /* 整窗常驻底色 */
-  --accent-wash-top: 11%; /* 顶部光带 */
+  --accent-wash: 1.2%; /* 整窗常驻底色：只留一点氛围，不让中性面染上主题色 */
+  --accent-wash-top: 3%; /* 顶部光带 */
   --accent-surface: 12%; /* 徽标 / 选中项 / 卡片底色 */
   --accent-surface-hover: 16%;
   --accent-edge: 28%; /* 描边 */
@@ -1446,8 +1446,8 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   --settings-accent-ink: oklch(0.85 0.15 30);
   --settings-accent-soft: color-mix(in oklab, var(--settings-accent) var(--accent-surface), var(--card));
 
-  --accent-wash: 3%; /* 整窗常驻底色 */
-  --accent-wash-top: 8%; /* 顶部光带 */
+  --accent-wash: 1%; /* 整窗常驻底色：只留一点氛围，不让中性面染上主题色 */
+  --accent-wash-top: 2.5%; /* 顶部光带 */
   --accent-surface: 16%; /* 徽标 / 选中项 / 卡片底色 */
   --accent-surface-hover: 20%;
   --accent-edge: 34%; /* 描边 */
@@ -1508,8 +1508,8 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   --settings-accent: oklch(0.78 0.045 85);
   --settings-accent-ink: oklch(0.86 0.035 85);
 
-  --accent-wash: 5%;
-  --accent-wash-top: 12%;
+  --accent-wash: 1.6%;
+  --accent-wash-top: 3.5%;
   --accent-surface: 24%;
   --accent-surface-hover: 30%;
   --accent-edge: 50%;
@@ -1724,9 +1724,15 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
    而且各块渐变按自身高度衰减，边界对不齐。现在改成**一层固定叠加**：一个覆盖整个窗口、
    不吃事件的伪元素，把所有像素统一罩住——所以不管下面是卡片、编辑器画布还是文件树，
    同一高度永远是同一个颜色。
-   两层：常驻 2.2% 底色（没有纯白）+ 顶部 6% 光带，420px 散尽。深色 3% / 8%。 */
+
+   强度刻意压得很低（浅 1.2%/3%、深 1%/2.5%）。这层雾的作用是"有一点主题氛围"，
+   不是给整个中性工作区上色：主题色真正该出现的地方是选中项、徽标、描边这些强调点。
+   2026-11-17 现场发现：旧值（浅 4%/11%、深 3%/8%）把侧栏、输入框、底栏整片染成
+   粉 / 棕，而中间打开的 HTML 报告自己带暖白底色、不吃这层雾——四周一片色、中间一张
+   白纸，色温断在边界上。压低到现在的比例后，中性面回到中性，强调点仍保留主题色，
+   文档白纸不再和周围打架。数值统一放在 --accent-wash / --accent-wash-top。 */
 :root {
-  /* 浅色同样从主题色标尺取值（此前硬编码 2.2%/6%，浅色下几乎不可见）。 */
+  /* 浅深都从主题色标尺取值，不在这里硬编码，改强度只需动标尺那一处。 */
   --wash-base: var(--accent-wash);
   --wash-top: var(--accent-wash-top);
   --overlay-z: 60;

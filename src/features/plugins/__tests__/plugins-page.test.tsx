@@ -527,3 +527,33 @@ test("returning to a loaded catalog reuses its snapshot, including across remoun
   render(<PluginsPage cwd="/work/project" active />)
   expect(refresh).toHaveBeenCalledTimes(1)
 })
+
+test("a failed catalog load shows the error instead of an endless skeleton, and ready flips do not re-arm it", async () => {
+  client.store.setState({ sessionList: [] })
+  const refresh = vi.fn().mockResolvedValue(undefined)
+  pluginsStore.setState({ refresh, error: "acpRequest: agent codex exited", loadedScope: null })
+  const view = render(<PluginsPage cwd="/work/project" active />)
+  // The failure is on screen; the skeleton is gone even though the connection is not ready.
+  await act(() => Promise.try(() => client.store.setState({ connection: "connecting", agent: null })))
+  await act(() => Promise.try(() => view.rerender(<PluginsPage cwd="/work/project" active />)))
+  expect(view.getByRole("alert").textContent).toContain("agent codex exited")
+  expect(view.queryByRole("status", { name: "Loading plugins…" })).toBeNull()
+  // The connection owner reconnects: ready flips false→true. The page may try once per transition,
+  // but a still-failing catalog must not spin — the error stays and no further refresh is queued.
+  await act(() => Promise.try(() => pluginsStore.setState({ error: "acpRequest: agent codex exited" })))
+  await act(() => Promise.try(() => client.store.setState({
+    connection: "ready",
+    agent: {
+      info: { name: "test", version: "1" },
+      protocolVersion: 2,
+      capabilities: { _meta: { codex: { plugins: true, skills: true } } }
+    }
+  })))
+  await act(() => Promise.try(() => view.rerender(<PluginsPage cwd="/work/project" active />)))
+  const callsAfterReconnect = refresh.mock.calls.length
+  // More store ticks (the shape that used to loop): nothing new is fetched while the error stands.
+  await act(() => Promise.try(() => pluginsStore.setState({ marketplaces: [] })))
+  await act(() => Promise.try(() => view.rerender(<PluginsPage cwd="/work/project" active />)))
+  expect(refresh.mock.calls.length).toBe(callsAfterReconnect)
+  expect(view.getByRole("alert").textContent).toContain("agent codex exited")
+})

@@ -451,3 +451,18 @@ test("skills retain all repository memberships while the installed summary dedup
   expect(store.getState().skillProjects).toEqual({})
   expect(store.getState().skills).toEqual([user])
 })
+
+test("a failed refresh reports the error and never rebuilds the connection", async () => {
+  const api = fakeApi()
+  const store = createPluginsStore(api)
+  api.listPlugins = vi.fn().mockRejectedValue(new Error("acpRequest: agent codex exited"))
+  await store.getState().refresh(["/a"])
+  expect(store.getState().error).toBe("acpRequest: agent codex exited")
+  expect(store.getState().loading).toBe(false)
+  // loadedScope stays unset: the page's effect keys off it, and a failure must not look loaded.
+  expect(store.getState().loadedScope).toBeNull()
+  // A second refresh (the reader's Retry) asks again; still no connection surgery from the store.
+  api.listPlugins = vi.fn().mockRejectedValue(new Error("acpRequest: agent codex exited"))
+  await store.getState().refresh(["/a"])
+  expect(store.getState().error).toBe("acpRequest: agent codex exited")
+})

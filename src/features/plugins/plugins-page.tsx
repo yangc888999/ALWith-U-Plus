@@ -368,7 +368,11 @@ function PluginToolbar() {
 function MarketplaceTab({ onOpen, query }: { onOpen: (entry: PluginEntry) => void; query: string }) {
   const ready = usePluginsReady()
   const loadErrors = useStore(pluginsStore, (state) => state.marketplaceLoadErrors)
-  const loading = useStore(pluginsStore, (state) => state.loading) || !ready
+  const failed = useStore(pluginsStore, (state) => state.error !== null)
+  // A failed load shows the error banner, not an endless skeleton: the skeleton is only for the
+  // first load (or a reconnect that has not produced data yet). While an error stands, the page
+  // waits for the reader's Retry or the connection owner's next ready transition.
+  const loading = useStore(pluginsStore, (state) => state.loading) || (!ready && !failed)
   const q = useDeferredValue(query.trim().toLowerCase())
   return (
     <Pane>
@@ -391,7 +395,8 @@ function InstalledTab({ onOpen, query }: { onOpen: (entry: PluginEntry) => void;
   const busyIds = useStore(pluginsStore, (state) => state.busyIds)
   const uninstall = useStore(pluginsStore, (state) => state.uninstall)
   const setPluginEnabled = useStore(pluginsStore, (state) => state.setPluginEnabled)
-  const loading = useStore(pluginsStore, (state) => state.loading)
+  const failed = useStore(pluginsStore, (state) => state.error !== null)
+  const loading = useStore(pluginsStore, (state) => state.loading) || (!ready && !failed)
   const filtered = installed.filter(({ plugin }) =>
     [pluginTitle(plugin), pluginDescription(plugin), plugin.name]
       .join(" ")
@@ -403,7 +408,7 @@ function InstalledTab({ onOpen, query }: { onOpen: (entry: PluginEntry) => void;
       <div className="flex flex-col gap-4">
         <section className="flex flex-col gap-1">
           <h2 className="px-2 text-xs font-medium text-muted-foreground">{t("plugins.headings.plugins")}</h2>
-          {!ready || loading ? (
+          {loading ? (
             <CatalogSkeleton />
           ) : filtered.length === 0 ? (
             <p className="px-2 py-4 text-sm text-muted-foreground">
