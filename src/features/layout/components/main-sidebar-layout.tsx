@@ -178,7 +178,12 @@ export function MainSidebarLayout({
           })
         return
       }
-      if (next && canvas.selected > 1) navigate("chat")
+      // Any region other than the conversation has to go back to it first: `pinnedOnScreen`
+      // requires `selected === 1`, so expanding while parked on the leading screen set `pinned`
+      // but left `docked` false — the panel stayed 0px wide and the toggle looked dead. Only
+      // `> 1` was handled, which is why "collapse once, then it never opens again" happened
+      // whenever the canvas had settled on the leading screen (2026-11-18).
+      if (next && canvas.selected !== 1) navigate("chat")
       setPresentation("docked")
       setPinned(next)
       // Serialize writes so rapid toggles cannot restore an older choice on restart.
@@ -300,6 +305,8 @@ export function MainSidebarLayout({
                     data-atlas-region={canvas.geometry.regions[index]}
                     data-atlas-leading={index === 0 ? "" : undefined}
                     aria-hidden="true"
+                    // `stops` are canvas-absolute and the track reserves the leading width as its
+                    // inline-start padding, so these markers line up with the screens as laid out.
                     style={{ insetInlineStart: offset, width: canvas.width }}
                   />
                 ))}
