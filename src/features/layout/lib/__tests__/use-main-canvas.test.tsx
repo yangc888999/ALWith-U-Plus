@@ -18,7 +18,10 @@ vi.mock("@tauri-apps/api/core", async (original) => ({
   ...(await original<typeof import("@tauri-apps/api/core")>()),
   isTauri: () => native.available
 }))
-vi.mock("@/bindings", () => ({ events: { "trackpad-gesture": { listen: native.listen } } }))
+vi.mock("@/bindings", () => ({
+  events: { "trackpad-gesture": { listen: native.listen } },
+  commands: { appendDiagnostic: vi.fn(() => Promise.resolve(null)) }
+}))
 vi.mock("@/lib/trackpad-preference", () => ({ useThreeFingerSwipeEnabled: () => native.enabled }))
 vi.mock("sonner", () => ({ toast: { error: native.error } }))
 

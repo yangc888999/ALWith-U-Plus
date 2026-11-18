@@ -30,7 +30,7 @@
 
 /* The resolver splits at a 320px floor; enforce it here too so a restored/transitioning layout
    can never render the chat as an unreadable sliver while the preview stays beside it. */
-.file-workspace-slide[data-atlas-region="chat"]:not([aria-hidden="true"]) {
+.file-workspace-slide:first-child:not([aria-hidden="true"]) {
   min-width: 320px;
 }
 /* Desktop's Slab: each region contributes half of the 8px gap. */

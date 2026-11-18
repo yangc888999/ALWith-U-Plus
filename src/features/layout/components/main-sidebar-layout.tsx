@@ -1,5 +1,4 @@
 import { SidebarOverlayContext } from "@alwith/module-chat/session-list"
-import "@nyssance/atlas/styles.css"
 import { PanelLeftDashedIcon, PanelLeftIcon } from "lucide-react"
 import {
   createContext,
@@ -225,7 +224,6 @@ export function MainSidebarLayout({
               aria-checked={docked}
               aria-expanded={visible}
               aria-controls={panelId}
-              data-atlas-navigation-trigger
               className="text-sidebar-foreground"
               onClick={() => changePinned(!docked)}
             >
@@ -287,9 +285,10 @@ export function MainSidebarLayout({
             <div ref={canvas.ref} className="main-canvas-viewport">
               <div
                 className="main-screen-track"
-                data-atlas-track
+                data-panning={canvas.panning ? "" : undefined}
                 style={
                   {
+                    ...canvas.trackStyle,
                     "--canvas-leading-width": `${canvas.geometry.leading}px`,
                     // CSS resolves the single-screen width before ResizeObserver delivers new geometry.
                     "--canvas-content-width": canvas.context.split
@@ -298,34 +297,27 @@ export function MainSidebarLayout({
                   } as CSSProperties
                 }
               >
-                {canvas.geometry.stops.map((offset, index) => (
-                  <div
-                    key={index}
-                    className="canvas-snap"
-                    data-atlas-region={canvas.geometry.regions[index]}
-                    data-atlas-leading={index === 0 ? "" : undefined}
-                    aria-hidden="true"
-                    // `stops` are canvas-absolute and the track reserves the leading width as its
-                    // inline-start padding, so these markers line up with the screens as laid out.
-                    style={{ insetInlineStart: offset, width: canvas.width }}
-                  />
-                ))}
                 <div
                   className="main-screen-leading"
+                  data-snap-region="leading"
                   data-screen-panel="leading"
-                  inert={mainActive}
-                  aria-hidden={mainActive}
+                  data-active={canvas.geometry.regions[canvas.selected] === "leading" ? "" : undefined}
+                  inert={canvas.geometry.regions[canvas.selected] !== "leading"}
+                  aria-hidden={canvas.geometry.regions[canvas.selected] !== "leading"}
                 >
                   {leading}
                 </div>
                 <SidebarOverlayContext.Provider value={retainOverlay}>
                   <div
                     className="main-sidebar-shell"
-                    data-atlas-navigation
+                    /* The chat screen begins at the shared sidebar's left edge — not at the content
+                       column's. Snapping to the content pushed the whole sidebar off-screen, which
+                       read as "the sidebar cannot expand, only the icon rail is left" (2026-11-19). */
+                    data-snap-region="chat"
                     data-resizing={dragPx !== null ? "" : undefined}
                     ref={canvas.navigationRef}
                   >
-                    <div className="main-sidebar-viewport" data-atlas-navigation-surface id={panelId}>
+                    <div className="main-sidebar-viewport" id={panelId}>
                       <div
                         ref={panel}
                         className="main-sidebar-panel"
@@ -380,7 +372,13 @@ export function MainSidebarLayout({
                 <div
                   className="main-screen-content"
                   data-screen-panel="main"
-                  inert={!mainActive}
+                  data-active={
+                    canvas.geometry.regions[canvas.selected] === "chat" ||
+                    canvas.geometry.regions[canvas.selected] === "preview"
+                      ? ""
+                      : undefined
+                  }
+                  inert={mainActive ? false : true}
                   aria-hidden={!mainActive}
                 >
                   {main}
@@ -388,7 +386,9 @@ export function MainSidebarLayout({
                 {trailing !== undefined && (
                   <aside
                     className="main-screen-trailing"
+                    data-snap-region="trailing"
                     data-screen-panel="trailing"
+                    data-active={canvas.geometry.regions[canvas.selected] === "trailing" ? "" : undefined}
                     inert={canvas.geometry.regions[canvas.selected] !== "trailing" && !canvas.moving}
                   >
                     {trailing}

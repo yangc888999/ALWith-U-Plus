@@ -358,6 +358,11 @@ html[data-window-backdrop="acrylic"]
   height: 100%;
   min-height: 0;
   touch-action: pan-y pinch-zoom;
+  /* The screen offset is written inline by useMainCanvas. Only the slide between screens is
+     eased; direct panning writes `transition: none` for the duration of the gesture.
+     Deliberately no `will-change: transform`: promoting the track to its own compositing layer
+     makes the native vibrancy/glass behind this transparent window flicker. */
+  transition: transform 240ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 .main-screen-leading,
 .main-screen-content {
@@ -1187,13 +1192,6 @@ html[data-appearance="solid"]
   inset-inline-end: auto;
 }
 
-/* One canvas owns all screen translation; anchors describe legal stops without duplicating content. */
-.canvas-snap {
-  position: absolute;
-  top: 0;
-  height: 100%;
-  pointer-events: none;
-}
 .main-screen-leading {
   overflow: hidden;
   width: var(--canvas-leading-width);
@@ -1229,6 +1227,24 @@ html[data-appearance="solid"]
   padding-inline-start: var(--canvas-leading-width);
 }
 
+/* Three screens are mutually exclusive, independent of the arithmetic that positions them.
+   A collapsed sidebar changes every CSS width in the track; relying on translate alone let the
+   leading and trailing columns bleed into the conversation's edges (2026-11-18). Visibility is
+   driven by which screen is active — never by geometry — so a wrong offset can no longer make a
+   neighbour appear. The sidebar itself is shared and has no data-screen-panel, so it stays put. */
+[data-screen-panel]:not([data-active]) {
+  visibility: hidden;
+  pointer-events: none;
+}
+/* While the reader drags the track, both neighbours must stay painted for the slide to make
+   sense. The exclusivity rule resumes the moment the gesture commits to a screen. */
+[data-panning] [data-screen-panel] {
+  visibility: visible !important;
+}
+[data-screen-panel][data-active] {
+  visibility: visible;
+  pointer-events: auto;
+}
 .main-screen-trailing {
   position: relative;
   flex: none;

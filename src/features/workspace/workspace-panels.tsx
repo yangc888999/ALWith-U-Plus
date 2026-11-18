@@ -1,5 +1,3 @@
-import { resolveSplitWidths as resolvePanelWidths } from "@nyssance/atlas/layout"
-import { useAtlas } from "@nyssance/atlas/react"
 import { ChevronLeft, ChevronRight } from "lucide-react"
 import {
   type ReactNode,
@@ -22,7 +20,27 @@ import { PanelDivider } from "./panel-divider"
 import { useWorkspaceLayout } from "./use-workspace-layout"
 import "./workspace.css"
 
-// Desktop's two main Atlas regions, in chat/preview order. Both remain mounted.
+const MIN_BLOCK_WIDTH = 320
+/** Inlined from Atlas' resolveSplitWidths — the only sizing rule this panel ever used. */
+function resolvePanelWidths(
+  viewportWidth: number,
+  previewVisible: boolean,
+  previewWidth: number,
+  fullViewportWidth = viewportWidth,
+  manuallySeparated = false
+): { chat: number; preview: number } {
+  const screen = Math.max(0, viewportWidth)
+  const full = Math.max(MIN_BLOCK_WIDTH, screen)
+  if (!previewVisible) return { chat: full, preview: 0 }
+  const requested = Math.max(400, previewWidth || Math.floor(screen / 2))
+  const pushedToNextScreen = previewWidth > 0 && previewWidth < 400
+  if (!manuallySeparated && !pushedToNextScreen && screen - requested >= MIN_BLOCK_WIDTH)
+    return { chat: screen - requested, preview: requested }
+  return { chat: full, preview: Math.max(MIN_BLOCK_WIDTH, fullViewportWidth) }
+}
+
+// Two mounted panes, chat then preview. The detached window pans between them with a local
+// `pane` index; inside the main canvas the parent owns the screen and both panes size by share.
 export function WorkspacePanels({
   chat,
   preview,
@@ -54,16 +72,9 @@ export function WorkspacePanels({
   const dragWidthRef = useRef(0)
   const layout = useWorkspaceLayout()
   const [manuallySeparated, setManuallySeparated] = useState(false)
-  const [edges, setEdges] = useState({ previous: false, next: false })
   const [edgeZone, setEdgeZone] = useState<"start" | "end" | null>(null)
-  const { ref: atlasRef, atlas } = useAtlas({
-    direction: i18n.dir(),
-    initialRegion: "chat",
-    watchResize: false,
-    manageInert: false,
-    hoverNavigation: false,
-    blocked: () => dragging.current
-  })
+  // Detached-window pane index: 0 = chat, 1 = preview. Replaces Atlas' snap engine here.
+  const [pane, setPane] = useState(0)
   const budget = canvas?.budget ?? viewportWidth
   const fullViewportWidth = canvas?.viewportWidth ?? viewportWidth
   // The drag owns a pixel-precise width only while it is happening; once released the share is
@@ -127,33 +138,13 @@ export function WorkspacePanels({
     if (!visible || maximized) setManuallySeparated(false)
   }, [visible, maximized])
 
+  // Pane navigation is only meaningful in the detached window; the unified canvas shows both.
+  // Opening the preview reveals the next-pane affordance, closing it returns to chat.
   useEffect(() => {
-    if (!atlas || unified) return
-    const update = (): void => {
-      const geometry = atlas.getGeometry()
-      setEdges({ previous: geometry.selected > 0, next: geometry.selected < geometry.snaps.length - 1 })
-    }
-    atlas.on("select", update).on("reInit", update)
-    update()
-    return () => {
-      atlas.off("select", update).off("reInit", update)
-    }
-  }, [atlas, unified])
-
-  useLayoutEffect(() => {
-    if (!atlas || unified || dragging.current) return
-    const selected = atlas.getGeometry().groups[atlas.getGeometry().selected]
-    const region = !visible
-      ? 0
-      : !previousVisible.current || maximized || previousMaximized.current
-        ? 1
-        : (selected?.[0] ?? 0)
-    previousVisible.current = visible
-    previousMaximized.current = maximized
-    atlas.refresh()
-    const snap = atlas.getGeometry().groups.findIndex((group) => group.includes(region))
-    if (snap !== -1) atlas.goToSnap(snap, { instant: true })
-  }, [atlas, unified, chatWidth, fileWidth, visible, maximized, draggingPreview])
+    if (unified) return
+    if (!visible) setPane(0)
+  }, [unified, visible])
+  const edges = { previous: !unified && pane > 0, next: !unified && visible && pane === 0 }
 
   return (
     <PanelControlsContext.Provider value={{ expanded, toggleExpanded }}>
@@ -172,11 +163,14 @@ export function WorkspacePanels({
         }}
         onMouseLeave={() => setEdgeZone(null)}
       >
-        <div ref={unified ? undefined : atlasRef} className="file-workspace-viewport">
-          <div className="file-workspace-track" data-atlas-track>
+        <div className="file-workspace-viewport">
+          <div
+            className="file-workspace-track"
+            data-pane={unified ? undefined : pane}
+            style={unified ? undefined : { transform: `translateX(${pane === 0 ? 0 : -chatWidth}px)` }}
+          >
             <div
               className="file-workspace-slide"
-              data-atlas-region="chat"
               style={{ width: !visible && !maximized && !canvas ? "100%" : chatWidth }}
               inert={maximized || (canvas?.split && canvas.selected === 2)}
               aria-hidden={maximized}
@@ -186,7 +180,6 @@ export function WorkspacePanels({
               </div>
             </div>
             <div
-              data-atlas-region="preview"
               className="file-workspace-slide file-workspace-preview-slide"
               style={{ width: fileWidth }}
             >
@@ -263,7 +256,7 @@ export function WorkspacePanels({
             variant="outline"
             size="icon-sm"
             aria-label={t("workspace.previousPane")}
-            onClick={() => atlas?.goToSnap(atlas.getGeometry().selected - 1)}
+            onClick={() => setPane(0)}
           >
             <ChevronLeft />
           </Button>
@@ -274,7 +267,7 @@ export function WorkspacePanels({
             variant="outline"
             size="icon-sm"
             aria-label={t("workspace.nextPane")}
-            onClick={() => atlas?.goToSnap(atlas.getGeometry().selected + 1)}
+            onClick={() => setPane(1)}
           >
             <ChevronRight />
           </Button>

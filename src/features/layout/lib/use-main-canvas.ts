@@ -1,7 +1,7 @@
-import { useAtlas } from "@nyssance/atlas/react"
 import { isTauri } from "@tauri-apps/api/core"
 import {
   type ContextType,
+  type CSSProperties,
   type RefCallback,
   useCallback,
   useEffect,
@@ -19,6 +19,17 @@ import { useThreeFingerSwipeEnabled } from "@/lib/trackpad-preference"
 import type { CanvasContext, CanvasWorkspace } from "./canvas-context"
 import { resolveMainCanvasGeometry } from "./canvas-geometry"
 
+/**
+ * The main canvas is a single flex track translated by one CSS variable. There is no carousel
+ * library and no snap engine: the app's `screen` prop is the one owner of "which screen", and a
+ * translate offset is derived from it. Nothing reads the DOM position back into state, so the
+ * four-way write-back loop that produced white screens and a sidebar on the wrong side is gone
+ * by construction (2026-11-18).
+ *
+ * Pointer panning (middle/side button) and three-finger swipes only *request* a neighbouring
+ * screen; the same `goTo` path a click uses applies it. During a drag the track follows the
+ * pointer via an ephemeral `dragOffset` ref written straight to the node — never React state.
+ */
 export function useMainCanvas(
   screen: "main" | "leading",
   pinned: boolean,
@@ -28,6 +39,7 @@ export function useMainCanvas(
   ref: RefCallback<HTMLDivElement>
   navigationRef: RefCallback<HTMLDivElement>
   geometry: ReturnType<typeof resolveMainCanvasGeometry>
+  trackStyle: CSSProperties
   context: NonNullable<ContextType<typeof CanvasContext>>
   selected: number
   moving: boolean
@@ -35,13 +47,14 @@ export function useMainCanvas(
   select: (index: number) => void
   width: number
   direction: "ltr" | "rtl"
+  panning: boolean
 } {
   const { i18n } = useTranslation()
   const direction = i18n.dir()
-  // Direction changes are rebuilt with geometry, before restoring the semantic region.
-  const [initialDirection] = useState(direction)
+  const rtl = direction === "rtl"
   const enabled = useThreeFingerSwipeEnabled()
   const viewport = useRef<HTMLDivElement>(null)
+  const track = useRef<HTMLDivElement>(null)
   const navigation = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ viewport: 0, navigation: 0 })
   const [workspace, setWorkspace] = useState<CanvasWorkspace>({
@@ -50,332 +63,366 @@ export function useMainCanvas(
     visible: false,
     maximized: false
   })
-  const [selected, setSelected] = useState(screen === "leading" ? 0 : 1)
-  const [moving, setMoving] = useState(false)
-  const settledSelection = useRef(selected)
-  useLayoutEffect(() => {
-    if (!moving) settledSelection.current = selected
-  }, [moving, selected])
-  const [navigationPeeking, setNavigationPeeking] = useState(false)
+  const [panning, setPanning] = useState(false)
+  const [navigationPeeking] = useState(false)
   const divider = useRef(false)
   const [dividerDragging, setDividerState] = useState(false)
-  const appliedGeometry = useRef<string | null>(null)
-  /**
-   * Launch has exactly one landing: the conversation. Until the canvas has a measured geometry
-   * and is demonstrably parked on the chat snap, every Atlas reading is geometry noise. Writing
-   * such a reading back to the app's `view` is what parked the window on the management screen
-   * with the sidebar on the far side (2026-11-18). The lock is released only by an explicit user
-   * navigation (click, drag, swipe, keyboard), never by a programmatic settle, so neither a cold
-   * `selected=0` nor a post-rebuild settle can ever latch the wrong screen.
-   */
-  const bootLocked = useRef(true)
-  const [request, setRequest] = useState<{
-    region: "chat" | "preview" | "trailing"
-    revision: number
-  } | null>(null)
-  const appliedRequest = useRef<number | null>(null)
-  const region = useRef<"leading" | "chat" | "preview" | "trailing">(screen === "leading" ? "leading" : "chat")
-  const rebuilding = useRef(false)
-  const previousScreen = useRef(screen)
-  const [initialIndex] = useState(screen === "leading" ? 0 : 1)
-  const callbacks = useRef({ onScreenChange, screen })
-  useLayoutEffect(() => {
-    callbacks.current = { onScreenChange, screen }
-  }, [onScreenChange, screen])
+
+  // The only source of truth for the visible screen. Derived from `screen`; user gestures update
+  // it through `goTo`, which also notifies the app. The app echoing `screen` back is idempotent.
+  const [selected, setSelected] = useState(screen === "leading" ? 0 : 1)
+  const selectedRef = useRef(selected)
+  selectedRef.current = selected
+
   const geometry = useMemo(
     () => resolveMainCanvasGeometry({ ...size, pinned, chat: workspace.chat, preview: workspace.preview }, trailing),
     [size, pinned, workspace.chat, workspace.preview, trailing]
   )
-  const geometryKey = `${geometry.stops.join(":")}:${geometry.content}:${direction}`
-  const { ref: atlasRef, atlas: api } = useAtlas({
-    regions: ".canvas-snap",
-    direction: initialDirection,
-    contain: false,
-    groupRegions: false,
-    initialRegion: initialIndex === 0 ? "leading" : "chat",
-    watchResize: false,
-    watchRegions: false,
-    manageInert: false,
-    // Changing this option rebuilds Atlas. Defer docking until motion settles.
-    navigationPinned: pinned && (moving ? settledSelection.current : selected) === 1,
-    // No hover peek: the collapsed sidebar carries its own icon rail, so sliding the panel out
-    // under the pointer duplicated the same destinations and fought the rail for the edge.
-    // Expanding is an explicit click (a rail entry or the title-bar pin toggle).
-    hoverNavigation: false,
-    navigationWidth: size.navigation || 248,
-    onNavigationChange: setNavigationPeeking,
-    trackpadEnabled: enabled,
-    trackpadAvailable: enabled && isTauri(),
-    blocked: () => divider.current
-  })
-  const navigationRef = useCallback((node: HTMLDivElement | null): void => {
-    navigation.current = node
-  }, [])
-  const reduced = (): boolean => window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  const ref = useCallback(
-    (node: HTMLDivElement | null): void => {
-      viewport.current = node
-      atlasRef(node)
-    },
-    [atlasRef]
-  )
+  const regions = geometry.regions
+  const regionsRef = useRef(regions)
+  regionsRef.current = regions
+  const stopsRef = useRef(geometry.stops)
+  stopsRef.current = geometry.stops
+  const rtlRef = useRef(rtl)
+  rtlRef.current = rtl
+  // Snap positions are read from the real DOM, the way a carousel measures its slides. Geometry
+  // arithmetic alone drifts once the sidebar collapses or a column overflows: the translate then
+  // lands a sidebar-width short and a blank strip appears (2026-11-18, resolution report).
+  const snapRef = useRef<number[]>([])
 
+  const offsetFor = useCallback((index: number): number => {
+    const snaps = snapRef.current
+    const regionsNow = regionsRef.current
+    const clamped = Math.max(0, Math.min(index, Math.max(regionsNow.length - 1, 0)))
+    // Prefer a measured slide position; fall back to geometry until the first measurement lands.
+    const value =
+      snaps[clamped] !== undefined
+        ? snaps[clamped]
+        : (stopsRef.current[clamped] ?? 0)
+    return (rtlRef.current ? value : -value)
+  }, [])
+
+  const readSnaps = useCallback((): void => {
+    const node = track.current
+    if (!node) return
+    const anchors: number[] = []
+    for (const region of regionsRef.current) {
+      // The leading screen is anchored at the track origin by definition; it is absolutely
+      // positioned inside the padding, so its offsetLeft is not a reliable snap target.
+      if (region === "leading") {
+        anchors.push(0)
+        continue
+      }
+      const marked: HTMLElement | null = node.querySelector<HTMLElement>(`[data-snap-region="${region}"]`)
+      const slide: HTMLElement | null =
+        marked ??
+        (region === "preview"
+          ? node.querySelector<HTMLElement>(".file-workspace-preview-slide")
+          : null) ??
+        (region === "chat" ? node.querySelector<HTMLElement>(".main-sidebar-shell") : null)
+      // offsetLeft is relative to the track; the same frame the carousel uses. A nested slide
+      // (preview) is offset within its own parent, so accumulate up to the track.
+      let position = slide?.offsetLeft ?? 0
+      let parent: Element | null = slide?.offsetParent ?? null
+      while (parent && parent !== node && parent instanceof HTMLElement) {
+        position += parent.offsetLeft
+        parent = parent.offsetParent
+      }
+      anchors.push(marked || slide ? position : (stopsRef.current[anchors.length] ?? 0))
+    }
+    snapRef.current = anchors
+  }, [])
+
+  // The app changed the view (a sidebar destination, a palette action). Follow it, never argue.
+  useEffect(() => {
+    const index = screen === "leading" ? 0 : 1
+    if (selectedRef.current !== index) setSelected(index)
+  }, [screen])
+
+  // Measurement only feeds geometry arithmetic. A floating/collapsed sidebar reports 0px; that is
+  // a presentation state, not the reader's column width, so it must not replace the stored share.
   useLayoutEffect(() => {
     const root = viewport.current
     const nav = navigation.current
     if (!root || !nav) return
     const measure = (): void => {
-      const next = { viewport: root.clientWidth, navigation: nav.offsetWidth }
-      setSize((current) =>
-        current.viewport === next.viewport && current.navigation === next.navigation ? current : next
-      )
+      const nextViewport = root.clientWidth
+      const nextNav = nav.offsetWidth
+      setSize((current) => {
+        const navigationWidth = nextNav > 0 ? nextNav : current.navigation
+        return current.viewport === nextViewport && current.navigation === navigationWidth
+          ? current
+          : { viewport: nextViewport, navigation: navigationWidth }
+      })
     }
     measure()
-    // Avoid flushSync: React batches the size update to the next frame on its own, so resizing
-    // or dragging the divider no longer forces a synchronous render that blocks the main thread.
     const observer = new ResizeObserver(measure)
     observer.observe(root)
     observer.observe(nav)
     return () => observer.disconnect()
   }, [])
 
-  const commitScreen = useCallback((index: number): void => {
-    const next = index === 0 ? "leading" : "main"
-    previousScreen.current = next
-    if (next !== callbacks.current.screen) callbacks.current.onScreenChange?.(next)
-  }, [])
-  /**
-   * A launch always lands on the conversation, never on whatever screen the canvas happened to
-   * measure first.
-   *
-   * The canvas is a horizontal track whose stops depend on CSS variables written by the same render
-   * that settles it, so the first measurement of a fresh window is not trustworthy: it can report
-   * the leading screen (or a half-built track) and the window then rests on blank paper with the
-   * sidebar over on the far side until something forces a re-measure. Chasing each such race is
-   * losing game — the product rule is simpler than the machinery: **every launch opens the new
-   * conversation**, with the sidebar and the chat column, and only an explicit click may move it
-   * elsewhere (2026-11-18).
-   *
-   * So once there is a real width to work with, park on the conversation exactly once. A later
-   * settle (a click, a drag, a divider release) is the reader's own, and this never runs again.
-   */
-  const openedOnConversation = useRef(false)
-  useLayoutEffect(() => {
-    if (openedOnConversation.current || !api || size.viewport === 0) return
-    const index = geometry.regions.indexOf("chat")
-    if (index < 0) return
-    openedOnConversation.current = true
-    region.current = "chat"
-    api.refresh({ direction })
-    api.goToSnap(index, { instant: true })
-    setSelected(index)
-    commitScreen(index)
-  }, [api, size.viewport, geometry.regions, direction, commitScreen])
-
-  // The moment an explicit navigation happens the reader has taken over; from then on Atlas is
-  // the authority for the current screen and the boot lock no longer applies.
-  const releaseBootLock = useCallback((): void => {
-    if (!bootLocked.current) return
-    bootLocked.current = false
-  }, [])
-
-  // Deliberately does NOT release the boot lock. The workspace panel fires `navigate("preview")`
-  // by itself while a project loads on launch; treating that as "the reader took over" would open
-  // the gate for the cold snap-0 settle to relay the window to the leading screen. A real user
-  // navigation reaches `view` through the screen effect or `select`, both of which do release it.
-  const navigate = useCallback((region: "chat" | "preview" | "trailing"): void => {
-    setRequest((current) => ({ region, revision: (current?.revision ?? 0) + 1 }))
-  }, [])
-  const setDividerDragging = useCallback(
-    (dragging: boolean): void => {
-      divider.current = dragging
-      setDividerState(dragging)
-      if (dragging) api?.cancelInput()
+  const goTo = useCallback(
+    (index: number): void => {
+      const clamped = Math.max(0, Math.min(index, regionsRef.current.length - 1))
+      if (clamped === selectedRef.current) return
+      setSelected(clamped)
+      const region = regionsRef.current[clamped]
+      if (region === "leading" || region === "chat") onScreenChange?.(region === "chat" ? "main" : "leading")
     },
-    [api]
+    [onScreenChange]
   )
 
-  useLayoutEffect(() => {
-    if (!api || size.viewport === 0 || dividerDragging) return
-    const requested = request !== null && appliedRequest.current !== request.revision
-    const geometryChanged = appliedGeometry.current !== geometryKey
-    if (!geometryChanged && !requested) return
-    api?.cancelInput()
-    rebuilding.current = true
-    if (geometryChanged) {
-      api.refresh({ direction })
-      appliedGeometry.current = geometryKey
-    }
-    if (requested) region.current = request.region
-    if (region.current === "preview" && !workspace.visible) region.current = "chat"
-    const desired = region.current === "preview" && !geometry.split ? 1 : geometry.regions.indexOf(region.current)
-    appliedRequest.current = request?.revision ?? null
-    const animating = requested && !reduced() && api.getGeometry().selected !== desired
-    api.goToSnap(desired, { instant: !animating })
-    rebuilding.current = false
-    if (requested) commitScreen(desired)
-    setSelected(desired)
-    setMoving(animating)
-  }, [
-    api,
-    direction,
-    geometryKey,
-    geometry.stops.length,
-    geometry.regions,
-    geometry.split,
-    workspace.visible,
-    size.viewport,
-    request,
-    commitScreen,
-    dividerDragging
-  ])
+  // Programmatic navigation from the workspace (opening the file tree, restoring a split).
+  // It never changes which *screen* the app is on unless the target really is leading/chat.
+  const navigate = useCallback(
+    (region: "chat" | "preview" | "trailing"): void => {
+      if (region === "preview" && !workspace.visible) return
+      const index = regionsRef.current.indexOf(region)
+      if (index >= 0) goTo(index)
+    },
+    [goTo, workspace.visible]
+  )
 
-  useEffect(() => {
-    if (!api) return
-    if (previousScreen.current !== screen) {
-      // The app itself changed the view (a sidebar destination such as plugins/settings). That is
-      // an explicit navigation, so the launch lock no longer applies from this point on.
-      releaseBootLock()
-      region.current = screen === "leading" ? "leading" : "chat"
-      api?.cancelInput()
-      const target = screen === "leading" ? 0 : 1
-      const animating =
-        size.viewport > 0 &&
-        !reduced() &&
-        target < api.getGeometry().snaps.length &&
-        api.getGeometry().selected !== target
-      setMoving(animating)
-      api.goToSnap(target, { instant: !animating })
-    }
-    previousScreen.current = screen
-  }, [api, screen, size.viewport, releaseBootLock])
+  const setDividerDragging = useCallback((dragging: boolean): void => {
+    divider.current = dragging
+    setDividerState(dragging)
+  }, [])
 
-  useEffect(() => {
-    if (!api) return
-    const select = (): void => {
-      const index = api.getGeometry().selected
-      // A cold Atlas reading is a measurement artefact, not the reader's intent. Until the reader
-      // navigates explicitly, a snap-0 report must never latch the region to `leading`: every later
-      // rebuild would then aim there and the window would sit on blank paper with the sidebar
-      // stranded on the far side (2026-11-18, first launch on a MacBook Air).
-      if (bootLocked.current) return
-      setSelected(index)
-      if (!rebuilding.current && appliedGeometry.current !== null) {
-        const selectedRegion = geometry.regions[index]
-        if (
-          selectedRegion !== undefined &&
-          !(selectedRegion === "chat" && region.current === "preview" && !geometry.split)
-        )
-          region.current = selectedRegion
+  const ref = useCallback((node: HTMLDivElement | null): void => {
+    viewport.current = node
+    // The track is the viewport's first child. Binding it here keeps the DOM writer inside the
+    // hook and avoids threading another ref through every layout host.
+    track.current = node?.querySelector<HTMLDivElement>(".main-screen-track") ?? null
+  }, [])
+  const navigationRef = useCallback((node: HTMLDivElement | null): void => {
+    navigation.current = node
+  }, [])
+
+  // ── Direct panning ────────────────────────────────────────────────────────────────────────────
+  // Middle/side-button drag and three-finger swipe share one model: accumulate displacement,
+  // write it straight to `track.style.transform`, and on release pick the nearest screen (with a
+  // 15% flick to the neighbour). The offset never lives in React state during the gesture.
+  const pan = useRef<{
+    owner: "mouse" | "trackpad"
+    pointerId: number | null
+    button: number
+    startX: number
+    startOffset: number
+    delta: number
+    width: number
+    ts: number
+  } | null>(null)
+  const lastGestureTs = useRef(-Infinity)
+  const dragApply = useCallback((delta: number): void => {
+    const node = track.current
+    const active = pan.current
+    if (!node || !active) return
+    active.delta = delta
+    node.style.transform = `translate3d(${active.startOffset + delta}px,0,0)`
+    node.style.transition = "none"
+  }, [])
+  const endPan = useCallback(
+    (cancelled = false): void => {
+      const active = pan.current
+      if (!active) return
+      pan.current = null
+      const node = track.current
+      if (active.owner === "mouse" && active.pointerId !== null && node?.hasPointerCapture(active.pointerId))
+        node.releasePointerCapture(active.pointerId)
+      setPanning(false)
+      const stops = stopsRef.current
+      const base = active.startOffset
+      const delta = cancelled ? 0 : active.delta
+      const location = base + delta
+      let nearest = 0
+      for (let index = 1; index < stops.length; index += 1) {
+        const candidate = offsetFor(index)
+        if (Math.abs(candidate - location) < Math.abs(offsetFor(nearest) - location)) nearest = index
       }
-    }
-    const stop = api.subscribe((state) => setMoving(state.moving))
-    const settle = (): void => {
-      setMoving(false)
-      // During the launch lock every Atlas settle is either the cold snap-0 measurement or a
-      // programmatic consequence of the landing/geometry rebuild — never a reader decision. Both
-      // handlers stay silent so `view` and `region.current` remain on chat. Only the explicit-intent
-      // paths release the lock; after that Atlas is authoritative again.
-      if (bootLocked.current) return
-      select()
-      commitScreen(api.getGeometry().selected)
-    }
-    // Pointer-down on the canvas is an unambiguous user intent, so it ends the launch lock even
-    // before a settle arrives — otherwise a reader who drags before the landing settle would be
-    // ignored and the view would not follow their drag.
-    const pointerDown = (): void => releaseBootLock()
-    api.on("select", select).on("settle", settle).on("pointerDown", pointerDown)
-    return () => {
-      stop()
-      api.off("select", select).off("settle", settle).off("pointerDown", pointerDown)
-    }
-  }, [api, commitScreen, geometry.regions, geometry.split, releaseBootLock])
+      let target = nearest
+      if (nearest === selectedRef.current && !cancelled && Math.abs(delta) > active.width * 0.15) {
+        target = selectedRef.current + (delta * (rtlRef.current ? -1 : 1) < 0 ? 1 : -1)
+      }
+      goTo(target)
+      // Hand the transform back to React. `setPanning(false)` guarantees a re-render whose
+      // trackStyle writes the settled offset with the CSS transition restored. Clearing the
+      // DOM style here would race that render and can leave the track stuck at the drag position.
+    },
+    [goTo, offsetFor]
+  )
+  const beginPan = useCallback(
+    (owner: "mouse" | "trackpad", startX: number, width: number): boolean => {
+      if (pan.current || divider.current || width <= 0) return false
+      const node = track.current
+      if (!node) return false
+      pan.current = {
+        owner,
+        pointerId: null,
+        button: -1,
+        startX,
+        startOffset: offsetFor(selectedRef.current),
+        delta: 0,
+        width,
+        ts: 0
+      }
+      setPanning(true)
+      return true
+    },
+    [offsetFor]
+  )
 
   useEffect(() => {
-    if (!api) return
+    const root = viewport.current
+    if (!root) return
+    const isPanButton = (button: number): boolean => button === 1 || button === 3 || button === 4
+    const inDragZone = (target: EventTarget | null): boolean =>
+      target instanceof Element && target.closest("[data-no-drag], [role=separator], button, input, textarea, a") !== null
+    const down = (event: PointerEvent): void => {
+      if (!isPanButton(event.button) || inDragZone(event.target)) return
+      if (!beginPan("mouse", event.clientX, root.clientWidth)) return
+      const active = pan.current
+      if (active) {
+        active.button = event.button
+        active.pointerId = event.pointerId
+      }
+      root.setPointerCapture(event.pointerId)
+      event.preventDefault()
+    }
+    const move = (event: PointerEvent): void => {
+      const active = pan.current
+      if (!active || active.owner !== "mouse" || event.pointerId !== active.pointerId) return
+      const mask = active.button === 1 ? 4 : active.button === 3 ? 8 : 16
+      if (!(event.buttons & mask)) {
+        endPan(false)
+        return
+      }
+      dragApply(event.clientX - active.startX)
+    }
+    const up = (event: PointerEvent): void => {
+      const active = pan.current
+      if (active?.owner === "mouse" && event.pointerId === active.pointerId) endPan(false)
+    }
+    const cancel = (): void => endPan(true)
+    window.addEventListener("pointerdown", down, true)
+    window.addEventListener("pointermove", move)
+    window.addEventListener("pointerup", up)
+    window.addEventListener("pointercancel", cancel)
+    window.addEventListener("blur", cancel)
+    return () => {
+      window.removeEventListener("pointerdown", down, true)
+      window.removeEventListener("pointermove", move)
+      window.removeEventListener("pointerup", up)
+      window.removeEventListener("pointercancel", cancel)
+      window.removeEventListener("blur", cancel)
+    }
+  }, [beginPan, dragApply, endPan])
+
+  useEffect(() => {
+    if (!apiReady(enabled)) return
     let disposed = false
     let unsubscribe: (() => void) | undefined
-    if (enabled && isTauri()) {
-      void events["trackpad-gesture"]
-        .listen(({ payload }) => {
-          if (!disposed) {
-            // A swipe is an explicit navigation. From here Atlas reflects the reader, not a cold
-            // measurement, so the launch lock must not suppress its settle any more.
-            releaseBootLock()
-            api.gesture(payload)
-          }
-        })
-        .then((stop) => {
-          if (disposed) stop()
-          else unsubscribe = stop
-        })
-        .catch((error: unknown) => {
-          if (!disposed) toast.error(error instanceof Error ? error.message : String(error))
-        })
-    }
+    void events["trackpad-gesture"]
+      .listen(({ payload }) => {
+        if (disposed || payload.fingers !== 3) return
+        if (payload.ts < lastGestureTs.current) return
+        lastGestureTs.current = payload.ts
+        const width = viewport.current?.clientWidth ?? 0
+        if (payload.phase === "began") {
+          if (pan.current?.owner === "trackpad") endPan(true)
+          beginPan("trackpad", 0, width)
+          return
+        }
+        const active = pan.current
+        if (!active || active.owner !== "trackpad") return
+        if (payload.phase === "changed") dragApply(payload.totalDx * width)
+        else if (payload.phase === "ended") {
+          dragApply(payload.totalDx * width)
+          endPan(false)
+        } else if (payload.phase === "cancelled") endPan(true)
+      })
+      .then((stop) => {
+        if (disposed) stop()
+        else unsubscribe = stop
+      })
+      .catch((error: unknown) => {
+        if (!disposed) toast.error(error instanceof Error ? error.message : String(error))
+      })
     return () => {
       disposed = true
       unsubscribe?.()
-      api.cancelInput()
     }
-  }, [api, enabled, releaseBootLock])
+  }, [enabled, beginPan, dragApply, endPan])
 
+  // Keyboard on the focused canvas: Arrow/Home/End move one screen, like the dots do.
   useEffect(() => {
     const node = viewport.current
     if (!node) return
-    // Atlas handles Arrow/Home/End on the focused canvas and reports the move only through
-    // `settle` (no pointerDown). Without this, keyboard navigation right after launch would be
-    // swallowed by the boot lock until the first click. A navigation key is explicit intent.
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.target !== node) return
-      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return
-      releaseBootLock()
+      const forward = rtl ? "ArrowLeft" : "ArrowRight"
+      const backward = rtl ? "ArrowRight" : "ArrowLeft"
+      const current = selectedRef.current
+      const target =
+        event.key === "Home" ? 0 : event.key === "End" ? regionsRef.current.length - 1 : event.key === forward ? current + 1 : event.key === backward ? current - 1 : null
+      if (target === null) return
+      event.preventDefault()
+      goTo(target)
     }
     node.addEventListener("keydown", onKeyDown)
     return () => node.removeEventListener("keydown", onKeyDown)
-  }, [api, releaseBootLock])
+  }, [goTo, rtl])
 
-  const select = (index: number): void => {
-    releaseBootLock()
-    if (api?.getGeometry().selected === index) return
-    api?.cancelInput()
-    const target = geometry.regions[index]
-    if (target === undefined) throw new Error("Unknown canvas region")
-    region.current = target
-    const animating =
-      size.viewport > 0 &&
-      !!api &&
-      !reduced() &&
-      index < api.getGeometry().snaps.length &&
-      api.getGeometry().selected !== index
-    setMoving(animating)
-    api?.goToSnap(index, { instant: !animating })
-    commitScreen(index)
-  }
+  // One writer for the track transform: this effect. Pointer pans write the same property during
+  // a gesture, and the next state change repositions from the settled offset. React never diffs a
+  // transform value here, so a drag can't be fought by a stale style prop.
+  useLayoutEffect(() => {
+    const node = track.current
+    if (!node || pan.current) return
+    // Re-measure the real slide positions on every geometry change (window resize, sidebar
+    // collapse, preview open) *before* translating. offsetLeft is layout-relative, so the current
+    // transform does not contaminate it.
+    readSnaps()
+    node.style.transform = `translate3d(${offsetFor(selected)}px,0,0)`
+  }, [offsetFor, selected, geometry.stops, geometry.content, panning, regions, readSnaps, pinned, workspace.visible])
+
+  const trackStyle = useMemo<CSSProperties>(
+    () => ({ transition: panning || dividerDragging ? "none" : undefined }),
+    [panning, dividerDragging]
+  )
+
   const context = useMemo(
     () => ({
       viewportWidth: size.viewport,
       budget: Math.max(0, size.viewport - (pinned ? size.navigation : 0)),
       selected,
-      trailingActive: geometry.regions[selected] === "trailing",
+      trailingActive: regions[selected] === "trailing",
       split: geometry.split,
-      moving,
+      moving: panning,
       setWorkspace,
       navigate,
       setDividerDragging
     }),
-    [size, pinned, selected, geometry.split, geometry.regions, moving, navigate, setDividerDragging]
+    [size, pinned, selected, regions, geometry.split, panning, navigate, setDividerDragging]
   )
+
   return {
     ref,
     navigationRef,
     geometry,
+    trackStyle,
     context,
     selected,
-    moving,
+    moving: panning,
     navigationPeeking,
-    select,
+    select: goTo,
     width: size.viewport,
-    direction
+    direction,
+    panning
   }
+}
+
+// Gesture subscription is native-only; kept as a helper so the effect dependency stays scalar.
+function apiReady(enabled: boolean): boolean {
+  return enabled && isTauri()
 }

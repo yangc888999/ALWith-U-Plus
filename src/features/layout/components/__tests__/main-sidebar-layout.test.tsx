@@ -549,6 +549,13 @@ test("a fresh main screen parks on chat, never on the trailing apps screen", asy
     // …and the apps screen stays inert until the reader explicitly travels there.
     const trailing = must(view.container.querySelector('[data-screen-panel="trailing"]'), "trailing screen")
     expect(trailing.hasAttribute("inert")).toBe(true)
+    // Mutual exclusivity is by data-active, not by translate: a collapsed sidebar changes the
+    // track widths, and geometry alone used to let the leading/trailing columns bleed into view.
+    const leading = must(view.container.querySelector('[data-screen-panel="leading"]'), "leading screen")
+    const chat = must(view.container.querySelector('[data-screen-panel="main"]'), "chat screen")
+    expect(chat.hasAttribute("data-active")).toBe(true)
+    expect(leading.hasAttribute("data-active")).toBe(false)
+    expect(trailing.hasAttribute("data-active")).toBe(false)
     expect(view.container.querySelector("[data-sidebar-mode]")).toHaveAttribute("data-sidebar-mode", "pinned")
     view.unmount()
   })
@@ -608,6 +615,20 @@ test("pressing the pin button from the workspace screen returns to chat and dock
     // leave the reader looking at the workspace with no sidebar.
     expect(view.container.querySelector("[data-sidebar-mode]")).toHaveAttribute("data-sidebar-mode", "pinned")
     expect([...view.container.querySelectorAll(".canvas-dots button")][0]).toHaveAttribute("aria-current", "page")
+    view.unmount()
+  })
+})
+
+test("a collapsed sidebar never lets the leading or trailing screen bleed into chat", async () => {
+  await withCanvasGeometry(async () => {
+    const view = render(workspaceLayout(false))
+    const panels = (name: string) => must(view.container.querySelector(`[data-screen-panel="${name}"]`), `${name} screen`)
+    expect(view.container.querySelector("[data-sidebar-mode]")).toHaveAttribute("data-sidebar-mode", "hidden")
+    // Regardless of how the collapsed column reshapes the track, only the chat screen is active:
+    // neither neighbour is painted, so no strip can leak into the conversation's edges.
+    expect(panels("main").hasAttribute("data-active")).toBe(true)
+    expect(panels("leading").hasAttribute("data-active")).toBe(false)
+    expect(panels("trailing").hasAttribute("data-active")).toBe(false)
     view.unmount()
   })
 })
