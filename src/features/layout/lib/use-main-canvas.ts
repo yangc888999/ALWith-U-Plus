@@ -204,7 +204,15 @@ export function useMainCanvas(
     const select = (): void => {
       const index = api.getGeometry().selected
       setSelected(index)
-      if (!rebuilding.current) {
+      // Before the first settle has run there is no measured geometry yet, and Atlas reports
+      // whatever snap it happens to sit on — on a cold start that is the leading screen, because
+      // the track's leading padding has not been laid out when it first measures. Adopting that
+      // reading as the reader's intent is what parked the canvas on the wrong screen for good: the
+      // region latched to `leading`, every later settle then dutifully aimed at it, and the window
+      // sat on blank paper with the sidebar off to the far side until a resize recomputed
+      // everything (2026-11-18, first launch on a MacBook Air). Until a settle has been applied,
+      // selection is a measurement artefact, not an intention.
+      if (!rebuilding.current && appliedGeometry.current !== null) {
         const selectedRegion = geometry.regions[index]
         if (
           selectedRegion !== undefined &&
