@@ -193,6 +193,20 @@ export const commands = {
     __t3Invoke<null>("computer_request_permissions", args),
   autostartSet: (args: { enabled: boolean }): Promise<null> => __t3Invoke<null>("autostart_set", args),
   showMainWindow: (): Promise<null> => __t3Invoke<null>("show_main_window"),
+  /**
+   *  Drags the window from the **synchronous** command's own event loop.
+   *
+   *  Two earlier designs each failed half the job:
+   *    * Tauri's injected drag script and the async `startDragging()` command lose the mouseDown by
+   *      the time they reach the main thread, so dragging worked every other try;
+   *    * `performWindowDragWithEvent:` runs, but is a no-op on the panel-style window Tauri creates;
+   *    * an AppKit NSView strip over the title bar *did* drag, but it also sat above the webview and
+   *      swallowed every click on the window controls underneath — the buttons went dead.
+   *
+   *  This version covers nothing. The webview keeps all of its clicks; when the pointer goes down on
+   *  the drag region the page calls this command, which runs on the main thread and pumps the mouse
+   *  events itself until the button comes up, moving the frame with `setFrameOrigin`.
+   */
   windowDrag: (): Promise<null> => __t3Invoke<null>("window_drag"),
   extensionInboxScan: (): Promise<Scan_Serialize> => __t3Invoke<Scan_Serialize>("extension_inbox_scan"),
   extensionInboxScanExtension: (args: { extensionId: string }): Promise<Scan_Serialize> =>
@@ -691,10 +705,6 @@ export const commands = {
    *  Native folder picker for "new project": the chosen directory becomes a project.
    */
   pickProjectDirectory: (): Promise<string | null> => __t3Invoke<string | null>("pick_project_directory"),
-  codexCheckEngineUpdate: (): Promise<EngineUpdateStatus_Serialize> =>
-    __t3Invoke<EngineUpdateStatus_Serialize>("codex_check_engine_update"),
-  codexInstallEngineUpdate: (args: { version: string }): Promise<string> =>
-    __t3Invoke<string>("codex_install_engine_update", args),
   mobileSetDraftSessions: (args: { sessionIds: string[] }): Promise<null> =>
     __t3Invoke<null>("mobile_set_draft_sessions", args),
   mobileBridgeStart: (args: { relayUrl: string }): Promise<null> => __t3Invoke<null>("mobile_bridge_start", args),
@@ -781,6 +791,10 @@ export const commands = {
   enterpriseLogout: (args: { generation: number }): Promise<null> => __t3Invoke<null>("enterprise_logout", args),
   updaterGetState: (): Promise<State_Serialize> => __t3Invoke<State_Serialize>("updater_get_state"),
   updaterInstallAndRelaunch: (): Promise<null> => __t3Invoke<null>("updater_install_and_relaunch"),
+  /**
+   *  One check on demand. Turning the switch on in Settings calls this, so the user does not wait
+   *  for the hourly tick (or the 30s startup delay) before seeing whether a release exists.
+   */
   updaterCheckNow: (): Promise<null> => __t3Invoke<null>("updater_check_now"),
   /**
    *  Makes `label` a child window of `main` (macOS only): it floats above the main window,
@@ -957,8 +971,6 @@ export type CommandErrors = {
   newChatDirectory: string
   deleteChatDirectory: string
   pickProjectDirectory: string
-  codexCheckEngineUpdate: string
-  codexInstallEngineUpdate: string
   mobileSetDraftSessions: never
   mobileBridgeStart: string
   mobileBridgeStop: string
@@ -992,7 +1004,7 @@ export type CommandErrors = {
   enterpriseLogout: Value
   updaterGetState: null
   updaterInstallAndRelaunch: string
-  updaterCheckNow: null
+  updaterCheckNow: string
   attachWindowToMain: string
   readAppsInfo: Value
   chromeExtensionInstalled: string
@@ -1348,7 +1360,17 @@ export type ChatImage = {
  *  developer-facing (URLs, HTTP status, English error chains), so it stays in the log: only this
  *  reason crosses the IPC boundary and reaches the user.
  */
-export type CheckFailureReason = "network" | "unavailable" | "invalidRelease" | "unknown"
+export type CheckFailureReason =
+  /**  No usable path to the feed: offline, DNS failure, TLS reset, timeout or refused proxy. */
+  | "network"
+  /**
+   *  The feed answered with something that is not release metadata (missing `latest.json`,
+   *  a 404 page, truncated JSON).
+   */
+  | "unavailable"
+  /**  A release was published but this build cannot use it (missing signature or filename). */
+  | "invalidRelease"
+  | "unknown"
 
 export type CloseTab = null
 
@@ -1498,20 +1520,6 @@ export type DiscoverInput_Serialize = {
 export type EditRedo = null
 
 export type EditUndo = null
-
-export type EngineUpdateStatus = EngineUpdateStatus_Serialize | EngineUpdateStatus_Deserialize
-
-export type EngineUpdateStatus_Deserialize = {
-  current: string
-  latest?: string | null
-  hasUpdate: boolean
-}
-
-export type EngineUpdateStatus_Serialize = {
-  current: string
-  latest: string | null
-  hasUpdate: boolean
-}
 
 export type Environment = {
   name: string

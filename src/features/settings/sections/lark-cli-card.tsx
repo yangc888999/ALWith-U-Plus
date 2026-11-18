@@ -401,8 +401,8 @@ export function LarkCliCard() {
           <StatusPill ok={installed} label={installed ? t("support.statusInstalled") : t("support.statusNotInstalled")} />
         }
       >
-        {/* 与「构建信息 → 引擎 → Codex CLI 0.167.0 [检查更新]」同一套：版本与检查按钮同一行，
-            有更新才多出「立即更新」；更新完成后提醒重启。 */}
+        {/* 版本与检查按钮同一行，有更新才多出「立即更新」；更新完成后提醒重启。
+            Codex 引擎那一行已不再有检查/更新按钮（引擎随发版走），这套交互只剩 Lark CLI 用。 */}
         <SettingRow compact title={t("support.version")}>
           <div className="flex min-w-0 flex-col items-end gap-1.5">
             <div className="flex flex-wrap items-center justify-end gap-2">

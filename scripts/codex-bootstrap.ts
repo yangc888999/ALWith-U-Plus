@@ -42,11 +42,11 @@ function describeProbe(probe: ReturnType<typeof spawnSync>): string {
 /**
  * Resolve the engine to run, preferring the configured path but never dying on it.
  *
- * `ALWITH_U_CODEX_PATH` may name a per-user engine update (`codex-override/codex`). That file is
- * outside the app bundle: a half-finished download, a quarantine flag or a broken arch leaves a
- * binary that cannot execute, and the agent used to exit before it could answer `initialize`.
- * The bundled engine always sits next to this Bun process, so a failing override degrades the
- * version instead of taking the whole app down.
+ * `ALWITH_U_CODEX_PATH` normally points at the bundled engine. Anything outside the app bundle —
+ * a half-finished copy, a quarantine flag or a broken arch — leaves a binary that cannot execute,
+ * and the agent used to exit before it could answer `initialize`. The bundled engine always sits
+ * next to this Bun process, so a failing configured path degrades the version instead of taking
+ * the whole app down.
  */
 function resolveCodex(configured: string): { command: string; version: string } {
   const first = spawnSync(configured, ["--version"], { encoding: "utf8", timeout: 10_000 })

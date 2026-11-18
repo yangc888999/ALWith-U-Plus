@@ -523,8 +523,6 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 skills::new_chat_directory,
                 skills::delete_chat_directory,
                 skills::pick_project_directory,
-                codex_update::codex_check_engine_update,
-                codex_update::codex_install_engine_update,
                 mobile::mobile_set_draft_sessions,
                 mobile::mobile_bridge_start,
                 mobile::mobile_bridge_stop,

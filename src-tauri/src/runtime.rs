@@ -154,22 +154,21 @@ pub(crate) fn sidecar_path(name: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// The Codex executable that would actually run: the user-installed engine override when
-/// present (`codex_update` writes it), otherwise the bundled sidecar.
-pub fn bundled_codex_path(app: &AppHandle) -> PathBuf {
-    if let Ok(data) = app.path().app_data_dir() {
-        let over = data.join("codex-override/codex");
-        if over.is_file() {
-            return over;
-        }
-    }
+/// The Codex executable the app runs: always the bundled sidecar.
+///
+/// This used to prefer `<app data>/codex-override/codex` — the copy the removed "engine update"
+/// flow downloaded. The engine launch had already dropped that path, but this function kept
+/// reading it, so 「构建信息 → 引擎」 reported whatever stale binary was left in the user's data
+/// directory instead of the version actually running (0.167.0 shown while 0.170.0 was executing,
+/// 2026-11-19). It takes no `AppHandle` on purpose: nothing here may consult app data again.
+pub fn bundled_codex_path() -> PathBuf {
     sidecar_path("codex").unwrap_or_else(|_| PathBuf::from("codex"))
 }
 
 /// Read the same bundled executable used by the Runtime, not the ACP adapter's package version.
 #[tauri3_specta::command]
-pub async fn codex_version(app: AppHandle) -> Result<String, String> {
-    let mut command = tokio::process::Command::new(bundled_codex_path(&app));
+pub async fn codex_version() -> Result<String, String> {
+    let mut command = tokio::process::Command::new(bundled_codex_path());
     command.arg("--version").kill_on_drop(true).hide_console();
     let output = tokio::time::timeout(Duration::from_secs(5), command.output())
         .await
@@ -203,8 +202,8 @@ pub struct BundledModelEntry {
 }
 
 #[tauri3_specta::command]
-pub async fn codex_bundled_models(app: AppHandle) -> Result<Vec<BundledModelEntry>, String> {
-    let mut command = tokio::process::Command::new(bundled_codex_path(&app));
+pub async fn codex_bundled_models() -> Result<Vec<BundledModelEntry>, String> {
+    let mut command = tokio::process::Command::new(bundled_codex_path());
     command.args(["debug", "models", "--bundled"]).kill_on_drop(true).hide_console();
     let output = tokio::time::timeout(Duration::from_secs(10), command.output())
         .await
@@ -275,7 +274,13 @@ fn engines_table(app: &AppHandle) -> Result<String, String> {
     // 时候任何一方都无法解释「我明明升级了」。产品决定（2026-11-17）：组件升级一律由发版带动，
     // 应用不再接受外部投递的引擎二进制。
     let codex_path_for_engine = |_app: &AppHandle| -> Result<String, String> {
-        Ok(sidecar_path("codex")?.to_string_lossy().to_string())
+        // Same single source as the version display: one function, so 「引擎」 can never show a
+        // binary the Runtime does not spawn.
+        let codex = bundled_codex_path();
+        if !codex.is_file() {
+            return Err(format!("bundled Codex missing at {}", codex.display()));
+        }
+        Ok(codex.to_string_lossy().to_string())
     };
     let mut engines = json!({"codex": {
         "command": sidecar_path("bun")?,
