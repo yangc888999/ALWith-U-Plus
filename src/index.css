@@ -1248,9 +1248,17 @@ html[data-appearance="solid"]
 .main-screen-trailing {
   position: relative;
   flex: none;
-  width: var(--sidebar-width);
+  /* The apps screen is a whole screen, not the narrow running-apps rail it started as: sizing it
+     to --sidebar-width pinned it to a few hundred pixels and left the rest of the window empty. */
+  width: var(--canvas-content-width);
   height: 100%;
   padding-inline: 4px;
+}
+/* The collapsed-sidebar rail floats above the body from 8px to 60px. The chat surface steps
+   aside by 58px; the apps screen has to do the same, otherwise the rail covers its left column —
+   the first card loses its edge and its title reads "ft Edge" instead of "Microsoft Edge". */
+[data-rail-show] .main-screen-trailing {
+  padding-inline-start: calc(58px + var(--main-surface-gutter) / 2);
 }
 /* 纯色档（solid）：浅色纯白、深色纯黑，不接受任何透明度。
    它同时对应 Rust 侧不挂窗口材质，所以这里把 alpha 钉死，避免滑块残留值把它变成

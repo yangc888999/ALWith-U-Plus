@@ -2,9 +2,8 @@
  * QA 独立集成验证（trailing 功能屏结构补全）。
  *
  * 与工程师的单元测试不同，这里把真实的 TrailingBoard 挂进真实的 MainSidebarLayout，
- * 用真实 i18n 文案（en / zh-CN），走「状态栏圆点停靠 → 屏头返回按钮 / chat 圆点返回」的
- * 完整回路，证明：
- *   a. 空列表时屏头与「返回对话」仍在，点击真的把画布带回 chat；
+ * 用真实 i18n 文案（en / zh-CN），走「状态栏圆点停靠 → 圆点返回」的完整回路，证明：
+ *   a. 空列表时屏头仍在，且不再渲染「返回对话」按钮（离开靠状态栏圆点）；
  *   b. 回到 chat 后 trailing 恢复 inert、侧栏恢复 pinned；
  *   c. 非空列表 / 存在工具窗口时不误报空态；
  *   d. 中文文案正确落到屏头。
@@ -140,7 +139,7 @@ function sidebarMode(container: HTMLElement): string | null {
   return container.querySelector("[data-sidebar-mode]")?.getAttribute("data-sidebar-mode") ?? null
 }
 
-test("empty trailing screen keeps a working back-to-chat action that restores inert and pinned", async () => {
+test("empty trailing screen keeps its header and returns through the status-bar dot", async () => {
   await withReducedMotion(() =>
     withCanvasGeometry(async () => {
       const view = renderLayout()
@@ -154,9 +153,10 @@ test("empty trailing screen keeps a working back-to-chat action that restores in
       expect(scope.getByRole("heading", { name: "Apps" })).toBeVisible()
       expect(scope.getByText("Running apps and tool windows appear here. Select a card to switch to it.")).toBeVisible()
       expect(scope.getByText("No running apps or tool windows right now.")).toBeVisible()
+      // 屏头的「返回对话」已移除：离开这一屏靠侧栏与状态栏圆点，按钮是多余的悬浮控件。
+      expect(scope.queryByRole("button", { name: "Back to chat" })).not.toBeInTheDocument()
 
-      // 空列表下「返回对话」仍是唯一出口，点击必须真的回到 chat。
-      await act(() => Promise.try(() => fireEvent.click(scope.getByRole("button", { name: "Back to chat" }))))
+      await backToChat(view.container)
       await waitFor(() => expect(dotsOf(view.container)[0]).toHaveAttribute("aria-current", "page"))
       expect(trailing.hasAttribute("inert")).toBe(true)
       expect(sidebarMode(view.container)).toBe("pinned")
@@ -166,7 +166,7 @@ test("empty trailing screen keeps a working back-to-chat action that restores in
   )
 })
 
-test("a populated trailing screen hides the empty hint and its back action still returns to chat", async () => {
+test("a populated trailing screen hides the empty hint and offers no back control", async () => {
   running.apps = [{ name: "Feishu", bundle_id: "com.electron.lark", icon: null }]
   await withReducedMotion(() =>
     withCanvasGeometry(async () => {
@@ -176,7 +176,8 @@ test("a populated trailing screen hides the empty hint and its back action still
       const scope = within(trailing)
       expect(scope.queryByText("No running apps or tool windows right now.")).not.toBeInTheDocument()
       expect(scope.getByRole("button", { name: "Feishu" })).toBeVisible()
-      await act(() => Promise.try(() => fireEvent.click(scope.getByRole("button", { name: "Back to chat" }))))
+      expect(scope.queryByRole("button", { name: "Back to chat" })).not.toBeInTheDocument()
+      await backToChat(view.container)
       await waitFor(() => expect(dotsOf(view.container)[0]).toHaveAttribute("aria-current", "page"))
       expect(trailing.hasAttribute("inert")).toBe(true)
       expect(sidebarMode(view.container)).toBe("pinned")
@@ -230,8 +231,8 @@ test("the trailing header speaks Simplified Chinese when the locale is zh-CN", a
         expect(scope.getByRole("heading", { name: "功能" })).toBeVisible()
         expect(scope.getByText("这里列出正在运行的应用与工具窗口，点击卡片即可切换过去。")).toBeVisible()
         expect(scope.getByText("暂无正在运行的应用或工具窗口。")).toBeVisible()
-        await act(() => Promise.try(() => fireEvent.click(scope.getByRole("button", { name: "返回对话" }))))
-        await waitFor(() => expect(dotsOf(view.container)[0]).toHaveAttribute("aria-current", "page"))
+        expect(scope.queryByRole("button", { name: "返回对话" })).not.toBeInTheDocument()
+        await backToChat(view.container)
         expect(trailing.hasAttribute("inert")).toBe(true)
         expect(sidebarMode(view.container)).toBe("pinned")
         view.unmount()

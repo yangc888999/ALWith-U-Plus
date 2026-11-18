@@ -78,7 +78,7 @@ function canvasValue(navigate: (region: "chat" | "preview" | "trailing") => void
   }
 }
 
-test("the apps screen shows a title, a description and a working back-to-chat action", () => {
+test("the apps screen shows a title and a description, with no stray back-to-chat control", () => {
   const navigate = vi.fn()
   render(
     <CanvasContext.Provider value={canvasValue(navigate)}>
@@ -88,8 +88,10 @@ test("the apps screen shows a title, a description and a working back-to-chat ac
   expect(screen.getByRole("heading", { name: "canvas.appsTitle" })).toBeVisible()
   expect(screen.getByText("canvas.appsDescription")).toBeVisible()
   expect(screen.queryByText("canvas.appsEmpty")).not.toBeInTheDocument()
-  fireEvent.click(screen.getByRole("button", { name: "canvas.backToChat" }))
-  expect(navigate).toHaveBeenCalledWith("chat")
+  // The rail and the canvas dots are the way back; a button floating in the header read as a
+  // stray control over the screen (2026-11-19), so it must stay gone.
+  expect(screen.queryByRole("button", { name: "canvas.backToChat" })).not.toBeInTheDocument()
+  expect(navigate).not.toHaveBeenCalled()
 })
 
 test("an empty apps screen explains itself instead of rendering a blank pane", async () => {
@@ -100,6 +102,7 @@ test("an empty apps screen explains itself instead of rendering a blank pane", a
     </CanvasContext.Provider>
   )
   expect(await screen.findByText("canvas.appsEmpty")).toBeVisible()
-  // The return action survives the empty list — it is the reader's only obvious exit.
-  expect(screen.getByRole("button", { name: "canvas.backToChat" })).toBeVisible()
+  // The header survives the empty list: the pane still explains where the reader is.
+  expect(screen.getByRole("heading", { name: "canvas.appsTitle" })).toBeVisible()
+  expect(screen.getByText("canvas.appsDescription")).toBeVisible()
 })
