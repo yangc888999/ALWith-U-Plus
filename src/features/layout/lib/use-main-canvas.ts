@@ -60,6 +60,15 @@ export function useMainCanvas(
   const divider = useRef(false)
   const [dividerDragging, setDividerState] = useState(false)
   const appliedGeometry = useRef<string | null>(null)
+  /**
+   * Launch has exactly one landing: the conversation. Until the canvas has a measured geometry
+   * and is demonstrably parked on the chat snap, every Atlas reading is geometry noise. Writing
+   * such a reading back to the app's `view` is what parked the window on the management screen
+   * with the sidebar on the far side (2026-11-18). The lock is released only by an explicit user
+   * navigation (click, drag, swipe, keyboard), never by a programmatic settle, so neither a cold
+   * `selected=0` nor a post-rebuild settle can ever latch the wrong screen.
+   */
+  const bootLocked = useRef(true)
   const [request, setRequest] = useState<{
     region: "chat" | "preview" | "trailing"
     revision: number
@@ -163,6 +172,17 @@ export function useMainCanvas(
     commitScreen(index)
   }, [api, size.viewport, geometry.regions, direction, commitScreen])
 
+  // The moment an explicit navigation happens the reader has taken over; from then on Atlas is
+  // the authority for the current screen and the boot lock no longer applies.
+  const releaseBootLock = useCallback((): void => {
+    if (!bootLocked.current) return
+    bootLocked.current = false
+  }, [])
+
+  // Deliberately does NOT release the boot lock. The workspace panel fires `navigate("preview")`
+  // by itself while a project loads on launch; treating that as "the reader took over" would open
+  // the gate for the cold snap-0 settle to relay the window to the leading screen. A real user
+  // navigation reaches `view` through the screen effect or `select`, both of which do release it.
   const navigate = useCallback((region: "chat" | "preview" | "trailing"): void => {
     setRequest((current) => ({ region, revision: (current?.revision ?? 0) + 1 }))
   }, [])
@@ -213,6 +233,9 @@ export function useMainCanvas(
   useEffect(() => {
     if (!api) return
     if (previousScreen.current !== screen) {
+      // The app itself changed the view (a sidebar destination such as plugins/settings). That is
+      // an explicit navigation, so the launch lock no longer applies from this point on.
+      releaseBootLock()
       region.current = screen === "leading" ? "leading" : "chat"
       api?.cancelInput()
       const target = screen === "leading" ? 0 : 1
@@ -225,21 +248,18 @@ export function useMainCanvas(
       api.goToSnap(target, { instant: !animating })
     }
     previousScreen.current = screen
-  }, [api, screen, size.viewport])
+  }, [api, screen, size.viewport, releaseBootLock])
 
   useEffect(() => {
     if (!api) return
     const select = (): void => {
       const index = api.getGeometry().selected
+      // A cold Atlas reading is a measurement artefact, not the reader's intent. Until the reader
+      // navigates explicitly, a snap-0 report must never latch the region to `leading`: every later
+      // rebuild would then aim there and the window would sit on blank paper with the sidebar
+      // stranded on the far side (2026-11-18, first launch on a MacBook Air).
+      if (bootLocked.current) return
       setSelected(index)
-      // Before the first settle has run there is no measured geometry yet, and Atlas reports
-      // whatever snap it happens to sit on — on a cold start that is the leading screen, because
-      // the track's leading padding has not been laid out when it first measures. Adopting that
-      // reading as the reader's intent is what parked the canvas on the wrong screen for good: the
-      // region latched to `leading`, every later settle then dutifully aimed at it, and the window
-      // sat on blank paper with the sidebar off to the far side until a resize recomputed
-      // everything (2026-11-18, first launch on a MacBook Air). Until a settle has been applied,
-      // selection is a measurement artefact, not an intention.
       if (!rebuilding.current && appliedGeometry.current !== null) {
         const selectedRegion = geometry.regions[index]
         if (
@@ -252,15 +272,24 @@ export function useMainCanvas(
     const stop = api.subscribe((state) => setMoving(state.moving))
     const settle = (): void => {
       setMoving(false)
+      // During the launch lock every Atlas settle is either the cold snap-0 measurement or a
+      // programmatic consequence of the landing/geometry rebuild — never a reader decision. Both
+      // handlers stay silent so `view` and `region.current` remain on chat. Only the explicit-intent
+      // paths release the lock; after that Atlas is authoritative again.
+      if (bootLocked.current) return
       select()
       commitScreen(api.getGeometry().selected)
     }
-    api.on("select", select).on("settle", settle)
+    // Pointer-down on the canvas is an unambiguous user intent, so it ends the launch lock even
+    // before a settle arrives — otherwise a reader who drags before the landing settle would be
+    // ignored and the view would not follow their drag.
+    const pointerDown = (): void => releaseBootLock()
+    api.on("select", select).on("settle", settle).on("pointerDown", pointerDown)
     return () => {
       stop()
-      api.off("select", select).off("settle", settle)
+      api.off("select", select).off("settle", settle).off("pointerDown", pointerDown)
     }
-  }, [api, commitScreen, geometry.regions, geometry.split])
+  }, [api, commitScreen, geometry.regions, geometry.split, releaseBootLock])
 
   useEffect(() => {
     if (!api) return
@@ -269,7 +298,12 @@ export function useMainCanvas(
     if (enabled && isTauri()) {
       void events["trackpad-gesture"]
         .listen(({ payload }) => {
-          if (!disposed) api.gesture(payload)
+          if (!disposed) {
+            // A swipe is an explicit navigation. From here Atlas reflects the reader, not a cold
+            // measurement, so the launch lock must not suppress its settle any more.
+            releaseBootLock()
+            api.gesture(payload)
+          }
         })
         .then((stop) => {
           if (disposed) stop()
@@ -284,9 +318,25 @@ export function useMainCanvas(
       unsubscribe?.()
       api.cancelInput()
     }
-  }, [api, enabled])
+  }, [api, enabled, releaseBootLock])
+
+  useEffect(() => {
+    const node = viewport.current
+    if (!node) return
+    // Atlas handles Arrow/Home/End on the focused canvas and reports the move only through
+    // `settle` (no pointerDown). Without this, keyboard navigation right after launch would be
+    // swallowed by the boot lock until the first click. A navigation key is explicit intent.
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.target !== node) return
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return
+      releaseBootLock()
+    }
+    node.addEventListener("keydown", onKeyDown)
+    return () => node.removeEventListener("keydown", onKeyDown)
+  }, [api, releaseBootLock])
 
   const select = (index: number): void => {
+    releaseBootLock()
     if (api?.getGeometry().selected === index) return
     api?.cancelInput()
     const target = geometry.regions[index]
