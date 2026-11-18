@@ -459,10 +459,29 @@ test("a failed refresh reports the error and never rebuilds the connection", asy
   await store.getState().refresh(["/a"])
   expect(store.getState().error).toBe("acpRequest: agent codex exited")
   expect(store.getState().loading).toBe(false)
-  // loadedScope stays unset: the page's effect keys off it, and a failure must not look loaded.
-  expect(store.getState().loadedScope).toBeNull()
+  // loadedScopes stay unset: the page's effect keys off them, and a failure must not look loaded.
+  expect(store.getState().loadedScopes).toEqual({ skills: null, marketplace: null, installed: null })
   // A second refresh (the reader's Retry) asks again; still no connection surgery from the store.
   api.listPlugins = vi.fn().mockRejectedValue(new Error("acpRequest: agent codex exited"))
   await store.getState().refresh(["/a"])
   expect(store.getState().error).toBe("acpRequest: agent codex exited")
+})
+
+test("a sliced refresh touches one catalog and leaves the other scopes unset", async () => {
+  const fake = fakeApi()
+  const installedPlugins = vi.fn(fake.installedPlugins)
+  const listSkills = vi.fn(fake.listSkills)
+  const listPlugins = vi.fn(fake.listPlugins)
+  const api = { ...fake, installedPlugins, listSkills, listPlugins }
+  const store = createPluginsStore(api)
+  await store.getState().refresh(["/a"], { slices: ["installed"] })
+  expect(installedPlugins).toHaveBeenCalledTimes(1)
+  expect(listSkills).not.toHaveBeenCalled()
+  expect(listPlugins).not.toHaveBeenCalled()
+  expect(store.getState().loadedScopes).toEqual({ skills: null, marketplace: null, installed: '["/a"]' })
+  // A second slice fills in on its own; the installed scan is not repeated.
+  await store.getState().refresh(["/a"], { slices: ["skills"] })
+  expect(listSkills).toHaveBeenCalledTimes(1)
+  expect(installedPlugins).toHaveBeenCalledTimes(1)
+  expect(store.getState().loadedScopes).toEqual({ skills: '["/a"]', marketplace: null, installed: '["/a"]' })
 })

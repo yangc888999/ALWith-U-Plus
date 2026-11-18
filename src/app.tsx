@@ -731,20 +731,34 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   // "disconnected" and every surface that reads the agent goes red until somebody reconnects — the
   // reader had to press "重新连接" for something the app knows how to fix. This is THE connection
   // owner reconnecting: one attempt at a time, bounded backoff, and it stops the moment a connect
-  // lands (`connection` leaves "disconnected"). It cannot loop: a failing connect keeps the state
-  // "failed", and the attempt budget is per drop, not per render.
+  // lands (`connection` leaves "disconnected").
+  const lastAutoReconnect = useRef(0)
   useEffect(() => {
     if (connection !== "disconnected") return
+    // A surface handoff (the floating chat window returning to main) drops this connection while
+    // the other side is still tearing its agent down. Reconnecting inside that window restarts the
+    // engine the handoff is already replacing, and the new exit drops the connection again — a
+    // self-sustaining restart loop (2026-11-18). Keep a minimum gap between automatic attempts, but
+    // never drop the attempt: returning early here left the app disconnected forever once the gap
+    // swallowed the only try (an inert 「重新连接」).
     let cancelled = false
+    let timer: number | undefined
     const run = async (round: number): Promise<void> => {
       if (cancelled) return
+      const wait = Math.max(0, 4_000 - (Date.now() - lastAutoReconnect.current))
+      if (wait > 0) {
+        timer = window.setTimeout(() => void run(round), wait)
+        return
+      }
+      lastAutoReconnect.current = Date.now()
       await connect()
       if (cancelled || client.state.connection !== "disconnected" || round >= 3) return
-      window.setTimeout(() => void run(round + 1), 600 * 2 ** round)
+      timer = window.setTimeout(() => void run(round + 1), 600 * 2 ** round)
     }
-    window.setTimeout(() => void run(0), 400)
+    timer = window.setTimeout(() => void run(0), 400)
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
   }, [connection, connect])
 

@@ -498,7 +498,7 @@ test("the skill catalog includes known projects beyond the current chat and excl
     ]
   })
   const view = render(<PluginsPage cwd="/work/alwith-u" active />)
-  await waitFor(() => expect(refresh).toHaveBeenCalledWith(["/work/alwith-desktop", "/work/alwith-u"]))
+  await waitFor(() => expect(refresh).toHaveBeenCalledWith(["/work/alwith-desktop", "/work/alwith-u"], expect.anything()))
   refresh.mockClear()
   await act(() =>
     Promise.try(() =>
@@ -507,13 +507,13 @@ test("the skill catalog includes known projects beyond the current chat and excl
   )
   expect(refresh).not.toHaveBeenCalled()
   view.rerender(<PluginsPage cwd="/work/other" active />)
-  await waitFor(() => expect(refresh).toHaveBeenCalledWith(["/work/alwith-desktop", "/work/other"]))
+  await waitFor(() => expect(refresh).toHaveBeenCalledWith(["/work/alwith-desktop", "/work/other"], expect.anything()))
 })
 
 test("returning to a loaded catalog reuses its snapshot, including across remounts", async () => {
   client.store.setState({ sessionList: [] })
   const refresh = vi.fn((cwds: string[] = []) => {
-    pluginsStore.setState({ loadedScope: JSON.stringify(cwds) })
+    pluginsStore.setState({ loadedScopes: { skills: JSON.stringify(cwds), marketplace: JSON.stringify(cwds), installed: JSON.stringify(cwds) } })
 
     return Promise.resolve()
   })
@@ -531,7 +531,7 @@ test("returning to a loaded catalog reuses its snapshot, including across remoun
 test("a failed catalog load shows the error instead of an endless skeleton, and ready flips do not re-arm it", async () => {
   client.store.setState({ sessionList: [] })
   const refresh = vi.fn().mockResolvedValue(undefined)
-  pluginsStore.setState({ refresh, error: "acpRequest: agent codex exited", loadedScope: null })
+  pluginsStore.setState({ refresh, error: "acpRequest: agent codex exited", loadedScopes: { skills: null, marketplace: null, installed: null } })
   const view = render(<PluginsPage cwd="/work/project" active />)
   // The failure is on screen; the skeleton is gone even though the connection is not ready.
   await act(() => Promise.try(() => client.store.setState({ connection: "connecting", agent: null })))
@@ -556,4 +556,15 @@ test("a failed catalog load shows the error instead of an endless skeleton, and 
   await act(() => Promise.try(() => view.rerender(<PluginsPage cwd="/work/project" active />)))
   expect(refresh.mock.calls.length).toBe(callsAfterReconnect)
   expect(view.getByRole("alert").textContent).toContain("agent codex exited")
+})
+
+test("opening the page asks only for the visible tab's catalog", async () => {
+  client.store.setState({ sessionList: [] })
+  const refresh = vi.fn().mockResolvedValue(undefined)
+  pluginsStore.setState({ refresh, loadedScopes: { skills: null, marketplace: null, installed: null } })
+  render(<PluginsPage cwd="/work/project" active />)
+  // Three engine scans per visit is what made this page expensive; the default view
+  // (插件 → 市场) needs the marketplace catalog only.
+  await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1))
+  expect(refresh).toHaveBeenLastCalledWith(["/work/project"], { slices: ["marketplace"] })
 })

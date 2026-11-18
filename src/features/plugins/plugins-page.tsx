@@ -47,7 +47,7 @@ import { pluginsStore } from "./instance"
 import { PluginDetailPage } from "./plugin-detail-page"
 import { PluginIcon, PluginIconDefinitions } from "./plugin-icon"
 import { SkillsTab } from "./skills-tab"
-import type { PluginEntry } from "./store"
+import type { CatalogSlice, PluginEntry } from "./store"
 
 function pluginTitle(plugin: PluginSummary): string {
   return plugin.interface?.displayName ?? plugin.name
@@ -366,8 +366,14 @@ function PluginToolbar() {
 }
 
 function MarketplaceTab({ onOpen, query }: { onOpen: (entry: PluginEntry) => void; query: string }) {
+  const { t } = useTranslation()
   const ready = usePluginsReady()
+  const refresh = useStore(pluginsStore, (state) => state.refresh)
   const loadErrors = useStore(pluginsStore, (state) => state.marketplaceLoadErrors)
+  // The remote catalog is skipped on purpose (a ~4.5 MB compact index over a 37 MB raw one). That
+  // is a note with a way to load it, not a failure, so it must not read like one.
+  const onlinePending = loadErrors.filter((error) => error.message === "ONLINE_MARKETPLACE_UNLOADED")
+  const otherErrors = loadErrors.filter((error) => error.message !== "ONLINE_MARKETPLACE_UNLOADED")
   const failed = useStore(pluginsStore, (state) => state.error !== null)
   // A failed load shows the error banner, not an endless skeleton: the skeleton is only for the
   // first load (or a reconnect that has not produced data yet). While an error stands, the page
@@ -377,8 +383,24 @@ function MarketplaceTab({ onOpen, query }: { onOpen: (entry: PluginEntry) => voi
   return (
     <Pane>
       <div className="flex flex-col gap-4">
-        {loadErrors.map((error) => (
-          <p key={error.marketplacePath} className="px-2 text-xs text-destructive">
+        {onlinePending.map((error) => (
+          <div
+            key={error.marketplacePath}
+            className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground"
+          >
+            <span>{t("plugins.marketplace.onlineNote")}</span>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={loading}
+              onClick={() => void refresh(undefined, { slices: ["marketplace"], includeRemote: true })}
+            >
+              {t("plugins.marketplace.onlineLoad")}
+            </Button>
+          </div>
+        ))}
+        {otherErrors.map((error) => (
+          <p key={error.marketplacePath} className="px-2 text-xs text-muted-foreground">
             {error.marketplacePath}: {error.message}
           </p>
         ))}
@@ -505,13 +527,26 @@ export function PluginsPage({ cwd, active }: { cwd: string | null; active: boole
   useEffect(() => {
     // The screen arrow is available even before the engine has connected.
     if (!active || !ready) return
-    if (pluginsStore.getState().loadedScope !== directoriesKey) void refresh(JSON.parse(directoriesKey) as string[])
-  }, [active, ready, refresh, directoriesKey])
+    // Only the visible tab's catalog is fetched: each of the three is a full engine scan, and a
+    // reader who opened 「插件 → 已安装」 never asked for the skills walk (2026-11-18).
+    const slices: CatalogSlice[] =
+      kind === "skills" ? ["skills"] : [pluginTab === "installed" ? "installed" : "marketplace"]
+    const loaded = pluginsStore.getState().loadedScopes
+    if (slices.some((slice) => loaded[slice] !== directoriesKey))
+      void refresh(JSON.parse(directoriesKey) as string[], { slices })
+  }, [active, ready, refresh, directoriesKey, kind, pluginTab])
 
   useEffect(() => {
-    if (!ready) return
-    return client.onSkillsChanged(() => void refresh(undefined, { background: true }))
-  }, [ready, refresh])
+    if (!ready || !active) return
+    // Codex announces a skills change after every catalog mutation and after rescanning; a full
+    // reload per notification was the page's loudest engine load. Coalesce them and re-read only
+    // the skills catalog.
+    let timer: number | undefined
+    return client.onSkillsChanged(() => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => void refresh(undefined, { background: true, slices: ["skills"] }), 800)
+    })
+  }, [ready, active, refresh])
 
   return (
     <div className="@container flex h-full flex-col overflow-hidden">

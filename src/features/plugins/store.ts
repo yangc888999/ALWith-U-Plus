@@ -47,9 +47,18 @@ export type PluginsApi = {
 /** A plugin together with the marketplace it was listed under (needed to install and read). */
 export type PluginEntry = { plugin: PluginSummary; marketplace: PluginMarketplaceEntry }
 
+/**
+ * The page has three independent catalogs and each costs the engine a full scan: `skills/list`
+ * walks every project directory, `plugin/list` walks the marketplaces, `plugin/installed` walks
+ * the installed set. Opening the page used to ask for all three at once, so a reader who only
+ * wanted to look at 「已安装」 paid for two scans they never saw (2026-11-18).
+ */
+export type CatalogSlice = "skills" | "marketplace" | "installed"
+
 type PluginsState = {
   loading: boolean
-  loadedScope: string | null
+  /** Per-catalog marker of the directory scope its data belongs to. */
+  loadedScopes: Record<CatalogSlice, string | null>
   upgrading: boolean
   /** Message of the last failed catalog load; the page shows a retry. */
   error: string | null
@@ -71,7 +80,16 @@ type PluginsState = {
   busySkills: Record<string, true>
   /** Marketplace names with an upgrade or removal in flight. */
   busyMarketplaces: Record<string, true>
-  refresh: (cwds?: string[], options?: { forceRefetch?: boolean; background?: boolean }) => Promise<void>
+  refresh: (
+    cwds?: string[],
+    options?: {
+      forceRefetch?: boolean
+      background?: boolean
+      slices?: readonly CatalogSlice[]
+      /** Ask the adapter to include the remote marketplace catalog (a compact ~4.5 MB index). */
+      includeRemote?: boolean
+    }
+  ) => Promise<void>
   /** Installs and returns Codex's answer (apps that still need auth); throws on failure. */
   install: (entry: PluginEntry) => Promise<PluginInstallResponse>
   setPluginEnabled: (plugin: PluginSummary, enabled: boolean) => Promise<void>
@@ -85,6 +103,14 @@ type PluginsState = {
 }
 
 export type PluginsStore = StoreApi<PluginsState>
+
+/** Two refreshes cover the same directories when their sorted keys match. */
+function sameScope(
+  pending: { cwds: string[] } | null,
+  cwds: string[]
+): boolean {
+  return pending !== null && pending.cwds.join("\u0000") === cwds.join("\u0000")
+}
 
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -153,7 +179,12 @@ function readParams(entry: PluginEntry): PluginReadParams {
  */
 export function createPluginsStore(api: PluginsApi): PluginsStore {
   const store = createStore<PluginsState>((set, get) => {
-    let pendingRefresh: { cwds: string[]; forceRefetch: boolean } | null = null
+    let pendingRefresh: {
+      cwds: string[]
+      forceRefetch: boolean
+      slices: Set<CatalogSlice>
+      includeRemote: boolean
+    } | null = null
     let refreshing: Promise<void> | null = null
     const refreshAfterChange = async (forceRefetch = false) => {
       await get().refresh(undefined, { forceRefetch, background: true })
@@ -176,7 +207,7 @@ export function createPluginsStore(api: PluginsApi): PluginsStore {
 
     return {
       loading: false,
-      loadedScope: null,
+      loadedScopes: { skills: null, marketplace: null, installed: null },
       upgrading: false,
       error: null,
       cwds: [],
@@ -192,7 +223,19 @@ export function createPluginsStore(api: PluginsApi): PluginsStore {
       busyMarketplaces: {},
 
       refresh: (cwds = get().cwds, options = {}) => {
-        pendingRefresh = { cwds, forceRefetch: options.forceRefetch === true || pendingRefresh?.forceRefetch === true }
+        // Concurrent asks merge: the visible tab and a background invalidation must not turn into
+        // two scans of the same catalog.
+        const slices = new Set<CatalogSlice>(options.slices ?? ["skills", "marketplace", "installed"])
+        if (pendingRefresh) {
+          const same = pendingRefresh.cwds.join("\u0000") === cwds.join("\u0000")
+          if (same) for (const slice of pendingRefresh.slices) slices.add(slice)
+        }
+        pendingRefresh = {
+          cwds,
+          forceRefetch: options.forceRefetch === true || pendingRefresh?.forceRefetch === true,
+          slices,
+          includeRemote: options.includeRemote === true || (sameScope(pendingRefresh, cwds) && pendingRefresh?.includeRemote === true)
+        }
         set({ cwds, ...(!options.background ? { loading: true } : {}) })
         if (refreshing) return refreshing
         refreshing = (async () => {
@@ -201,29 +244,44 @@ export function createPluginsStore(api: PluginsApi): PluginsStore {
             pendingRefresh = null
             set({ error: null })
             try {
+              const scope = JSON.stringify(request.cwds)
+              const wantSkills = request.slices.has("skills")
+              const wantMarketplace = request.slices.has("marketplace")
+              const wantInstalled = request.slices.has("installed")
               const [skills, plugins, installed] = await Promise.all([
-                api.listSkills(request.cwds, request.forceRefetch),
-                api.listPlugins({
-                  ...(request.cwds.length > 0 ? { cwds: request.cwds } : {}),
-                  ...(request.forceRefetch ? { forceRefetch: true } : {})
-                }),
-                api.installedPlugins(request.cwds)
+                wantSkills ? api.listSkills(request.cwds, request.forceRefetch) : null,
+                wantMarketplace
+                  ? api.listPlugins({
+                      ...(request.cwds.length > 0 ? { cwds: request.cwds } : {}),
+                      ...(request.forceRefetch ? { forceRefetch: true } : {}),
+                      ...(request.includeRemote ? { includeRemote: true } : {})
+                    } as PluginListParams)
+                  : null,
+                wantInstalled ? api.installedPlugins(request.cwds) : null
               ])
               // A newer scope or invalidation must settle before exposing a snapshot.
               if (pendingRefresh) continue
-              const merged = mergeSkills(skills)
+              const merged = skills === null ? null : mergeSkills(skills)
+              const loadedScopes = { ...get().loadedScopes }
+              if (merged !== null) loadedScopes.skills = scope
+              if (plugins !== null) loadedScopes.marketplace = scope
+              if (installed !== null) loadedScopes.installed = scope
               set({
-                loadedScope: JSON.stringify(request.cwds),
-                skills: merged.skills,
-                skillProjects: merged.projects,
-                skillErrors: merged.errors,
-                marketplaces: plugins.marketplaces,
-                marketplaceLoadErrors: plugins.marketplaceLoadErrors,
-                featuredPluginIds: plugins.featuredPluginIds,
-                installed: installedEntries(installed)
+                loadedScopes,
+                ...(merged === null
+                  ? {}
+                  : { skills: merged.skills, skillProjects: merged.projects, skillErrors: merged.errors }),
+                ...(plugins === null
+                  ? {}
+                  : {
+                      marketplaces: plugins.marketplaces,
+                      marketplaceLoadErrors: plugins.marketplaceLoadErrors,
+                      featuredPluginIds: plugins.featuredPluginIds
+                    }),
+                ...(installed === null ? {} : { installed: installedEntries(installed) })
               })
             } catch (error) {
-              // Report, never repair: a failed refresh leaves `loadedScope` untouched so the
+              // Report, never repair: a failed refresh leaves `loadedScopes` untouched so the
               // page's effect does not spin, and the connection owner decides when to reconnect.
               if (!pendingRefresh) set({ error: describe(error) })
             }

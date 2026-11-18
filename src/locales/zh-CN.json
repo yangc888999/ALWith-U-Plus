@@ -1688,7 +1688,9 @@
       "pluginCount_one": "{{count}} 个插件",
       "pluginCount_other": "{{count}} 个插件",
       "partialMore_one": "还有 {{count}} 个市场无法加载",
-      "partialMore_other": "还有 {{count}} 个市场无法加载"
+      "partialMore_other": "还有 {{count}} 个市场无法加载",
+      "onlineNote": "在线市场目录较大，默认未加载（约 1.3 万个插件）。本地与已安装插件不受影响。",
+      "onlineLoad": "加载在线市场"
     },
     "previousPage": "上一页",
     "nextPage": "下一页"

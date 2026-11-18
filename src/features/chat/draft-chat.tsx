@@ -122,6 +122,10 @@ export function DraftChat({
   // A cleared context parks the previous model/effort; the draft starts from it so the next
   // conversation keeps what the user had dialled in rather than the provider default.
   const inheritedEffort = useRef<string | null>(null)
+  // A saved provider catalog change (sign-in, logout, a new model list) can invalidate the
+  // draft's model, so preparation follows the revision — never the connection status: that flips
+  // on every catalog reset/apply and turned this effect into a connect()/restart loop (2026-11-18).
+  const providerRevision = providerSnapshot?.revision
   const [model, setModel] = useState<string | null>(() => {
     const inherited = client.takeInherited()
     inheritedEffort.current = inherited?.effort ?? null
@@ -141,7 +145,6 @@ export function DraftChat({
       mounted.current = false
     }
   }, [])
-  const providerRevision = providerSnapshot?.revision
   const recentProjects = useMemo(
     () => [
       ...new Set(
@@ -160,8 +163,6 @@ export function DraftChat({
     // a 1-3 second reconnect storm that no page ever asked for (2026-11-18). The connection banner
     // and the error card (both explicit) own reconnection; preparation only re-runs on real input.
     void attempt
-    void providerRevision
-    void providerSnapshot?.status
     let active = true
     setPreparing(true)
     setError(null)
@@ -229,7 +230,7 @@ export function DraftChat({
     return () => {
       active = false
     }
-  }, [owner, cwd, providerRevision, providerSnapshot?.status, attempt, model])
+  }, [owner, cwd, providerRevision, attempt, model])
 
   // An engine that is already ready disproves a startup-class error: whatever it described is no
   // longer true, and leaving the card up only sends the reader to press a 「重试」 that has nothing

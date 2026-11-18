@@ -4,6 +4,59 @@ export function patchAdapter(source: string): string {
     if (source.split(before).length !== 2) throw new Error("Adapter patch anchor changed or duplicated")
     source = source.replace(before, after)
   }
+  // A remote marketplace catalog (openai-curated-remote) is ~13.7k plugins and ~37 MB of JSON in a
+  // single ACP frame. That frame cannot cross codex → adapter → Runtime → IPC without stalling or
+  // dropping the connection, which surfaced as "the engine exits as soon as the OpenAI marketplace
+  // is connected". Serve a compact index instead: dropped by default, and when the page asks for it
+  // (`includeRemote`), trimmed to the fields the list and search actually read (2026-11-18).
+  replace(
+    '    const target = CATALOG_METHODS[method];\n    if (!target)\n      throw RequestError.methodNotFound(method);\n    const response = await this.codex.request(target, method === "_codex/account_read" ? { refreshToken: false } : params);',
+    `    const target = CATALOG_METHODS[method];
+    if (!target)
+      throw RequestError.methodNotFound(method);
+    let response = await this.codex.request(target, method === "_codex/account_read" ? { refreshToken: false } : params);
+    if (method === "_codex/plugin_list" && response !== null && typeof response === "object" && Array.isArray(response.marketplaces)) {
+      const includeRemote = params !== null && typeof params === "object" && params.includeRemote === true;
+      const compact = (plugin) => ({
+        id: plugin.id,
+        remotePluginId: plugin.remotePluginId ?? null,
+        name: plugin.name,
+        installed: plugin.installed === true,
+        enabled: plugin.enabled === true,
+        installPolicy: plugin.installPolicy,
+        availability: plugin.availability,
+        interface: plugin.interface === null || plugin.interface === undefined
+          ? null
+          : {
+              displayName: plugin.interface.displayName ?? null,
+              shortDescription: plugin.interface.shortDescription ?? null,
+              developerName: plugin.interface.developerName ?? null
+            }
+      });
+      const kept = [];
+      let skipped = 0;
+      let skippedName = null;
+      for (const marketplace of response.marketplaces) {
+        if (marketplace.path === null) {
+          if (!includeRemote) {
+            skipped += 1;
+            skippedName = skippedName ?? marketplace.name;
+            continue;
+          }
+          kept.push({ ...marketplace, plugins: (marketplace.plugins ?? []).map(compact) });
+          continue;
+        }
+        kept.push(marketplace);
+      }
+      response = { ...response, marketplaces: kept };
+      if (skipped > 0) {
+        response.marketplaceLoadErrors = [
+          ...(response.marketplaceLoadErrors ?? []),
+          { marketplacePath: skippedName ?? "remote", message: "ONLINE_MARKETPLACE_UNLOADED" }
+        ];
+      }
+    }`
+  )
   replace(
     '!this.providerCatalog?.hasGateway?.(provider)',
     '!this.codexAcpClient.providerCatalog.hasGateway(provider) && !this.codexAcpClient.providerCatalog.hasRuntime(provider)'

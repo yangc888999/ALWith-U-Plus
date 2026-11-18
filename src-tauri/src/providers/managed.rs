@@ -283,9 +283,21 @@ pub async fn providers_refresh_managed(
             }
         };
         let mut next = inner.saved.clone();
-        next.managed = Some(Cache { account, provider });
-        next.revision = next.revision.checked_add(1).ok_or_else(|| json!({"message":"模型配置版本号已用尽，请重启应用后重试"}))?;
-        persist(&state.path, &next).map_err(|_| json!({"message":"无法保存模型配置，请检查磁盘权限"}))?;
+        let cache = Cache { account, provider };
+        // The revision is a *content* version: it moves only when the catalog the account serves
+        // actually changes. Bumping it on every fetch made the saved revision a heartbeat, and
+        // every bump re-ran the draft preparation in the webview — which called connect() again,
+        // whose adoption fallback restarts the engine, whose exit resets the catalog, whose next
+        // fetch bumped the revision again (2026-11-18, the 1 s engine restart loop).
+        let unchanged = next
+            .managed
+            .as_ref()
+            .is_some_and(|cached| serde_json::to_value(cached).ok() == serde_json::to_value(&cache).ok());
+        next.managed = Some(cache);
+        if !unchanged {
+            next.revision = next.revision.checked_add(1).ok_or_else(|| json!({"message":"模型配置版本号已用尽，请重启应用后重试"}))?;
+            persist(&state.path, &next).map_err(|_| json!({"message":"无法保存模型配置，请检查磁盘权限"}))?;
+        }
         gate.models = model_ids(next.managed.as_ref().and_then(|cache| cache.provider.as_ref()));
         let _ = RevokedSessions {
             session_ids: gate

@@ -1688,7 +1688,9 @@
       "pluginCount_one": "{{count}} plugin",
       "pluginCount_other": "{{count}} plugins",
       "partialMore_one": "{{count}} more marketplace could not be loaded",
-      "partialMore_other": "{{count}} more marketplaces could not be loaded"
+      "partialMore_other": "{{count}} more marketplaces could not be loaded",
+      "onlineNote": "The online marketplace catalog is large, so it was not loaded (about 13k plugins). Local and installed plugins are unaffected.",
+      "onlineLoad": "Load online marketplace"
     },
     "previousPage": "Previous",
     "nextPage": "Next"

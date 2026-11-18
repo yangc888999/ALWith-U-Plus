@@ -65,7 +65,25 @@ function resolveCodex(configured: string): { command: string; version: string } 
   throw new Error(`Codex version probe failed for ${configured} (${describeProbe(first)})`)
 }
 
+/**
+ * The agent process only lives as long as its stdin: the Runtime closes that pipe when it stops
+ * the agent. Recording the exit code and the pipe's end separates "the Runtime stopped me" from
+ * "I died on my own", which is the difference between a reconnect loop and a crash (2026-11-18).
+ */
+function recordLifecycle(line: string): void {
+  try {
+    mkdirSync(dirname(bootLogPath()), { recursive: true })
+    appendFileSync(bootLogPath(), `[${new Date().toISOString()}] ${line}\n`)
+  } catch {}
+}
+
 async function start(): Promise<void> {
+  const startedAt = Date.now()
+  recordLifecycle(`agent boot pid=${process.pid} codex=${process.env["ALWITH_U_CODEX_PATH"] ?? "?"}`)
+  process.once("exit", (code) => recordLifecycle(`agent exit code=${code} aliveMs=${Date.now() - startedAt}`))
+  process.once("SIGTERM", () => recordLifecycle("agent SIGTERM"))
+  process.once("SIGINT", () => recordLifecycle("agent SIGINT"))
+  process.stdin.once("end", () => recordLifecycle("agent stdin end"))
   const configured = process.env.ALWITH_U_CODEX_PATH
   if (!configured || !isAbsolute(configured))
     throw new Error("ALWITH_U_CODEX_PATH must name the bundled Codex executable")
