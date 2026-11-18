@@ -1375,7 +1375,12 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       <WallpaperBackground onError={reportExtensionError}>
         <MainSidebarLayout
           chatMode={isTemporaryChat}
-          initialPinned={initialPreferences.sidebarPinned}
+          // A launch always opens on the new-conversation screen with the sidebar out: the rail is
+          // something the reader collapses on purpose during a session, never a state the app
+          // restores. Reopening into a collapsed rail (or onto a management screen) after a
+          // resize/sleep/display change was the last way the window could come back looking empty
+          // (2026-11-18). The stored preference still drives the Settings switch below.
+          initialPinned
           screen={leading ? "leading" : "main"}
           onScreenChange={(screen) => {
             if (screen === "main") setView("chat")

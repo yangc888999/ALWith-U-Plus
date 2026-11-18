@@ -135,6 +135,34 @@ export function useMainCanvas(
     previousScreen.current = next
     if (next !== callbacks.current.screen) callbacks.current.onScreenChange?.(next)
   }, [])
+  /**
+   * A launch always lands on the conversation, never on whatever screen the canvas happened to
+   * measure first.
+   *
+   * The canvas is a horizontal track whose stops depend on CSS variables written by the same render
+   * that settles it, so the first measurement of a fresh window is not trustworthy: it can report
+   * the leading screen (or a half-built track) and the window then rests on blank paper with the
+   * sidebar over on the far side until something forces a re-measure. Chasing each such race is
+   * losing game — the product rule is simpler than the machinery: **every launch opens the new
+   * conversation**, with the sidebar and the chat column, and only an explicit click may move it
+   * elsewhere (2026-11-18).
+   *
+   * So once there is a real width to work with, park on the conversation exactly once. A later
+   * settle (a click, a drag, a divider release) is the reader's own, and this never runs again.
+   */
+  const openedOnConversation = useRef(false)
+  useLayoutEffect(() => {
+    if (openedOnConversation.current || !api || size.viewport === 0) return
+    const index = geometry.regions.indexOf("chat")
+    if (index < 0) return
+    openedOnConversation.current = true
+    region.current = "chat"
+    api.refresh({ direction })
+    api.goToSnap(index, { instant: true })
+    setSelected(index)
+    commitScreen(index)
+  }, [api, size.viewport, geometry.regions, direction, commitScreen])
+
   const navigate = useCallback((region: "chat" | "preview" | "trailing"): void => {
     setRequest((current) => ({ region, revision: (current?.revision ?? 0) + 1 }))
   }, [])
