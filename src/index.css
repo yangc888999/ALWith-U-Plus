@@ -1635,6 +1635,20 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   background-color: var(--card);
 }
 
+/* The strip above the input (quoted document · running state · 分工) keeps its own rounded-top
+   surface. The package paints it `bg-sidebar`, which was a visible grey slab until v1.0.13 folded
+   the solid appearance's --sidebar into the same white/black as --card and --background: from then
+   on the strip was the same colour as everything around it and read as "the background is gone".
+   The tokens must stay single-colour for the solid mode, so the contrast is restored HERE, on the
+   strip only, from --muted (the one step the solid mode reserves for temporary surfaces). Dark
+   keeps the package's faint foreground wash, which still reads on the dark card. */
+[data-chat-input-header] {
+  background-color: var(--muted);
+}
+.dark [data-chat-input-header] {
+  background-color: color-mix(in oklab, var(--foreground) 3%, transparent);
+}
+
 /* Model rows are reordered with pointer events; never let WebKit start a native drag image. */
 .model-drag-handle {
   -webkit-user-drag: none;
@@ -1707,29 +1721,36 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   background: transparent;
   box-shadow: none;
   white-space: nowrap;
-  /* The name sets the width: the trigger refuses to shrink, so a long model id is shown whole
-     instead of being clipped to whatever the toolbar has left. */
-  flex: 0 0 auto;
-  max-width: none;
+  /* The trigger used to refuse to shrink (`flex: 0 0 auto; max-width: none`) so a long model id
+     always showed whole. In a narrow composer that made the right-hand group wider than its grid
+     track; with `justify-end` the overflow spilled LEFT, over the attach/command buttons — and the
+     send key sat on top of the picker's neighbour, so "I clicked send" opened the model menu.
+     The trigger now yields space: it shrinks and the name ellipsises (full name on hover), while
+     the icon, effort dots and send key keep their size. Wide windows are unchanged — nothing
+     shrinks until the row actually runs out of room. */
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
 }
 .alwith-model-pill[data-testid="model-trigger"]:hover {
   background: color-mix(in oklab, var(--settings-accent) 10%, transparent);
 }
-/* One line for the name, dots underneath it. The trigger takes the width the name needs and never
-   wraps: truncating it turned "4.1-Flash" into "Flash" with no way to read the rest.
-   Scope to the label container only: the icon box is also a direct child span and must stay
-   horizontally + vertically centred. */
+/* One line for the name, dots underneath it. Scope to the label container only: the icon box is
+   also a direct child span and must stay horizontally + vertically centred. */
 .alwith-model-pill > span:not(.model-picker-icon) {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
-  max-width: none;
+  min-width: 0;
+  max-width: 100%;
 }
 .alwith-model-pill > span:not(.model-picker-icon) > span:first-child {
   display: block;
-  max-width: none;
-  overflow: visible;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 /* The icon box sits first in the trigger's flex row and must align with the label's centre. */
@@ -1835,6 +1856,19 @@ body::after {
    语言文案；上游改层级时这条会失效而不是隐藏错东西。 */
 .chat-composer-toolbar button.border-border {
   display: none;
+}
+
+/* The toolbar's right-hand group (model picker · voice · send) is a plain flex row inside a
+   `minmax(0,1fr)` grid track. Its children used to be unshrinkable, so once their combined width
+   passed the track the row overflowed LEFT (justify-end) and painted over the left-hand group —
+   the send key landed on the model picker's neighbour and clicks went to the wrong control.
+   Two defences, in order: the model trigger now shrinks (above), and if the row STILL does not
+   fit (very narrow window, long voice controls) it wraps onto a second line inside the card
+   instead of overlapping anything. The grid track keeps min-width 0 so it can actually shrink. */
+.chat-composer-toolbar > div > div:last-child {
+  min-width: 0;
+  flex-wrap: wrap;
+  row-gap: 4px;
 }
 
 /* ==========================================================================

@@ -17,7 +17,7 @@ import { useStore } from "zustand"
 
 import { selectedModelId } from "@/agent/native-models"
 import { client } from "@/lib/client"
-import type { ProviderSnapshot } from "@/lib/providers"
+import { displayModelLabel, type ProviderSnapshot } from "@/lib/providers"
 
 import { DraftModelSelect } from "./draft-model-select"
 import { chatModelMenu } from "./model-catalog"
@@ -143,12 +143,32 @@ export function ModelEntry(props: DraftModelEntry | SessionModelEntry) {
       />
     )
   }
+  // The trigger ellipsises when the composer is too narrow for the full name (index.css), so the
+  // whole name has to remain readable somewhere: a native hover title on the slot. The id comes
+  // from the session's own options; the display name prefers the reader's rename, then the
+  // catalogue's label, then the raw id — the same order the turn-progress row uses.
+  const modelId = selectedModelId(props.session.configOptions ?? [])
+  const option = props.session.configOptions.find((entry) => entry.category === "model" && entry.type === "select")
+  const choices: unknown[] =
+    option !== undefined && option.type === "select" && Array.isArray(option.options) ? option.options : []
+  let catalogueLabel: string | null = null
+  for (const entry of choices) {
+    const nested = (entry as { options?: unknown }).options
+    const list = Array.isArray(nested) ? nested : [entry]
+    for (const item of list) {
+      const choice = item as { value?: unknown; name?: unknown }
+      if (choice.value === modelId && typeof choice.name === "string" && choice.name !== "") catalogueLabel = choice.name
+    }
+  }
+  const fullName = modelId === null ? undefined : (displayModelLabel(modelId) ?? catalogueLabel ?? modelId)
   return (
-    <ModelMenu
-      {...chatModelMenu}
-      sessionId={props.session.id}
-      options={props.session.configOptions}
-      disabled={modelGateOf(props.session) !== "ready"}
-    />
+    <div className="contents" title={fullName}>
+      <ModelMenu
+        {...chatModelMenu}
+        sessionId={props.session.id}
+        options={props.session.configOptions}
+        disabled={modelGateOf(props.session) !== "ready"}
+      />
+    </div>
   )
 }

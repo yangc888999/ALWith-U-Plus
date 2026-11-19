@@ -20,6 +20,10 @@ vi.mock("../draft-model-select", () => ({
 vi.mock("../recovery-model-select", () => ({
   RecoveryModelSelect: () => <div data-testid="recovery-picker" />
 }))
+// The package menu needs a conversation host; this file tests the slot U renders around it.
+vi.mock("@alwith/module-chat/conversation", () => ({
+  ModelMenu: () => <div data-testid="model-menu" />
+}))
 
 await initI18n("en")
 
@@ -89,6 +93,24 @@ test("a conversation without a model option renders the recovery picker", () => 
   const view = render(<ModelEntry surface="session" session={sessionWith([effortOption])} />)
   try {
     expect(view.getByTestId("recovery-picker")).toBeInTheDocument()
+  } finally {
+    view.unmount()
+  }
+})
+
+// The trigger ellipsises in a narrow composer (index.css), so the full name must stay readable on
+// hover. The slot carries it as a native title; `display: contents` keeps the toolbar layout intact.
+test("the session menu slot carries the full model name as a hover title", () => {
+  const option = {
+    ...modelOption,
+    currentValue: "gpt-6.2-sol",
+    options: [{ value: "gpt-6.2-sol", name: "GPT 6.2 Sol (Long Catalogue Name)" }]
+  }
+  const view = render(<ModelEntry surface="session" session={sessionWith([option], { attached: true })} />)
+  try {
+    const slot = view.container.querySelector("div.contents")
+    expect(slot).not.toBeNull()
+    expect(slot?.getAttribute("title")).toBe("GPT 6.2 Sol (Long Catalogue Name)")
   } finally {
     view.unmount()
   }
