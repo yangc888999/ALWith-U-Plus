@@ -64,6 +64,10 @@ export async function prepareWorkspaceFile(path: string, host?: WorkspaceFileHos
       ? path
       : await prepareDriveFile(drive, path, {
           maxEditorBytes,
+          // 超大 PDF 留在预览标签里：只有非 PDF 才交给系统应用。上一版无条件外开，一句
+          // 「Files larger than 16 MiB open in the system application.」把这条写成了既定
+          // 行为，于是几十页的 PDF 每次双击都跑到 Preview.app，回来还得重新找位置。
+          openLargeFilesExternally: !isPdfPreview(path),
           confirmDownload: async (name, bytes) => {
             const accepted = await confirm(
               `Download ${name} (${bytes} bytes)?${isPdfPreview(path) ? "" : " Files larger than 16 MiB open in the system application."}`,

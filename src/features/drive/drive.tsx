@@ -1,10 +1,10 @@
 import { logBackgroundError } from "@/lib/background-errors"
 
-import { drive } from "./controller"
+import { drive, driveTransport } from "./controller"
 
 export { drive } from "./controller"
 
-import type { FailedUpload, RootInfo } from "@alwith/module-drive"
+import { CONTRACT_VERSION, type FailedUpload, type RootInfo } from "@alwith/module-drive"
 import {
   type DriveHost,
   DriveMassDeleteDialog,
@@ -45,17 +45,32 @@ export function useDriveConnection(start = true): void {
   useEffect(() => {
     if (!isTauri()) return
     let disposed = false
-    void drive
-      .attach()
-      .then(async () => {
-        if (start && !disposed && drive.getSnapshot().snapshot?.configured) {
-          await drive.request({ type: "start" })
-          await drive.request({ type: "refreshClientConfig" })
+    void (async () => {
+      // 先问一次快照，用契约版本给这次启动定性，再决定要不要 start。
+      //
+      // 旧顺序是 `attach()` 之后读 `getSnapshot().configured`：attach 会先订阅事件流，而
+      // start / refreshClientConfig 会推进 generation —— 消费者因此可能挂在上一代快照上，
+      // 首帧显示「未配置」，随后被一次推送改回来。先校验再启动，订阅只发生在定稿之后。
+      if (start) {
+        try {
+          const response = await driveTransport.request({ type: "snapshot" })
+          if (disposed) return
+          if (response.type !== "snapshot" || response.data.version !== CONTRACT_VERSION)
+            throw new Error("Incompatible Drive contract")
+          if (response.data.configured) {
+            await driveTransport.request({ type: "start" })
+            if (disposed) return
+            await driveTransport.request({ type: "refreshClientConfig" })
+          }
+        } catch (error) {
+          if (!disposed) logBackgroundError("drive-startup", error)
         }
-      })
-      .catch((error: unknown) => {
-        if (!disposed) logBackgroundError("drive-startup", error)
-      })
+      }
+      // 启动失败也要 attach：否则云盘状态面板连错误都显示不出来，只剩一个空壳。
+      if (!disposed) await drive.attach()
+    })().catch((error: unknown) => {
+      if (!disposed) logBackgroundError("drive-startup", error)
+    })
     return () => {
       disposed = true
       drive.dispose()

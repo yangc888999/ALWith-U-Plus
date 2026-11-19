@@ -8,7 +8,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex, OnceLock},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Manager, State};
 use tauri3_specta::Event;
@@ -277,6 +277,16 @@ impl Providers {
         if close_deepseek_by_default(&mut saved) {
             if let Err(error) = persist(&path, &saved) {
                 log::warn!("Provider store: could not persist the DeepSeek default close: {error}");
+            }
+        }
+        // 引擎目录是 GPT 模型的唯一真源，先同步再谈别的：`prepare_merged_catalog` 紧随其后，
+        // 它写出的 merged.json 是引擎与四处选择器共用的那份清单。顺序颠倒会让新模型晚一个
+        // 启动才出现，而中间那段正是「选择器里没有、会话却认」的分裂窗口。
+        let directory_for_engine = directory.clone();
+        if sync_engine_models(&directory_for_engine, &mut saved) {
+            saved.revision = saved.revision.saturating_add(1);
+            if let Err(error) = persist(&path, &saved) {
+                log::warn!("Provider store: could not persist the engine model sync: {error}");
             }
         }
         // Restore the company model's configured reasoning level before any catalog tuning runs.
@@ -1712,6 +1722,190 @@ fn complete_catalog_entry(entry: Option<&Value>) -> Value {
     merged
 }
 
+/// 引擎自己公布的一个 GPT 模型，只保留应用真正要用的字段。
+///
+/// 引擎目录是 GPT 模型的唯一真源：型号上下线、effort 档位、加速档位都随引擎发行版变化，
+/// 应用不该维护第二份。以前靠 `inferred_reasoning_levels` 猜（GPT 一律 three levels），
+/// 于是 6.2 上线后选择器里只有 `low/medium/high`，「快速模式」整行消失。
+#[derive(Clone, Debug)]
+struct EngineModel {
+    slug: String,
+    label: String,
+    efforts: Vec<String>,
+    default_effort: Option<String>,
+    context_window: Option<u64>,
+    speed_tiers: Vec<String>,
+    service_tiers: Value,
+}
+
+/// 引擎目录缓存的位置。`merged_catalog` 是同步函数，不能去跑子进程，只能读这份快照。
+fn engine_catalog_path(directory: &Path) -> PathBuf {
+    directory.join("model-catalogs").join("engine-catalog.json")
+}
+
+/// 读上一次落盘的引擎目录；缺失或不可解析时返回空表（调用方按「不知道」处理）。
+fn engine_catalog(directory: &Path) -> Vec<EngineModel> {
+    let Ok(bytes) = std::fs::read(engine_catalog_path(directory)) else { return Vec::new() };
+    let Ok(parsed) = serde_json::from_slice::<Value>(&bytes) else { return Vec::new() };
+    let Some(models) = parsed.get("models").and_then(Value::as_array) else { return Vec::new() };
+    models.iter().filter_map(engine_model_from).collect()
+}
+
+fn engine_model_from(model: &Value) -> Option<EngineModel> {
+    let slug = model.get("slug").and_then(Value::as_str)?.trim().to_string();
+    if slug.is_empty() {
+        return None;
+    }
+    let efforts = model
+        .get("supported_reasoning_levels")
+        .and_then(Value::as_array)
+        .map(|levels| {
+            levels
+                .iter()
+                .filter_map(|level| level.get("effort").and_then(Value::as_str).map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Some(EngineModel {
+        label: engine_display_label(model.get("display_name").and_then(Value::as_str).unwrap_or(&slug)),
+        slug,
+        efforts,
+        default_effort: model
+            .get("default_reasoning_level")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        context_window: model.get("context_window").and_then(Value::as_u64),
+        speed_tiers: model
+            .get("additional_speed_tiers")
+            .and_then(Value::as_array)
+            .map(|tiers| tiers.iter().filter_map(Value::as_str).map(str::to_string).collect())
+            .unwrap_or_default(),
+        service_tiers: model.get("service_tiers").cloned().unwrap_or(Value::Null),
+    })
+}
+
+/// `GPT-6.2-Sol` → `6.2 Sol`，与设置里既有的短名风格（`6.1 Sol` / `6 Astra`）一致。
+fn engine_display_label(published: &str) -> String {
+    let stripped = published.trim().strip_prefix("GPT-").unwrap_or(published.trim());
+    stripped.replace('-', " ").replace("  ", " ").trim().to_string()
+}
+
+/// 跑一次 `codex debug models --bundled`，把结果写进缓存。
+///
+/// 子进程放在线程里带超时：这是启动路径，一个卡住的引擎不能拖住整个应用。读的是内嵌表，
+/// 不联网，实测毫秒级；超时值只是防线。
+fn refresh_engine_catalog(directory: &Path) -> Vec<EngineModel> {
+    let (sender, receiver) = std::sync::mpsc::channel::<Option<String>>();
+    std::thread::spawn(move || {
+        let output = std::process::Command::new(crate::runtime::bundled_codex_path())
+            .args(["debug", "models", "--bundled"])
+            .output();
+        let _ = sender.send(output.ok().and_then(|result| {
+            result.status.success().then(|| String::from_utf8_lossy(&result.stdout).to_string())
+        }));
+    });
+    let Some(Some(raw)) = receiver.recv_timeout(Duration::from_secs(10)).ok() else {
+        log::warn!("engine catalog: {} did not answer; keeping the previous snapshot", ENGINE_CATALOG_LABEL);
+        return engine_catalog(directory);
+    };
+    let Ok(parsed) = serde_json::from_str::<Value>(&raw) else {
+        log::warn!("engine catalog: unreadable output; keeping the previous snapshot");
+        return engine_catalog(directory);
+    };
+    let path = engine_catalog_path(directory);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(bytes) = serde_json::to_vec(&parsed) {
+        if std::fs::read(&path).ok().as_deref() != Some(bytes.as_slice()) {
+            if let Err(error) = std::fs::write(&path, &bytes) {
+                log::warn!("engine catalog: could not write {}: {error}", path.display());
+            }
+        }
+    }
+    engine_catalog(directory)
+}
+
+const ENGINE_CATALOG_LABEL: &str = "codex debug models";
+
+/// 引擎公布、且明确要出现在选择器里的 GPT 模型。
+///
+/// 两个条件都取自引擎自己的字段，不维护第二份名单：
+///   * `visibility == "list"` —— `hide` 是内部用途（`codex-auto-review`、`gpt-daybreak-*`）；
+///   * 没有 `upgrade` —— 引擎用它标出「已被某型号取代」，例如 5.6 Sol/5.5 都指向 `gpt-6-sol`。
+///     已被取代的型号还列在选择器里，读的人只会困惑该选哪个。
+fn engine_listed_models(directory: &Path) -> Vec<EngineModel> {
+    let Ok(bytes) = std::fs::read(engine_catalog_path(directory)) else { return Vec::new() };
+    let Ok(parsed) = serde_json::from_slice::<Value>(&bytes) else { return Vec::new() };
+    let Some(models) = parsed.get("models").and_then(Value::as_array) else { return Vec::new() };
+    models
+        .iter()
+        .filter(|model| model.get("visibility").and_then(Value::as_str) == Some("list"))
+        .filter(|model| model.get("upgrade").is_none_or(Value::is_null))
+        .filter_map(engine_model_from)
+        .collect()
+}
+
+/// 把引擎的 GPT 目录同步进 `可用模型` 的 openai 清单，返回是否真的改了什么。
+///
+/// 这是「各处调用模型一致」的那一步：设置页、对话框、拉会/分工、外部 API 都从同一份
+/// `built_in_model_overrides` 派生。只在 merged catalog 里补模型会让引擎认识它、而 UI 不认识，
+/// 于是出现「选择器里没有、但会话能跑」的分裂——正是要避免的东西。
+///
+/// 规则：
+///   * 引擎有、清单没有 → 追加（引擎顺序，最新的在前）；
+///   * 两边都有 → 用引擎的 effort 档位与默认档覆盖，label 与上下文窗口保留用户的值；
+///   * 清单有、引擎没有 → 保留（bridge-only 条目和用户自建条目都靠这条活着）。
+fn sync_engine_models(directory: &Path, saved: &mut Saved) -> bool {
+    // 刷新缓存是副作用：`merged_catalog` 与 adapter 的 per-thread 目录都从这份快照取元数据。
+    refresh_engine_catalog(directory);
+    let listed = engine_listed_models(directory);
+    if listed.is_empty() {
+        // 引擎没答话：不要凭空删掉或重排用户的清单。
+        return false;
+    }
+    let rows = saved.built_in_model_overrides.entry("openai".to_string()).or_default();
+    let mut added: Vec<CustomModel> = Vec::new();
+    let mut changed = false;
+    for model in &listed {
+        if model.efforts.is_empty() {
+            // 没有档位声明的条目写进清单只会让选择器显示一个不能调档的模型。
+            continue;
+        }
+        match rows.iter_mut().find(|row| row.api_id == model.slug) {
+            Some(row) => {
+                // 档位清单必须跟着引擎走：选一个上游已撤掉的档位，整轮请求会被 400 拒。
+                // 默认档是用户的偏好，不覆盖——引擎改推荐值不等于用户要换档。
+                if row.reasoning_levels.as_deref() != Some(model.efforts.as_slice()) {
+                    row.reasoning_levels = Some(model.efforts.clone());
+                    changed = true;
+                }
+                if row.context_window.is_none() && model.context_window.is_some() {
+                    row.context_window = model.context_window;
+                    changed = true;
+                }
+            }
+            None => {
+                log::info!("engine catalog: adding {} to the GPT shortlist", model.slug);
+                added.push(CustomModel {
+                    label: model.label.clone(),
+                    api_id: model.slug.clone(),
+                    context_window: model.context_window,
+                    description: None,
+                    reasoning_levels: Some(model.efforts.clone()),
+                    default_reasoning_level: model.default_effort.clone(),
+                    enabled: None,
+                });
+                changed = true;
+            }
+        }
+    }
+    if !added.is_empty() {
+        rows.splice(0..0, added);
+    }
+    changed
+}
+
 /// Rewrites the `Model identity:` paragraph so it names *this* entry's own model.
 ///
 /// A catalog entry that is not spelled out in a bundled catalog is built by cloning a sibling
@@ -2092,18 +2286,95 @@ fn merged_catalog(app_data: &std::path::Path) -> Option<Value> {
             }
         }
     }
-    // 加速档位必须在这里补：每个条目都是以 `qwen4-max-preview` 为模板克隆出来的，而模板不带
-    // `additional_speed_tiers`。适配器用 `model.additionalSpeedTiers` 判断「这个模型支不支持
-    // 加速」（`modelSupportsFast`），字段一缺，`fast-mode` 这个 configOption 根本不会发布，
-    // 对话框上方的「快速模式」整行就消失了——GPT 全系在引擎内置表里都声明了 `["fast"]`，
-    // 丢的是我们自己这一层。
+    // 引擎目录先落一遍：型号上下线、effort 档位、加速档位都以引擎为准。写在这里而不是各条
+    // 目录源里，是因为克隆模板（qwen4-max-preview）不带这些字段，任何一级上游都可能缺。
+    let engine = engine_catalog(app_data);
     for entry in entries.iter_mut() {
+        apply_engine_metadata(entry, &engine);
         restore_native_speed_tiers(entry);
     }
+    // 引擎有、目录里没有的型号：直接补进来。`sync_engine_models` 已经把清单补齐，但那次写入的
+    // 是 `builtin-openai-*.json`，而它只在 provider apply 时才生成——首次启动的这一刻还没有。
+    // 两边都做，谁先到都能得到同一份清单。
+    append_engine_models(&mut entries, &engine_listed_models(app_data), &mut seen);
     if entries.is_empty() {
         return None;
     }
     Some(json!({ "models": entries }))
+}
+
+/// 用引擎的声明覆盖一个目录条目的能力字段。
+///
+/// 只认 `gpt-` 开头的 slug：引擎目录里没有网关型号，按 slug 匹配天然不会碰它们。缺字段时
+/// 什么都不做，免得把一份好条目改坏——`restore_native_speed_tiers` 仍是最后的兜底。
+fn apply_engine_metadata(entry: &mut Value, engine: &[EngineModel]) {
+    let Some(object) = entry.as_object_mut() else { return };
+    let slug = object.get("slug").and_then(Value::as_str).unwrap_or_default().to_string();
+    if !slug.starts_with("gpt-") {
+        return;
+    }
+    let Some(model) = engine.iter().find(|candidate| candidate.slug == slug) else { return };
+    if !model.efforts.is_empty() {
+        object.insert(
+            "supported_reasoning_levels".into(),
+            json!(model
+                .efforts
+                .iter()
+                .map(|effort| json!({ "effort": effort, "description": effort_description(effort) }))
+                .collect::<Vec<_>>()),
+        );
+    }
+    if model.default_effort.is_some() && object.get("default_reasoning_level").is_none() {
+        // 只补缺，不覆盖：默认档是用户的偏好，引擎改推荐值不等于用户要换档。
+        object.insert("default_reasoning_level".into(), json!(model.default_effort));
+    }
+    if !model.speed_tiers.is_empty() {
+        object.insert("additional_speed_tiers".into(), json!(model.speed_tiers));
+    }
+    if !model.service_tiers.is_null() {
+        object.insert("service_tiers".into(), model.service_tiers.clone());
+    }
+    if object.get("context_window").is_none() {
+        if let Some(window) = model.context_window {
+            object.insert("context_window".into(), json!(window));
+            object.insert("max_context_window".into(), json!(window));
+        }
+    }
+}
+
+/// 把引擎新公布、目录里还没有的型号补进合并目录。
+///
+/// 模板优先取同族（已是 `gpt-` 的条目），因为工具/搜索这些能力字段必须对得上；一条都没有时
+/// 才退回 `complete_catalog_entry(None)`，那是全新安装的第一帧。
+fn append_engine_models(entries: &mut Vec<Value>, engine: &[EngineModel], seen: &mut BTreeSet<String>) {
+    for model in engine {
+        if model.efforts.is_empty() || !seen.insert(model.slug.clone()) {
+            continue;
+        }
+        let family = entries
+            .iter()
+            .find(|entry| entry.get("slug").and_then(Value::as_str).is_some_and(|slug| slug.starts_with("gpt-")))
+            .cloned();
+        let Some(template) = family.or_else(|| Some(complete_catalog_entry(None))).filter(|entry| entry.is_object()) else {
+            continue;
+        };
+        let mut entry = template;
+        if let Some(object) = entry.as_object_mut() {
+            object.insert("slug".into(), json!(model.slug));
+            object.insert("display_name".into(), json!(model.label));
+            object.insert("description".into(), json!("GPT model served through the local bridge."));
+            if let Some(window) = model.context_window {
+                object.insert("context_window".into(), json!(window));
+                object.insert("max_context_window".into(), json!(window));
+            }
+        }
+        apply_engine_metadata(&mut entry, engine);
+        restore_native_speed_tiers(&mut entry);
+        // 模板来自同族，身份段会写着那个型号——必须换成它自己。
+        retarget_identity(&mut entry);
+        log::info!("engine catalog: added {} to the merged catalog", model.slug);
+        entries.push(entry);
+    }
 }
 
 /// 把 Codex 原生 GPT 家族的加速档位补回目录条目。
@@ -2276,6 +2547,10 @@ fn write_built_in_catalog(
             }
         }
         retarget_identity(&mut entry);
+        // 这份文件经 `model_catalog_json` 交给 adapter，per-thread 的 configOptions 就由它生成。
+        // 少了 `additional_speed_tiers`，adapter 的 `modelSupportsFast` 判 false，`fast-mode`
+        // 这个 configOption 根本不会发布 —— 对话框上方那行「快速模式」直接消失。
+        restore_native_speed_tiers(&mut entry);
         entries.insert(model.api_id.clone(), entry);
     }
     let models: Vec<Value> = ordered
@@ -3943,6 +4218,151 @@ mod tests {
         let mut other = json!({"slug": "qwen4-max-preview"});
         restore_native_speed_tiers(&mut other);
         assert!(other.get("additional_speed_tiers").is_none(), "a non-GPT model must not gain the switch");
+    }
+
+    /// 写一份引擎目录快照到临时 app data，模拟一次启动时同步到的内容。
+    fn write_engine_catalog(root: &std::path::Path, models: Value) {
+        let path = engine_catalog_path(root);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_vec(&json!({ "models": models })).unwrap()).unwrap();
+    }
+
+    fn engine_row(slug: &str, display: &str, efforts: &[&str], default: &str, visible: &str) -> Value {
+        json!({
+            "slug": slug,
+            "display_name": display,
+            "visibility": visible,
+            "default_reasoning_level": default,
+            "supported_reasoning_levels": efforts.iter().map(|effort| json!({ "effort": effort })).collect::<Vec<_>>(),
+            "additional_speed_tiers": ["fast"],
+            "service_tiers": [{ "id": "priority", "name": "Fast" }],
+            "context_window": 500_000,
+        })
+    }
+
+    #[test]
+    fn a_new_engine_model_joins_the_shortlist_and_keeps_the_old_rows() {
+        // 引擎发了 6.2，用户清单里还是 6.1 / 6 —— 用户既不能去设置里手写一个 id，也不该被要求
+        // 知道引擎换过型号。同步要做的：把新的按引擎顺序放到最前，effort 跟着引擎走，用户自己
+        // 加的行和已选默认档一个都不能动。
+        let root = tempfile::tempdir().unwrap();
+        write_engine_catalog(
+            root.path(),
+            json!([
+                engine_row("gpt-6.2-sol", "GPT-6.2-Sol", &["low", "medium", "high", "xhigh", "max", "ultra"], "low", "list"),
+                engine_row("gpt-6.1-sol", "GPT-6.1-Sol", &["low", "medium", "high", "xhigh", "max", "ultra"], "low", "list"),
+                engine_row("gpt-daybreak-blue-latest", "Daybreak Blue", &["low", "high"], "low", "hide"),
+            ]),
+        );
+        let mut saved = Saved {
+            built_in_model_overrides: BTreeMap::from([(
+                "openai".to_string(),
+                vec![
+                    CustomModel {
+                        label: "6.1 Sol".into(),
+                        api_id: "gpt-6.1-sol".into(),
+                        context_window: Some(1_050_000),
+                        description: None,
+                        reasoning_levels: Some(vec!["low".into(), "medium".into(), "high".into()]),
+                        default_reasoning_level: Some("medium".into()),
+                        enabled: None,
+                    },
+                    CustomModel {
+                        label: "我自己的".into(),
+                        api_id: "my-own-model".into(),
+                        context_window: None,
+                        description: None,
+                        reasoning_levels: None,
+                        default_reasoning_level: None,
+                        enabled: None,
+                    },
+                ],
+            )]),
+            ..Saved::default()
+        };
+
+        assert!(sync_engine_models(root.path(), &mut saved));
+
+        let rows = &saved.built_in_model_overrides["openai"];
+        assert_eq!(rows[0].api_id, "gpt-6.2-sol", "the newest engine model comes first");
+        assert_eq!(rows[0].label, "6.2 Sol", "GPT- prefix and dashes are folded into the app's short label");
+        assert_eq!(
+            rows[0].reasoning_levels.as_deref(),
+            Some(["low", "medium", "high", "xhigh", "max", "ultra"].map(str::to_string).as_slice())
+        );
+
+        let updated = rows.iter().find(|row| row.api_id == "gpt-6.1-sol").unwrap();
+        assert_eq!(
+            updated.reasoning_levels.as_deref().map(<[String]>::len),
+            Some(6),
+            "the ladder follows the engine: three levels cannot express xhigh/max/ultra"
+        );
+        assert_eq!(updated.default_reasoning_level.as_deref(), Some("medium"), "the user's default is a preference");
+        assert_eq!(updated.context_window, Some(1_050_000), "a window the user set is not overwritten");
+
+        assert!(rows.iter().any(|row| row.api_id == "my-own-model"), "a row the engine never heard of survives");
+        assert!(
+            !rows.iter().any(|row| row.api_id == "gpt-daybreak-blue-latest"),
+            "visibility=hide is the engine's own word for internal models"
+        );
+
+        // 第二次同步没有新信息，就不能再改 revision —— 否则每次启动都重写一遍 provider。
+        assert!(!sync_engine_models(root.path(), &mut saved));
+    }
+
+    #[test]
+    fn a_cloned_catalog_entry_takes_its_ladder_and_speed_from_the_engine() {
+        // 目录条目的骨架来自 qwen 模板：三档 effort、没有加速档位。引擎对这些型号说得很清楚，
+        // 该由引擎覆盖；网关型号不在引擎目录里，一个字段都不该被碰。
+        let engine = vec![EngineModel {
+            slug: "gpt-6.2-astra".into(),
+            label: "6.2 Astra".into(),
+            efforts: ["low", "medium", "high", "xhigh", "max", "ultra"].map(str::to_string).to_vec(),
+            default_effort: Some("low".into()),
+            context_window: Some(272_000),
+            speed_tiers: vec!["fast".into()],
+            service_tiers: json!([{ "id": "priority", "name": "Fast" }]),
+        }];
+        let mut entry = json!({
+            "slug": "gpt-6.2-astra",
+            "supported_reasoning_levels": [{"effort": "low"}, {"effort": "medium"}, {"effort": "high"}],
+            "default_reasoning_level": "medium",
+        });
+        apply_engine_metadata(&mut entry, &engine);
+        assert_eq!(entry["supported_reasoning_levels"].as_array().unwrap().len(), 6);
+        assert_eq!(entry["additional_speed_tiers"], json!(["fast"]));
+        assert_eq!(entry["default_reasoning_level"], "medium", "only a missing default is filled in");
+        assert_eq!(entry["context_window"], 272_000);
+
+        let mut gateway = json!({ "slug": "qwen3.8-max", "supported_reasoning_levels": [{"effort": "none"}] });
+        apply_engine_metadata(&mut gateway, &engine);
+        assert_eq!(gateway["supported_reasoning_levels"], json!([{"effort": "none"}]));
+        assert!(gateway.get("additional_speed_tiers").is_none());
+    }
+
+    #[test]
+    fn an_engine_model_missing_from_every_catalog_is_appended_once() {
+        let engine = vec![EngineModel {
+            slug: "gpt-6.2-sol".into(),
+            label: "6.2 Sol".into(),
+            efforts: ["low", "high"].map(str::to_string).to_vec(),
+            default_effort: Some("low".into()),
+            context_window: Some(500_000),
+            speed_tiers: vec!["fast".into()],
+            service_tiers: Value::Null,
+        }];
+        let mut entries = vec![json!({ "slug": "gpt-6.1-sol", "display_name": "6.1 Sol" })];
+        let mut seen: BTreeSet<String> = BTreeSet::from(["gpt-6.1-sol".to_string()]);
+        append_engine_models(&mut entries, &engine, &mut seen);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1]["slug"], "gpt-6.2-sol");
+        assert_eq!(entries[1]["display_name"], "6.2 Sol");
+        assert_eq!(entries[1]["additional_speed_tiers"], json!(["fast"]));
+        assert_eq!(entries[1]["context_window"], 500_000);
+
+        // 再跑一次不能出现第二条 —— `seen` 是跨源去重的同一张表。
+        append_engine_models(&mut entries, &engine, &mut seen);
+        assert_eq!(entries.len(), 2);
     }
 
     fn model_with_window(api_id: &str, window: Option<u64>, enabled: Option<bool>) -> CustomModel {
