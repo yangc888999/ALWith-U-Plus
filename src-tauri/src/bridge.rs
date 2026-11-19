@@ -326,6 +326,142 @@ fn drop_item_id(body: &[u8], index: usize) -> Option<Vec<u8>> {
 
 /// The same history with everything a switching vendor cannot own removed: reasoning items and
 /// item ids. Used once, only after a gateway refused the original payload.
+/// 一次拒绝最多用掉几级「削弱请求」的补救。每级只试一次，且只在响应体没有可执行语义时启动。
+///
+/// 上限存在的理由：补救是**试错**，不该让一次拒绝换来一串请求。真正的语义错误必须原样到达读者，
+/// 不能被重试掩盖成一串无意义的等待。
+const RECOVERY_MAX_STEPS: u32 = 2;
+
+/// 裁历史时最多保留多少条 input 项。
+///
+/// 2026-11-19 的一次真实失败：一条开了十天的对话重放出 7.8MB / 10,690 条 input，chatgpt.com
+/// 回了**空 body 的 404**。同一个账号发 8MB 的单条文本是 200，所以不是单纯的体积上限，而是条目
+/// 数量与结构（海量 function_call_output + 加密 reasoning + 压缩摘要混在一起）撞上了后端的边界。
+const TRIM_MAX_ITEMS: usize = 400;
+
+/// 裁历史时的字节预算。条目上限之外再压一道：单条超长输出也能把包撑到不该有的体积。
+const TRIM_BUDGET_BYTES: usize = 4 * 1024 * 1024;
+
+/// 小于这个体积的请求不做裁剪 —— 小对话被拒是别的原因，裁了只会白丢上下文。
+const TRIM_MIN_PAYLOAD: usize = 1024 * 1024;
+
+/// True when this refusal carries nothing a reader could act on.
+///
+/// 只有「上游什么也没说」才值得用削弱请求的方式去试。空 body 是最典型的一种：边缘层
+/// （Cloudflare、用户自己的隧道）拒绝时不会带业务语义，chatgpt.com 对这个重放包回的正是空 404。
+///
+/// 反过来，只要 body 里有 `{"error":{...}}`、`{"message":...}` 或任何非空文本，就说明厂商指名了
+/// 某个问题（模型不存在、参数不合法、地区受限）。这时重试只会多花一次额度，还会把真实原因埋到
+/// 第二次请求的错误里 —— 那正是这一版要根除的「换个说法继续失败」。
+fn refusal_is_opaque(body: &str) -> bool {
+    body.trim().is_empty()
+}
+
+/// 把对话历史裁到「最近的一段」，用于上游以体积或条目数拒绝整个请求的时候。
+///
+/// 三条不变量，破任何一条都会让下一轮换成另一种方式失败：
+///   * 只从最老的一端裁，最近的上下文完整保留 —— 读者要接着问的是最近发生的事；
+///   * 裁完的第一条必须是 user 消息 —— 以 assistant 或工具输出开头的历史会被上游直接拒；
+///   * 不留孤儿的工具调用 —— 只有 `function_call` 没有对应的 `function_call_output`（或反过来）
+///     是硬错误，比超限更难恢复。
+///
+/// 返回 `None` 表示「没什么可裁」，调用方据此不再重试。
+fn trim_history(body: &[u8], max_items: usize, budget: usize) -> Option<Vec<u8>> {
+    let mut parsed: Value = serde_json::from_slice(body).ok()?;
+    let input = parsed.get_mut("input")?.as_array_mut()?;
+    let total = input.len();
+    if total <= 1 {
+        return None;
+    }
+    let size_of = |item: &Value| serde_json::to_vec(item).map(|bytes| bytes.len()).unwrap_or(0);
+    // 两道闸门都是**上限**，谁更紧谁说话：条目数先切出尾巴，字节预算再往里收一次。
+    // 早先写成「按预算往前吃」，预算宽时会把起点一直吃到 0 —— 于是「条目太多」这种拒绝反而
+    // 裁不动，而那正是最需要它的一种。
+    let mut start = total.saturating_sub(max_items);
+    let mut bytes: usize = 0;
+    let mut cut = total;
+    while cut > start {
+        let size = size_of(&input[cut - 1]);
+        if bytes + size > budget {
+            break;
+        }
+        bytes += size;
+        cut -= 1;
+    }
+    start = cut;
+    if start == 0 {
+        return None;
+    }
+    // 对齐到一个用户回合的开头：裁出来的片段不能以半截工具链或助手发言开头。
+    while start < total {
+        let item = &input[start];
+        let is_user_message = item.get("type").and_then(Value::as_str) == Some("message")
+            && item.get("role").and_then(Value::as_str) == Some("user");
+        if is_user_message {
+            break;
+        }
+        start += 1;
+    }
+    if start >= total {
+        return None;
+    }
+    let mut kept: Vec<Value> = input[start..].to_vec();
+    // 边界上被截断的调用/输出成对删掉。`call_id` 是两个方向唯一的关联键。
+    let call_ids = |wanted: &str| -> std::collections::HashSet<String> {
+        kept.iter()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some(wanted))
+            .filter_map(|item| item.get("call_id").and_then(Value::as_str).map(str::to_string))
+            .collect()
+    };
+    let calls = call_ids("function_call");
+    let outputs = call_ids("function_call_output");
+    kept.retain(|item| match item.get("type").and_then(Value::as_str) {
+        Some("function_call") => item.get("call_id").and_then(Value::as_str).is_some_and(|id| outputs.contains(id)),
+        Some("function_call_output") => item.get("call_id").and_then(Value::as_str).is_some_and(|id| calls.contains(id)),
+        _ => true,
+    });
+    let dropped = total - start;
+    log::warn!(
+        "bridge: trimmed {dropped} of {total} history item(s) (kept {}, about {bytes} bytes) after the upstream refused it",
+        kept.len()
+    );
+    parsed["input"] = Value::Array(kept);
+    serde_json::to_vec(&parsed).ok()
+}
+
+/// 一份被拒请求的体检摘要，只在上游拒绝时计算。
+///
+/// 这一行是这一整类故障的教训换来的：2026-11-19 那个 7.8MB 的重放包被 chatgpt.com 回了空
+/// body，日志只留下「upstream answered 404 (7832870 bytes in): 」——体积有了，但**发的到底是
+/// 什么**没有：多少条、哪一类占了多少字节。于是定位只能靠猜，猜错两次。
+///
+/// 现在拒绝时会写出条目数、体积，以及按字节排序的前三类 item。下一次出现同样的 404，日志自己
+/// 就说明了触发条件，不必再现、不必再猜。
+fn describe_payload(payload: &[u8]) -> String {
+    let Ok(parsed) = serde_json::from_slice::<Value>(payload) else {
+        return format!("payload={} bytes (not JSON)", payload.len());
+    };
+    let Some(input) = parsed.get("input").and_then(Value::as_array) else {
+        return format!("payload={} bytes (no input array)", payload.len());
+    };
+    let mut by_type: std::collections::BTreeMap<&str, (usize, usize)> = std::collections::BTreeMap::new();
+    for item in input {
+        let kind = item.get("type").and_then(Value::as_str).unwrap_or("?");
+        let size = serde_json::to_vec(item).map(|bytes| bytes.len()).unwrap_or(0);
+        let entry = by_type.entry(kind).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += size;
+    }
+    let mut ranked: Vec<(&str, usize, usize)> = by_type.into_iter().map(|(kind, (count, bytes))| (kind, count, bytes)).collect();
+    ranked.sort_by(|a, b| b.2.cmp(&a.2));
+    let top: Vec<String> = ranked
+        .iter()
+        .take(3)
+        .map(|(kind, count, bytes)| format!("{kind}={count} items/{bytes}B"))
+        .collect();
+    format!("payload={} bytes, items={}, top: {}", payload.len(), input.len(), top.join(", "))
+}
+
 fn portable_history(body: &[u8]) -> Option<Vec<u8>> {
     let mut parsed: Value = serde_json::from_slice(body).ok()?;
     let input = parsed.get_mut("input")?.as_array_mut()?;
@@ -461,7 +597,9 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
                 false,
                 false,
                 false,
-                false,
+                // 老版本按 provider 直连的路径也走同一张补救阶梯：任何一层代理都可能用空 body
+                // 拒绝一个包，而路由长什么样与「这个包能不能被发出去」无关。
+                true,
                 // A legacy per-provider route, not the shared gateway router.
                 false,
             )
@@ -481,7 +619,8 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
         false,
         false,
         false,
-        false,
+        // Same recovery ladder as every other route — see `forward_responses`'s other call.
+        true,
         // Same as above: a single vendor's own route, never the shared gateway router.
         false,
     )
@@ -989,7 +1128,11 @@ fn forward_chatgpt(request: tiny_http::Request, parsed: &Value) -> Result<(), St
         true,
         false,
         false,
-        false,
+        // 历史补救对原生链路同样成立。开着它，一个被 chatgpt.com 拒掉的重放包还能退到「去掉
+        // 跨组织不可解密的 reasoning + 所有 item id」，再不行退到「裁掉最老的历史」；关着它，
+        // 这类拒绝就只剩一句空 body 的 404。注释里原本写的「原生后端会重试一次握手」说的是
+        // 握手，与历史无关 —— 2026-11-19 的 7.8MB 重放包正是被这条判断漏掉的。
+        true,
         // The native backend already retries a dropped handshake once in the engine's own loop;
         // the extra gateway attempt below belongs to gateways only.
         false,
@@ -1887,8 +2030,13 @@ fn relay(
         request_builder = request_builder.header(*name, *value);
     }
     let mut payload = payload;
-    let mut attempted_recovery = false;
+    // 每一级补救各有自己的闸门。以前三种修复共用同一个 `attempted_recovery`，谁先命中就把机会
+    // 用光，另一种本该能救的修复永远轮不到 —— 这也是一种「换个说法继续失败」。
+    let mut attempted_reasoning_drop = false;
+    let mut attempted_id_drop = false;
     let mut attempted_portable = false;
+    let mut attempted_trim = false;
+    let mut recovery_steps = 0u32;
     // One budget shared by both transport failures. Two separate counters would let a connect
     // failure and a header timeout take turns and spawn more `.send()` threads than either route
     // is allowed; this counter makes the ceiling "retries in total", which is what it means.
@@ -1998,11 +2146,31 @@ fn relay(
         }
         let body = response.bytes().map_err(|error| format!("upstream body: {error}"))?;
         let text = String::from_utf8_lossy(&body);
+        // ── 一次拒绝怎么补救 ────────────────────────────────────────────────────
+        //
+        // 上游拒绝的形状不止一种，而每一种新形状过去都是一个新的用户可见死局：加密推理跨组织
+        // 不可解密、跨厂商 item id 前缀不符、公司网关只说一句 `upstream request was rejected`。
+        // 2026-11-19 出现第四种：chatgpt.com 对一个 7.8MB / 万条历史的重放包回了**空 body 的
+        // 404**，桥里三条补救一条都不匹配，整轮只能报「厂商返回了 404」——而模型本身是好的。
+        //
+        // 现在收成一张阶梯，从「不丢一个字」到「裁掉最老的历史」，每级只试一次：
+        //   1. 命中语义的定向修复（加密推理 / id 前缀）—— 只在该语义出现时触发；
+        //   2. 可移植历史（去掉 reasoning 与所有 item id）—— 内容一个字不丢；
+        //   3. 裁历史（保留最近 400 条 / 4MB）—— 唯一能真正缩小包的一级。
+        //
+        // 2、3 只在**上游什么也没说**时启动（`refusal_is_opaque`），或者状态码本身就是体积信号
+        // （413）。有语义的错误原样传给读者，绝不靠试错掩盖。
+        let refused_by_size = status == 413;
+        let opaque = refusal_is_opaque(&text);
+        let may_probe = opaque || refused_by_size;
+
         // One recovery attempt only: if the retry fails for the same reason there is nothing left
-        // to strip and the caller must see the real error.
-        if !attempted_recovery && is_invalid_encrypted_content(&text) {
+        // to strip and the caller must see the real error. The blob is only reusable by the
+        // organization that produced it, so this repair has no alternative shape to try.
+        if !attempted_reasoning_drop && is_invalid_encrypted_content(&text) {
             if let Some(stripped) = drop_reasoning_items(&payload) {
-                attempted_recovery = true;
+                attempted_reasoning_drop = true;
+                recovery_steps += 1;
                 payload = stripped;
                 log::warn!("bridge: retrying after invalid_encrypted_content ({status})");
                 continue;
@@ -2010,10 +2178,11 @@ fn relay(
         }
         // Fallback for an item type `normalize_item_ids` has no rule for: drop exactly the id the
         // backend named and try once. Anything else is passed through untouched.
-        if !attempted_recovery && is_id_prefix_mismatch(&text) {
+        if !attempted_id_drop && is_id_prefix_mismatch(&text) {
             if let Some(index) = refused_input_index(&text) {
                 if let Some(fixed) = drop_item_id(&payload, index) {
-                    attempted_recovery = true;
+                    attempted_id_drop = true;
+                    recovery_steps += 1;
                     payload = fixed;
                     log::warn!("bridge: retrying after an id-prefix refusal on input[{index}]");
                     continue;
@@ -2021,15 +2190,42 @@ fn relay(
             }
         }
         // A thread written by another vendor replays ids and encrypted reasoning that only that
-        // vendor can interpret. Some gateways refuse the whole request without naming a field —
-        // the company relay answers `upstream request was rejected`, and the thread then looks
-        // unusable although its text is fine. One retry with a portable history decides it: if the
-        // refusal was about the history it goes through, otherwise the real error still surfaces.
-        if portable_fallback && !attempted_portable && matches!(status, 400 | 422) {
+        // vendor can interpret. Some upstreams refuse the whole request without naming a field —
+        // the company relay answers `upstream request was rejected`, and chatgpt.com answers an
+        // empty 404 for a large replayed thread. One retry with a portable history decides it: if
+        // the refusal was about the history it goes through, otherwise the real error still
+        // surfaces. Enabled for the native route too — it used to be gateway-only, on the theory
+        // that "the native backend retries a dropped handshake once", which says nothing about a
+        // refused *history*.
+        if portable_fallback
+            && !attempted_portable
+            && recovery_steps < RECOVERY_MAX_STEPS
+            && (matches!(status, 400 | 422) || may_probe)
+        {
             if let Some(stripped) = portable_history(&payload) {
                 attempted_portable = true;
+                recovery_steps += 1;
                 payload = stripped;
                 log::warn!("bridge: retrying after {status} with a portable history");
+                continue;
+            }
+        }
+        // 包大到一定程度，条目数和体积本身就会成为拒绝理由 —— 而这类拒绝常常连一句解释都没有
+        // （空 body 的 404/413）。这是唯一能真正把包缩小的补救：保留最近的回合，丢掉最老的历史。
+        // 只在包确实很大时做（`TRIM_MIN_PAYLOAD`）：小对话被拒是别的原因，裁了只会白丢上下文。
+        if !attempted_trim
+            && recovery_steps < RECOVERY_MAX_STEPS
+            && may_probe
+            && payload.len() >= TRIM_MIN_PAYLOAD
+        {
+            if let Some(trimmed) = trim_history(&payload, TRIM_MAX_ITEMS, TRIM_BUDGET_BYTES) {
+                attempted_trim = true;
+                recovery_steps += 1;
+                payload = trimmed;
+                log::warn!(
+                    "bridge: retrying after {status} with the oldest history trimmed ({} bytes)",
+                    payload.len()
+                );
                 continue;
             }
         }
@@ -2109,6 +2305,8 @@ fn relay(
             payload.len(),
             text.chars().take(300).collect::<String>()
         );
+        // 拒绝的时候才付这份体检的成本，而它正是定位这一整类故障唯一缺的东西。
+        log::warn!("bridge: refused request was {}", describe_payload(&payload));
         return respond(request, status, "application/json", &body);
     };
     let status = response.status().as_u16();
@@ -3433,6 +3631,152 @@ data: [DONE]
         assert!(!body.contains("\"code\":10000"), "the engine must never see the injected error: {body}");
         assert!(body.contains("response.completed"), "the replay must reach the engine: {body}");
     }
+
+    #[test]
+    fn an_empty_refusal_is_the_only_one_worth_probing() {
+        // 空 body = 上游什么也没说。只有这种才值得用削弱请求的方式试。
+        assert!(refusal_is_opaque(""));
+        assert!(refusal_is_opaque("   \n\t "));
+        // 任何一句有语义的话都不许碰：重试只会多花一次额度，还把真实原因埋到第二次请求里。
+        assert!(!refusal_is_opaque(r#"{"error":{"message":"model not found"}}"#));
+        assert!(!refusal_is_opaque(r#"{"path":"/v4/responses"}"#));
+        assert!(!refusal_is_opaque("<html><body>Request Entity Too Large</body></html>"));
+    }
+
+    #[test]
+    fn trimming_keeps_the_newest_turns_and_never_leaves_an_orphan_call() {
+        // 真实形状：压缩摘要 + 成对的工具调用 + 助手发言 + 用户提问，共 40 回合。
+        let mut input: Vec<Value> = Vec::new();
+        for round in 0..40 {
+            input.push(json!({"type":"message","role":"user","content":[{"type":"input_text","text":format!("q{round}")}]}));
+            input.push(json!({"type":"reasoning","id":format!("rs_{round}"),"summary":[]}));
+            input.push(json!({"type":"function_call","call_id":format!("c{round}"),"name":"shell","arguments":"{}"}));
+            input.push(json!({"type":"function_call_output","call_id":format!("c{round}"),"output":"ok"}));
+            input.push(json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":format!("a{round}")}]}));
+        }
+        let body = serde_json::to_vec(&json!({"model":"gpt-6.2-sol","input":input})).unwrap();
+        let trimmed = trim_history(&body, 11, usize::MAX).expect("40 rounds must be trimmable to 11 items");
+        let parsed: Value = serde_json::from_slice(&trimmed).unwrap();
+        let kept = parsed["input"].as_array().unwrap();
+
+        assert!(kept.len() <= 11, "the item cap is an upper bound, got {}", kept.len());
+        assert!(kept.len() >= 5, "the newest round must survive whole, got {}", kept.len());
+        // 第一条必须是 user 消息：以助手发言或工具输出开头的历史会被直接拒。
+        assert_eq!(kept[0]["type"], "message");
+        assert_eq!(kept[0]["role"], "user");
+        // 末条一字不动 —— 那是读者正在等的那一轮。
+        assert_eq!(kept.last().unwrap()["content"][0]["text"], "a39");
+        // 边界上的半个工具链必须成对消失，否则下一轮会以另一种方式失败。
+        let calls: Vec<&str> = kept.iter().filter(|i| i["type"] == "function_call").filter_map(|i| i["call_id"].as_str()).collect();
+        let outputs: Vec<&str> = kept.iter().filter(|i| i["type"] == "function_call_output").filter_map(|i| i["call_id"].as_str()).collect();
+        assert_eq!(calls, outputs, "every kept call has its output and vice versa");
+        // 原文没被改动。
+        assert_eq!(parsed["model"], "gpt-6.2-sol");
+    }
+
+    #[test]
+    fn trimming_a_short_history_is_a_no_op() {
+        // 小对话被拒是别的原因；裁了只会白丢上下文，所以必须返回 None 让真实错误到达读者。
+        let body = br#"{"model":"m","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}"#;
+        assert!(trim_history(body, 400, TRIM_BUDGET_BYTES).is_none());
+
+        let mut long: Vec<Value> = Vec::new();
+        for round in 0..3 {
+            long.push(json!({"type":"message","role":"user","content":[{"type":"input_text","text":format!("q{round}")}]}));
+            long.push(json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":format!("a{round}")}]}));
+        }
+        let body = serde_json::to_vec(&json!({"model":"m","input":long})).unwrap();
+        assert!(trim_history(&body, 400, TRIM_BUDGET_BYTES).is_none(), "under the cap: nothing to trim");
+    }
+
+    #[test]
+    fn a_refused_request_reports_its_own_shape() {
+        // 这一行是整类故障的定位手段：上一次只有体积，没有「发的是什么」。
+        let body = serde_json::to_vec(&json!({"model":"m","input":[
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
+            {"type":"function_call","call_id":"c1","name":"shell","arguments":"{}"},
+            {"type":"function_call_output","call_id":"c1","output":"ok"},
+            {"type":"reasoning","id":"rs_1","summary":[]}
+        ]}))
+        .unwrap();
+        let described = describe_payload(&body);
+        assert!(described.contains("items=4"), "got: {described}");
+        assert!(described.contains("function_call"), "got: {described}");
+        assert!(described.contains("bytes"), "got: {described}");
+    }
+
+    #[test]
+    fn an_opaque_404_recovers_by_trimming_the_oldest_history() {
+        // 2026-11-19 的真实事故：一条开了十天的对话重放出 7.8MB / 万条历史，chatgpt.com 回了
+        // 空 body 的 404，桥里三条补救一条都不匹配，整轮只能报「厂商返回了 404」——而模型是好的。
+        //
+        // 这条测试走完整链路：上游第一次空 404，桥自己换成裁过的历史再发一次，第二次 200。
+        // 断言的是「读者最终拿到 200」以及「第二次发出去的确实更小、且以用户消息开头、没有孤儿
+        // 工具调用」，而不是某个内部函数的返回值。
+        let gateway = "trim-probe";
+        let upstream = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let upstream_addr = upstream.server_addr().to_ip().unwrap();
+        register_router_route(gateway, &format!("http://{upstream_addr}/v1"), "probe-secret", false);
+        let first_len = Arc::new(std::sync::Mutex::new(0usize));
+        let seen_first_len = Arc::clone(&first_len);
+        let relay = std::thread::spawn(move || {
+            // 第一次：读一遍就拒绝，body 为空 —— 这正是那个 404 的形态。
+            let mut first = upstream.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+            let mut body = String::new();
+            first.as_reader().read_to_string(&mut body).unwrap();
+            *seen_first_len.lock().unwrap() = body.len();
+            first.respond(tiny_http::Response::from_string("").with_status_code(404)).unwrap();
+
+            // 第二次：留下来自桥的请求，并允许它通过。
+            let mut second = upstream.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+            let mut body = String::new();
+            second.as_reader().read_to_string(&mut body).unwrap();
+            let parsed: Value = serde_json::from_str(&body).unwrap();
+            let input = parsed["input"].as_array().unwrap();
+            assert!(input.len() < RETRIED_ITEM_COUNT, "the retry must be smaller, got {}", input.len());
+            assert_eq!(input[0]["type"], "message");
+            assert_eq!(input[0]["role"], "user", "a trimmed window cannot start mid-turn");
+            let calls: Vec<&str> = input.iter().filter(|i| i["type"] == "function_call").filter_map(|i| i["call_id"].as_str()).collect();
+            let outputs: Vec<&str> = input.iter().filter(|i| i["type"] == "function_call_output").filter_map(|i| i["call_id"].as_str()).collect();
+            assert_eq!(calls, outputs, "no orphan tool call may survive the cut");
+            second
+                .respond(tiny_http::Response::from_string("event: response.created\n\n").with_header(
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/event-stream"[..]).unwrap(),
+                ))
+                .unwrap();
+        });
+
+        // 一条没有 reasoning、没有 item id 的历史：可移植历史那一级无事可做，只能靠裁剪。
+        // 体积要过 TRIM_MIN_PAYLOAD，否则「小对话不裁」那条闸门会拦住它（那是刻意的）。
+        let filler = "x".repeat(2400);
+        let mut input: Vec<Value> = Vec::new();
+        for round in 0..RETRIED_ITEM_COUNT {
+            input.push(json!({"type":"message","role":"user","content":[{"type":"input_text","text":format!("q{round}{filler}")}]}));
+            input.push(json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":format!("a{round}")}]}));
+        }
+        let payload = serde_json::to_vec(&json!({"model": format!("{gateway}/any"), "input": input})).unwrap();
+        assert!(payload.len() >= TRIM_MIN_PAYLOAD, "fixture must clear the size gate");
+
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let address = server.server_addr().to_ip().unwrap();
+        let client = std::thread::spawn(move || {
+            reqwest::blocking::Client::new()
+                .post(format!("http://{address}/alwith/responses"))
+                .body(payload)
+                .send()
+                .unwrap()
+                .status()
+                .as_u16()
+        });
+        handle(server.recv_timeout(Duration::from_secs(10)).unwrap().unwrap()).unwrap();
+        assert_eq!(client.join().unwrap(), 200, "the turn must recover instead of dying on an opaque 404");
+        relay.join().unwrap();
+        assert!(*first_len.lock().unwrap() > 0, "the first attempt carried the full history");
+        unregister_router_route(gateway);
+    }
+
+    /// 上面那条测试用的历史条数：越过 TRIM_MAX_ITEMS（400）才会触发条目上限那一级。
+    const RETRIED_ITEM_COUNT: usize = 420;
 
     #[test]
     fn portable_history_strips_foreign_reasoning_and_item_ids() {
