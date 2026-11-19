@@ -1,17 +1,17 @@
-# ALWith L Guide
+# ALWith U⁺ Guide
 
-ALWith L is an independent desktop client powered by Codex CLI. Use it to work with an AI assistant, organize conversations by project, and inspect files alongside your chat. It is not affiliated with or endorsed by OpenAI.
+ALWith U⁺ is an independent desktop client powered by Codex CLI. Use it to work with an AI assistant, organize conversations by project, and inspect files alongside your chat. It is not affiliated with or endorsed by OpenAI.
 
 ## Start here
 
 ### Essentials
-1. Open ALWith L and sign in to your ALwith account.
+1. Open ALWith U⁺ and sign in to your ALwith account.
 2. Open your account menu at the bottom of the sidebar and choose **Settings**. Configure Codex or a model provider in the provider settings.
 3. Start a new chat with the **+** button. Choose a project folder when the task involves local files.
 4. Choose a model in the message composer, describe your goal, and send your message.
 5. Review the response, requested permissions, and file changes before continuing.
 
-Your ALwith account and model access are separate. Signing in to ALwith does not automatically sign you in to Codex or supply another provider's API key. ALWith L and ALwith Desktop keep separate ALwith login sessions.
+Your ALwith account and model access are separate. Signing in to ALwith does not automatically sign you in to Codex or supply another provider's API key. ALWith U⁺ and ALwith Desktop keep separate ALwith login sessions.
 
 Try a concrete first task: “Read this project's README and explain how to run it. Do not change files.” For a change request, include the intended result and how you want it verified.
 
@@ -93,7 +93,7 @@ Use the stop control to interrupt a running turn. A stopped turn may already hav
 
 The conversation menu provides the actions available for that conversation, including history management. Use a new chat for an unrelated task; keep related follow-up questions in the same conversation so the assistant has the context.
 
-Codex manages conversation history. ALWith L displays that history rather than maintaining a separate copy. Signing out of ALWith L only clears this application's ALwith login; it is not a history-deletion command.
+Codex manages conversation history. ALWith U⁺ displays that history rather than maintaining a separate copy. Signing out of ALWith U⁺ only clears this application's ALwith login; it is not a history-deletion command.
 
 ### Give the assistant a usable brief
 
@@ -134,7 +134,7 @@ Open **Settings** from the account menu to configure model access. Codex authent
 
 Configured provider models appear in the chat's model picker under their provider group. Select a model for the conversation that should use it. Configuring a provider does not switch every conversation to that provider.
 
-For a custom provider, use the endpoint, API key, and model ID supplied by that provider. ALWith L's provider gateway expects Responses API compatibility; a service that only supports a different API format may not work.
+For a custom provider, use the endpoint, API key, and model ID supplied by that provider. ALWith U⁺'s provider gateway expects Responses API compatibility; a service that only supports a different API format may not work.
 
 Reasoning-effort options depend on the selected model. A higher effort can change response time and usage; it does not guarantee a correct answer. Available models and controls may differ by provider and account.
 

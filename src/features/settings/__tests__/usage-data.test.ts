@@ -97,7 +97,7 @@ describe("call scope filtering", () => {
     { ...point({ date: "2026-11-01", model: "agent" }), clientSource: "other_agent" as const }
   ]
 
-  test("scopeOf reads only clientSource and treats a missing one as an ALWith L call", () => {
+  test("scopeOf reads only clientSource and treats a missing one as an ALWith U⁺ call", () => {
     expect(scopeOf({})).toBe("internal")
     expect(scopeOf({ clientSource: undefined })).toBe("internal")
     expect(scopeOf({ clientSource: "alwith_l" })).toBe("internal")

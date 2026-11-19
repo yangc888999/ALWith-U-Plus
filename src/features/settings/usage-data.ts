@@ -27,7 +27,7 @@ export function filterByClientSource<T extends Pick<UsagePoint, "clientSource">>
 }
 
 /**
- * The top-level usage filter: every call that went through ALWith L, split by who made it.
+ * The top-level usage filter: every call that went through ALWith U⁺, split by who made it.
  * `clientSource` is the only evidence of a caller — a model id, a provider name or a request path
  * says nothing about which client opened the call, so none of them may decide the scope.
  */

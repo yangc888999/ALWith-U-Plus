@@ -260,7 +260,7 @@ function ChangeLogDialog({
 }
 
 /**
- * 引擎行：显示内置 Codex CLI 版本。Codex CLI 随 ALWith L 应用包更新，不提供独立更新入口。
+ * 引擎行：显示内置 Codex CLI 版本。Codex CLI 随 ALWith U⁺ 应用包更新，不提供独立更新入口。
  */
 function EngineUpdateRow({ cliVersion }: { cliVersion: string | null }) {
   const { t } = useTranslation()

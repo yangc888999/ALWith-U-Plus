@@ -889,10 +889,19 @@ fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
     };
     let payload = if route.sanitize { sanitize(&payload) } else { payload };
     let authorization = format!("Bearer {}", route.bearer_token);
+    let endpoint = upstream_endpoint(&route.base_url, if chat_protocol { "chat/completions" } else { "responses" });
+    // Name the destination on every request. Without it a 429 whose body is a vendor's own JSON
+    // could not be attributed to a route: the log said "upstream answered 429" and nothing about
+    // which upstream, so a native-vs-gateway question had to be answered by reading config files
+    // (2026-11-19). The host is enough to identify the vendor; the path never is.
+    log::info!(
+        "bridge: routed model={selection} gateway={gateway} upstream={}",
+        endpoint.split("://").nth(1).unwrap_or(&endpoint).split('/').next().unwrap_or("unknown")
+    );
     relay(
         request,
         &selection,
-        &upstream_endpoint(&route.base_url, if chat_protocol { "chat/completions" } else { "responses" }),
+        &endpoint,
         Some(&authorization),
         &[],
         payload,
@@ -946,6 +955,10 @@ fn forward_chatgpt(request: tiny_http::Request, parsed: &Value) -> Result<(), St
         Err(_) => payload,
     };
     let authorization = format!("Bearer {}", credentials.access_token);
+    let model = parsed.get("model").and_then(Value::as_str).unwrap_or("");
+    // Same reason as the routed hop: the destination has to be on the record, because a bare model
+    // name is the one case where "which vendor answered" is not obvious from the model string.
+    log::info!("bridge: native model={model} upstream=chatgpt.com");
     let headers = [
         ("chatgpt-account-id", credentials.account_id.as_str()),
         ("OpenAI-Beta", "responses=experimental"),
@@ -1668,6 +1681,64 @@ fn should_replay_429(muted: bool, replays: u32, quota_blocked: bool) -> bool {
     muted && !quota_blocked && replays < MAX_429_REPLAYS
 }
 
+/// Whether a 429 says a **request-count window is spent**, not that a burst is being throttled.
+///
+/// The company gateway (new-api) answers a spent window with a self-describing refusal:
+/// `{"error":{"code":"rate_limit_exceeded","message":"已达到速率上限：3小时内最多250次请求，当前
+/// 已使用258次，预计133分钟后（10:11）恢复","type":"new_api_error"}}`. That is a different animal
+/// from a transient burst limit: no replay inside the window can succeed, and — measured
+/// 2026-11-19 — the eight silent replays were themselves charged to the same counter, taking the
+/// account from its 250 ceiling to 258 while it was already closed. The refusal has to reach the
+/// reader at once; the vendor's own message already names the reset time.
+///
+/// The test is deliberately narrow: a limit *and* a used count *and* a recovery statement. A
+/// plain 429 from any other vendor carries none of the three, so it keeps its existing path.
+fn quota_window_spent(text: &str) -> bool {
+    if !text.contains("rate_limit_exceeded") {
+        return false;
+    }
+    let states_limit = text.contains("已达到速率上限") || text.contains("超出速率限制");
+    let states_usage = text.contains("已使用") || text.contains("已用");
+    let states_recovery = text.contains("恢复") || text.contains("重置");
+    states_limit && states_usage && states_recovery
+}
+
+/// Append the upstream host to a vendor's refusal, so the banner names who refused.
+///
+/// A bare model name in the conversation says nothing about the route a request took, and a 429
+/// body is shown verbatim. That is how, on 2026-11-19, the company gateway's「已达到速率上限：3小时
+/// 内最多250次请求」came to be read as the ChatGPT model's own error — the reader had switched to
+/// `gpt-6.1-sol`, which never touches that gateway, and concluded the switch had failed. The
+/// vendor's wording and reset time are left exactly as sent; only the source is added.
+///
+/// Anything that is not the vendor's `{"error":{"message":…}}` shape passes through untouched: a
+/// rewritten body would be a worse lie than an unattributed one.
+fn name_upstream(body: &[u8], url: &str) -> Vec<u8> {
+    let host = url
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("");
+    if host.is_empty() {
+        return body.to_vec();
+    }
+    let Ok(mut parsed) = serde_json::from_slice::<Value>(body) else {
+        return body.to_vec();
+    };
+    let Some(message) = parsed
+        .get("error")
+        .and_then(|error| error.get("message"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return body.to_vec();
+    };
+    if let Some(slot) = parsed.get_mut("error").and_then(|error| error.get_mut("message")) {
+        *slot = Value::String(format!("{message}（来源：{host}）"));
+    }
+    serde_json::to_vec(&parsed).unwrap_or_else(|_| body.to_vec())
+}
+
 /// How the spent-quota refusal says when the budget comes back.
 ///
 /// Returns a whole clause that already ends in `。`, so the message never has to guess punctuation
@@ -1961,6 +2032,14 @@ fn relay(
         // The one exception is a spent free budget: replaying cannot succeed today, so the user
         // gets the reset time instead of a spinner that burns the rest of the allowance.
         if status == 429 {
+            // A spent request-count window is not a burst. Replaying inside it cannot succeed, and
+            // on the company gateway every rejected attempt is charged to that same window — on
+            // 2026-11-19 the eight replays moved the account from 250 to 258 while it was already
+            // over its ceiling. Pass the vendor's message (it names the reset time) straight on.
+            if quota_window_spent(&text) {
+                log::warn!("bridge: 429 with the request window spent, answering instead of replaying");
+                return respond(request, status, "application/json", &name_upstream(&body, url));
+            }
             let muted = overload_429_mute();
             // The ceiling only ever applies to a free model (see `free_quota_applies`): a paid model
             // refused by a short burst window must fall through to the normal replay below, never be
@@ -3732,6 +3811,60 @@ data: [DONE]
             should_replay_429(muted, MAX_429_REPLAYS - 1, paid_blocked),
             "and keeps the whole replay budget before the vendor's own error surfaces"
         );
+    }
+
+    /// The company gateway's spent-window refusal is not a burst: replaying it cannot succeed and
+    /// costs eight more requests from the very counter that is already over its ceiling. Measured
+    /// 2026-11-19 — the account sat at 258 against a 250 limit after exactly `MAX_429_REPLAYS`
+    /// silent replays, so the refusal now goes straight through.
+    #[test]
+    fn a_spent_gateway_request_window_answers_at_once_instead_of_replaying() {
+        // Verbatim from `~/Library/Logs/ai.alwith.u/ALWith U⁺.log`.
+        let spent = r#"{"error":{"code":"rate_limit_exceeded","message":"已达到速率上限：3小时内最多250次请求，当前已使用258次，预计133分钟后（10:11）恢复 (request id: 2026111823591583828755AKybAUqE)","type":"new_api_error"}}"#;
+        assert!(quota_window_spent(spent), "a named window, a used count and a reset time are all present");
+
+        // What every other vendor's 429 looks like. No window, no counter, no reset — it keeps the
+        // existing silent-replay path.
+        for burst in [
+            r#"{"error":{"message":"Rate limit exceeded","type":"tokens"}}"#,
+            r#"{"error":{"code":10000,"message":"provider returned an error"}}"#,
+        ] {
+            assert!(!quota_window_spent(burst), "a bare burst refusal must not be read as a spent window");
+        }
+
+        // Half a description is not enough: `rate_limit_exceeded` alone says nothing about whether
+        // the window is closed, and guessing "spent" would turn a 7-second burst into a dead turn.
+        assert!(!quota_window_spent(r#"{"error":{"code":"rate_limit_exceeded"}}"#));
+        assert!(!quota_window_spent(r#"{"error":{"code":"rate_limit_exceeded","message":"已达到速率上限"}}"#));
+        assert!(
+            !quota_window_spent(r#"{"error":{"code":"rate_limit_exceeded","message":"已使用258次"}}"#),
+            "a usage count with no limit and no reset is not a closed window"
+        );
+    }
+
+    /// A refusal shown verbatim cannot be attributed: the same 429 body looks identical whether it
+    /// came from ChatGPT or from the company gateway, and the conversation only shows the model the
+    /// reader picked. Naming the host is what stops a gateway refusal from reading as the model's.
+    #[test]
+    fn a_spent_window_refusal_names_the_upstream_that_sent_it() {
+        let spent = r#"{"error":{"code":"rate_limit_exceeded","message":"已达到速率上限：3小时内最多250次请求，当前已使用258次，预计133分钟后（10:11）恢复","type":"new_api_error"}}"#;
+        let named: Value = serde_json::from_slice(&name_upstream(
+            spent.as_bytes(),
+            "https://vip.aipro.love/v1/responses",
+        ))
+        .expect("the vendor's JSON survives the annotation");
+        let message = named["error"]["message"].as_str().expect("message stays a string");
+        // The vendor's own wording and reset time must reach the reader untouched.
+        assert!(message.starts_with("已达到速率上限：3小时内最多250次请求"));
+        assert!(message.contains("（10:11）恢复"));
+        assert!(message.ends_with("（来源：vip.aipro.love）"), "the source is appended, never substituted");
+        assert_eq!(named["error"]["code"], "rate_limit_exceeded", "other fields are left alone");
+
+        // Anything that is not the vendor's shape must pass through byte-for-byte: a half-rewritten
+        // body would be a worse lie than an unattributed one.
+        assert_eq!(name_upstream(b"<html>502 Bad Gateway</html>", "https://x.test/v1"), b"<html>502 Bad Gateway</html>");
+        assert_eq!(name_upstream(br#"{"message":"nope"}"#, "https://x.test/v1"), br#"{"message":"nope"}"#);
+        assert_eq!(name_upstream(spent.as_bytes(), ""), spent.as_bytes(), "no host means nothing to name");
     }
 
     #[test]

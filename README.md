@@ -23,8 +23,8 @@
 安装 `package.json` 中固定的 Bun 版本、Rust stable，以及对应平台的 [Tauri 依赖](https://v2.tauri.app/start/prerequisites/)。macOS 需要 Apple Silicon。
 
 ```sh
-git clone https://github.com/yangc888999/alwith-l.git
-cd alwith-l
+git clone https://github.com/yangc888999/ALWith-U-Plus.git
+cd ALWith-U-Plus
 bun install
 ```
 

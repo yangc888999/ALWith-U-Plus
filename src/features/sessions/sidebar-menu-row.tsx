@@ -3,7 +3,7 @@
  *
  * A row may own a small flyout of related destinations: hovering reveals them without spending a
  * permanent row on each, and a plain click still runs the row's own action. WorkBuddy's
- * "专家·技能·连接器" behaves this way, and it is what keeps ALWith L's header from growing a row per
+ * "专家·技能·连接器" behaves this way, and it is what keeps ALWith U⁺'s header from growing a row per
  * surface. Rows with a single destination (新建任务) pass no `destinations` and behave like a
  * normal button — no hover menu, no extra click before the page they name.
  *

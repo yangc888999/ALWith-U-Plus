@@ -16,7 +16,7 @@ import { groupSessionRows } from "@/lib/group-sessions"
 import { automationSessionRows, replaceAutomationSessionRows } from "@/lib/automation-sessions"
 import { removeGroup, setGroup } from "@/lib/groups"
 
-import { type ClientOptions, CodexClient, type GatewayModel, withoutModelSwitchNotes } from "../client"
+import { type ClientOptions, CodexClient, type GatewayModel, modelVendor, withoutModelSwitchNotes } from "../client"
 import { macProjectPaths, type ProjectPaths } from "../project-path"
 import { createFakeAgent } from "./fake-agent"
 import { FakeHubPort } from "./fake-runtime-client"
@@ -1564,6 +1564,25 @@ test("a new turn clears the stop, so the next model pick parks the ordinary way"
   expect(client.pendingModelFor(id)).toBe("gpt-6.1-luna")
   turnRunning = false
   await turn
+})
+
+test("a model name alone does not identify a vendor", () => {
+  // 哈基米 is a reseller: its catalog carries `gpt-6.1-sol` under the same words as the native one.
+  // Same name, different vendor, different quota pool — so a switch between them must not be
+  // treated as a no-op while the request stays with the old vendor (2026-11-19). The picker, the
+  // engine and the bridge spell the same choice three ways; all three resolve to one vendor here.
+  expect(modelVendor("gpt-6.1-sol")).toBe("native")
+  expect(modelVendor("gateway:hakimi:gpt-6.1-sol")).toBe("hakimi")
+  expect(modelVendor("hakimi/gpt-6.1-sol")).toBe("hakimi")
+  expect(modelVendor("gateway:qwen:qwen3.8-max")).toBe("qwen")
+  expect(modelVendor("qwen/qwen3.8-max")).toBe("qwen")
+  // A custom provider runtime id is opaque: it must not collapse into a builtin vendor.
+  expect(modelVendor("gateway:custom-68616b696d69:gpt-6.1-sol")).toBe("custom-68616b696d69")
+
+  // The rule the switch applies: inside one vendor this is only a name change…
+  expect(modelVendor("gateway:hakimi:claude-fable-5-1")).toBe(modelVendor("gateway:hakimi:gpt-6.1-sol"))
+  // …but the same words from another vendor are a different pick, whatever the id spelling.
+  expect(modelVendor("gateway:hakimi:gpt-6.1-sol")).not.toBe(modelVendor("gpt-6.1-sol"))
 })
 
 test("a turn that failed leaves nothing to wait for, so the next model pick lands", async () => {
@@ -3215,7 +3234,7 @@ test("orchestration fails when the applied model or effort does not read back", 
   })
   try {
     await expect(client.prompt(id, [{ type: "text", text: "build the report" }])).rejects.toThrow(
-      "分工配置回读不一致"
+      "角色配置回读不一致"
     )
     expect(fake.prompts).toEqual([])
     expect(client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as string | undefined).toBe(
@@ -4215,4 +4234,124 @@ test("a draft whose rollout the engine lost is replaced by a fresh draft, not st
   expect(next).not.toBe(first)
   expect(client.state.draftSessions[next]).toBe("main")
   expect(client.state.sessions[first]).toBeUndefined()
+})
+
+/**
+ * 拉会、分工这类特殊模式在**同一条会话**上按角色轮换模型，所以它们与普通聊天共用一份引擎
+ * 状态。下面几条锁住"角色写的东西不能变成读者的选择"这条边界：会话记录、跨厂商判定和
+ * 恢复动作都必须以读者为准。
+ */
+function stubModelStorage(): Map<string, string> {
+  const storage = new Map<string, string>()
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, String(value)),
+    removeItem: (key: string) => storage.delete(key),
+    clear: () => storage.clear()
+  })
+  return storage
+}
+
+test("a roster speaker never becomes the conversation's own recorded model", async () => {
+  const models: ReasoningModelFixture[] = [
+    { id: "main-native", groupId: "chatgpt", efforts: ["low"], defaultEffort: "low" },
+    { id: "architect", groupId: "chatgpt", efforts: ["low"], defaultEffort: "low" }
+  ]
+  const storage = stubModelStorage()
+  const { client, fake } = await make((agent) => {
+    configureReasoningModels(agent, models, "main-native", "low")
+  })
+  // 最终总纪要这一步故意失败：它是唯一一处把会话切回读者模型的地方，失败后若没有作用域隔离，
+  // 记录里留下的就是最后一位发言人的模型，下次打开这条会话会直接用它。
+  fake.promptError.current = (text) => (text.includes("最终总纪要") ? new Error("summary failed") : null)
+  const id = await client.newSession("/tmp/group-record")
+  try {
+    await client.runGroupDiscussion(
+      id,
+      [
+        { id: "r1", name: "架构师", model: "architect", effort: "low", instruction: "看架构", moderator: false },
+        { id: "r2", name: "主持人", model: "architect", effort: "low", instruction: "定稿", moderator: true }
+      ],
+      1,
+      "# 群说明",
+      ""
+    )
+    const stored = JSON.parse(storage.get("alwith:session-models") ?? "{}") as Record<
+      string,
+      { model?: string | null }
+    >
+    expect(stored[id]?.model).toBe("main-native")
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test("a role's model write never cancels the turn it is waiting behind", async () => {
+  const models: ReasoningModelFixture[] = [
+    { id: "main-native", groupId: "chatgpt", efforts: ["low"], defaultEffort: "low" },
+    { id: "architect", groupId: "chatgpt", efforts: ["low"], defaultEffort: "low" }
+  ]
+  stubModelStorage()
+  const { client, fake } = await make((agent) => {
+    configureReasoningModels(agent, models, "main-native", "low")
+  })
+  const id = await client.newSession("/tmp/role-write")
+  const respond = must(fake.configResponse.current, "missing config handler")
+  // 引擎在上一轮收尾期间拒绝任何模型写入——正是这里最容易被误判成"读者在抢模型"。
+  fake.configResponse.current = (request) => {
+    if (request.configId === "model")
+      throw RequestError.invalidRequest({ sessionId: request.sessionId }, "Wait for the current turn to finish")
+    return respond(request)
+  }
+  try {
+    await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "running" })
+    const internals = client as unknown as { writeRoleModel: (id: string, model: string) => Promise<void> }
+    // 一直没等到 idle：角色切换等满一个窗口后如实失败，交上层记成"该角色缺席"。
+    // 走读者的 setConfig 则会 force cancel 或 park——那会截断上一位的发言，或事后偷偷换模型。
+    await expect(internals.writeRoleModel(id, "architect")).rejects.toThrow(/Wait for the current turn/)
+    expect(fake.cancels).toEqual([])
+    expect(client.pendingModelFor(id)).toBeNull()
+    expect(
+      client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as string | undefined
+    ).toBe("main-native")
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test("a role's hand-back prefers the reader's newest pick over the pair captured earlier", async () => {
+  stubModelStorage()
+  const { client } = await make()
+  const id = await client.newSession("/tmp/group-handback")
+  try {
+    const internals = client as unknown as {
+      sessionModels: Map<string, { model: string | null; effort: string | null }>
+      pendingModelSwitches: Map<string, string>
+      userWantedSelection: (
+        id: string,
+        fallback: { model: string; effort: string | null; fastMode: boolean }
+      ) => { model: string; effort: string | null; fastMode: boolean }
+    }
+    const captured = { model: "main-native", effort: "low", fastMode: false }
+    // 读者没动过：捕获的那一对就是答案。
+    internals.sessionModels.set(id, { model: "main-native", effort: "low" })
+    expect(internals.userWantedSelection(id, captured)).toEqual(captured)
+    // 读者改了模型：记录里的 level 属于记录里的模型，跟着它一起回去。
+    internals.sessionModels.set(id, { model: "user-pick", effort: "low" })
+    expect(internals.userWantedSelection(id, captured)).toEqual({
+      model: "user-pick",
+      effort: "low",
+      fastMode: false
+    })
+    // 读者在角色发言期间改的（引擎当时拒绝写入，选择被 park）比记录更新。
+    internals.pendingModelSwitches.set(id, "parked-pick")
+    // 被 park 的选择没有自己的 level：不能把上一个模型那一档带过去。
+    expect(internals.userWantedSelection(id, captured)).toEqual({
+      model: "parked-pick",
+      effort: null,
+      fastMode: false
+    })
+  } finally {
+    vi.unstubAllGlobals()
+  }
 })

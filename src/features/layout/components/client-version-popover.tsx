@@ -57,7 +57,7 @@ export function ClientVersionPopover() {
       >
         <div className="grid grid-cols-[auto_auto_auto] items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
           <span aria-hidden className="size-1.5 rounded-full bg-green-500" />
-          <span>ALWith L</span>
+          <span>ALWith U⁺</span>
           <span className="text-right tabular-nums">{clientVersion === null ? "—" : `v${clientVersion}`}</span>
           <span aria-hidden className="size-1.5 rounded-full bg-green-500" />
           <span>Codex CLI</span>

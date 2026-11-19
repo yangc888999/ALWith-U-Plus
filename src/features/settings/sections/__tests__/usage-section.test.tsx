@@ -234,7 +234,7 @@ test("全部 / 内部 / 外部 scope filters the overview, analysis and the call
   native.report.mockResolvedValue(
     report({
       points: [
-        // 无 clientSource 的历史行按 ALWith L 内部调用处理：900K tokens。
+        // 无 clientSource 的历史行按 ALWith U⁺ 内部调用处理：900K tokens。
         { ...base.points[0], model: "internal-model" },
         { ...base.points[1], model: "external-model", clientSource: "workbuddy" }
       ],

@@ -317,7 +317,7 @@ export function UsageSection() {
   // calling yesterday "today".
   const [today, setToday] = useState(() => new Date())
   const [range, setRange] = useState<Range>("30d")
-  // 「调用范围」是页面顶部的一级维度：ALWith L 自己的内部调用 vs 其它客户端发起的外部调用。
+  // 「调用范围」是页面顶部的一级维度：ALWith U⁺ 自己的内部调用 vs 其它客户端发起的外部调用。
   // WorkBuddy / 千问办公 / 其它 Agent 只是明细里的来源标识，不做成顶部筛选项。
   const [usageScope, setUsageScope] = useState<UsageScopeFilter>(ALL_SCOPES)
   // 外部调用没有设置入口（那个模块已下线），账本里出现的外部行一律参与统计：
@@ -1038,7 +1038,7 @@ export function UsageSection() {
         title={t("usageReport.overview")}
         action={
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
-            {/* 调用范围：默认「全部」，只区分 ALWith L 内部调用与其它客户端的外部调用。
+            {/* 调用范围：默认「全部」，只区分 ALWith U⁺ 内部调用与其它客户端的外部调用。
                 设置 → 外部调用 里关掉「统计外部调用」后，外部行整体退出统计，这里只剩两项。 */}
             <Select
               items={[

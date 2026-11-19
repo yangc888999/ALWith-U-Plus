@@ -149,6 +149,29 @@ export type AppState = CodexClientState & {
 /** Stop reason published when an account-owned model was revoked and the chat needs a new pick. */
 const ACCOUNT_MODEL_REQUIRED = "account_model_required"
 
+/**
+ * Which vendor a model id belongs to.
+ *
+ * A model name does not identify a model: 哈基米 is a reseller, so its catalog carries
+ * `gpt-6.1-sol` under the same words as the native one, and the two sit in different quota pools —
+ * switching between them looks like a no-op in the picker but moves the request to another vendor
+ * (2026-11-19). Three spellings reach this file for the same fact: the picker's
+ * `gateway:<provider>:<model>`, the `<provider>/<model>` Codex hands the bridge, and a bare name
+ * for one of Codex's own models. All three resolve to one vendor here.
+ */
+export function modelVendor(model: string): string {
+  const gateway = /^gateway:([^:]+):/.exec(model)
+  if (gateway !== null) {
+    try {
+      return decodeURIComponent(gateway[1])
+    } catch {
+      return gateway[1]
+    }
+  }
+  const slash = model.indexOf("/")
+  return slash > 0 ? model.slice(0, slash) : "native"
+}
+
 /** `_meta.alwith.model`: open the thread on that gateway model (codex-acp-v2 catalog mode). */
 function modelHint(model: string | null): Record<string, unknown> | undefined {
   return model === null ? undefined : { alwith: { model } }
@@ -173,6 +196,15 @@ const STALE_RUN_STATE_MS = 60_000
 
 /** How often a parked model switch re-checks a settled conversation (see `parkModelSwitch`). */
 const PENDING_MODEL_RETRY_MS = 2_000
+
+/**
+ * How long a role waits for the previous turn's terminal update before writing its own model.
+ *
+ * The roster awaits the turn anyway, so this only covers the beat between the agent accepting the
+ * end of a turn and the store publishing it. Waiting longer buys nothing; the write is attempted
+ * either way and a refusal costs that one role, never the discussion.
+ */
+const ROLE_SWITCH_IDLE_MS = 3_000
 
 
 /**
@@ -383,8 +415,17 @@ export class CodexClient extends CodexAcpClient<AppState> {
   private readonly restoring = new Set<string>()
   /** Sessions whose planner turn is running, so orchestration cannot recurse into itself. */
   private readonly orchestrating = new Set<string>()
-  /** Sessions where a plan/execute role is picking its own model and effort pair. */
-  private readonly selectingRole = new Set<string>()
+  /**
+   * Sessions where a role — a 分工 planner/worker or a 拉会 speaker — is writing its own model,
+   * effort and acceleration, not the reader choosing one.
+   *
+   * A depth counter rather than a set: the scopes nest (a split wraps its whole planner turn, a
+   * speaker wraps the model, effort and fast-mode writes that follow the switch), and a set would
+   * drop the outer guard the moment the inner one finished — letting the role's model be saved as
+   * this conversation's own choice, which is then restored on the next launch and read as the
+   * vendor the reader is on.
+   */
+  private readonly roleScopes = new Map<string, number>()
   /** Live orchestration phase per session, so the status row can name the active role. A running
    *  orchestrated turn is always planner or worker, but the session's selected id is only switched
    *  part-way through, so reading it back gives the wrong role until the swap lands. */
@@ -522,6 +563,9 @@ export class CodexClient extends CodexAcpClient<AppState> {
       fastExplicit?: boolean
     }
   ): void {
+    // Nothing a role writes is the reader's choice. Guarding here as well as at the call sites
+    // keeps one forgotten branch from persisting a speaker's model as this chat's own.
+    if (this.inRoleScope(id)) return
     const current = this.sessionModels.get(id) ?? { model: null, effort: null }
     const next = { ...current, ...patch }
     if (
@@ -534,6 +578,29 @@ export class CodexClient extends CodexAcpClient<AppState> {
       return
     this.sessionModels.set(id, next)
     this.persistSessionModels()
+  }
+
+  /**
+   * Whether a role currently owns this conversation's config.
+   *
+   * Both special chat modes run several models through one session: 分工 swaps planner/worker per
+   * turn, 拉会 swaps a speaker per role. Everything they write is that role's, never the reader's
+   * selection, and it must not be able to end a turn the way a user's pick may.
+   */
+  private inRoleScope(id: string): boolean {
+    return (this.roleScopes.get(id) ?? 0) > 0 || this.orchestrating.has(id)
+  }
+
+  /** Marks the start of one role-owned stretch. Nesting is counted, so an inner scope cannot end it. */
+  private enterRoleScope(id: string): void {
+    this.roleScopes.set(id, (this.roleScopes.get(id) ?? 0) + 1)
+  }
+
+  /** Ends one role-owned stretch; the scope closes only when the outermost one ends. */
+  private leaveRoleScope(id: string): void {
+    const depth = this.roleScopes.get(id) ?? 0
+    if (depth <= 1) this.roleScopes.delete(id)
+    else this.roleScopes.set(id, depth - 1)
   }
 
   /**
@@ -619,7 +686,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // Internal selections carry their own effort: a restored chat replays its saved level, and an
     // orchestration role resolves one against the new model a line later. Writing a default under
     // them would either win the race or waste an agent round trip.
-    if (this.restoring.has(id) || this.selectingRole.has(id)) return
+    if (this.restoring.has(id) || this.inRoleScope(id)) return
     // The config options that describe the new model arrive with the same response; one turn of
     // the event loop lets that patch reach the store before the ladder is read.
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
@@ -645,7 +712,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * so they are skipped here to avoid two competing writes.
    */
   private async applyModelFastMode(id: string, model: string): Promise<void> {
-    if (this.selectingRole.has(id)) return
+    if (this.inRoleScope(id)) return
     if (!this.holds(id)) return
     const desired = modelFastModeFor(model)
     const session = this.session(id)
@@ -1495,6 +1562,15 @@ export class CodexClient extends CodexAcpClient<AppState> {
           // now": end the turn and write the choice instead of parking it behind a turn that is
           // already over.
           if (await this.switchRightAfterStop(id, configId, value, requested)) return
+          // Crossing to another vendor cannot be parked: a live turn froze its model when it
+          // started, so the write lands on the thread while the turn keeps running on the old one —
+          // and when it restarts, it inherits the frozen model. That is how picking a ChatGPT model
+          // during a gateway turn that was still retrying left every request on the gateway: the
+          // reader switched vendors and kept getting the old vendor's 429 (2026-11-19). End the
+          // turn and land the choice now; a same-vendor pick stays parked as before.
+          if (this.crossesVendor(id, value)) {
+            if (await this.switchRightAfterStop(id, configId, value, requested, true)) return
+          }
           // A turn that died with an error never delivers its final update. Parking every pick
           // behind that ghost is what made "one model failed" read as "no model works in this
           // chat": the badge stayed, the picker stayed put, and every prompt waited on a turn
@@ -1547,7 +1623,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     await super.setConfig(id, configId, value)
     // Mirror the write into this chat's record. A value that equals the model row's own default is
     // not a deviation: it stays re-derivable, so a later change to that row still reaches the chat.
-    if (this.holds(id) && !this.selectingRole.has(id) && !this.orchestrating.has(id)) {
+    if (this.holds(id) && !this.inRoleScope(id)) {
       const session = this.session(id)
       const model = selectedModel(session.configOptions)
       if (configId === "fast-mode" && typeof value === "boolean")
@@ -1599,15 +1675,77 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * this chat was a stop, and any new turn clears that entry in `prompt`. So a pick is forced
    * whenever there is nothing left to wait for, and parked whenever a real turn is running.
    */
+  /**
+   * The model this chat is on right now.
+   *
+   * The engine's own value comes first: it is the model whose provider is actually being spent
+   * when the next request leaves, which is what a cross-vendor decision is about. The recorded
+   * pick is only the reader's last choice — while 分工 or 拉会 runs, the engine deliberately sits
+   * on a role's model and the record still holds the reader's, so reading the record first made
+   * every same-vendor comparison wrong exactly when it mattered.
+   */
+  private currentModelOf(id: string): string {
+    if (this.holds(id)) {
+      const live = this.session(id).configOptions.find((option) => option.configId === "model")?.currentValue
+      if (typeof live === "string" && live !== "") return live
+    }
+    return this.sessionModels.get(id)?.model ?? ""
+  }
+
+  /**
+   * The selection the reader is on right now, to hand the conversation back to after a role.
+   *
+   * `fallback` is the pair captured when the role stretch began. A reader may pick another model
+   * while a discussion runs, and that pick lives only in the record: the engine is busy reporting
+   * the role's model. Restoring the captured pair would silently undo their choice.
+   */
+  private userWantedSelection(
+    id: string,
+    fallback: { model: string; effort: string | null; fastMode: boolean }
+  ): { model: string; effort: string | null; fastMode: boolean } {
+    const recorded = this.sessionModels.get(id)
+    // A pick made while a role was speaking is parked, not recorded: the engine refused the write,
+    // so it never reached `saveSessionModel`. It is still the reader's newest intent, and only a
+    // reader can park a pick here — roles write straight to the engine.
+    const pending = this.pendingModelSwitches.get(id)
+    const model = pending ?? recorded?.model
+    if (model === undefined || model === null || model === "") return fallback
+    // A park carries no level of its own, and a level recorded under this very model is the
+    // reader's own choice for it — the captured pair is only there to fill a gap.
+    if (pending !== undefined) return { model, effort: null, fastMode: false }
+    return {
+      model,
+      effort: recorded?.effort ?? fallback.effort,
+      fastMode: recorded?.fastMode ?? fallback.fastMode
+    }
+  }
+
+  /**
+   * Whether a pick moves to a different vendor.
+   *
+   * Same-vendor picks are only a model-string change: every gateway shares one Codex provider,
+   * so the write can wait behind a running turn. A different vendor is a different quota pool and,
+   * for a native model, a different provider binding — parking that pick means the live turn keeps
+   * spending the old vendor's budget and the reader sees the old vendor's 429 after switching.
+   */
+  private crossesVendor(id: string, value: string): boolean {
+    const current = this.currentModelOf(id)
+    if (current === "") return false
+    return modelVendor(current) !== modelVendor(value)
+  }
+
   private async switchRightAfterStop(
     id: string,
     configId: string,
     value: string,
-    requested: string
+    requested: string,
+    force = false
   ): Promise<boolean> {
     // The gate is state, not time: nothing has been sent since the stop, so there is no turn left
-    // to wait for — however long ago that stop was.
-    if (!this.stoppedSessions.has(id)) return false
+    // to wait for — however long ago that stop was. `force` is the caller saying the wait itself is
+    // the problem (a vendor-line switch on a live turn); it still ends the turn, just without a
+    // preceding stop to justify it.
+    if (!force && !this.stoppedSessions.has(id)) return false
     // This pick supersedes anything parked earlier: cancelling below would otherwise apply the old
     // choice first and the two writes would race for the model string.
     const parked = this.pendingModelSwitches.get(id)
@@ -2247,7 +2385,14 @@ export class CodexClient extends CodexAcpClient<AppState> {
   }
 
   /** Resolves once this conversation is idle again (or the user asked the roster to stop). */
-  private async waitForIdle(id: string): Promise<void> {
+  /**
+   * Resolves once this conversation is idle again (or the user asked the roster to stop).
+   *
+   * `timeoutMs` bounds the wait for callers that must not block forever on a turn whose terminal
+   * update never arrives. The roster's own gate waits without one — a speaker is allowed to take
+   * its time — while a role's model switch only needs the "just finished" beat to pass.
+   */
+  private async waitForIdle(id: string, timeoutMs?: number): Promise<void> {
     // A closed session has no state to wait for; the caller's next turn simply fails and is caught.
     const settled = (): boolean => {
       const state = this.state.sessions[id]?.state
@@ -2257,16 +2402,19 @@ export class CodexClient extends CodexAcpClient<AppState> {
     await new Promise<void>((resolve) => {
       let done = false
       let detach = (): void => {}
+      let timer: ReturnType<typeof setTimeout> | null = null
       const finish = (): void => {
         if (done) return
         done = true
         detach()
+        if (timer !== null) clearTimeout(timer)
         resolve()
       }
       const check = (): void => {
         if (groupControlFor(id).stop || settled()) finish()
       }
       detach = this.store.subscribe(check)
+      if (timeoutMs !== undefined) timer = setTimeout(finish, timeoutMs)
       check()
     })
   }
@@ -2330,10 +2478,13 @@ export class CodexClient extends CodexAcpClient<AppState> {
   ): Promise<string | null> {
     const reference = turns[0]
     if (reference === undefined) return null
+    // The capstone is written on the reader's own model — the one they are on *now*, which may
+    // differ from the pair captured when the discussion started if they picked another mid-run.
+    const target = this.userWantedSelection(id, selection)
+    this.enterRoleScope(id)
     try {
       announceGroupSpeaker(null, totalRounds)
-      // Take the user's session model for the capstone; the caller's finally restores it.
-      await this.switchSelectionModel(id, selection.model, "最终总纪要")
+      await this.switchSelectionModel(id, target.model, "最终总纪要")
       const speakers: FinalSummarySpeaker[] = turns.map((turn) => ({ name: turn.name, title: turn.title ?? "" }))
       const receipt = await this.promptWithTimeout(
         id,
@@ -2350,6 +2501,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
     } catch (error) {
       patchGroupDiscussion(id, { error: `最终总结失败：${error instanceof Error ? error.message : String(error)}` })
       return null
+    } finally {
+      this.leaveRoleScope(id)
     }
   }
 
@@ -2363,41 +2516,50 @@ export class CodexClient extends CodexAcpClient<AppState> {
     template: string,
     framing?: GroupPromptFraming
   ): Promise<void> {
-    announceGroupSpeaker(turn.name, round + 1)
-    await this.switchSelectionModel(id, turn.model, turn.name)
-    if (turn.effort !== null) {
-      const session = this.holds(id) ? this.session(id) : undefined
-      const configId = session === undefined ? null : this.effortConfigId(session.configOptions)
-      const supported = this.supportedEfforts(id)
-      if (configId !== null && supported !== null && supported.includes(turn.effort))
-        await this.setConfig(id, configId, turn.effort)
-    }
-    if (turn.fastMode !== undefined) {
-      const session = this.holds(id) ? this.session(id) : undefined
-      const fast = session?.configOptions.find((entry) => entry.configId === "fast-mode")
-      if (fast !== undefined && isBooleanOption(fast) && fast.currentValue !== turn.fastMode)
-        await this.setConfig(id, "fast-mode", turn.fastMode)
-    }
-    // Keep the `〔…〕` wrapper: that prefix is what marks a roster turn so the restart logic in
-    // `lastUserTurnKey` skips it. The role's title (职务) is folded inside when present.
-    const speakerLabel =
-      turn.title !== undefined && turn.title.trim() !== "" ? `${turn.name}（${turn.title.trim()}）` : turn.name
-    const receipt = await this.promptWithTimeout(
-      id,
-      [{ type: "text", text: groupTurnPrompt(turn, round, document, kind, template, framing) }],
-      {
-        display: [
-          {
-            type: "text",
-            text:
-              kind === "summary"
-                ? `〔${speakerLabel}〕总结`
-                : `〔${speakerLabel}〕第 ${round + 1} 轮`
-          }
-        ]
+    // Everything a speaker writes is the speaker's: its model, its effort, its acceleration. The
+    // scope keeps the conversation's own record on the reader's selection while the roster runs —
+    // otherwise the last member's model is what the chat restores on its next launch, and what the
+    // cross-vendor check reads as "the model the user is on".
+    this.enterRoleScope(id)
+    try {
+      announceGroupSpeaker(turn.name, round + 1)
+      await this.switchSelectionModel(id, turn.model, turn.name)
+      if (turn.effort !== null) {
+        const session = this.holds(id) ? this.session(id) : undefined
+        const configId = session === undefined ? null : this.effortConfigId(session.configOptions)
+        const supported = this.supportedEfforts(id)
+        if (configId !== null && supported !== null && supported.includes(turn.effort))
+          await this.setConfig(id, configId, turn.effort)
       }
-    )
-    await this.waitForTurn(id, receipt)
+      if (turn.fastMode !== undefined) {
+        const session = this.holds(id) ? this.session(id) : undefined
+        const fast = session?.configOptions.find((entry) => entry.configId === "fast-mode")
+        if (fast !== undefined && isBooleanOption(fast) && fast.currentValue !== turn.fastMode)
+          await this.setConfig(id, "fast-mode", turn.fastMode)
+      }
+      // Keep the `〔…〕` wrapper: that prefix is what marks a roster turn so the restart logic in
+      // `lastUserTurnKey` skips it. The role's title (职务) is folded inside when present.
+      const speakerLabel =
+        turn.title !== undefined && turn.title.trim() !== "" ? `${turn.name}（${turn.title.trim()}）` : turn.name
+      const receipt = await this.promptWithTimeout(
+        id,
+        [{ type: "text", text: groupTurnPrompt(turn, round, document, kind, template, framing) }],
+        {
+          display: [
+            {
+              type: "text",
+              text:
+                kind === "summary"
+                  ? `〔${speakerLabel}〕总结`
+                  : `〔${speakerLabel}〕第 ${round + 1} 轮`
+            }
+          ]
+        }
+      )
+      await this.waitForTurn(id, receipt)
+    } finally {
+      this.leaveRoleScope(id)
+    }
   }
 
   /**
@@ -2414,7 +2576,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     orchestration: SessionOrchestration
   ): Record<"planner" | "worker", { model: string; effort: string | null; fastMode: boolean }> {
     const session = this.holds(id) ? this.session(id) : undefined
-    if (session === undefined) throw new Error("分工模式会话不存在")
+    if (session === undefined) throw new Error("当前会话不存在")
     const current = selectedModel(session.configOptions)
     if (!isNativeModel(session.configOptions, current)) throw new Error("当前会话模型不在模型列表中，无法使用分工模式")
 
@@ -2453,7 +2615,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     role: { model: string; effort: string | null; fastMode?: boolean }
   ): Promise<void> {
     const label = roleName === "planner" ? "规划模型" : "执行模型"
-    this.selectingRole.add(id)
+    this.enterRoleScope(id)
     try {
       // 兜底：分工里记的模型可能已经下线（`deepseek-flash` 在 DeepSeek 关闭后就是这种）。
       // 先核对目录，命中不了就换成这条会话当前可用的模型并写回配置，然后把话说明白。
@@ -2478,12 +2640,16 @@ export class CodexClient extends CodexAcpClient<AppState> {
       await this.writeSelectionEffort(id, label, role.model, effort)
       await this.applyRoleFastMode(id, label, role.model, role.fastMode === true)
     } finally {
-      this.selectingRole.delete(id)
+      this.leaveRoleScope(id)
     }
   }
 
   /**
-   * 分工角色模型失效时换一个确定可用的：优先这条会话当前选中的模型，其次目录里第一个非账号模型。
+   * 分工角色模型失效时换一个确定可用的，**优先留在同一个厂商**。
+   *
+   * 角色配的是某家中转站的模型时，那家的目录里往往还有别的模型；原来的兜底把网关全部排除，
+   * 结果一条网关模型下线就把角色强行拉回原生 GPT——配额池和账号都换了，读者却只看到"已改用
+   * 某模型"。同一厂商找不到才退到这条会话当前选中的模型，再退到原生分组。
    * 写回 localStorage 后，下一次发送不会再撞同一个错。
    */
   private repairOrchestrationRole(
@@ -2497,8 +2663,12 @@ export class CodexClient extends CodexAcpClient<AppState> {
     const catalog = nativeModelCatalog(session.configOptions ?? [])
     if (catalog.some((entry) => entry.id === role.model)) return null
     const current = selectedModel(session.configOptions)
-    const available = catalog.filter((entry) => !entry.id.startsWith("gateway:"))
-    const next = available.find((entry) => entry.id === current) ?? available[0]
+    const vendor = modelVendor(role.model)
+    const next =
+      catalog.find((entry) => entry.id !== role.model && modelVendor(entry.id) === vendor) ??
+      catalog.find((entry) => entry.id === current) ??
+      catalog.find((entry) => modelVendor(entry.id) === "native") ??
+      catalog[0]
     if (next === undefined) return null
     const saved = orchestrationFor(id)
     if (saved !== null) {
@@ -2527,7 +2697,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     desired: boolean
   ): Promise<void> {
     const session = this.holds(id) ? this.session(id) : undefined
-    if (session === undefined) throw new Error("分工模式会话不存在")
+    if (session === undefined) throw new Error("当前会话不存在")
     const option = session.configOptions.find((entry) => entry.configId === "fast-mode")
     if (option === undefined) {
       if (desired) throw new Error(`${label}“${model}”不支持加速模式`)
@@ -2539,7 +2709,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     const after = this.holds(id) ? this.session(id) : undefined
     const actual = after?.configOptions.find((entry) => entry.configId === "fast-mode")
     if (after === undefined || actual === undefined || !isBooleanOption(actual) || actual.currentValue !== desired)
-      throw new Error(`分工配置回读不一致：${label}加速模式未${desired ? "开启" : "关闭"}`)
+      throw new Error(`角色配置回读不一致：${label}加速模式未${desired ? "开启" : "关闭"}`)
   }
 
   /** Captures the main conversation's selection before a role takes over the shared session. */
@@ -2556,23 +2726,45 @@ export class CodexClient extends CodexAcpClient<AppState> {
     }
   }
 
-  /** Switches the session model and confirms the agent actually applied it. */
+  /**
+   * Switches one role's model and confirms the agent actually applied it.
+   *
+   * Shared by both special chat modes: 分工 swaps planner/worker per turn, 拉会 swaps a speaker
+   * per role — and both let a role sit on another vendor than the conversation's own model. The
+   * write therefore must not take the user's path through `setConfig`: there a busy rejection
+   * means "the reader is taking the model away from a live answer", so it ends the turn or parks
+   * the pick. For a role both are wrong — cancelling cuts the previous speaker's answer, parking
+   * applies a speaker's model later behind everyone's back.
+   */
   private async switchSelectionModel(id: string, model: string, label: string): Promise<Session> {
     const before = this.holds(id) ? this.session(id) : undefined
-    if (before === undefined) throw new Error("分工模式会话不存在")
-    if (selectedModel(before.configOptions) !== model) await this.setConfig(id, "model", model)
+    if (before === undefined) throw new Error("当前会话不存在")
+    if (selectedModel(before.configOptions) !== model) await this.writeRoleModel(id, model)
 
     const after = this.holds(id) ? this.session(id) : undefined
-    if (after === undefined) throw new Error("分工模式会话不存在")
+    if (after === undefined) throw new Error("当前会话不存在")
     if (selectedModel(after.configOptions) !== model)
-      throw new Error(`分工配置回读不一致：${label}模型未切换到“${model}”`)
+      throw new Error(`角色配置回读不一致：${label}模型未切换到“${model}”`)
     return after
+  }
+
+  /**
+   * Writes a role's model straight to the engine.
+   *
+   * Waits (bounded) for the previous turn's terminal update, because a write into that gap is
+   * refused by the agent, and a refusal here is not something the reader asked for: it only means
+   * this one role cannot take the floor, which the caller reports as an absent member instead of
+   * ending the discussion. Never `cancel` — that belongs to the reader's own pick.
+   */
+  private async writeRoleModel(id: string, model: string): Promise<void> {
+    await this.waitForIdle(id, ROLE_SWITCH_IDLE_MS)
+    await super.setConfig(id, "model", model)
   }
 
   /** Writes one selection's effort under the config id the adapter exposes, then reads it back. */
   private async writeSelectionEffort(id: string, label: string, model: string, effort: string): Promise<void> {
     let session = this.holds(id) ? this.session(id) : undefined
-    if (session === undefined) throw new Error("分工模式会话不存在")
+    if (session === undefined) throw new Error("当前会话不存在")
     const configId = this.effortConfigId(session.configOptions)
     if (configId === null) throw new Error(`${label}“${model}”未暴露 Effort 配置`)
     const supported = this.supportedEfforts(id)
@@ -2581,32 +2773,39 @@ export class CodexClient extends CodexAcpClient<AppState> {
     await this.setConfig(id, configId, effort)
 
     session = this.holds(id) ? this.session(id) : undefined
-    if (session === undefined) throw new Error("分工模式会话不存在")
+    if (session === undefined) throw new Error("当前会话不存在")
     const actualModel = selectedModel(session.configOptions)
     const actualEffort = this.selectedEffort(session.configOptions)
     if (actualModel !== model || actualEffort !== effort)
       throw new Error(
-        `分工配置回读不一致：${label}期望 ${model} + ${effort}，实际 ${actualModel ?? "无"} + ${actualEffort ?? "无"}`
+        `角色配置回读不一致：${label}期望 ${model} + ${effort}，实际 ${actualModel ?? "无"} + ${actualEffort ?? "无"}`
       )
   }
 
-  /** Restores the main selection after a role finishes, without writing an unsupported effort. */
+  /**
+   * Restores the conversation to the reader's own selection after a role finishes.
+   *
+   * The pair captured at the start is only a fallback: a reader can change models mid-discussion,
+   * and that change must not be undone by the hand-back. The restored pair is recorded as the
+   * conversation's choice, so the next launch resumes on it rather than on the last speaker's.
+   */
   private async restoreMainSelection(
     id: string,
     selection: { model: string; effort: string | null; fastMode: boolean }
   ): Promise<void> {
+    const target = this.userWantedSelection(id, selection)
     // The saved pair is authoritative here; the model's own default must not slip in between.
-    this.selectingRole.add(id)
+    this.enterRoleScope(id)
     try {
-      await this.switchSelectionModel(id, selection.model, "主会话")
+      await this.switchSelectionModel(id, target.model, "主会话")
       const session = this.holds(id) ? this.session(id) : undefined
-      if (session === undefined) throw new Error("分工模式会话不存在")
-      if (selection.effort !== null) {
+      if (session === undefined) throw new Error("当前会话不存在")
+      if (target.effort !== null) {
         const configId = this.effortConfigId(session.configOptions)
         const supported = this.supportedEfforts(id)
-        if (configId === null || supported === null || !supported.includes(selection.effort))
-          throw new Error(`主会话“${selection.model}”不支持 Effort“${selection.effort}”`)
-        await this.writeSelectionEffort(id, "主会话", selection.model, selection.effort)
+        if (configId === null || supported === null || !supported.includes(target.effort))
+          throw new Error(`主会话“${target.model}”不支持 Effort“${target.effort}”`)
+        await this.writeSelectionEffort(id, "主会话", target.model, target.effort)
       }
       // A role may have turned acceleration on/off; hand the main conversation back with its own.
       const after = this.holds(id) ? this.session(id) : undefined
@@ -2615,18 +2814,20 @@ export class CodexClient extends CodexAcpClient<AppState> {
         after !== undefined &&
         fast !== undefined &&
         isBooleanOption(fast) &&
-        fast.currentValue !== selection.fastMode
+        fast.currentValue !== target.fastMode
       )
-        await this.setConfig(id, "fast-mode", selection.fastMode)
+        await this.setConfig(id, "fast-mode", target.fastMode)
     } finally {
-      this.selectingRole.delete(id)
+      this.leaveRoleScope(id)
     }
+    // Back outside the role's scope: this is the reader's selection again, so record it.
+    this.saveSessionModel(id, { model: target.model, effort: target.effort, fastMode: target.fastMode })
   }
 
   /** Runs a role request and always returns the shared session to the user's main selection. */
   private async withMainSelection<T>(id: string, run: () => Promise<T>): Promise<T> {
     const selection = this.currentSelection(id)
-    if (selection === null) throw new Error("分工模式会话没有当前模型")
+    if (selection === null) throw new Error("当前会话没有选中的模型")
 
     let outcome: { ok: true; value: T } | { ok: false; error: unknown }
     try {
@@ -2641,14 +2842,6 @@ export class CodexClient extends CodexAcpClient<AppState> {
     } catch (error) {
       restoreFailure = error
     }
-
-    // Roles no longer write the session store; persist the real main selection once it is back.
-    if (restoreFailure === null)
-      this.saveSessionModel(id, {
-        model: selection.model,
-        effort: selection.effort,
-        fastMode: selection.fastMode
-      })
 
     const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error))
     if (!outcome.ok) {
@@ -3275,7 +3468,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     const fastMode = fastOption !== undefined && isBooleanOption(fastOption) ? fastOption.currentValue === true : false
     const tableEffort = this.defaultEffortForModel(session, model)
     const tableFast = modelFastModeFor(model)
-    if (!this.selectingRole.has(session.id) && !this.orchestrating.has(session.id))
+    if (!this.inRoleScope(session.id))
       this.saveSessionModel(session.id, {
         model,
         effort,
@@ -3303,7 +3496,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // engine happened to open with, not a user choice: recording them made the first value a chat
     // ever saw (often a global Low/Max) stick forever. `confirmModel` writes them when the user
     // actually picks, and `restoreSessionModel` otherwise follows the model row.
-    if (!this.selectingRole.has(session.id)) this.saveSessionModel(session.id, { model: modelId })
+    if (!this.inRoleScope(session.id)) this.saveSessionModel(session.id, { model: modelId })
     const option = session.configOptions.find((entry) => entry.category === "model" && entry.type === "select")
     const isGateway =
       option !== undefined &&

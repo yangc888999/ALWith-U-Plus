@@ -3633,6 +3633,12 @@ mod tests {
             assert!(model["base_instructions"].as_str().unwrap().contains("Codex"));
         }
 
+        inner.saved = remove_custom(&inner.saved, "custom_private", 1).unwrap();
+        reconcile_test(&mut inner, &client).await.unwrap();
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls[1]["params"]["params"]["_meta"]["codex"]["id"], "custom-637573746f6d5f70726976617465");
+    }
+
     /// The regression behind "我选的 Ling 3.2 Flash，它说自己是 Claude Opus 5.5": a catalog entry
     /// cloned from a sibling kept the sibling's identity paragraph, so the prompt told the model it
     /// was a different product. Every entry must name itself.
@@ -3673,11 +3679,6 @@ mod tests {
         // The original prompt survives below it.
         assert!(text.contains("You are Codex, an agent based on GPT-5."));
         assert_eq!(text.matches("Model identity:").count(), 1);
-    }
-        inner.saved = remove_custom(&inner.saved, "custom_private", 1).unwrap();
-        reconcile_test(&mut inner, &client).await.unwrap();
-        let calls = calls.lock().unwrap();
-        assert_eq!(calls[1]["params"]["params"]["_meta"]["codex"]["id"], "custom-637573746f6d5f70726976617465");
     }
 
     /// A built-in (native) provider's saved model override must thread its `context_window` into the
