@@ -2092,10 +2092,41 @@ fn merged_catalog(app_data: &std::path::Path) -> Option<Value> {
             }
         }
     }
+    // 加速档位必须在这里补：每个条目都是以 `qwen4-max-preview` 为模板克隆出来的，而模板不带
+    // `additional_speed_tiers`。适配器用 `model.additionalSpeedTiers` 判断「这个模型支不支持
+    // 加速」（`modelSupportsFast`），字段一缺，`fast-mode` 这个 configOption 根本不会发布，
+    // 对话框上方的「快速模式」整行就消失了——GPT 全系在引擎内置表里都声明了 `["fast"]`，
+    // 丢的是我们自己这一层。
+    for entry in entries.iter_mut() {
+        restore_native_speed_tiers(entry);
+    }
     if entries.is_empty() {
         return None;
     }
     Some(json!({ "models": entries }))
+}
+
+/// 把 Codex 原生 GPT 家族的加速档位补回目录条目。
+///
+/// 只在条目自己没写这个字段时生效：写过的（例如 `gpt-daybreak-*` 确实声明 `[]`）原样保留，
+/// 免得把「不支持加速」的模型也变成可选。`service_tiers` 一并补上，引擎才认 `service_tier:
+/// "priority"` 这个取值——只补前者会让开关能点但请求被拒。
+fn restore_native_speed_tiers(entry: &mut Value) {
+    let Some(object) = entry.as_object_mut() else { return };
+    let slug = object.get("slug").and_then(Value::as_str).unwrap_or_default().to_ascii_lowercase();
+    if !slug.starts_with("gpt-") || slug.starts_with("gpt-daybreak") {
+        return;
+    }
+    if object.contains_key("additional_speed_tiers") {
+        return;
+    }
+    object.insert("additional_speed_tiers".into(), json!(["fast"]));
+    if !object.contains_key("service_tiers") {
+        object.insert(
+            "service_tiers".into(),
+            json!([{"id":"priority","name":"Fast","description":"1.5x speed, increased usage"}]),
+        );
+    }
 }
 
 /// 本地 bridge 支持、但引擎内置表里没有的 GPT 模型：(引擎 slug, 显示名, 上下文窗口)。
@@ -3893,6 +3924,25 @@ mod tests {
         // A provider with neither a catalog nor overrides reports an empty list, not a missing key.
         let empty = built_in_models(&resources, &BTreeMap::new());
         assert_eq!(empty.get("openai").map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn a_native_gpt_entry_keeps_its_acceleration_tier() {
+        // 目录条目都以 qwen4-max-preview 为模板克隆，而模板没有 additional_speed_tiers。适配器正是
+        // 靠这个字段决定要不要发布 `fast-mode`，缺了整个「快速模式」入口就消失。GPT 全系在引擎的
+        // 内置表里都写了 ["fast"]，所以这里必须补回去；写过空数组的（daybreak）保持原样。
+        let mut plain = json!({"slug": "gpt-6.1-sol", "display_name": "6.1 Sol"});
+        restore_native_speed_tiers(&mut plain);
+        assert_eq!(plain["additional_speed_tiers"], json!(["fast"]));
+        assert_eq!(plain["service_tiers"][0]["id"], json!("priority"));
+
+        let mut declined = json!({"slug": "gpt-daybreak-blue-latest", "additional_speed_tiers": []});
+        restore_native_speed_tiers(&mut declined);
+        assert_eq!(declined["additional_speed_tiers"], json!([]), "a model that declares none keeps none");
+
+        let mut other = json!({"slug": "qwen4-max-preview"});
+        restore_native_speed_tiers(&mut other);
+        assert!(other.get("additional_speed_tiers").is_none(), "a non-GPT model must not gain the switch");
     }
 
     fn model_with_window(api_id: &str, window: Option<u64>, enabled: Option<bool>) -> CustomModel {

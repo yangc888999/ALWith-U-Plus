@@ -398,15 +398,27 @@ test("a localized message with interpolation is not formatted a second time", as
   expect(describeError(new Error(once))).toBe(once)
 })
 
-test("a vendor 404 names the endpoint problem instead of dumping JSON", async () => {
+test("a vendor 404 quotes what the upstream actually said", async () => {
   await chinese()
 
+  // `{"path":"/v4/responses"}` is the whole reason this shape exists: the reader has to be able to
+  // tell "the vendor has no such model" from "the request never reached the vendor the picker named".
   const message = describeError(
     new Error('unexpected status 404 Not Found: {"path":"/v4/responses"}, url: http://127.0.0.1:55556/alwith/responses')
   )
   expect(message).toContain("404")
-  expect(message).toContain("Base URL")
+  expect(message).toContain("/v4/responses")
   expect(message).not.toContain("unexpected status")
+
+  // en envelope: the sentence inside wins over the raw body.
+  const nested = describeError(
+    new Error('unexpected status 404 Not Found: {"error":{"message":"No endpoints found for gpt-6.1-sol"}}')
+  )
+  expect(nested).toContain("No endpoints found for gpt-6.1-sol")
+
+  // No body at all: the sentence must still read as a sentence, not end on a colon.
+  const bare = describeError(new Error("unexpected status 404 Not Found"))
+  expect(bare).toContain("上游没有说明原因")
 })
 
 test("the bridge's own stream timeout names the real cause", async () => {

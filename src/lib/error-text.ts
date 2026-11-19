@@ -12,7 +12,7 @@ type Rule = {
   match: RegExp
   key: string
   /** Values handed to the translation, in order of the capture groups. */
-  values?: (match: RegExpExecArray) => Record<string, string>
+  values?: (match: RegExpExecArray, message: string) => Record<string, string>
 }
 
 const RULES: Rule[] = [
@@ -439,8 +439,15 @@ const RULES: Rule[] = [
     // A 404 means the vendor has no such route. That is either an unknown model id or a base URL
     // that does not serve the selected protocol — not proof of a protocol mismatch, which is what
     // the earlier copy claimed for every 404. Name both possibilities instead of the vendor's JSON.
+    //
+    // 2026-11-19: the copy also used to send every reader to "核对模型 ID 和 Base URL", which is
+    // wrong whenever the request never reached the vendor the picker named (a chat pinned to a
+    // retired provider answers 404 locally). Quote the upstream sentence instead: it names the
+    // model, the route or the missing gateway, and that is the only thing that makes the report
+    // actionable.
     match: /unexpected status 404\b/i,
-    key: "error.providerEndpointNotFound"
+    key: "error.providerEndpointNotFound",
+    values: (_match, message) => ({ detail: vendorDetail(message) })
   },
   {
     // The settings store is revision-guarded. One card writes twice (a model toggle, then
@@ -740,6 +747,33 @@ function unwrapBody(message: string): string {
   }
 }
 
+/** Longest vendor sentence kept inside a 404 message; the rest is noise. */
+const VENDOR_DETAIL_MAX = 160
+
+/**
+ * The vendor's own sentence inside a failed response, as a value for the 404 copy.
+ *
+ * The engine hands back `unexpected status 404 Not Found: {"error":{…}}, url: …`; that body is the
+ * only part saying *why*. Falls back to a neutral phrase so the rendered sentence never ends on a
+ * dangling colon.
+ */
+function vendorDetail(message: string): string {
+  const body = /:\s*(\{[\s\S]*?\})\s*(?:,\s*url:|$)/.exec(message)?.[1] ?? ""
+  const fallback = i18n.t("error.providerEndpointNotFoundDetail")
+  const neutral = typeof fallback === "string" ? fallback : ""
+  if (body === "") return neutral
+  let text: string | null = null
+  try {
+    text = envelopeMessage(JSON.parse(body))
+  } catch {
+    // Not JSON: the raw body still beats hiding it.
+    text = null
+  }
+  const detail = (text ?? body).replace(/\s+/g, " ").trim()
+  if (detail === "") return neutral
+  return detail.length > VENDOR_DETAIL_MAX ? `${detail.slice(0, VENDOR_DETAIL_MAX)}…` : detail
+}
+
 /**
  * `describeError` is also installed as a global formatter for the chat package, so one engine
  * failure can pass through it twice: once for the inline card, once for the host's error toast.
@@ -786,7 +820,7 @@ export function describeError(error: unknown): string {
   for (const rule of RULES) {
     const match = rule.match.exec(message)
     if (match !== null) {
-      const translated = i18n.t(rule.key, rule.values?.(match))
+      const translated = i18n.t(rule.key, rule.values?.(match, message))
       // i18n may not be initialised in unit tests or very early startup; never replace a real
       // message with `undefined` just because the table matched.
       return typeof translated === "string" && translated !== "" ? translated : message

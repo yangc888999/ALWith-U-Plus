@@ -16,7 +16,7 @@ import { groupSessionRows } from "@/lib/group-sessions"
 import { automationSessionRows, replaceAutomationSessionRows } from "@/lib/automation-sessions"
 import { removeGroup, setGroup } from "@/lib/groups"
 
-import { type ClientOptions, CodexClient, type GatewayModel, modelVendor, withoutModelSwitchNotes } from "../client"
+import { type ClientOptions, CodexClient, type GatewayModel, modelVendor, parkedRetryDelay, withoutModelSwitchNotes } from "../client"
 import { macProjectPaths, type ProjectPaths } from "../project-path"
 import { createFakeAgent } from "./fake-agent"
 import { FakeHubPort } from "./fake-runtime-client"
@@ -1462,6 +1462,18 @@ test("model changes after restoring a session wait for the previous configuratio
   expect(fake.configChanges).toEqual(["deepseek-flash", "gpt-6.1-sol"])
   const model = client.session("h1").configOptions.find((option) => option.configId === "model")
   expect(model?.currentValue).toBe("gpt-6.1-sol")
+})
+
+test("a parked switch that keeps being refused backs off instead of hammering the agent", () => {
+  // What one machine actually logged: `Wait for the current turn before changing its provider`
+  // every two seconds for ninety minutes, each cycle re-parking itself, until the ring buffer held
+  // nothing else. The ladder is the guard — assert it grows and then flattens.
+  expect(parkedRetryDelay(1)).toBe(2_000)
+  expect(parkedRetryDelay(2)).toBe(4_000)
+  expect(parkedRetryDelay(3)).toBe(8_000)
+  expect(parkedRetryDelay(4)).toBe(16_000)
+  expect(parkedRetryDelay(9)).toBe(16_000)
+  expect(parkedRetryDelay(0)).toBe(2_000)
 })
 
 test("a model picked mid-turn is parked, never errors, and lands once the turn settles", async () => {

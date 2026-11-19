@@ -231,6 +231,18 @@ fn handle(request: tiny_http::Request) -> Result<(), String> {
     }
     let upstream_base = routes().read().ok().and_then(|map| map.get(runtime_id).cloned());
     let Some(upstream_base) = upstream_base else {
+        // 1.3.0 之前每条会话绑在自己那个 provider 上（`openai` / `openrouter` / `kimi` …），
+        // Codex 因此把请求打到 `/<provider>/responses`。合并成共享路由后这些路径不再注册，
+        // 于是一条老会话只要换了模型就永远 404 —— 而这一支在写日志之前就 return，现场连一行
+        // 痕迹都不留，日志里只能看到「模型厂商返回了 404」，把人引去核对模型 ID 和 Base URL。
+        //
+        // 交给共享路由重新分派：裸模型名（原生 GPT）走 chatgpt.com；`网关/模型` 查得到就转发，
+        // 查不到由 missing_gateway_response 给出带厂商名的 404，UI 能翻成「厂商 X 还没有配置」。
+        // 模型列表的 GET 不属于这条路径，维持原判并留下记录。
+        log::warn!("bridge: unregistered gateway {runtime_id} ({method} /{action}), delegating to the shared router");
+        if method == "post" && action == "responses" {
+            return forward_routed(request);
+        }
         return respond(request, 404, "application/json", br#"{"error":{"message":"bridge: unregistered gateway"}}"#);
     };
     let authorization = request
@@ -2427,6 +2439,55 @@ mod tests {
         unregister_route(gateway);
     }
     use super::*;
+
+    #[test]
+    fn a_thread_pinned_to_a_retired_provider_reaches_the_shared_router() {
+        // 老会话绑在旧 provider 上，Codex 打的是 `/<provider>/responses`；这些路径在共享路由之后
+        // 不再注册。直接 404 会让「换个模型」变成永久失败，而这一支在写日志之前就 return，现场
+        // 连一行痕迹都没有。改成交给共享路由：网关名照常转发，内层也没注册时回带厂商名的 404，
+        // UI 才能说清楚是谁没配，而不是让人去核对 Base URL。
+        let gateway = "legacy-probe";
+        let upstream = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let upstream_addr = upstream.server_addr().to_ip().unwrap();
+        register_router_route(gateway, &format!("http://{upstream_addr}/v1"), "probe-secret", false);
+        let relay = std::thread::spawn(move || {
+            let mut request = upstream.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+            assert_eq!(request.url(), "/v1/responses");
+            let mut body = String::new();
+            request.as_reader().read_to_string(&mut body).unwrap();
+            let body: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(body["model"], "kept", "the gateway prefix is stripped before the vendor sees it");
+            request.respond(tiny_http::Response::from_string("ok").with_status_code(200)).unwrap();
+        });
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let address = server.server_addr().to_ip().unwrap();
+        let client = std::thread::spawn(move || {
+            reqwest::blocking::Client::new()
+                .post(format!("http://{address}/openai/responses"))
+                .json(&serde_json::json!({"model": format!("{gateway}/kept"), "input": []}))
+                .send()
+                .unwrap()
+                .status()
+                .as_u16()
+        });
+        handle(server.recv_timeout(Duration::from_secs(5)).unwrap().unwrap()).unwrap();
+        assert_eq!(client.join().unwrap(), 200, "a retired provider path must be re-dispatched, not refused");
+        relay.join().unwrap();
+        unregister_router_route(gateway);
+
+        let client = std::thread::spawn(move || {
+            let response = reqwest::blocking::Client::new()
+                .post(format!("http://{address}/openai/responses"))
+                .json(&serde_json::json!({"model": "nobody/anything", "input": []}))
+                .send()
+                .unwrap();
+            (response.status().as_u16(), response.text().unwrap())
+        });
+        handle(server.recv_timeout(Duration::from_secs(5)).unwrap().unwrap()).unwrap();
+        let (status, body) = client.join().unwrap();
+        assert_eq!(status, 404);
+        assert!(body.contains("gateway nobody is not configured"), "got: {body}");
+    }
 
     #[test]
     fn web_search_tools_are_dropped_before_the_gateway_sees_them() {

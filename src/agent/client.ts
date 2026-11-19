@@ -198,6 +198,30 @@ const STALE_RUN_STATE_MS = 60_000
 const PENDING_MODEL_RETRY_MS = 2_000
 
 /**
+ * How many times one parked choice may be re-attempted before the app gives up on it.
+ *
+ * 「本轮后切换」 parked on a busy rejection and retried every 2 seconds forever: the local session
+ * said idle, the adapter kept answering `Wait for the current turn before changing its provider`,
+ * and each cycle re-parked itself. One real log read 90 minutes of that, and because the log is a
+ * ring buffer it also erased every other symptom in the window. A choice that cannot apply is not
+ * worth a permanent timer — try a few times with backoff, then say so and drop it.
+ */
+const PENDING_MODEL_MAX_ATTEMPTS = 5
+
+/** First retry delay after a refused switch; doubles per attempt up to `PENDING_MODEL_RETRY_MS * 8`. */
+const PENDING_MODEL_BACKOFF_MS = 2_000
+
+/**
+ * How long to wait before the next attempt, given how many have already been refused.
+ *
+ * Pulled out of the retry path so the ladder itself can be asserted without waiting on timers.
+ */
+export function parkedRetryDelay(attempts: number): number {
+  const step = Math.max(1, Math.floor(attempts))
+  return Math.min(PENDING_MODEL_BACKOFF_MS * 2 ** (step - 1), PENDING_MODEL_RETRY_MS * 8)
+}
+
+/**
  * How long a role waits for the previous turn's terminal update before writing its own model.
  *
  * The roster awaits the turn anyway, so this only covers the beat between the agent accepting the
@@ -1321,6 +1345,9 @@ export class CodexClient extends CodexAcpClient<AppState> {
   private readonly pendingModelListeners = new Set<() => void>()
   /** When each parked choice was requested, so a wedged liveness clock cannot hold it forever. */
   private readonly parkedAt = new Map<string, number>()
+  /** Consecutive refusals per conversation, and when the next attempt is allowed (see the cap above). */
+  private readonly parkedAttempts = new Map<string, number>()
+  private readonly parkedRetryAt = new Map<string, number>()
   /**
    * Chats whose last user gesture was Stop, so the next model pick is applied instead of parked.
    *
@@ -1794,6 +1821,12 @@ export class CodexClient extends CodexAcpClient<AppState> {
    */
   private parkModelSwitch(id: string, model: string): void {
     void info(`[pending-model] park id=${id} model=${model} busy=${this.sessionBusy(id)} state=${this.state.sessions[id]?.state ?? "?"}`)
+    // A different target starts a fresh budget. Re-parking the same one — which is what every
+    // refused retry does — keeps the count so the cap can actually be reached.
+    if (this.pendingModelSwitches.get(id) !== model) {
+      this.parkedAttempts.delete(id)
+      this.parkedRetryAt.delete(id)
+    }
     this.pendingModelSwitches.set(id, model)
     this.parkedAt.set(id, Date.now())
     this.emitPendingModel()
@@ -1821,6 +1854,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
     if (this.pendingModelSwitches.get(id) !== requested) return
     this.pendingModelSwitches.delete(id)
     this.parkedAt.delete(id)
+    this.parkedAttempts.delete(id)
+    this.parkedRetryAt.delete(id)
     const stop = this.pendingModelWatchers.get(id)
     this.pendingModelWatchers.delete(id)
     stop?.()
@@ -1885,6 +1920,10 @@ export class CodexClient extends CodexAcpClient<AppState> {
     if (applying !== undefined) return applying
     const pending = this.pendingModelSwitches.get(id)
     if (pending === undefined) return Promise.resolve()
+    // Inside a backoff window there is nothing to do: the interval still fires, but a choice the
+    // agent just refused is not retried on the same two-second beat.
+    const retryAt = this.parkedRetryAt.get(id)
+    if (!force && retryAt !== undefined && Date.now() < retryAt) return Promise.resolve()
     if (!force && this.sessionBusy(id) && !this.parkedSwitchOverdue(id)) return Promise.resolve()
     // Deferred by one microtask on purpose: `setConfig` publishes a store patch synchronously,
     // and the watcher — which runs inside that patch — must already see this entry, or it would
@@ -1894,12 +1933,27 @@ export class CodexClient extends CodexAcpClient<AppState> {
       .then(
         () => { void info(`[pending-model] apply landed id=${id} model=${pending} force=${force} stillParked=${this.pendingModelSwitches.has(id)}`) },
         (error: unknown) => {
-          void info(`[pending-model] apply threw id=${id} model=${pending} error=${String(error).slice(0, 240)}`)
+          const message = error instanceof Error ? error.message : String(error)
+          void info(`[pending-model] apply threw id=${id} model=${pending} error=${message.slice(0, 240)}`)
           // A busy rejection re-parks the choice inside setConfig and the watcher retries when
           // the turn settles. Any other failure means this choice cannot apply at all — drop it,
           // or every store tick would start another write and starve the app's timers.
-          if (!this.turnBusyRejection(error instanceof Error ? error.message : String(error)))
+          if (!this.turnBusyRejection(message)) {
             this.clearParkedModel(id, pending)
+            return
+          }
+          // A refusal that repeats is not a turn that is about to end — it is a conversation whose
+          // provider can never be switched. Back off, then stop: leaving the timer armed made one
+          // machine retry every two seconds for ninety minutes and drowned the log ring buffer.
+          const attempts = (this.parkedAttempts.get(id) ?? 0) + 1
+          if (attempts >= PENDING_MODEL_MAX_ATTEMPTS) {
+            void info(`[pending-model] giving up id=${id} model=${pending} attempts=${attempts}`)
+            this.clearParkedModel(id, pending)
+            toast.error(i18n.t("chat.pendingModelFailed"))
+            return
+          }
+          this.parkedAttempts.set(id, attempts)
+          this.parkedRetryAt.set(id, Date.now() + parkedRetryDelay(attempts))
         }
       )
     this.pendingModelApplies.set(id, apply)
