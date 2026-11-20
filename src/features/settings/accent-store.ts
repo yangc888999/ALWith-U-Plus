@@ -64,15 +64,28 @@ export const useAccentStore = create<AccentState>()(
 // persisted choice lands in the same localStorage. zustand's persist does not echo writes
 // across windows, so we listen for the storage event and re-read, keeping every window on
 // the same accent without a reload.
+//
+// ⚠️ 只有「真的不一样」才采纳。persist 在每次 setState 后都会再写一次 localStorage，而那次写入
+// 又会在**另一个窗口**触发 storage 事件——如果两个窗口各持一个不同的值，就会互相采纳、互相回写，
+// 无限来回：现场表现是强调色在「柠檬绿 ⇄ 少女粉」之间一直切，整个窗口的色调跟着一起闪。
+// 采纳前先比对当前值，值和本地一致就到此为止，回写链自己断开。
+export function adoptRemoteAccent(raw: string | null): void {
+  if (raw === null) return
+  try {
+    const parsed = JSON.parse(raw) as { state?: { accent?: AccentId } }
+    const next = parsed.state?.accent
+    if (next === undefined) return
+    if (useAccentStore.getState().accent === next) return
+    useAccentStore.setState({ accent: next })
+  } catch {
+    // Ignore malformed payloads; the next write will correct them.
+  }
+}
+
 if (typeof window !== "undefined" && "addEventListener" in window) {
   window.addEventListener("storage", (event) => {
-    if (event.key !== "alwith-settings-accent" || event.newValue === null) return
-    try {
-      const parsed = JSON.parse(event.newValue) as { state?: { accent?: AccentId } }
-      if (parsed.state?.accent !== undefined) useAccentStore.setState({ accent: parsed.state.accent })
-    } catch {
-      // Ignore malformed payloads; the next write will correct them.
-    }
+    if (event.key !== "alwith-settings-accent") return
+    adoptRemoteAccent(event.newValue)
   })
 }
 

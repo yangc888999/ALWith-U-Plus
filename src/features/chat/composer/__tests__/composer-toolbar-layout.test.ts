@@ -27,11 +27,27 @@ function ruleOf(selector: string): string {
   return (match?.[0] ?? "").replace(/\/\*[\s\S]*?\*\//g, "")
 }
 
-test("the input-header strip paints its own surface in both themes", () => {
-  const light = ruleOf("[data-chat-input-header]")
-  expect(light).toContain("background-color: var(--muted)")
-  const dark = ruleOf(".dark [data-chat-input-header]")
-  expect(dark).toContain("background-color: color-mix(in oklab, var(--foreground) 3%, transparent)")
+test("the composer is painted as one surface, not a header slab stacked on a card", () => {
+  const header = ruleOf("[data-chat-input-header]")
+  // The package's tab geometry: narrower than the card, dropped, and tucked underneath it.
+  expect(header).toContain("margin: 0")
+  expect(header).toContain("top: 0")
+  // The row owns no fill and no ring any more — the shared parent paints both halves.
+  expect(header).toContain("background-color: transparent")
+  expect(header).toContain("box-shadow: none")
+  // ...and the surface gives up its own fill/ring for the same reason.
+  const surface = ruleOf("[data-composer] .codex-composer-surface")
+  expect(surface).toContain("background-color: transparent")
+  expect(surface).toContain("box-shadow: none")
+  // The single outline lives on the element that contains header AND input.
+  const shell = /\[data-composer\] div:has\(> form > \.codex-composer-surface\)[^{]*\{([^}]*)\}/.exec(styles)
+  expect(shell?.[1]).toContain("border-radius: 24px")
+  expect(shell?.[1]).toContain("var(--chat-input-bg-color")
+  // An empty row must not leave a bare strip above the input.
+  expect(styles).toMatch(/\[data-chat-input-header\]:not\(:has\(button, span\)\)\s*\{\s*display: none;/)
+  // `:has()` cannot be nested inside another `:has()` — the spec forbids it and the whole rule is
+  // dropped — so no rule may wrap one in another.
+  expect(styles).not.toMatch(/:has\([^)]*:has\(/)
 })
 
 test("the model trigger shrinks and ellipsises instead of overflowing the toolbar", () => {
@@ -48,8 +64,16 @@ test("the model trigger shrinks and ellipsises instead of overflowing the toolba
   expect(nameLine).not.toContain("overflow: visible")
 })
 
-test("the toolbar's right group can shrink and wraps rather than overlap", () => {
+test("the toolbar stays one line: the send key is pinned and the picker yields", () => {
   const group = ruleOf(".chat-composer-toolbar > div > div:last-child")
   expect(group).toContain("min-width: 0")
-  expect(group).toContain("flex-wrap: wrap")
+  // Stacking the group onto a second line was the previous fallback and was rejected on sight.
+  expect(group).not.toContain("flex-wrap: wrap")
+  expect(styles).toMatch(
+    /\.chat-composer-toolbar button\[type="submit"\]\s*\{\s*flex: none;\s*\}/
+  )
+  // Degradation runs on the toolbar's own width, in three steps.
+  expect(styles).toMatch(/@container input-footer \(max-width: 30rem\)/)
+  expect(styles).toMatch(/@container input-footer \(max-width: 25rem\)/)
+  expect(styles).toMatch(/@container input-footer \(max-width: 21rem\)/)
 })

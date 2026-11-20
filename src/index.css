@@ -1627,26 +1627,48 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--settings-accent) 22%, transparent);
 }
 
-/* The composer is ONE neutral card. It used to carry a theme-tinted gradient, which turned the
-   header row and the textarea into two different colours and, stacked under the amber running
-   strip, read as three separate slabs. The accent now lives on controls only. */
-.codex-composer-surface {
+/* ── The composer is ONE painted surface, not two slabs stacked ────────────────────────────────
+   The package renders the chip row and the input as two SIBLINGS, and each one carries its own
+   fill and its own 0.5px ring. On top of that the row is drawn as a tab — 13px narrower on each
+   side, dropped 4px, pulled 18px back up under the card (`top-1 mx-[13px] -mb-[18px] pb-[27px]
+   rounded-t-2xl`). Two fills × two rings × one inset = a step and a seam across the middle, and
+   re-tinting the row never fixes it, because the boundary is structural.
+   So the fill is lifted one level instead of being repainted: their shared parent becomes the
+   card — one radius, one ring, one shadow — and both children go transparent. There is no longer
+   an edge that can be misaligned, because the only outline belongs to a box that CONTAINS both
+   halves. `:has()` does the lifting: the parent has no hook of its own, and the surface is two
+   levels down (div.relative > form.w-full > .codex-composer-surface). */
+[data-composer] div:has(> form > .codex-composer-surface),
+[data-composer] div:has(> .codex-composer-surface) {
+  border-radius: 24px;
+  background-color: var(--chat-input-bg-color, var(--card));
+  box-shadow:
+    0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent),
+    0 2px 8px color-mix(in oklab, var(--foreground) 4%, transparent);
+}
+/* The input keeps its own scroll clip, so the bottom corners stay rounded; the fill and the ring
+   move up to the parent. */
+[data-composer] .codex-composer-surface {
+  border-radius: 0 0 24px 24px;
+  background-color: transparent;
   background-image: none;
-  background-color: var(--card);
+  box-shadow: none;
 }
-
-/* The strip above the input (quoted document · running state · 分工) keeps its own rounded-top
-   surface. The package paints it `bg-sidebar`, which was a visible grey slab until v1.0.13 folded
-   the solid appearance's --sidebar into the same white/black as --card and --background: from then
-   on the strip was the same colour as everything around it and read as "the background is gone".
-   The tokens must stay single-colour for the solid mode, so the contrast is restored HERE, on the
-   strip only, from --muted (the one step the solid mode reserves for temporary surfaces). Dark
-   keeps the package's faint foreground wash, which still reads on the dark card. */
+/* The row keeps its padding and drops everything that made it a separate object: the inset, the
+   tuck under the card, its own fill, its own ring and its own corners. */
 [data-chat-input-header] {
-  background-color: var(--muted);
+  top: 0;
+  margin: 0;
+  padding: 8px 12px 7px;
+  border-radius: 0;
+  background-color: transparent;
+  box-shadow: none;
 }
-.dark [data-chat-input-header] {
-  background-color: color-mix(in oklab, var(--foreground) 3%, transparent);
+/* An empty row is an empty strip, and that is the normal state of a plain chat (nothing quoted,
+   nothing running, no 分工). The row is always in the DOM because every chip renders
+   conditionally, so emptiness is read from what is actually inside it. */
+[data-chat-input-header]:not(:has(button, span)) {
+  display: none;
 }
 
 /* Model rows are reordered with pointer events; never let WebKit start a native drag image. */
@@ -1735,12 +1757,15 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
 .alwith-model-pill[data-testid="model-trigger"]:hover {
   background: color-mix(in oklab, var(--settings-accent) 10%, transparent);
 }
-/* One line for the name, dots underneath it. Scope to the label container only: the icon box is
-   also a direct child span and must stay horizontally + vertically centred. */
+/* One line, always. The package stacks the name over the effort dots in a column, which made the
+   trigger two rows tall — taller than every neighbour in the toolbar, and the reason a long name
+   had to be allowed to push the row wider instead of shortening. The label container is a row now:
+   name, then the effort ladder as inline dots, then the chevron. Same information, one baseline,
+   and a height that matches the buttons beside it. */
 .alwith-model-pill > span:not(.model-picker-icon) {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  flex-direction: row;
+  align-items: center;
   gap: 4px;
   min-width: 0;
   max-width: 100%;
@@ -1752,6 +1777,10 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* The ladder keeps its dots but sits on the same line, shrinking to its intrinsic width. */
+.alwith-model-pill > span:not(.model-picker-icon) > span:nth-child(2) {
+  flex: none;
 }
 /* The icon box sits first in the trigger's flex row and must align with the label's centre. */
 .alwith-model-pill > .model-picker-icon {
@@ -1858,17 +1887,44 @@ body::after {
   display: none;
 }
 
-/* The toolbar's right-hand group (model picker · voice · send) is a plain flex row inside a
-   `minmax(0,1fr)` grid track. Its children used to be unshrinkable, so once their combined width
-   passed the track the row overflowed LEFT (justify-end) and painted over the left-hand group —
-   the send key landed on the model picker's neighbour and clicks went to the wrong control.
-   Two defences, in order: the model trigger now shrinks (above), and if the row STILL does not
-   fit (very narrow window, long voice controls) it wraps onto a second line inside the card
-   instead of overlapping anything. The grid track keeps min-width 0 so it can actually shrink. */
+/* ── 工具栏：永远一行，宽度不够就让模型名让位 ────────────────────────────────────────────────
+   右组（模型选择器 · 语音 · 发送）是 `minmax(0,1fr)` 轨道里的 `flex justify-end`。以前子元素
+   拒绝收缩，整组比轨道宽时向左溢出，盖住左边的按钮——点发送实际点到选择器。
+
+   分层规则，从"谁必须不动"往下排：
+   1. 发送键 `flex: none`，任何窗宽都钉在最右，位置永远一致；
+   2. 模型选择器可收缩（见上面 .alwith-model-pill），名字放不下就省略号，全名在悬停提示里；
+   3. 容器查询按**工具栏自身宽度**（不是窗口宽度，侧栏和预览栏都会改变它）逐级收紧：
+      先收内边距 → 再藏 effort 小圆点 → 最后把名字压到 5.5rem。
+   不用换行：上下两行会把一行工具栏变成两行内容，比溢出更丑，也更难扫读。 */
 .chat-composer-toolbar > div > div:last-child {
   min-width: 0;
-  flex-wrap: wrap;
-  row-gap: 4px;
+  flex-wrap: nowrap;
+}
+/* The send key never yields: it is the one control that must sit in the same place at every width. */
+.chat-composer-toolbar button[type="submit"] {
+  flex: none;
+}
+
+@container input-footer (max-width: 30rem) {
+  .alwith-model-pill[data-testid="model-trigger"] {
+    padding-inline: 4px;
+    gap: 4px;
+  }
+}
+/* Effort dots are the first thing to go: they are decorative at a glance, and the ladder is still
+   readable in the menu one click away. */
+@container input-footer (max-width: 25rem) {
+  .alwith-model-pill > span:not(.model-picker-icon) > span:nth-child(2) {
+    display: none;
+  }
+}
+/* Then the name itself gets a hard cap. It still truncates with an ellipsis rather than vanishing,
+   because an icon-only trigger cannot say "which model am I on" at all. */
+@container input-footer (max-width: 21rem) {
+  .alwith-model-pill[data-testid="model-trigger"] > span:not(.model-picker-icon) {
+    max-width: 5.5rem;
+  }
 }
 
 /* ==========================================================================
