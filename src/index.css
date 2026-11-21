@@ -1627,29 +1627,31 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--settings-accent) 22%, transparent);
 }
 
-/* ── The chip row is a HOLDER, not a second card ───────────────────────────────────────────────
-   Three attempts, in order, because the first two teach what the real constraint is:
-   1. the package's own tab geometry (13px inset + `-mb-[18px]` tuck + 27px fake padding) —
-      one slab wedged behind another; corners never line up and the seam shows on both sides;
+/* ── The chip row: same material as the card, separated by space instead of colour ─────────────
+   Four attempts, and the last one is the only one that survives all the constraints:
+   1. the package's tab geometry (13px inset + `-mb-[18px]` tuck + 27px fake padding) — one slab
+      wedged behind another; corners never line up and the seam shows on both sides;
    2. lifting the fill to the shared parent so both halves form ONE card — no seam, but then the
-      setup row and the text field are the same continuous surface, so the chips read as part of
-      the input itself;
-   3. a narrower strip with its own fill, hairline and radius — separated, but it is a box drawn
-      around boxes: the chips already carry their own pill borders, so the container is chrome on
-      chrome, and a 4% slab that size just reads as a grey lid on top of the card.
-   What is left is the honest version: no fill, no ring, no radius. The row is a transparent
-   holder; its children provide every visible edge. Separation comes from spacing and from the
-   horizontal inset, which lines the chips up with the text inside the card — so they read as
-   belonging to the composer without being welded to it. */
-[data-chat-input-header] {
+      setup row and the text field are one continuous surface, so chips read as typed content;
+   3. a narrower strip with a 4% ink wash — reads as a grey lid laid over the card;
+   4. transparent holder — clean, but the chips then float with nothing holding them, which is
+      what "纯透明的好吗" correctly objected to.
+   The mistake common to 2–4 is that the two halves were being told apart by COLOUR. A 4% shift
+   between two adjacent surfaces is below the threshold where a difference reads as intent; it
+   reads as a rendering error. So the separation moves to what actually communicates structure:
+   – the SAME fill token as the card, so no shade can differ between them by construction;
+   – its own rounded rect, so it is visibly a box and not a header fused to the input;
+   – a real 6px gap and a hairline, which is a much stronger signal than 4% of ink.
+   Selector is scoped under `[data-composer]` for specificity: the package ships `bg-sidebar` on
+   this element, and a bare attribute selector only ties with it on paper. */
+[data-composer] [data-chat-input-header] {
   top: 0;
-  /* 10px inline matches the input group's own `px-2.5`, so the chips' left edge sits exactly on
-     the text's left edge: they read as part of the composer without a container saying so. */
-  margin: 0;
-  padding: 2px 10px 8px;
-  border-radius: 0;
-  background-color: transparent;
-  box-shadow: none;
+  /* Full width of the card: the chips line up with the box below instead of floating inside it. */
+  margin: 0 0 6px;
+  padding: 5px 12px;
+  border-radius: 14px;
+  background-color: var(--chat-input-bg-color, var(--card));
+  box-shadow: 0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent);
 }
 /* The card below owns its fill, ring and all four corners: it is a box, not a half-box. */
 [data-composer] .codex-composer-surface {

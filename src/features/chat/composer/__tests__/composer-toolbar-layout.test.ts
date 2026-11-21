@@ -27,23 +27,25 @@ function ruleOf(selector: string): string {
   return (match?.[0] ?? "").replace(/\/\*[\s\S]*?\*\//g, "")
 }
 
-test("the controls row is a transparent holder, never a box around boxes", () => {
-  const header = ruleOf("[data-chat-input-header]")
-  // The package's tab geometry: dropped, and pulled back UP under the card by a negative margin.
-  expect(header).toContain("top: 0")
-  expect(header).not.toMatch(/margin:[^;]*-18px/)
-  expect(header).not.toMatch(/margin:[^;]*13px/)
-  // A grey slab with its own ring read as a lid on the card; the chips already carry pill borders,
-  // so the container must add no chrome of its own.
-  expect(header).toContain("background-color: transparent")
-  expect(header).toContain("box-shadow: none")
-  expect(header).not.toContain("color-mix")
-  // Separation comes from spacing + a horizontal inset that lines the chips up with the input text.
-  expect(header).toMatch(/padding:\s*2px\s+10px\s+8px/)
-  // The card below keeps all four corners and its own fill: it is a box, not a half-box.
+test("the controls row shares the card's material instead of shifting its colour", () => {
+  const header = /\[data-composer\] \[data-chat-input-header\]\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ""
   const surface = ruleOf("[data-composer] .codex-composer-surface")
+  // A 4% ink difference between two adjacent surfaces reads as a rendering error, not as intent —
+  // so hierarchy is carried by geometry (own rounded rect, real gap, hairline), never by shade.
+  expect(header).toContain("background-color: var(--chat-input-bg-color, var(--card))")
+  expect(surface).toContain("background-color: var(--chat-input-bg-color, var(--card))")
+  expect(header).not.toContain("color-mix(in oklab, var(--foreground) 4%")
+  // Its own rounded rect: not a header fused onto the input, not a transparent floater either.
+  expect(header).toMatch(/border-radius:\s*14px/)
+  expect(header).not.toContain("border-radius: 0")
+  // A real gap below it. The package's -18px tuck is what made the two overlap in the first place.
+  expect(header).toMatch(/margin:\s*0\s+0\s+6px/)
+  expect(header).not.toMatch(/-18px/)
+  expect(header).not.toMatch(/13px/)
+  // Scoped under [data-composer] so the package's own `bg-sidebar` cannot win on a tie.
+  expect(styles).toMatch(/\[data-composer\] \[data-chat-input-header\]\s*\{/)
+  // The card below keeps all four corners and its own fill: it is a box, not a half-box.
   expect(surface).toContain("border-radius: 24px")
-  expect(surface).toContain("var(--chat-input-bg-color")
   expect(surface).not.toContain("border-radius: 0 0 24px 24px")
   // No rule may lift the fill to the shared parent — that made one continuous surface.
   expect(styles).not.toMatch(/\[data-composer\] div:has\(/)
