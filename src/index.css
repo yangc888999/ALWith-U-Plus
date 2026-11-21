@@ -1593,6 +1593,25 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   --accent-preset-emerald: oklch(0.76 0.13 170);
 }
 
+/* ── 主题色上的前景（按钮填充主题色时，图标/文字必须读得清）────────────────────────
+   CSS 无法按明度自动选反色，所以按预设明度分组声明，而不是逐个写：
+   明亮档（明度 ≥0.70：柠檬绿 / 少女粉 / 亚麻灰）配深墨；其余配白。
+   深色外观整体把 accent 提亮了，因此默认改深墨，唯独自带实色的「极致黑」仍配白。 */
+:root {
+  --accent-on: oklch(0.99 0 0);
+}
+:root[data-accent="lemon-green"],
+:root[data-accent="girly-pink"],
+:root[data-accent="linen-gray"] {
+  --accent-on: oklch(0.22 0.02 90);
+}
+.dark {
+  --accent-on: oklch(0.17 0.012 260);
+}
+.dark[data-accent="elegant-black"] {
+  --accent-on: oklch(0.98 0 0);
+}
+
 /* ── 布局预览条四段配色 ────────────────────────────────────────────────────────
    浅色沿用「主题色混入背景」(26/46/68/100%)，本身辨识度够；深色必须拆开处理：
    深色背景 #181818 比预览条所在的 bg-muted (oklch .269) 还暗，旧公式把第一段
@@ -1627,40 +1646,41 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--settings-accent) 22%, transparent);
 }
 
-/* ── The chip row: same material as the card, separated by space instead of colour ─────────────
-   Four attempts, and the last one is the only one that survives all the constraints:
-   1. the package's tab geometry (13px inset + `-mb-[18px]` tuck + 27px fake padding) — one slab
-      wedged behind another; corners never line up and the seam shows on both sides;
-   2. lifting the fill to the shared parent so both halves form ONE card — no seam, but then the
-      setup row and the text field are one continuous surface, so chips read as typed content;
-   3. a narrower strip with a 4% ink wash — reads as a grey lid laid over the card;
-   4. transparent holder — clean, but the chips then float with nothing holding them, which is
-      what "纯透明的好吗" correctly objected to.
-   The mistake common to 2–4 is that the two halves were being told apart by COLOUR. A 4% shift
-   between two adjacent surfaces is below the threshold where a difference reads as intent; it
-   reads as a rendering error. So the separation moves to what actually communicates structure:
-   – the SAME fill token as the card, so no shade can differ between them by construction;
-   – its own rounded rect, so it is visibly a box and not a header fused to the input;
-   – a real 6px gap and a hairline, which is a much stronger signal than 4% of ink.
-   Selector is scoped under `[data-composer]` for specificity: the package ships `bg-sidebar` on
-   this element, and a bare attribute selector only ties with it on paper. */
-[data-composer] [data-chat-input-header] {
-  top: 0;
-  /* Full width of the card: the chips line up with the box below instead of floating inside it. */
-  margin: 0 0 6px;
-  padding: 5px 12px;
-  border-radius: 14px;
-  background-color: var(--chat-input-bg-color, var(--card));
-  box-shadow: 0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent);
-}
-/* The card below owns its fill, ring and all four corners: it is a box, not a half-box. */
-[data-composer] .codex-composer-surface {
+/* ── 输入区：一块白卡，chip 行靠「分割线」分层 ─────────────────────────────────────────────
+   这一处前后改了五版，每版的失败原因都值得留档，因为它们排除了三种看似合理的做法：
+   1. 包内原样（内缩 13px + `-mb-[18px]` 负边距）——一块塞进另一块底下，圆角对不上；
+   2. 合成一张卡（无间距）——缝没了，但功能区与输入区毫无区分，chip 读起来像正文；
+   3. 窄一圈 + 自己的 4% 墨底——成了压在卡上的灰盖子，且相邻表面差 4% 只会读成「渲染出错」；
+   4. 纯透明——chip 悬空，没有东西托着；
+   5. 窄一圈 + 实房间距（上一版）——两个框内部颜色其实**完全相同**（实测都是 233,240,251），
+      刺眼的是中间 6px 的**间距露出了蓝色页面底**，整块被切成「蓝／白／蓝／白」四段。
+   结论：在壁纸/半透明底上，「间距」不是分层手段，它是**露底**。能用的分层只有两种——
+   分割线，或阴影。这里选分割线：它是一条明确的 UI 元素，不会被读成色差，也不挖开底色。
+   所以填充落在把两者都包住的父级上（`div.relative > form > .codex-composer-surface`），
+   两个子元素全透明；chip 行与输入区因此是**同一块被涂色的表面**，色差在构造上不可能出现。 */
+[data-composer] div:has(> form > .codex-composer-surface) {
   border-radius: 24px;
   background-color: var(--chat-input-bg-color, var(--card));
-  background-image: none;
   box-shadow:
     0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent),
     0 2px 8px color-mix(in oklab, var(--foreground) 4%, transparent);
+}
+/* 输入区交出填充与描边，只保留自己的滚动裁剪；顶部圆角让给父级，底部自己收口。 */
+[data-composer] .codex-composer-surface {
+  border-radius: 0 0 24px 24px;
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
+}
+/* chip 行：整宽、无填充，靠一条 1px 分割线与输入区隔开。分割线用 inset 阴影画，
+   这样不占高度、不会因为 subpixel 把行高顶掉 1px。 */
+[data-composer] [data-chat-input-header] {
+  top: 0;
+  margin: 0;
+  padding: 7px 12px;
+  border-radius: 0;
+  background-color: transparent;
+  box-shadow: inset 0 -1px 0 0 color-mix(in oklab, var(--foreground) 9%, transparent);
 }
 /* An empty row is an empty strip, and that is the normal state of a plain chat (nothing quoted,
    nothing running, no 分工). The row is always in the DOM because every chip renders
@@ -1902,6 +1922,32 @@ body::after {
 /* The send key never yields: it is the one control that must sit in the same place at every width. */
 .chat-composer-toolbar button[type="submit"] {
   flex: none;
+}
+
+/* ── 主题色在主界面的落点：主操作 + 输入态 ──────────────────────────────────────
+   「选了主题色，主界面几乎看不到」的根因不是强调色太淡，而是**主窗口里没有消费点**：
+   发送键用 `bg-foreground`（纯黑，彩度 0），输入框没有焦点反馈，主题色 38 处引用全在
+   设置页与预览工具栏。
+   这里刻意不提高整窗底色的主题色混入比例——那版（浅 4%/11%）会把侧栏、输入框、底栏整片
+   染色，并与中间的白文档形成色温断层，已经被否过一次。颜色要出现在**承载语义的控件**上：
+   主操作（发送）与激活态（输入焦点），读起来是「这个产品的颜色」，而不是「屏幕脏了」。 */
+[data-composer] .chat-composer-toolbar button[type="submit"] {
+  background-color: var(--settings-accent);
+  color: var(--accent-on);
+}
+[data-composer] .chat-composer-toolbar button[type="submit"]:hover:not(:disabled) {
+  background-color: color-mix(in oklab, var(--settings-accent) 86%, var(--foreground));
+}
+[data-composer] .chat-composer-toolbar button[type="submit"]:disabled {
+  background-color: color-mix(in oklab, var(--settings-accent) 40%, var(--muted));
+  color: color-mix(in oklab, var(--accent-on) 70%, transparent);
+}
+/* 输入态：焦点一进来，卡片描边转成主题色。这是「正在这里输入」的唯一强信号，也是主题色在
+   主窗口里出现频率最高的一处。壁纸档卡片本身透明，所以描边用 1.5px 而不是发丝线。 */
+[data-composer] .codex-composer-surface:focus-within {
+  box-shadow:
+    0 0 0 1.5px color-mix(in oklab, var(--settings-accent) 72%, transparent),
+    0 2px 8px color-mix(in oklab, var(--settings-accent) 14%, transparent);
 }
 
 @container input-footer (max-width: 30rem) {
