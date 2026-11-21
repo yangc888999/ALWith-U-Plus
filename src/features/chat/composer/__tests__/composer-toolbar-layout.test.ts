@@ -27,27 +27,38 @@ function ruleOf(selector: string): string {
   return (match?.[0] ?? "").replace(/\/\*[\s\S]*?\*\//g, "")
 }
 
-test("the composer is painted as one surface, not a header slab stacked on a card", () => {
+test("the controls row is a transparent holder, never a box around boxes", () => {
   const header = ruleOf("[data-chat-input-header]")
-  // The package's tab geometry: narrower than the card, dropped, and tucked underneath it.
-  expect(header).toContain("margin: 0")
+  // The package's tab geometry: dropped, and pulled back UP under the card by a negative margin.
   expect(header).toContain("top: 0")
-  // The row owns no fill and no ring any more — the shared parent paints both halves.
+  expect(header).not.toMatch(/margin:[^;]*-18px/)
+  expect(header).not.toMatch(/margin:[^;]*13px/)
+  // A grey slab with its own ring read as a lid on the card; the chips already carry pill borders,
+  // so the container must add no chrome of its own.
   expect(header).toContain("background-color: transparent")
   expect(header).toContain("box-shadow: none")
-  // ...and the surface gives up its own fill/ring for the same reason.
+  expect(header).not.toContain("color-mix")
+  // Separation comes from spacing + a horizontal inset that lines the chips up with the input text.
+  expect(header).toMatch(/padding:\s*2px\s+10px\s+8px/)
+  // The card below keeps all four corners and its own fill: it is a box, not a half-box.
   const surface = ruleOf("[data-composer] .codex-composer-surface")
-  expect(surface).toContain("background-color: transparent")
-  expect(surface).toContain("box-shadow: none")
-  // The single outline lives on the element that contains header AND input.
-  const shell = /\[data-composer\] div:has\(> form > \.codex-composer-surface\)[^{]*\{([^}]*)\}/.exec(styles)
-  expect(shell?.[1]).toContain("border-radius: 24px")
-  expect(shell?.[1]).toContain("var(--chat-input-bg-color")
+  expect(surface).toContain("border-radius: 24px")
+  expect(surface).toContain("var(--chat-input-bg-color")
+  expect(surface).not.toContain("border-radius: 0 0 24px 24px")
+  // No rule may lift the fill to the shared parent — that made one continuous surface.
+  expect(styles).not.toMatch(/\[data-composer\] div:has\(/)
   // An empty row must not leave a bare strip above the input.
   expect(styles).toMatch(/\[data-chat-input-header\]:not\(:has\(button, span\)\)\s*\{\s*display: none;/)
-  // `:has()` cannot be nested inside another `:has()` — the spec forbids it and the whole rule is
-  // dropped — so no rule may wrap one in another.
-  expect(styles).not.toMatch(/:has\([^)]*:has\(/)
+})
+
+test("the effort ladder is never dropped by a width breakpoint", () => {
+  // It sat on the name's line once, so it was the first thing dropped in narrow windows. Stacked
+  // under the name it costs no horizontal space — hiding it only deletes information.
+  expect(styles).not.toMatch(/\.alwith-model-pill[^{]*> span:nth-child\(2\)\s*\{\s*display: none/)
+  const label = ruleOf(".alwith-model-pill > span:not(.model-picker-icon)")
+  expect(label).toContain("flex-direction: column")
+  expect(label).toContain("align-items: flex-start")
+  expect(label).not.toContain("flex-direction: row")
 })
 
 test("the model trigger shrinks and ellipsises instead of overflowing the toolbar", () => {
@@ -72,8 +83,10 @@ test("the toolbar stays one line: the send key is pinned and the picker yields",
   expect(styles).toMatch(
     /\.chat-composer-toolbar button\[type="submit"\]\s*\{\s*flex: none;\s*\}/
   )
-  // Degradation runs on the toolbar's own width, in three steps.
+  // Degradation runs on the toolbar's own width, never the window's. Only two steps remain: the
+  // ladder no longer competes with the name for horizontal space, so there is nothing to drop at
+  // 25rem — the name just gets its hard cap at the narrowest width.
   expect(styles).toMatch(/@container input-footer \(max-width: 30rem\)/)
-  expect(styles).toMatch(/@container input-footer \(max-width: 25rem\)/)
+  expect(styles).not.toMatch(/@container input-footer \(max-width: 25rem\)/)
   expect(styles).toMatch(/@container input-footer \(max-width: 21rem\)/)
 })
