@@ -1779,7 +1779,7 @@ html[data-selection-menu] [data-testid="comment-selection-button"] {
    composer at two lines; the saved drag height is a ceiling, not a fixed height, so an old
    288px drag cannot keep the input three times taller than its content. */
 [data-composer] .codex-composer-surface .alwith-composer-textarea {
-  min-height: var(--composer-input-min, 2.75rem);
+  min-height: var(--composer-input-min, 7.5rem);
   max-height: min(var(--composer-input-height, 12rem), 12rem);
 }
 [data-composer] .codex-composer-surface > div:has(> .alwith-composer-textarea) {
@@ -1884,7 +1884,13 @@ html[data-selection-menu] [data-testid="comment-selection-button"] {
   flex: 1;
   flex-direction: column;
 }
-.welcome-hero-composer [data-composer] form > .chat-composer-toolbar {
+.welcome-hero-composer [data-composer] form > div:has(.chat-composer-toolbar) {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.welcome-hero-composer [data-composer] form .chat-composer-toolbar {
   margin-top: auto !important;
 }
 .welcome-hero-composer [data-chat-input-header] {
@@ -1910,7 +1916,7 @@ html[data-selection-menu] [data-testid="comment-selection-button"] {
 [data-composer] .alwith-composer-textarea {
   /* Never let a persisted drag (or a malformed stored value) collapse the box below two rows:
      the placeholder and resize grip must stay visible or the composer reads as "missing". */
-  min-height: var(--composer-input-min, 3.3rem);
+  min-height: var(--composer-input-min, 7.5rem);
   max-height: min(var(--composer-input-height, 12rem), 12rem);
   overflow-y: auto;
   /* The shared textarea primitive carries a visible form border. The composer already has its

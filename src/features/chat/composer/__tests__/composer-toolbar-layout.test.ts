@@ -171,12 +171,15 @@ test("the resting send key matches WorkBuddy while active action glyphs invert",
 })
 
 test("the welcome composer keeps one fixed footprint across tabs", () => {
-  expect(styles).toMatch(/min-height: var\(--composer-input-min, 3\.3rem\)/)
+  expect(styles).toMatch(/min-height: var\(--composer-input-min, 7\.5rem\)/)
   expect(styles).toMatch(
     /\.welcome-hero-composer \[data-composer\] > \[data-chat-drop-zone\] > \.relative:has\(> form > \.codex-composer-surface\)\s*\{[^}]*min-height: 10\.5rem/
   )
   expect(styles).not.toMatch(/data-welcome-mode="chat"\] \.welcome-hero-composer \[data-composer\] \.alwith-composer-textarea/)
   expect(styles).toMatch(
-    /\.welcome-hero-composer \[data-composer\] form > \.chat-composer-toolbar\s*\{\s*margin-top: auto !important;/
+    /\.welcome-hero-composer \[data-composer\] form > div:has\(\.chat-composer-toolbar\)\s*\{[^}]*flex: 1/
+  )
+  expect(styles).toMatch(
+    /\.welcome-hero-composer \[data-composer\] form \.chat-composer-toolbar\s*\{\s*margin-top: auto !important;/
   )
 })

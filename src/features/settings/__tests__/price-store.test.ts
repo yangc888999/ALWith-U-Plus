@@ -10,13 +10,16 @@ import {
   DEFAULT_USD_TO_CNY,
   DEFAULT_UTC_OFFSET,
   DEFAULT_VENDOR_SOURCES,
+  findPrice,
   guessVendor,
   isPeak,
   matchesModel,
   mergeVendorAliases,
   migratePriceState,
   modelMatchKey,
+  modelPriceKey,
   parseOpenRouterPrices,
+  parseNonWorkdays,
   parseVendorPrices,
   parseWindows,
   displayModelName
@@ -51,6 +54,21 @@ describe("peak windows", () => {
   test("weekends are always off-peak", () => {
     // 2026-11-07 is a Saturday.
     expect(isPeak("2026-11-07", 1, deepseek, 8)).toBe(false)
+  })
+})
+
+describe("non-workday calendar", () => {
+  test("expands single dates and closed ranges", () => {
+    const days = parseNonWorkdays("2026-10-01~2026-10-03, 2026-10-05")
+    expect([...days]).toEqual(["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-05"])
+  })
+
+  test("statutory holidays are off-peak all day even inside a weekday peak window", () => {
+    const holiday = { ...deepseek, nonWorkdays: "2026-10-01~2026-10-07" }
+    // 2026-10-01 09:00 Beijing (Thursday): normally peak, holiday makes it off-peak.
+    expect(isPeak("2026-10-01", 1, holiday, 8)).toBe(false)
+    // The next Thursday is back to the normal weekday peak window.
+    expect(isPeak("2026-10-08", 1, holiday, 8)).toBe(true)
   })
 })
 
@@ -128,6 +146,20 @@ describe("costOf", () => {
   test("a configured vendor/model also matches the bare name", () => {
     expect(matchesModel({ ...gpt, model: "openai/gpt-6.1-sol" }, "gpt-6.1-sol")).toBe(true)
     expect(matchesModel({ ...gpt, model: "GPT-6.1-SOL" }, "gpt-6.1-sol")).toBe(true)
+  })
+
+  test("price aliases cover the labels and suffixes the usage ledger reports", () => {
+    expect(modelPriceKey("6.2 Sol")).toBe(modelPriceKey("gpt-6.2-sol"))
+    expect(modelPriceKey("6.2 Astra")).toBe(modelPriceKey("gpt-6.2-astra"))
+    expect(modelPriceKey("flash")).toBe(modelPriceKey("deepseek-v4.1-flash"))
+    expect(modelPriceKey("deepseek-v4.1-flash-1017")).toBe(modelPriceKey("deepseek-flash"))
+    expect(modelPriceKey("deepseek-v4.1-flash-enterprise")).toBe(modelPriceKey("deepseek-v4.1-flash"))
+  })
+
+  test("findPrice never lets a zero placeholder shadow a priced row", () => {
+    const priced = DEFAULT_PRICES.find((price) => price.model === "gpt-6.2-sol")!
+    const placeholder = { ...blankPrice("OpenAI"), model: "6.2 Sol" }
+    expect(findPrice([placeholder, priced], "gpt-6.2-sol")).toBe(priced)
   })
 
   test("a flat discount reduces the charged amount by the fraction off", () => {
@@ -389,7 +421,7 @@ describe("mergeVendorAliases", () => {
   })
 })
 
-describe("migratePriceState (v7)", () => {
+describe("migratePriceState", () => {
   test("a persisted vendor-source map from the upstream app is replaced wholesale", () => {
     // The upstream app shares this bundle id, so its localStorage can arrive with the old
     // platform.openai.com URL and a flat model-list regex — exactly the state that produced the
@@ -444,6 +476,38 @@ describe("migratePriceState (v7)", () => {
     expect(row?.vendor).toBe("Finture")
     expect(row?.input).toBe(1)
     expect(migrated.prices.some((price) => price.model === customId)).toBe(false)
+  })
+
+  test("v8 fills placeholder rows from the curated prices and maps aliases", () => {
+    const migrated = migratePriceState({
+      prices: [
+        { ...blankPrice("OpenAI"), model: "gpt-6.2-sol" },
+        { ...blankPrice("OpenAI"), model: "gpt-6.2-astra" },
+        { ...blankPrice("千问 Qwen"), model: "deepseek-v4.1-flash-1017" },
+        { ...blankPrice("其他"), model: "flash" }
+      ],
+      vendorSources: {},
+      updatedAt: null
+    })
+    const sol = migrated.prices.find((price) => price.model === "gpt-6.2-sol")!
+    const astra = migrated.prices.find((price) => price.model === "gpt-6.2-astra")!
+    const deepseekFlash = migrated.prices.find((price) => price.model === "deepseek-v4.1-flash-1017")!
+    const bareFlash = migrated.prices.find((price) => price.model === "flash")!
+    expect(sol).toMatchObject({ input: 2, cached: 0.1, output: 10, currency: "USD" })
+    expect(astra).toMatchObject({ input: 8, cached: 0.4, output: 40, currency: "USD" })
+    expect(deepseekFlash).toMatchObject({ input: 2, cached: 0.04, output: 8, currency: "CNY" })
+    expect(bareFlash).toMatchObject({ input: 2, cached: 0.04, output: 8, currency: "CNY", vendor: "DeepSeek" })
+    expect(bareFlash.label).toBe("DeepSeek V4.1 Flash")
+  })
+
+  test("v9 fills the holiday calendar on an already-priced DeepSeek row", () => {
+    const migrated = migratePriceState({
+      prices: [{ ...deepseek, nonWorkdays: "" }],
+      vendorSources: {},
+      updatedAt: null
+    })
+    const row = migrated.prices.find((price) => price.model === "deepseek-flash")
+    expect(row?.nonWorkdays).toContain("2026-10-01~2026-10-07")
   })
 
   test("a fresh (versionless) state still gets the full default source map", () => {

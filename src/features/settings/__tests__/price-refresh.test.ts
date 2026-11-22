@@ -95,11 +95,18 @@ test("a ledger model from the Qwen provider lands in the 千问 Qwen card", () =
 })
 
 test("a custom gateway model lands in Finture under its bare model id", () => {
-  const id = "custom-example/deepseek-V4.1-flash-enterprise"
-  const added = addUnpricedModels([id], new Map([[modelMatchKey("deepseek-V4.1-flash"), "DeepSeek"]]))
-  expect(added).toEqual(["deepseek-V4.1-flash-enterprise"])
-  const row = usePriceStore.getState().prices.find((price) => price.model === "deepseek-V4.1-flash-enterprise")
+  const id = "custom-example/novel-enterprise-model"
+  const added = addUnpricedModels([id], new Map())
+  expect(added).toEqual(["novel-enterprise-model"])
+  const row = usePriceStore.getState().prices.find((price) => price.model === "novel-enterprise-model")
   expect(row?.vendor).toBe("Finture")
+})
+
+test("a DeepSeek Flash enterprise variant uses the curated flash price instead of a blank row", () => {
+  expect(addUnpricedModels(["custom-example/deepseek-V4.1-flash-enterprise"], new Map())).toEqual([])
+  const row = usePriceStore.getState().prices.find((price) => price.model === "deepseek-v4.1-flash")
+  expect(row?.input).toBeGreaterThan(0)
+  expect(row?.output).toBeGreaterThan(0)
 })
 
 test("a bare id already tracked under a full vendor/model id is not added twice", () => {

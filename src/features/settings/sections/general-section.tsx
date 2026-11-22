@@ -166,13 +166,17 @@ export function GeneralSection() {
               void savePreference("defaultStartSurface", value)
             }}
           >
-            <SelectTrigger className="w-full" aria-label={t("settings.defaultStartSurface")}>
+            <SelectTrigger className="w-[12rem]" aria-label={t("settings.defaultStartSurface")}>
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem value="chat">{t("settings.startSurfaceChat")}</SelectItem>
-                <SelectItem value="work">{t("settings.startSurfaceWork")}</SelectItem>
+            <SelectContent className="min-w-[12rem] p-1.5">
+              <SelectGroup className="p-0">
+                <SelectItem className="py-2.5 ps-3 pe-9" value="chat">
+                  {t("settings.startSurfaceChat")}
+                </SelectItem>
+                <SelectItem className="py-2.5 ps-3 pe-9" value="work">
+                  {t("settings.startSurfaceWork")}
+                </SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>

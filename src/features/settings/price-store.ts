@@ -48,6 +48,8 @@ export type ModelPrice = PriceTier & {
   peakWindows: string
   /** Peak windows only apply Monday–Friday. */
   weekdaysOnly: boolean
+  /** Local dates that are off-peak all day, e.g. `2026-10-01~2026-10-07`. */
+  nonWorkdays: string
   /** Billing condition worth keeping next to the number (long-context tier, cache write, …). */
   note: string
 }
@@ -202,6 +204,7 @@ function entry(
     offPeak: null,
     peakWindows: "",
     weekdaysOnly: false,
+    nonWorkdays: "",
     note: "",
     ...extra
   }
@@ -210,6 +213,9 @@ function entry(
 /** DeepSeek's discounted hours: off-peak everywhere except weekday 09–12 and 14–18 (Beijing). */
 const DEEPSEEK_PEAK = "09:00-12:00,14:00-18:00"
 const DEEPSEEK_NOTE = "工作日北京时间 09:00–12:00、14:00–18:00 为高峰；其余时段（含周末及法定节假日）按闲时价"
+/** State Council 2026 statutory holiday periods (workday-adjusted weekends are off-peak too). */
+const CHINA_2026_NON_WORKDAYS =
+  "2026-01-01~2026-01-03,2026-02-15~2026-02-23,2026-04-04~2026-04-06,2026-05-01~2026-05-05,2026-06-19~2026-06-21,2026-09-25~2026-09-27,2026-10-01~2026-10-07"
 const OPENAI_NOTE = "Standard · 短上下文；长上下文另有定价"
 const XAI_NOTE = "短上下文 <200K；≥200K 时输入/缓存/输出同步上调"
 const OPENROUTER_NOTE = "OpenRouter 路由价（USD/百万 token，2026-11-13 官方目录快照）；点「更新」拉取当前价"
@@ -244,12 +250,14 @@ export const DEFAULT_PRICES: ModelPrice[] = [
     offPeak: { input: 4.5, cached: 0.15, output: 13.5 },
     peakWindows: DEEPSEEK_PEAK,
     weekdaysOnly: true,
+    nonWorkdays: CHINA_2026_NON_WORKDAYS,
     note: DEEPSEEK_NOTE
   }),
   entry("DeepSeek", "deepseek-flash", 2, 0.04, 8, {
     offPeak: { input: 1, cached: 0.02, output: 4 },
     peakWindows: DEEPSEEK_PEAK,
     weekdaysOnly: true,
+    nonWorkdays: CHINA_2026_NON_WORKDAYS,
     note: `对应 DeepSeek-V4.1-Flash-1017；${DEEPSEEK_NOTE}`
   }),
   // The ledger records the marketing id (`deepseek-V4.1-flash`) while the price page lists the
@@ -259,6 +267,7 @@ export const DEFAULT_PRICES: ModelPrice[] = [
     offPeak: { input: 1, cached: 0.02, output: 4 },
     peakWindows: DEEPSEEK_PEAK,
     weekdaysOnly: true,
+    nonWorkdays: CHINA_2026_NON_WORKDAYS,
     note: `与 deepseek-flash 同价（V4.1 系列；页面表 id 是 deepseek-flash）；${DEEPSEEK_NOTE}`
   }),
 
@@ -353,6 +362,7 @@ export function parsePriceArray(parsed: unknown): ModelPrice[] {
             : null,
         peakWindows: String(item.peakWindows ?? ""),
         weekdaysOnly: Boolean(item.weekdaysOnly),
+        nonWorkdays: String(item.nonWorkdays ?? ""),
         note: String(item.note ?? "")
       } satisfies ModelPrice
     })
@@ -376,6 +386,41 @@ function toPrice(raw: string | undefined): number | undefined {
 /** Matching key that folds dots/dashes and case, so `claude-opus-5.5` and `claude-opus-5-5` agree. */
 export function modelMatchKey(model: string): string {
   return displayModelName(model).toLowerCase().replace(/[\s.]/g, "-")
+}
+
+/** Known marketing labels that the ledger and the curated table spell differently. */
+const MODEL_PRICE_ALIASES: Record<string, string> = {
+  flash: "deepseek-v4-1-flash",
+  "deepseek-flash": "deepseek-v4-1-flash"
+}
+
+/**
+ * Identity used for pricing, slightly wider than the display fold above: the ledger may record a
+ * marketing label (`6.2 Sol`) while the curated table uses the API id (`gpt-6.2-sol`), and the
+ * same DeepSeek Flash model appears as `flash`, `deepseek-flash`, `deepseek-v4.1-flash-1017` or
+ * `deepseek-v4.1-flash-enterprise`. Keeping one key for all of these lets a price row follow the
+ * model through any of those spellings.
+ */
+export function modelPriceKey(model: string): string {
+  const key = modelMatchKey(model)
+  if (key === "flash") return "deepseek-v4-1-flash"
+  if (/^deepseek-v4-1-flash(?:-\d{4})?(?:-enterprise)?$/.test(key)) return "deepseek-v4-1-flash"
+  // OpenAI labels drop the `gpt-` prefix in the usage ledger (`6.2 Sol`), while the curated
+  // table keeps the API id (`gpt-6.2-sol`). Fold the bare numeric label onto the API id.
+  if (/^\d+(?:-\d+)*-[a-z]/.test(key)) return `gpt-${key}`
+  return MODEL_PRICE_ALIASES[key] ?? key
+}
+
+/** A row that actually carries a usable price (explicitly free counts as priced). */
+export function hasPrice(price: ModelPrice): boolean {
+  if (price.free === true) return true
+  return (
+    price.input > 0 ||
+    price.cached > 0 ||
+    price.output > 0 ||
+    (price.offPeak !== null &&
+      (price.offPeak.input > 0 || price.offPeak.cached > 0 || price.offPeak.output > 0))
+  )
 }
 
 /**
@@ -638,19 +683,58 @@ export function migratePriceState(persisted: unknown): PriceState {
   // only the grouping and the source map's keys move.
   // v7 normalizes custom gateway ids used by Finture so persisted rows do not keep the long
   // `custom-.../model` name or remain under the model family guessed from the suffix.
+  //
+  // v8 fills auto-created placeholder rows from the curated defaults and adds price aliases for
+  // the marketing labels the ledger reports (`6.2 Sol`, `flash`, DeepSeek V4.1 Flash date and
+  // enterprise suffixes). Those placeholders used to shadow the real default row: `findPrice`
+  // returned the first matching row, which was the zero row, so the usage page asked the reader
+  // to price a model the app already knew.
+  //
+  // v9 adds the non-workday/holiday calendar to DeepSeek's off-peak rule. Existing priced rows
+  // keep their numbers; only an empty calendar is filled from the curated default.
   const normalized = (state.prices ?? DEFAULT_PRICES).map((price) => {
-    const vendor = customModelVendor(price.model)
-    if (vendor === null) return price
-    return { ...price, vendor, model: displayModelName(price.model) }
+    const base = { ...price, nonWorkdays: price.nonWorkdays ?? "" }
+    const vendor = customModelVendor(base.model)
+    if (vendor === null) return base
+    return { ...base, vendor, model: displayModelName(base.model) }
   })
   const folded = mergeVendorAliases(normalized, DEFAULT_VENDOR_SOURCES)
-  // Migration v7: append default rows the persisted table is missing. The curated snapshot gains
-  // rows over time (e.g. the `deepseek-v4.1-flash` marketing-id alias); without this merge an
-  // upgraded install never sees them, because its persisted table replaced the defaults wholesale.
-  // Custom edits survive: a persisted model key always wins over a default row with the same key.
-  const known = new Set(folded.prices.map((price) => modelMatchKey(price.model)))
-  const additions = DEFAULT_PRICES.filter((price) => !known.has(modelMatchKey(price.model)))
-  const prices = additions.length > 0 ? [...folded.prices, ...additions] : folded.prices
+  const defaultsByKey = new Map(DEFAULT_PRICES.map((price) => [modelPriceKey(price.model), price]))
+  const filled = folded.prices.map((price) => {
+    let next = price
+    if (next.model.trim().toLowerCase().endsWith(":free") && next.free !== true) {
+      next = { ...next, free: true }
+    }
+    if (next.model.trim().toLowerCase() === "flash") {
+      next = {
+        ...next,
+        label: next.label?.trim() || "DeepSeek V4.1 Flash",
+        vendor: next.vendor === "其他" ? "DeepSeek" : next.vendor
+      }
+    }
+    const source = defaultsByKey.get(modelPriceKey(next.model))
+    if (source !== undefined && next.nonWorkdays?.trim() === "" && source.nonWorkdays !== "") {
+      next = { ...next, nonWorkdays: source.nonWorkdays }
+    }
+    if (source === undefined || hasPrice(next)) return next
+    return {
+      ...next,
+      input: source.input,
+      cached: source.cached,
+      output: source.output,
+      offPeak: source.offPeak,
+      peakWindows: source.peakWindows,
+      weekdaysOnly: source.weekdaysOnly,
+      nonWorkdays: source.nonWorkdays,
+      currency: source.currency,
+      note: next.note?.trim() || source.note
+    }
+  })
+  // Append default rows the persisted table is missing, using the same alias-aware key. Custom
+  // edits survive: a persisted model key always wins over a default row with the same key.
+  const known = new Set(filled.map((price) => modelPriceKey(price.model)))
+  const additions = DEFAULT_PRICES.filter((price) => !known.has(modelPriceKey(price.model)))
+  const prices = additions.length > 0 ? [...filled, ...additions] : filled
   return {
     ...state,
     prices,
@@ -682,26 +766,30 @@ export const usePriceStore = create<PriceState>()(
     }),
     {
       name: "alwith-settings-prices",
-      version: 7,
+      version: 9,
       migrate: migratePriceState
     }
   )
 )
 
-/** Case-insensitive match on the folded key (dots/dashes/whitespace), so `claude-opus-5.5` and
- *  `claude-opus-5-5` agree everywhere — pricing and the vendor updater use the same fold. A
- *  configured `vendor/model` also matches the bare model name. */
+/** Case-insensitive match on the price key (dots/dashes/whitespace plus the label aliases above),
+ *  so `claude-opus-5.5`, `claude-opus-5-5` and `6.2 Sol` agree everywhere — pricing and the
+ *  vendor updater use the same fold. A configured `vendor/model` also matches the bare name. */
 export function matchesModel(price: ModelPrice, model: string): boolean {
-  const configured = modelMatchKey(price.model)
-  const actual = modelMatchKey(model)
+  const configured = modelPriceKey(price.model)
+  const actual = modelPriceKey(model)
   if (configured === "" || actual === "") return false
   if (configured === actual) return true
   const bare = configured.includes("/") ? configured.split("/").pop() ?? "" : configured
-  return bare === actual
+  const actualBare = actual.includes("/") ? actual.split("/").pop() ?? "" : actual
+  return bare === actualBare
 }
 
 export function findPrice(prices: ModelPrice[], model: string): ModelPrice | undefined {
-  return prices.find((price) => matchesModel(price, model))
+  const matching = prices.filter((price) => matchesModel(price, model))
+  // A zero placeholder must never shadow the curated row it duplicated. Prefer a row that
+  // actually has prices; only fall back to the first match when every match is still empty.
+  return matching.find(hasPrice) ?? matching[0]
 }
 
 function minutesOf(value: string): number | null {
@@ -731,11 +819,46 @@ function withinWindow(minute: number, [start, end]: [number, number]): boolean {
 }
 
 /** Local wall-clock hour and weekday for a UTC (date, hour) bucket. */
-export function localClock(date: string, hour: number, utcOffset: number): { hour: number; weekday: number } {
+export function localClock(date: string, hour: number, utcOffset: number): { date: string; hour: number; weekday: number } {
   const stamp = Date.parse(`${date}T00:00:00Z`)
-  if (!Number.isFinite(stamp)) return { hour, weekday: 1 }
+  if (!Number.isFinite(stamp)) return { date, hour, weekday: 1 }
   const shifted = new Date(stamp + (hour + utcOffset) * 3_600_000)
-  return { hour: shifted.getUTCHours(), weekday: shifted.getUTCDay() }
+  return { date: shifted.toISOString().slice(0, 10), hour: shifted.getUTCHours(), weekday: shifted.getUTCDay() }
+}
+
+const DAY_MS = 86_400_000
+const nonWorkdayCache = new Map<string, Set<string>>()
+
+function validDay(value: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  const stamp = Date.parse(`${value}T00:00:00Z`)
+  if (!Number.isFinite(stamp)) return null
+  return new Date(stamp).toISOString().slice(0, 10) === value ? value : null
+}
+
+/** Expand `2026-10-01` and `2026-10-01~2026-10-07` items into concrete local dates. */
+export function parseNonWorkdays(value: string | undefined): Set<string> {
+  const text = value ?? ""
+  const cached = nonWorkdayCache.get(text)
+  if (cached !== undefined) return cached
+  const days = new Set<string>()
+  for (const raw of text.split(/[,，;；\n\s]+/)) {
+    const part = raw.trim()
+    if (part === "") continue
+    const [startRaw, endRaw = startRaw] = part.split("~").map((entry) => entry.trim())
+    const start = validDay(startRaw)
+    const end = validDay(endRaw)
+    if (start === null || end === null) continue
+    const startStamp = Date.parse(`${start}T00:00:00Z`)
+    const endStamp = Date.parse(`${end}T00:00:00Z`)
+    if (endStamp < startStamp || (endStamp - startStamp) / DAY_MS > 366) continue
+    for (let stamp = startStamp; stamp <= endStamp; stamp += DAY_MS) {
+      days.add(new Date(stamp).toISOString().slice(0, 10))
+    }
+  }
+  if (nonWorkdayCache.size > 100) nonWorkdayCache.clear()
+  nonWorkdayCache.set(text, days)
+  return days
 }
 
 /** Whether a bucket falls inside the model's peak windows. Empty windows mean "always peak". */
@@ -743,6 +866,7 @@ export function isPeak(date: string, hour: number, price: ModelPrice, utcOffset:
   const windows = parseWindows(price.peakWindows)
   if (windows.length === 0) return true
   const clock = localClock(date, hour, utcOffset)
+  if (parseNonWorkdays(price.nonWorkdays).has(clock.date)) return false
   if (price.weekdaysOnly && (clock.weekday === 0 || clock.weekday === 6)) return false
   const minute = clock.hour * 60
   return windows.some((window) => withinWindow(minute, window))
@@ -766,13 +890,7 @@ export function costOf(
   // A row whose three prices are all zero is an unfilled placeholder (a freshly added row or the
   // OpenRouter group), not a free model. Treating it as "priced" would report 0 spend and inflate
   // the matched-model count, hiding the fact that cost is actually unknown.
-  const hasPrice =
-    price.input > 0 ||
-    price.cached > 0 ||
-    price.output > 0 ||
-    (price.offPeak !== null &&
-      (price.offPeak.input > 0 || price.offPeak.cached > 0 || price.offPeak.output > 0))
-  if (!hasPrice) return null
+  if (!hasPrice(price)) return null
   const tier = price.offPeak !== null && !isPeak(point.date, point.hour, price, utcOffset) ? price.offPeak : price
   const amount =
     (point.input / 1_000_000) * tier.input +

@@ -42,13 +42,17 @@ const noHandOff: NonNullable<ComposerProps["onHandOff"]> = () => {}
 
 /** The input's height, dragged from the top edge of the card and remembered across launches. */
 const INPUT_HEIGHT_KEY = "alwith:composer-input-height"
+const INPUT_HEIGHT_POLICY_KEY = "alwith:composer-input-height-policy"
+const INPUT_HEIGHT_POLICY = 2
+/** The post-1.5.9 default empty composer height. */
+const DEFAULT_INPUT_MIN = 120
 // The saved value is a ceiling, not a fixed height: an empty composer stays at its two-line floor.
 // A smaller drag can still hide the placeholder and resize grip, so values below the floor are
 // ignored on load; a hand-edited or malformed localStorage value cannot collapse the composer.
 const INPUT_MIN = 44
 const INPUT_MAX = 192
 /** Restore a deliberately small drag on launch; larger historical values stay ceilings only. */
-const INPUT_RESTORE_MAX = 96
+const INPUT_RESTORE_MAX = 128
 
 /**
  * A grab strip along the composer's top edge.
@@ -63,7 +67,25 @@ function ComposerResizeHandle({ shellRef }: { shellRef: React.RefObject<HTMLDivE
   useEffect(() => {
     const shell = shellRef.current
     if (shell === null) return
+    // The welcome card is a fixed canvas in both tabs; the conversation's remembered height must
+    // not resize it (that made Chat and Work differ by the header height). Welcome drags still
+    // work for the current session, but they neither read nor overwrite the conversation height.
+    if (shell.closest(".welcome-hero-composer") !== null) return
     const saved = Number(localStorage.getItem(INPUT_HEIGHT_KEY))
+    const policy = Number(localStorage.getItem(INPUT_HEIGHT_POLICY_KEY) ?? 1)
+    if (!Number.isFinite(policy) || policy < INPUT_HEIGHT_POLICY) {
+      // The old policy treated 96px as the tallest remembered floor. That was the size readers
+      // saw as the "default" composer; lift it to the new default once, while leaving deliberately
+      // shorter custom drags alone. Future drags persist normally under the new policy.
+      const next = Number.isFinite(saved) && saved === 96 ? DEFAULT_INPUT_MIN : saved
+      if (Number.isFinite(next) && next >= INPUT_MIN && next <= INPUT_MAX) {
+        shell.style.setProperty("--composer-input-height", `${next}px`)
+        if (next <= INPUT_RESTORE_MAX) shell.style.setProperty("--composer-input-min", `${next}px`)
+        localStorage.setItem(INPUT_HEIGHT_KEY, String(next))
+      }
+      localStorage.setItem(INPUT_HEIGHT_POLICY_KEY, String(INPUT_HEIGHT_POLICY))
+      return
+    }
     if (Number.isFinite(saved) && saved >= INPUT_MIN && saved <= INPUT_MAX) {
       shell.style.setProperty("--composer-input-height", `${saved}px`)
       if (saved <= INPUT_RESTORE_MAX) shell.style.setProperty("--composer-input-min", `${saved}px`)
@@ -99,7 +121,8 @@ function ComposerResizeHandle({ shellRef }: { shellRef: React.RefObject<HTMLDivE
     if (event.currentTarget.hasPointerCapture(event.pointerId))
       event.currentTarget.releasePointerCapture(event.pointerId)
     const value = state.shell.style.getPropertyValue("--composer-input-height")
-    if (value !== "") localStorage.setItem(INPUT_HEIGHT_KEY, String(Number.parseFloat(value)))
+    if (value !== "" && state.shell.closest(".welcome-hero-composer") === null)
+      localStorage.setItem(INPUT_HEIGHT_KEY, String(Number.parseFloat(value)))
   }
   return (
     <div

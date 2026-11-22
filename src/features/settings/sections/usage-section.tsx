@@ -2263,6 +2263,18 @@ export function UsageSection() {
                                       />
                                       {t("usageReport.weekdaysOnly")}
                                     </label>
+                                    <Field label={t("usageReport.nonWorkdays")}>
+                                      <input
+                                        type="text"
+                                        value={price.nonWorkdays ?? ""}
+                                        placeholder="2026-10-01~2026-10-07"
+                                        title={t("usageReport.nonWorkdaysHint")}
+                                        onChange={(event) =>
+                                          patchPrice(index, { nonWorkdays: event.currentTarget.value })
+                                        }
+                                        className="h-7 w-64 rounded border border-input bg-transparent px-1.5 text-[11px] tabular-nums outline-none focus-visible:border-ring"
+                                      />
+                                    </Field>
                                     <span className="pb-1 text-[10px] text-muted-foreground">
                                       {t("usageReport.offPeakPrices")}
                                     </span>
@@ -2283,6 +2295,9 @@ export function UsageSection() {
                                         />
                                       </Field>
                                     ))}
+                                    <span className="w-full text-[10px] leading-4 text-muted-foreground">
+                                      {t("usageReport.nonWorkdaysHint")}
+                                    </span>
                                   </div>
                                 </td>
                               </tr>

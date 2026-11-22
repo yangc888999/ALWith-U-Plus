@@ -23,7 +23,7 @@ import {
   customModelVendor,
   displayModelName,
   guessVendor,
-  modelMatchKey,
+  modelPriceKey,
   parseOpenRouterPrices,
   parseVendorPrices,
   usePriceStore,
@@ -82,7 +82,7 @@ export async function refreshAllVendorPrices(
         source.openrouter === undefined
           ? parseVendorPrices(text, source.regex)
           : parseOpenRouterPrices(text, source.openrouter)
-      const byModel = new Map(parsed.map((row) => [modelMatchKey(row.model), row]))
+      const byModel = new Map(parsed.map((row) => [modelPriceKey(row.model), row]))
       const existing = prices.filter((price) => price.vendor === vendor)
       let updated = 0
       if (existing.length === 0) {
@@ -101,7 +101,7 @@ export async function refreshAllVendorPrices(
       } else {
         prices = prices.map((price) => {
           if (price.vendor !== vendor) return price
-          const hit = byModel.get(modelMatchKey(price.model))
+          const hit = byModel.get(modelPriceKey(price.model))
           if (hit === undefined) return price
           updated += 1
           return {
@@ -113,8 +113,8 @@ export async function refreshAllVendorPrices(
           }
         })
       }
-      const tracked = new Set(prices.filter((price) => price.vendor === vendor).map((price) => modelMatchKey(price.model)))
-      const discovered = parsed.filter((row) => !tracked.has(modelMatchKey(row.model))).map((row) => row.model)
+      const tracked = new Set(prices.filter((price) => price.vendor === vendor).map((price) => modelPriceKey(price.model)))
+      const discovered = parsed.filter((row) => !tracked.has(modelPriceKey(row.model))).map((row) => row.model)
       outcomes.push({ vendor, status: "ok", updated, discovered })
     } catch (error) {
       outcomes.push({
@@ -144,7 +144,7 @@ export function propagateSharedPrices(prices: ModelPrice[]): number {
   const official = new Map<string, ModelPrice>()
   for (const price of prices) {
     if (price.model.includes("/")) continue
-    const key = modelMatchKey(price.model)
+    const key = modelPriceKey(price.model)
     if (key === "") continue
     if (!(price.input > 0 || price.cached > 0 || price.output > 0)) continue
     // First official row wins; the curated table lists each id once.
@@ -153,15 +153,29 @@ export function propagateSharedPrices(prices: ModelPrice[]): number {
   let changed = 0
   for (let i = 0; i < prices.length; i += 1) {
     const price = prices[i]
-    const bare = modelMatchKey(price.model.includes("/") ? price.model.split("/").pop() ?? "" : price.model)
+    const bare = modelPriceKey(price.model.includes("/") ? price.model.split("/").pop() ?? "" : price.model)
     const source = official.get(bare)
     if (source === undefined || source === price) continue
     // An aggregator row keeps its own routing price when it already has one — the whole point of
     // the OpenRouter group is that its quote can differ from the vendor's list price.
     if (price.model.includes("/") && (price.input > 0 || price.output > 0)) continue
-    if (price.input === source.input && price.cached === source.cached && price.output === source.output && price.currency === source.currency)
+    const nonWorkdays = price.nonWorkdays?.trim() === "" ? source.nonWorkdays : price.nonWorkdays
+    if (
+      price.input === source.input &&
+      price.cached === source.cached &&
+      price.output === source.output &&
+      price.currency === source.currency &&
+      price.nonWorkdays === nonWorkdays
+    )
       continue
-    prices[i] = { ...price, input: source.input, cached: source.cached, output: source.output, currency: source.currency }
+    prices[i] = {
+      ...price,
+      input: source.input,
+      cached: source.cached,
+      output: source.output,
+      currency: source.currency,
+      nonWorkdays
+    }
     changed += 1
   }
   return changed
@@ -181,15 +195,15 @@ export function addUnpricedModels(
   // it (matchesModel folds the same way), and vice versa.
   const tracked = new Set<string>()
   for (const price of state.prices) {
-    tracked.add(modelMatchKey(price.model))
-    if (price.model.includes("/")) tracked.add(modelMatchKey(price.model.split("/").pop() ?? ""))
+    tracked.add(modelPriceKey(price.model))
+    if (price.model.includes("/")) tracked.add(modelPriceKey(price.model.split("/").pop() ?? ""))
   }
   const added: string[] = []
   let prices = state.prices
   for (const model of usedModels) {
-    const key = modelMatchKey(model)
+    const key = modelPriceKey(model)
     if (key === "" || tracked.has(key)) continue
-    const bare = model.includes("/") ? modelMatchKey(model.split("/").pop() ?? "") : key
+    const bare = model.includes("/") ? modelPriceKey(model.split("/").pop() ?? "") : key
     if (tracked.has(bare)) continue
     // The provider catalog's group name ("Qwen") folds onto the price table's vendor group
     // ("千问 Qwen") so the new row lands in the card that already has a price source.
