@@ -471,7 +471,7 @@ export function ChatView(props: ChatViewProps) {
               like WorkBuddy's single-column chat; in split view the pane is narrower than the cap,
               so this changes nothing there. Keep draft-chat.tsx in sync. */}
           <div
-            className="relative mx-auto h-full min-h-0 w-full max-w-[1120px]"
+            className="relative mx-auto h-full min-h-0 w-full max-w-[var(--chat-column-width)]"
             data-conversation-detail={detail}
             data-group-discussion={isGroupDiscussion ? "" : undefined}
             onContextMenu={openContextMenu}

@@ -123,12 +123,12 @@ function dotsOf(container: HTMLElement): HTMLButtonElement[] {
 
 async function parkOnTrailing(container: HTMLElement) {
   const dots = dotsOf(container)
-  expect(dots).toHaveLength(2)
-  await act(() => Promise.try(() => fireEvent.click(must(dots[1], "trailing dot"))))
+  expect(dots).toHaveLength(3)
+  await act(() => Promise.try(() => fireEvent.click(must(dots[2], "trailing dot"))))
 }
 
 async function backToChat(container: HTMLElement) {
-  await act(() => Promise.try(() => fireEvent.click(must(dotsOf(container)[0], "chat dot"))))
+  await act(() => Promise.try(() => fireEvent.click(must(dotsOf(container)[1], "chat dot"))))
 }
 
 function trailingPanel(container: HTMLElement): HTMLElement {
@@ -157,7 +157,7 @@ test("empty trailing screen keeps its header and returns through the status-bar 
       expect(scope.queryByRole("button", { name: "Back to chat" })).not.toBeInTheDocument()
 
       await backToChat(view.container)
-      await waitFor(() => expect(dotsOf(view.container)[0]).toHaveAttribute("aria-current", "page"))
+      await waitFor(() => expect(dotsOf(view.container)[1]).toHaveAttribute("aria-current", "page"))
       expect(trailing.hasAttribute("inert")).toBe(true)
       expect(sidebarMode(view.container)).toBe("pinned")
       expect(must(view.container.querySelector(".main-sidebar-panel"), "sidebar panel").hasAttribute("inert")).toBe(false)
@@ -178,7 +178,7 @@ test("a populated trailing screen hides the empty hint and offers no back contro
       expect(scope.getByRole("button", { name: "Feishu" })).toBeVisible()
       expect(scope.queryByRole("button", { name: "Back to chat" })).not.toBeInTheDocument()
       await backToChat(view.container)
-      await waitFor(() => expect(dotsOf(view.container)[0]).toHaveAttribute("aria-current", "page"))
+      await waitFor(() => expect(dotsOf(view.container)[1]).toHaveAttribute("aria-current", "page"))
       expect(trailing.hasAttribute("inert")).toBe(true)
       expect(sidebarMode(view.container)).toBe("pinned")
       view.unmount()
@@ -195,7 +195,7 @@ test("the chat status-bar dot also leaves trailing inert and re-pins the sidebar
       expect(trailing.hasAttribute("inert")).toBe(false)
       expect(sidebarMode(view.container)).toBe("hidden")
       await backToChat(view.container)
-      await waitFor(() => expect(dotsOf(view.container)[0]).toHaveAttribute("aria-current", "page"))
+      await waitFor(() => expect(dotsOf(view.container)[1]).toHaveAttribute("aria-current", "page"))
       expect(trailing.hasAttribute("inert")).toBe(true)
       expect(sidebarMode(view.container)).toBe("pinned")
       view.unmount()

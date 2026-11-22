@@ -139,6 +139,7 @@ const AutomationPage = lazy(() =>
   import("@/features/automation/automation-page").then((module) => ({ default: module.AutomationPage }))
 )
 const UsagePage = lazy(() => import("@/features/usage/usage-page").then((module) => ({ default: module.UsagePage })))
+const SkillsPage = lazy(() => import("@/features/plugins/skills-page").then((module) => ({ default: module.SkillsPage })))
 
 export function App({ initialPreferences }: { initialPreferences: Preferences }) {
   useAccentDataAttribute()
@@ -202,18 +203,19 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   const [hotkeysOpen, setHotkeysOpen] = useState(false)
   // Management pages share the leading screen; the offscreen chat stays mounted.
   const [view, setView] = useState<
-    "chat" | "plugins" | "extensions" | "archives" | "story" | "extension" | "automation" | "usage"
+    "chat" | "plugins" | "extensions" | "archives" | "story" | "extension" | "automation" | "usage" | "skills"
   >("chat")
-  const [leadingPage, setLeadingPage] = useState<"plugins" | "extensions" | "archives" | "automation" | "usage">(
-    "plugins"
-  )
+  const [leadingPage, setLeadingPage] = useState<
+    "plugins" | "extensions" | "archives" | "automation" | "usage" | "skills"
+  >("plugins")
   const leading =
     view === "plugins" ||
     view === "extensions" ||
     view === "extension" ||
     view === "archives" ||
     view === "automation" ||
-    view === "usage"
+    view === "usage" ||
+    view === "skills"
   const [extensionView, setExtensionView] = useState<string | null>(null)
   const openExtension = useCallback(
     (id: string): void => {
@@ -233,17 +235,14 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     setView("archives")
   }, [])
   const [pluginsVisited, setPluginsVisited] = useState(false)
-  const [skillsRequest, setSkillsRequest] = useState(0)
   const openPlugins = useCallback(() => {
     setPluginsVisited(true)
     setLeadingPage("plugins")
     setView("plugins")
   }, [])
   const openSkills = useCallback(() => {
-    setPluginsVisited(true)
-    setLeadingPage("plugins")
-    setView("plugins")
-    setSkillsRequest((value) => value + 1)
+    setLeadingPage("skills")
+    setView("skills")
   }, [])
   const openExtensions = useCallback(() => {
     setLeadingPage("extensions")
@@ -267,8 +266,9 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     else if (leadingPage === "archives") openArchives()
     else if (leadingPage === "automation") openAutomation()
     else if (leadingPage === "usage") openUsage()
+    else if (leadingPage === "skills") openSkills()
     else openPlugins()
-  }, [leadingPage, openExtensions, openArchives, openAutomation, openUsage, openPlugins])
+  }, [leadingPage, openExtensions, openArchives, openAutomation, openUsage, openSkills, openPlugins])
   // The online BI surface is a child webview of the main window, so it stays glued on top when the
   // canvas slides to the leading screen (the main content is only `inert`, never unmounted). Close
   // both the preview extension and the standalone BI window the moment we leave the main screen, so
@@ -1385,6 +1385,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       <WallpaperBackground onError={reportExtensionError}>
         <MainSidebarLayout
           chatMode={isTemporaryChat}
+          sidebarHidden={leading}
           // A launch always opens on the new-conversation screen with the sidebar out: the rail is
           // something the reader collapses on purpose during a session, never a state the app
           // restores. Reopening into a collapsed rail (or onto a management screen) after a
@@ -1396,7 +1397,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
             if (screen === "main") setView("chat")
             else openLeading()
           }}
-          sidebar={
+          sidebar={leading ? null : (
             <SessionSidebar
               screen={leading ? "leading" : "main"}
               leadingPage={leadingPage}
@@ -1419,7 +1420,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                 else openLeading()
               }}
             />
-          }
+          )}
           leading={
             <>
               <LeadingNavigation
@@ -1429,6 +1430,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                 onOpenPlugins={openPlugins}
                 onOpenExtensions={openExtensions}
                 onOpenUsage={openUsage}
+                onOpenSkills={openSkills}
               >
                 <ExtensionNavigation
                   host={extensions}
@@ -1447,7 +1449,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                 {pluginsVisited && (
                   <div className={leadingPage === "plugins" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
                     <Suspense fallback={null}>
-                      <PluginsPage cwd={directory} active={view === "plugins"} skillsRequest={skillsRequest} />
+                      <PluginsPage cwd={directory} active={view === "plugins"} />
                     </Suspense>
                   </div>
                 )}
@@ -1471,6 +1473,12 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                   <div className="min-h-0 flex-1 overflow-auto">
                     <Suspense fallback={null}>
                       <UsagePage />
+                    </Suspense>
+                  </div>
+                ) : leadingPage === "skills" ? (
+                  <div className="min-h-0 flex-1 overflow-auto">
+                    <Suspense fallback={null}>
+                      <SkillsPage />
                     </Suspense>
                   </div>
                 ) : null}

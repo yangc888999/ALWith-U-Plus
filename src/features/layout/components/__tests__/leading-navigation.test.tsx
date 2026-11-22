@@ -11,12 +11,13 @@ await initI18n("en")
 
 test("leading navigation switches pages and is inaccessible on the main screen", () => {
   function Screen() {
-    const [page, setPage] = useState<"plugins" | "extensions" | "archives" | "usage">("plugins")
+    const [page, setPage] = useState<"plugins" | "extensions" | "archives" | "usage" | "skills">("plugins")
     const [screen, setScreen] = useState<"leading" | "main">("leading")
     return (
       <MainSidebarLayout
         initialPinned={false}
         screen={screen}
+        onScreenChange={setScreen}
         sidebar={
           <button type="button" onClick={() => setScreen("main")}>
             Return to chat
@@ -30,6 +31,7 @@ test("leading navigation switches pages and is inaccessible on the main screen",
               onOpenExtensions={() => setPage("extensions")}
               onOpenArchives={() => setPage("archives")}
               onOpenUsage={() => setPage("usage")}
+              onOpenSkills={() => setPage("skills")}
             />
             <main aria-label="Current page">{page}</main>
           </>
@@ -43,6 +45,7 @@ test("leading navigation switches pages and is inaccessible on the main screen",
   for (const [name, page] of [
     ["Features", "extensions"],
     ["Plugins", "plugins"],
+    ["Skills", "skills"],
     ["Archived chats", "archives"],
     ["Usage", "usage"]
   ] as const) {
@@ -55,7 +58,7 @@ test("leading navigation switches pages and is inaccessible on the main screen",
         .filter((button) => button.getAttribute("aria-current") === "page" && !button.closest(".canvas-dots"))
     ).toHaveLength(1)
   }
-  fireEvent.click(view.getByRole("button", { name: "Return to chat" }))
+  fireEvent.click(view.getByRole("button", { name: "Page 2" }))
   expect(view.queryByRole("button", { name: "Plugins" })).not.toBeInTheDocument()
   expect(view.getByRole("main")).toHaveTextContent("Chat")
 })

@@ -463,9 +463,9 @@ function withCanvasGeometry(run: () => void, viewport = 1200, sidebar = 248) {
 
 async function parkOnWorkspace(container: HTMLElement) {
   const dots = [...container.querySelectorAll<HTMLButtonElement>(".canvas-dots button")]
-  // Two dots: the chat screen and the workspace beside it.
-  expect(dots).toHaveLength(2)
-  await act(() => Promise.try(() => fireEvent.click(must(dots[1], "workspace dot"))))
+  // Three dots: the tool page, chat, and the workspace beside it.
+  expect(dots).toHaveLength(3)
+  await act(() => Promise.try(() => fireEvent.click(must(dots[2], "workspace dot"))))
 }
 
 /**
@@ -566,8 +566,8 @@ test("a fresh main screen parks on chat, never on the trailing apps screen", asy
   await withCanvasGeometry(async () => {
     const view = render(workspaceLayout(true))
     const dots = [...view.container.querySelectorAll<HTMLButtonElement>(".canvas-dots button")]
-    // First dot = chat, last dot = trailing. Startup must select chat…
-    expect(dots[0]).toHaveAttribute("aria-current", "page")
+    // First dot = tool pages, second = chat, last = trailing. Startup must select chat…
+    expect(dots[1]).toHaveAttribute("aria-current", "page")
     expect(dots.at(-1)).not.toHaveAttribute("aria-current")
     // …and the apps screen stays inert until the reader explicitly travels there.
     const trailing = must(view.container.querySelector('[data-screen-panel="trailing"]'), "trailing screen")
@@ -580,6 +580,25 @@ test("a fresh main screen parks on chat, never on the trailing apps screen", asy
     expect(leading.hasAttribute("data-active")).toBe(false)
     expect(trailing.hasAttribute("data-active")).toBe(false)
     expect(view.container.querySelector("[data-sidebar-mode]")).toHaveAttribute("data-sidebar-mode", "pinned")
+    view.unmount()
+  })
+})
+
+test("tool pages can hide the conversation sidebar completely", async () => {
+  await withCanvasGeometry(() => {
+    const view = render(
+      <MainSidebarLayout
+        initialPinned
+        sidebarHidden
+        screen="leading"
+        sidebar={<SidebarContent />}
+        leading={<main data-testid="tool-page">Tool page</main>}
+        main={<ChatContent />}
+      />
+    )
+    const wrapper = must(view.container.querySelector('[data-slot="sidebar-wrapper"]'), "sidebar wrapper")
+    expect(wrapper.getAttribute("style")).toContain("--sidebar-width: 0px")
+    expect(view.getByTestId("tool-page")).toHaveTextContent("Tool page")
     view.unmount()
   })
 })
@@ -616,8 +635,8 @@ test("the apps screen becomes interactive when parked and the chat dot brings th
       expect(trailing.hasAttribute("inert")).toBe(false)
       const dots = [...view.container.querySelectorAll<HTMLButtonElement>(".canvas-dots button")]
       expect(dots.at(-1)).toHaveAttribute("aria-current", "page")
-      await act(() => Promise.try(() => fireEvent.click(must(dots[0], "chat dot"))))
-      expect(dots[0]).toHaveAttribute("aria-current", "page")
+      await act(() => Promise.try(() => fireEvent.click(must(dots[1], "chat dot"))))
+      expect(dots[1]).toHaveAttribute("aria-current", "page")
       expect(trailing.hasAttribute("inert")).toBe(true)
       expect(view.container.querySelector("[data-sidebar-mode]")).toHaveAttribute("data-sidebar-mode", "pinned")
       view.unmount()
@@ -637,7 +656,7 @@ test("pressing the pin button from the workspace screen returns to chat and dock
     // `changePinned` jumps the canvas back to the chat region before docking: expanding must never
     // leave the reader looking at the workspace with no sidebar.
     expect(view.container.querySelector("[data-sidebar-mode]")).toHaveAttribute("data-sidebar-mode", "pinned")
-    expect([...view.container.querySelectorAll(".canvas-dots button")][0]).toHaveAttribute("aria-current", "page")
+    expect([...view.container.querySelectorAll(".canvas-dots button")][1]).toHaveAttribute("aria-current", "page")
     view.unmount()
   })
 })

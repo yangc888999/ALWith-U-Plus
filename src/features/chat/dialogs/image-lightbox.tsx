@@ -115,24 +115,24 @@ function ImagePreview({ image, index, count }: { image: PreviewImage; index: num
   }
   return (
     <>
-      <header className="flex w-full shrink-0 items-center justify-between gap-3 px-4 py-3">
-        <div className="flex min-w-0 items-center gap-3">
+      <header className="flex w-full shrink-0 items-center justify-between gap-2 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
           <DialogClose
             render={
               <Button
                 variant="default"
-                size="lg"
-                className="shrink-0 rounded-full px-4 shadow-lg"
+                size="icon-sm"
+                className="shrink-0 rounded-full shadow-sm"
                 title={t("workspace.closePreview")}
               />
             }
           >
             <XIcon />
-            <span>{t("workspace.closePreview")}</span>
+            <span className="sr-only">{t("workspace.closePreview")}</span>
           </DialogClose>
           <DialogTitle className="min-w-0 truncate text-sm font-medium">{image.alt || name}</DialogTitle>
         </div>
-        <div className="flex shrink-0 items-center gap-2" role="toolbar" aria-label={t("chat.image.tools")}>
+        <div className="flex shrink-0 items-center gap-1.5" role="toolbar" aria-label={t("chat.image.tools")}>
           <DropdownMenu>
             <DropdownMenuTrigger
               render={<Button variant="outline" className="rounded-full" aria-label={t("chat.image.zoom")} />}
@@ -223,7 +223,7 @@ function ImagePreview({ image, index, count }: { image: PreviewImage; index: num
             }
           >
             <Maximize2Icon />
-            <span className="hidden sm:inline">{t("chat.image.openSidePanel")}</span>
+            <span className="hidden 2xl:inline">{t("chat.image.openSidePanel")}</span>
           </Button>
         </div>
       </header>
@@ -239,7 +239,7 @@ function ImagePreview({ image, index, count }: { image: PreviewImage; index: num
               style={
                 natural.width && scale
                   ? { width: natural.width * scale, height: natural.height * scale }
-                  : { maxWidth: "100%", maxHeight: "80vh" }
+                  : { maxWidth: "100%", maxHeight: "100%" }
               }
               onLoad={(event) =>
                 setNatural({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })
@@ -296,7 +296,7 @@ export function ImageLightbox() {
             moveImage(event.key === "ArrowLeft" ? -1 : 1)
           }
         }}
-        className="fixed inset-0 flex h-dvh w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none bg-background/90 p-0 ring-0 backdrop-blur-md sm:max-w-none data-open:zoom-in-100 data-closed:zoom-out-100"
+        className="flex h-[min(50vh,40rem)] min-h-[16rem] w-[min(50vw,56rem)] min-w-[20rem] max-w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-xl bg-popover/95 p-0 shadow-2xl backdrop-blur-md sm:max-w-none data-open:zoom-in-95 data-closed:zoom-out-95"
       >
         {image && (
           <ImagePreview

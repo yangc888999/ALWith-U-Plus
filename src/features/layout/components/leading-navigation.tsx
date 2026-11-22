@@ -1,4 +1,4 @@
-import { ArchiveIcon, BlocksIcon, ChartColumnIcon, PuzzleIcon } from "lucide-react"
+import { ArchiveIcon, BlocksIcon, GaugeIcon, PuzzleIcon, SparklesIcon } from "lucide-react"
 import type { ReactElement, ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -11,21 +11,24 @@ export function LeadingNavigation({
   onOpenExtensions,
   onOpenArchives,
   onOpenUsage,
+  onOpenSkills,
   children
 }: {
-  activePage: "plugins" | "extensions" | "archives" | "usage" | null
+  activePage: "plugins" | "extensions" | "archives" | "usage" | "skills" | null
   children?: ReactNode
   onOpenPlugins: () => void
   onOpenExtensions: () => void
   onOpenArchives: () => void
   onOpenUsage: () => void
+  onOpenSkills: () => void
 }): ReactElement {
   const { t } = useTranslation()
   const items = [
     { id: "plugins", label: t("sidebar.plugins"), icon: PuzzleIcon, onClick: onOpenPlugins },
     { id: "extensions", label: t("sidebar.features"), icon: BlocksIcon, onClick: onOpenExtensions },
+    { id: "skills", label: t("sidebar.skills"), icon: SparklesIcon, onClick: onOpenSkills },
     { id: "archives", label: t("archives.title"), icon: ArchiveIcon, onClick: onOpenArchives },
-    { id: "usage", label: t("settings.usage"), icon: ChartColumnIcon, onClick: onOpenUsage }
+    { id: "usage", label: t("settings.usage"), icon: GaugeIcon, onClick: onOpenUsage }
   ] as const
 
   return (

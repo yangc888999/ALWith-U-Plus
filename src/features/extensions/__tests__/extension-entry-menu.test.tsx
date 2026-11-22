@@ -135,6 +135,7 @@ test("leading navigation goes directly to management", () => {
       onOpenPlugins={vi.fn()}
       onOpenExtensions={props.onManage}
       onOpenUsage={vi.fn()}
+      onOpenSkills={vi.fn()}
     />
   )
   fireEvent.click(ui.getByRole("button", { name: "Features" }))

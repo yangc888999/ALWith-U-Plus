@@ -53,10 +53,28 @@ function EnabledVoiceButton({
   const [resuming, setResuming] = useState(resume !== undefined)
   const report = (error: Error): void => {
     const detail = "detail" in error ? error.detail : null
-    const reference =
-      typeof detail === "object" && detail !== null && "requestId" in detail && typeof detail.requestId === "string"
-        ? ` (${detail.requestId})`
-        : ""
+    const failure =
+      typeof detail === "object" && detail !== null
+        ? (detail as { category?: unknown; requestId?: unknown })
+        : null
+    const requestId = typeof failure?.requestId === "string" ? failure.requestId : null
+    const authFailed =
+      failure?.category === "authentication" ||
+      error.message.toLowerCase().includes("authentication_failed") ||
+      error.message.toLowerCase().includes("invalid_credential")
+    if (authFailed) {
+      toast.error(t("voice.authenticationFailed"), {
+        description: requestId
+          ? t("voice.authenticationFailedHint", { requestId })
+          : t("voice.authenticationFailedHintNoId"),
+        action: {
+          label: t("voice.openSettings"),
+          onClick: () => void openSettingsWindow("voice")
+        }
+      })
+      return
+    }
+    const reference = requestId === null ? "" : ` (${requestId})`
     const message = error.message === "voice_existing_draft" ? t("voice.existingDraft") : error.message
     toast.error(message + reference)
   }

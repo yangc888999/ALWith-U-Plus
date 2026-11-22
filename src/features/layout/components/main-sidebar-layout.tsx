@@ -66,7 +66,8 @@ export function MainSidebarLayout({
   headerTrailing,
   statusBar,
   children,
-  chatMode
+  chatMode,
+  sidebarHidden = false
 }: {
   initialPinned: boolean
   screen: MainScreen
@@ -85,6 +86,8 @@ export function MainSidebarLayout({
   children?: ReactNode
   /** A chat surface has two columns and its own sidebar width; a project reads the four-column store. */
   chatMode?: boolean
+  /** The leading/tool pages own the whole window and must not leave the conversation sidebar behind. */
+  sidebarHidden?: boolean
 }) {
   const { t } = useTranslation()
   const layout = useWorkspaceLayout()
@@ -260,7 +263,7 @@ export function MainSidebarLayout({
         data-sidebar-presentation={docked || canvas.moving ? "docked" : presentation}
         style={
           {
-            "--sidebar-width": `${effectiveSidebarPx}px`,
+            "--sidebar-width": `${sidebarHidden ? 0 : effectiveSidebarPx}px`,
             "--leading-sidebar-width": "var(--sidebar-width)",
             "--canvas-sidebar-offset": `${Math.max(0, (canvas.geometry.stops[canvas.selected] ?? 0) - canvas.geometry.leading)}px`,
             "--active-sidebar-width": docked ? "var(--sidebar-width)" : "0px",
@@ -402,9 +405,9 @@ export function MainSidebarLayout({
         </CanvasContext.Provider>
         <footer className="main-window-statusbar">
           <CanvasDots
-            count={canvas.geometry.stops.length - 1}
-            selected={canvas.selected - 1}
-            onSelect={(index) => canvas.select(index + 1)}
+            count={canvas.geometry.regions.length}
+            selected={canvas.selected}
+            onSelect={(index) => canvas.select(index)}
           />
           {statusBar}
         </footer>

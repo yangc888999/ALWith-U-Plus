@@ -176,4 +176,7 @@ test("the welcome composer keeps one fixed footprint across tabs", () => {
     /\.welcome-hero-composer \[data-composer\] > \[data-chat-drop-zone\] > \.relative:has\(> form > \.codex-composer-surface\)\s*\{[^}]*min-height: 10\.5rem/
   )
   expect(styles).not.toMatch(/data-welcome-mode="chat"\] \.welcome-hero-composer \[data-composer\] \.alwith-composer-textarea/)
+  expect(styles).toMatch(
+    /\.welcome-hero-composer \[data-composer\] form > \.chat-composer-toolbar\s*\{\s*margin-top: auto !important;/
+  )
 })

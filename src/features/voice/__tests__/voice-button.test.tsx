@@ -1,4 +1,4 @@
-import type { VoiceEvent, VoiceState } from "@alwith/module-voice"
+import type { VoiceEvent, VoiceFailure, VoiceState } from "@alwith/module-voice"
 import { prepareCapture } from "@alwith/module-voice/audio"
 import { RevisionDraft } from "@alwith/module-voice/chat"
 import { useVoiceInteraction } from "@alwith/module-voice/react"
@@ -25,6 +25,7 @@ const fake = vi.hoisted(() => ({
   report: vi.fn(),
   profiles: vi.fn(),
   openSettings: vi.fn(),
+  failure: null as VoiceFailure | null,
   voiceEnabled: true,
   cancelCapture: vi.fn(async () => {})
 }))
@@ -39,7 +40,8 @@ vi.mock("@alwith/module-voice/tauri", () => ({
             state: () => {},
             partial: (text: string) => receive({ type: "partial", recordingId: id, text }),
             final: (text: string) => receive({ type: "final", recordingId: id, text }),
-            error: (error: Error) => receive({ type: "failed", recordingId: id, message: error.message })
+            error: (error: Error) =>
+              receive({ type: "failed", recordingId: id, message: error.message, error: fake.failure ?? undefined })
           },
           finish: vi.fn(() => Promise.resolve(""))
         }
@@ -97,6 +99,41 @@ beforeEach(() => {
   fake.report.mockClear()
   fake.profiles.mockReset().mockResolvedValue({ vui: true, doubao: true })
   fake.openSettings.mockClear()
+  fake.failure = null
+})
+
+test("voice authentication failures point at the voice settings instead of the raw provider code", async () => {
+  fake.failure = {
+    stage: "authentication",
+    category: "authentication",
+    code: "authentication_failed",
+    requestId: "request-1"
+  }
+  render(
+    <VoiceButton
+      draft={new RevisionDraft("auth", "", [0, 0])}
+      cwd="/tmp"
+      enabled
+      cancelRef={{ current: null }}
+      waitForTurn={async () => {}}
+      supportsHandsfree
+    />
+  )
+  fireEvent.click(screen.getByRole("button", { name: "voice.start" }))
+  await screen.findByRole("button", { name: "voice.stop" })
+  act(() => must(fake.instances[0], "voice recording").callbacks.error(new Error("authentication_failed")))
+  await waitFor(() =>
+    expect(fake.report).toHaveBeenCalledWith(
+      "voice.authenticationFailed",
+      expect.objectContaining({
+        description: "voice.authenticationFailedHint",
+        action: expect.objectContaining({ label: "voice.openSettings" })
+      })
+    )
+  )
+  const options = fake.report.mock.calls[0]?.[1] as { action?: { onClick?: () => void } }
+  options.action?.onClick?.()
+  expect(fake.openSettings).toHaveBeenCalledWith("voice")
 })
 test("disabling voice removes its controls and cancels an active recording", async () => {
   const props = {

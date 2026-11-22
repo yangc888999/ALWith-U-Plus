@@ -331,6 +331,12 @@ html[data-window-backdrop="acrylic"]
 :root {
   --chat-column-width: 70rem; /* 1120px at the default 16px root */
 }
+/* High-density desktops expose a much wider CSS viewport than a laptop (often 2560-3200px).
+   A fixed 16px root left every rem-based control physically small there. Scale the root with
+   the viewport, while keeping the familiar 16px baseline on 1280-1600px windows. */
+html {
+  font-size: clamp(16px, calc(0.5vw + 7px), 22px);
+}
 [data-timeline-user-message-navigation-content],
 [data-session-actions],
 [data-chat-drop-zone],
@@ -1851,7 +1857,7 @@ html[data-selection-menu] [data-testid="comment-selection-button"] {
    the base composer rules stay the canonical definition. */
 .welcome-hero {
   padding-block: clamp(1.5rem, 5vh, 4rem) 2rem;
-  justify-content: flex-start;
+  justify-content: safe center;
 }
 .welcome-hero-composer [data-composer][data-composer-dock] {
   border-block-start: 0;
@@ -1869,9 +1875,28 @@ html[data-selection-menu] [data-testid="comment-selection-button"] {
    footprint of the welcome surface itself. */
 .welcome-hero-composer [data-composer] > [data-chat-drop-zone] > .relative:has(> form > .codex-composer-surface) {
   min-height: 10.5rem;
+  display: flex;
+  flex-direction: column;
+}
+.welcome-hero-composer [data-composer] form {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.welcome-hero-composer [data-composer] form > .chat-composer-toolbar {
+  margin-top: auto !important;
 }
 .welcome-hero-composer [data-chat-input-header] {
   background-color: transparent !important;
+}
+/* Wide high-density windows have room for the composer to align with the greeting instead of
+   staying a narrow 48rem island. The base 1280-1600px layout keeps its original measure. */
+@media (min-width: 1600px) {
+  .welcome-hero-composer,
+  .welcome-hero-recent {
+    max-width: 56rem;
+  }
 }
 
 /* Model rows are reordered with pointer events; never let WebKit start a native drag image. */

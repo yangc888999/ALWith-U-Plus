@@ -125,6 +125,7 @@
     "plugins": "插件",
     "extensions": "扩展",
     "features": "功能",
+    "skills": "技能",
     "newTask": "新建任务",
     "newTaskWindow": "聊天浮窗",
     "toolbox": "插件 · 扩展 · 技能",
@@ -2090,7 +2091,11 @@
     "shortcutHint": "500 毫秒内双击 Option/Alt 开始，单击结束。仅当前聊天窗口生效。",
     "realtimeStart": "语音聊天",
     "realtimeStop": "结束语音聊天",
-    "realtimeCancel": "取消语音连接"
+    "realtimeCancel": "取消语音连接",
+    "authenticationFailed": "语音服务鉴权失败",
+    "authenticationFailedHint": "当前语音引擎的 API Key 无效或已过期，请到「设置 → 语音」重新填写。请求 ID：{{requestId}}",
+    "authenticationFailedHintNoId": "当前语音引擎的 API Key 无效或已过期，请到「设置 → 语音」重新填写。",
+    "openSettings": "打开语音设置"
   },
   "computer": {
     "actions": {

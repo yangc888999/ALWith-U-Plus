@@ -125,6 +125,7 @@
     "plugins": "Plugins",
     "extensions": "Extensions",
     "features": "Features",
+    "skills": "Skills",
     "newTask": "New task",
     "newTaskWindow": "Chat window",
     "toolbox": "Plugins · Extensions · Skills",
@@ -2090,7 +2091,11 @@
     "shortcutHint": "Double-tap Option/Alt within 500 ms to start; tap once to finish. Active chat window only.",
     "realtimeStart": "Voice call",
     "realtimeStop": "End voice call",
-    "realtimeCancel": "Cancel voice connection"
+    "realtimeCancel": "Cancel voice connection",
+    "authenticationFailed": "Voice service authentication failed",
+    "authenticationFailedHint": "The voice engine API key is invalid or expired. Re-enter it in Settings → Voice. Request ID: {{requestId}}",
+    "authenticationFailedHintNoId": "The voice engine API key is invalid or expired. Re-enter it in Settings → Voice.",
+    "openSettings": "Open voice settings"
   },
   "computer": {
     "actions": {

@@ -270,7 +270,7 @@ function SidebarRailButton({ label, icon: Icon, active, muted, hint, onSelect, d
 
 type SessionSidebarProps = {
   screen: MainScreen
-  leadingPage: "plugins" | "extensions" | "archives" | "automation" | "usage"
+  leadingPage: "plugins" | "extensions" | "archives" | "automation" | "usage" | "skills"
   selectedId: string | null
   onSelect: (sessionRow: SessionSummary) => void
   onNewChat: () => void

@@ -492,16 +492,7 @@ function InstalledTab({ onOpen, query }: { onOpen: (entry: PluginEntry) => void;
 }
 
 /** Catalogs cover the selected project and known conversation projects. */
-export function PluginsPage({
-  cwd,
-  active,
-  skillsRequest = 0
-}: {
-  cwd: string | null
-  active: boolean
-  /** Increment to land on 技能 after entering from the sidebar shortcut. */
-  skillsRequest?: number
-}) {
+export function PluginsPage({ cwd, active }: { cwd: string | null; active: boolean }) {
   const { t } = useTranslation()
   const refresh = useStore(pluginsStore, (state) => state.refresh)
   const loading = useStore(pluginsStore, (state) => state.loading)
@@ -532,10 +523,6 @@ export function PluginsPage({
   const searchLabel = t(kind === "skills" ? "plugins.skills.search" : "plugins.search")
   const [selected, setSelected] = useState<PluginEntry | null>(null)
   const ready = usePluginsReady()
-
-  useEffect(() => {
-    if (skillsRequest > 0) setKind("skills")
-  }, [skillsRequest])
 
   useEffect(() => {
     // The screen arrow is available even before the engine has connected.
