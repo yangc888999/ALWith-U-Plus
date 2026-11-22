@@ -34,6 +34,18 @@ export function isTemporaryChatDir(cwd: string | null | undefined): boolean {
   return isQuickChatDirectory(cwd)
 }
 
+/**
+ * Whether the path is a conversation's *own* folder (`<quick-chat>/Chat/<stamp>`) rather than the
+ * quick-chat root. Those folders belong to one conversation and are deleted with it, so the
+ * workspace may locate them; the root itself never becomes a workspace.
+ */
+export function isChatOwnDirectory(cwd: string | null | undefined): boolean {
+  if (cwd === null || cwd === undefined || cwd === "" || root === null) return false
+  const normalized = cwd.replace(/\/+$/, "")
+  const base = root.replace(/\/+$/, "")
+  return normalized.startsWith(`${base}/`)
+}
+
 /** `2026-11-08 22-54-03` — sortable, filesystem-safe, and readable in a folder list. */
 export function chatStamp(date: Date = new Date()): string {
   const pad = (value: number) => String(value).padStart(2, "0")

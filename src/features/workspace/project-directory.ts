@@ -17,7 +17,7 @@
 import { useSyncExternalStore } from "react"
 
 import { isGroupsRootDirectory } from "@/lib/path"
-import { isTemporaryChatDir } from "@/lib/quick-chat"
+import { isChatOwnDirectory, isTemporaryChatDir } from "@/lib/quick-chat"
 
 /** The draft composer has no session id yet, but still owns a project directory (a fresh meeting). */
 export const DRAFT_DIRECTORY_KEY = "__draft__"
@@ -144,7 +144,9 @@ export function shouldOpenFourColumns(input: {
   if (!input.previewVisible) return false
   const explicit = input.boundDirectory ?? input.sessionCwd
   if (explicit === null || explicit.trim() === "") return false
-  return !isTemporaryChatDir(explicit) && !isGroupsRoot(explicit)
+  // A conversation's own quick-chat folder is locatable like a project; the quick-chat root and
+  // a directory-less draft are not.
+  return (!isTemporaryChatDir(explicit) || isChatOwnDirectory(explicit)) && !isGroupsRoot(explicit)
 }
 
 /**
@@ -166,17 +168,24 @@ function resolveDirectory(directory: string, groupId: string | null): ProjectDir
   // The Groups root is invalid before any other test: a quick-chat path can never be that root,
   // and failing to flag it here would show every meeting's folder as one project.
   if (isGroupsRoot(directory)) return { directory: null, groupId, reason: "invalid" }
-  if (isTemporaryChatDir(directory)) return { directory: null, groupId, reason: "temporary" }
+  if (isTemporaryChatDir(directory)) {
+    // The conversation's own folder stays locatable: selecting that chat must open *its* files,
+    // never a stale project. Only the quick-chat root itself has no workspace.
+    if (isChatOwnDirectory(directory)) return { directory, groupId, reason: "temporary" }
+    return { directory: null, groupId, reason: "temporary" }
+  }
   return { directory, groupId, reason: groupId !== null ? "group" : "project" }
 }
 
 /**
  * Resolves the directory for the surface, in priority order:
  * ① an explicit binding (draft uses `DRAFT_DIRECTORY_KEY`) → ② the session's own cwd
- * → ③ the last picked directory → ④ nothing (`missing`).
+ * → ③ nothing (`missing`).
  *
- * A temporary chat always wins over a stale `lastDirectory`: falling through to a previous project
- * would open four columns of somebody else's files next to a throwaway conversation.
+ * There is deliberately no `lastDirectory` fallback: a selected conversation whose cwd has not
+ * arrived yet must show *nothing*, not the previous project's files, and a brand-new task must
+ * not inherit whichever folder was picked last. `lastDirectory` is accepted for call-site
+ * compatibility but never consulted.
  */
 export function resolveProjectDirectory(input: {
   sessionId: string | null
@@ -191,7 +200,5 @@ export function resolveProjectDirectory(input: {
   }
   const cwd = input.sessionCwd
   if (cwd !== null && cwd.trim() !== "") return resolveDirectory(cwd, null)
-  const last = input.lastDirectory
-  if (last !== null && last.trim() !== "") return resolveDirectory(last, null)
   return { directory: null, groupId: null, reason: "missing" }
 }

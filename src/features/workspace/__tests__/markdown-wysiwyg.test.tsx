@@ -1,5 +1,5 @@
 import { createPreviewProviders, type PreviewProps } from "@alwith/module-editor/previews"
-import { Editor, editorViewCtx } from "@milkdown/core"
+import { commandsCtx, Editor, editorViewCtx } from "@milkdown/core"
 import { TextSelection } from "@milkdown/prose/state"
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { ReactNode } from "react"
@@ -7,6 +7,7 @@ import { useMemo, useState } from "react"
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
 import { createWysiwygMarkdownIntegration } from "../markdown-wysiwyg"
+import { deleteTableColumnCommand, deleteTableRowCommand } from "../markdown-commands"
 import type { WysiwygLabels } from "../wysiwyg-types"
 
 const labels: WysiwygLabels = {
@@ -237,37 +238,52 @@ test("existing <u>x</u> parses into an underline mark and re-serializes", async 
   expect(view.container.querySelector(".alwith-wysiwyg-toolbar")).not.toBeNull()
 })
 
-test("table row/column delete works from a plain caret (TextSelection), last row removes the table", async () => {
+test("table deletes are command-only now: no toolbar buttons, last row removes the table", async () => {
   const editorRef = captureEditor()
   const props = withWysiwyg(fixture("| a | b |\n| - | - |\n| 1 | 2 |\n| 3 | 4 |\n"))
   render(<Workbench props={props} />)
   await enterEditMode()
   const editor = editorRef.current
   if (!editor) throw new Error("Missing editor")
+  // Table editing left the toolbar; the commands remain for programmatic use.
+  expect(screen.queryByRole("button", { name: "Insert table" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Delete row" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Delete column" })).toBeNull()
   act(() => caretAt(editor, "1"))
-  await waitFor(() => expect(screen.getByRole("button", { name: "Delete row" })).not.toBeDisabled())
-  fireEvent.click(screen.getByRole("button", { name: "Delete row" }))
+  act(() => {
+    editor.action((ctx) => {
+      ctx.get(commandsCtx).call(deleteTableRowCommand.key)
+    })
+  })
   await waitFor(() => expect(props.context.onChange).toHaveBeenCalled())
   const afterRow = (props.context.onChange as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string
   expect(afterRow).not.toContain("| 1 |")
   expect(afterRow).toContain("| 3 |")
   // The header is a real row: deleting the last data row leaves the header.
   act(() => caretAt(editor, "3"))
-  fireEvent.click(screen.getByRole("button", { name: "Delete row" }))
+  act(() => {
+    editor.action((ctx) => {
+      ctx.get(commandsCtx).call(deleteTableRowCommand.key)
+    })
+  })
   await waitFor(() => {
     const last = (props.context.onChange as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string
     expect(last).not.toContain("| 3 |")
   })
   // Deleting the final remaining row (the header) spans the whole table → remove the table.
   act(() => caretAt(editor, "a"))
-  fireEvent.click(screen.getByRole("button", { name: "Delete row" }))
+  act(() => {
+    editor.action((ctx) => {
+      ctx.get(commandsCtx).call(deleteTableRowCommand.key)
+    })
+  })
   await waitFor(() => {
     const last = (props.context.onChange as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string
     expect(last).not.toContain("|")
   })
 })
 
-test("table column delete removes the caret's column", async () => {
+test("table column delete removes the caret's column without a toolbar entry", async () => {
   const editorRef = captureEditor()
   const props = withWysiwyg(fixture("| a | b |\n| - | - |\n| 1 | 2 |\n"))
   render(<Workbench props={props} />)
@@ -275,8 +291,11 @@ test("table column delete removes the caret's column", async () => {
   const editor = editorRef.current
   if (!editor) throw new Error("Missing editor")
   act(() => caretAt(editor, "1"))
-  await waitFor(() => expect(screen.getByRole("button", { name: "Delete column" })).not.toBeDisabled())
-  fireEvent.click(screen.getByRole("button", { name: "Delete column" }))
+  act(() => {
+    editor.action((ctx) => {
+      ctx.get(commandsCtx).call(deleteTableColumnCommand.key)
+    })
+  })
   await waitFor(() => expect(props.context.onChange).toHaveBeenCalled())
   const last = (props.context.onChange as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string
   expect(last).not.toContain("| 1 |")

@@ -83,7 +83,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ChatContextMenu, type ContextMenuTarget, selectionRectOf } from "@/features/chat/chat-context-menu"
 import { ChatDirectoryContext } from "@/features/chat/file-actions"
 import { CanvasContext } from "@/features/layout/lib/canvas-context"
-import { isTemporaryChatDir } from "@/lib/quick-chat"
+import { isChatOwnDirectory, isTemporaryChatDir } from "@/lib/quick-chat"
 
 import { type FilePosition, WorkspaceContext, WorkspaceHeaderContext } from "./context"
 import { useHostDialog } from "./host-dialog"
@@ -159,7 +159,9 @@ function report(error: unknown): void {
 function emptyReasonFor(reason: ProjectDirectoryReason, cwd: string | null): WorkspaceEmptyReason | null {
   if (cwd === null) return reason === "invalid" ? "invalid" : "missing"
   if (reason === "invalid") return "invalid"
-  if (reason === "temporary" || isTemporaryChatDir(cwd)) return "temporary"
+  // A conversation's own quick-chat folder is a real, locatable workspace; only the root (or an
+  // unclassified temporary path) has no files to show.
+  if ((reason === "temporary" || isTemporaryChatDir(cwd)) && !isChatOwnDirectory(cwd)) return "temporary"
   return null
 }
 
@@ -189,7 +191,8 @@ export function FileWorkspace({
   reason = "project",
   guidance = null,
   invalidDirectory = null,
-  directoryKey
+  directoryKey,
+  draft = false
 }: {
   cwd: string | null
   children: ReactNode
@@ -218,6 +221,8 @@ export function FileWorkspace({
    * conversation unresolved. Standalone tests omit it and fall back to `sessionId ?? __draft__`.
    */
   directoryKey?: string
+  /** A brand-new task: the workspace and file tree must not be openable at all. */
+  draft?: boolean
 }) {
   const windowsControls = useContext(WindowsWorkspaceControlsContext)
   const { resolvedTheme } = useTheme()
@@ -326,7 +331,9 @@ export function FileWorkspace({
   const navigateCanvas = canvas?.navigate
   // A temporary chat has none of these columns, so its window header carries no switches for them.
   // Leaving them visible offered 评论栏 / 文件树 / 工作区 on a surface that has no tree to hide.
-  const temporaryChat = isTemporaryChatDir(cwd)
+  const temporaryChat = isTemporaryChatDir(cwd) && !isChatOwnDirectory(cwd)
+  // A draft has no directory of its own yet; every workspace entry point stays shut.
+  const workspaceAllowed = !draft
   // P0-5: hiding the *whole* toolbar for a temporary chat (or a chat whose directory has not
   // arrived) removed the only buttons that could explain why 文件栏 does nothing. Keep 四方格 and
   // 文件栏 always reachable; only the chat-specific actions are hidden when there is no directory.
@@ -346,7 +353,7 @@ export function FileWorkspace({
    */
   const retryWorkspace = useCallback((): void => {
     const bound = projectDirectoryFor(projectBindingKey)
-    const ready = bound !== null || (cwd !== null && !isTemporaryChatDir(cwd))
+    const ready = bound !== null || (cwd !== null && (!isTemporaryChatDir(cwd) || isChatOwnDirectory(cwd)))
     setEmptyReason(ready ? null : emptyReasonFor(reason, cwd))
     setViewMode(false)
     setVisible(true)
@@ -422,6 +429,12 @@ export function FileWorkspace({
   // transition that has to close columns the user did not close themselves.
   const wasProject = useRef(defaultOpen)
   useEffect(() => {
+    if (draft) {
+      setViewMode(false)
+      setVisible(false)
+      reportEmptyState()
+      return
+    }
     const project = defaultOpen
     const leftProject = wasProject.current && !project
     wasProject.current = project
@@ -454,12 +467,12 @@ export function FileWorkspace({
     // for `workspace` to exist (that would deadlock the four-column layout).
     reportEmptyState()
     setVisible(true)
-  }, [defaultOpen, cwd, setTreeVisible, reportEmptyState])
+  }, [defaultOpen, cwd, setTreeVisible, reportEmptyState, draft])
   // An explicit "create a chat in this project" always shows the four columns, even for a project
   // that was opened (and maybe collapsed) earlier in this run. `openedProjects` still keeps the
   // ordinary revisits quiet; this signal deliberately bypasses it.
   useEffect(() => {
-    if (columnsRequest === 0 || !defaultOpen || cwd === null) {
+    if (draft || columnsRequest === 0 || !defaultOpen || cwd === null) {
       reportEmptyState()
       return
     }
@@ -467,7 +480,7 @@ export function FileWorkspace({
     setTreeVisible(true)
     setVisible(true)
     reportEmptyState()
-  }, [columnsRequest, defaultOpen, cwd, setTreeVisible, reportEmptyState])
+  }, [columnsRequest, defaultOpen, cwd, setTreeVisible, reportEmptyState, draft])
   // Opening any conversation of a project restores the four columns — session list, chat, file tree
   // and preview. This is keyed by the conversation, not by the project: entering the same project
   // again through another chat (or through the floated chat window) must not inherit the collapsed
@@ -1200,6 +1213,7 @@ export function FileWorkspace({
   const openDriveLink = useCallback((path: string): Promise<void> => routeDriveTarget.current(path), [])
   useDriveDeepLinks(openDriveLink)
   const toggle = useCallback((): void => {
+    if (!workspaceAllowed) return
     if (visible) {
       // Use the layout's effective state, including a preview moved onto the third screen.
       if (panelControls.current?.expanded) panelControls.current.toggleExpanded()
@@ -1208,7 +1222,7 @@ export function FileWorkspace({
         setViewMode(false)
       }
     } else {
-      if (cwd === null || isTemporaryChatDir(cwd)) {
+      if (cwd === null || (isTemporaryChatDir(cwd) && !isChatOwnDirectory(cwd))) {
         // A dead click was the reported bug. Open the column with an actionable explanation
         // instead of calling `ensure(null)` and silently returning.
         reportEmptyState()
@@ -1229,14 +1243,15 @@ export function FileWorkspace({
         })
         .catch(report)
     }
-  }, [cwd, ensure, visible, reportEmptyState, guidance, reason, t])
+  }, [cwd, ensure, visible, reportEmptyState, guidance, reason, t, workspaceAllowed])
   /**
    * The one action behind 四方格 (when no directory is bound), the header 文件栏 toggle and the
    * collapsed-state FolderTree. It ensures the workspace *and* opens/expands the columns; the old
    * header toggle only flipped `treeVisible`, which did nothing at all when `visible` was false.
    */
   const showProjectTree = useCallback((): void => {
-    if (cwd === null || isTemporaryChatDir(cwd)) {
+    if (!workspaceAllowed) return
+    if (cwd === null || (isTemporaryChatDir(cwd) && !isChatOwnDirectory(cwd))) {
       reportEmptyState()
       setViewMode(false)
       setVisible(true)
@@ -1255,7 +1270,7 @@ export function FileWorkspace({
         setViewMode(false)
       })
       .catch(report)
-  }, [cwd, ensure, setTreeVisible, reportEmptyState, guidance, reason, t])
+  }, [cwd, ensure, setTreeVisible, reportEmptyState, guidance, reason, t, workspaceAllowed])
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.altKey || event.key.toLowerCase() !== "e")
@@ -1576,6 +1591,7 @@ export function FileWorkspace({
       />
       {showMainControls &&
         headerTarget !== null &&
+        workspaceAllowed &&
         createPortal(
           <div className="file-workspace-toolbar">
             {/* A second copy of the tree toggle for the window header; the tree's own toolbar
@@ -1652,6 +1668,7 @@ export function FileWorkspace({
         )}
       {showMainControls &&
         windowsControls !== null &&
+        workspaceAllowed &&
         createPortal(
           <div className="file-workspace-toolbar">
             <WorkspaceButton />
@@ -1660,7 +1677,7 @@ export function FileWorkspace({
         )}
       <WorkspacePanels
         controlsRef={panelControls}
-        visible={visible}
+        visible={visible && workspaceAllowed}
         maximized={visible && workspace !== null && viewMode}
         onMaximizedChange={setViewMode}
         onVisibleChange={(next) => {

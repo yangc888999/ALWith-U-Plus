@@ -1468,10 +1468,11 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                   guidance={directoryGuidance}
                   invalidDirectory={invalidDirectory}
                   directoryKey={directoryKey}
-                  // Projects open with the preview when four columns is on, or when its own
-                  // visibility toggle is on; temporary chats stay two-column. `readOnly` never
-                  // suppresses the columns: an account-model recovery is still a project session.
+                  // Projects and a conversation's own quick-chat folder open with the preview when
+                  // four columns is on; a brand-new task keeps the workspace and tree shut.
+                  // `readOnly` never suppresses the columns: a recovery session is still a project.
                   defaultOpen={defaultFourColumns}
+                  draft={selectedId === null || draftSessions[selectedId] !== undefined}
                 >
                   <DriveDeleteConfirmation />
                   <div className="flex min-h-0 flex-1 flex-col">{main}</div>

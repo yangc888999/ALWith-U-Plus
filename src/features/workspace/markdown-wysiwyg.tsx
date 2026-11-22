@@ -39,7 +39,6 @@ import {
   Bold,
   Check,
   Code,
-  Columns3,
   IndentDecrease,
   IndentIncrease,
   Italic,
@@ -47,10 +46,8 @@ import {
   ListOrdered,
   Pencil,
   Quote,
-  Rows3,
   SquareCode,
   Strikethrough,
-  Table,
   Underline
 } from "lucide-react"
 import type { ReactNode } from "react"
@@ -205,10 +202,7 @@ function buttonSpecs(labels: WysiwygLabels): ToolbarButtonSpec[] {
     { command: "bulletList", label: labels.bulletList, icon: <List />, pressed: "ul" },
     { command: "orderedList", label: labels.orderedList, icon: <ListOrdered />, pressed: "ol" },
     { command: "outdent", label: labels.outdent, icon: <IndentDecrease /> },
-    { command: "indent", label: labels.indent, icon: <IndentIncrease /> },
-    { command: "insertTable", label: labels.insertTable, icon: <Table />, separator: true },
-    { command: "deleteRow", label: labels.deleteRow, icon: <Rows3 />, requires: "inTable" },
-    { command: "deleteColumn", label: labels.deleteColumn, icon: <Columns3 />, requires: "inTable" }
+    { command: "indent", label: labels.indent, icon: <IndentIncrease /> }
   ]
 }
 

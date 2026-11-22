@@ -237,7 +237,7 @@ describe("selection menu placement", () => {
 describe("comment integration", () => {
   // The document viewer draws its own floating 评论 button; the bar absorbs it instead of
   // stacking two pills on one selection (2026-11-21).
-  test("the bar offers 评论 when the viewer's trigger exists, and clicks it", async () => {
+  test("a Markdown viewer's native trigger must not add 评论 to a host that never enabled it", async () => {
     const viewerClick = vi.fn()
     const trigger = document.createElement("button")
     trigger.dataset.testid = "comment-selection-button"
@@ -255,6 +255,43 @@ describe("comment integration", () => {
         </div>
       )
       const node = screen.getByTestId("doc-text")
+      const range = document.createRange()
+      range.selectNodeContents(node)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      act(() => {
+        document.dispatchEvent(new Event("selectionchange"))
+      })
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      })
+      // 评论 is an HTML-preview capability; discovering the viewer's trigger is not enough.
+      expect(screen.queryByRole("menuitem", { name: /评论|Comment/ })).toBeNull()
+      expect(viewerClick).not.toHaveBeenCalled()
+    } finally {
+      trigger.remove()
+    }
+  })
+
+  test("an HTML-enabled host absorbs the viewer trigger into 评论 and clicks it", async () => {
+    const viewerClick = vi.fn()
+    const trigger = document.createElement("button")
+    trigger.dataset.testid = "comment-selection-button"
+    trigger.addEventListener("click", viewerClick)
+    document.body.append(trigger)
+    try {
+      render(
+        <div>
+          <div className="file-workspace-editor">
+            <div className="ProseMirror" data-alwith-markdown-editing="false">
+              <span data-testid="doc-text-html">文档正文</span>
+            </div>
+          </div>
+          <SelectionMenu containerRef={{ current: null }} sessionId="s" allowComment />
+        </div>
+      )
+      const node = screen.getByTestId("doc-text-html")
       const range = document.createRange()
       range.selectNodeContents(node)
       const selection = window.getSelection()

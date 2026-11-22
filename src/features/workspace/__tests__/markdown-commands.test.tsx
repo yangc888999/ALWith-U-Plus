@@ -7,7 +7,8 @@
  * and asserted on the published Markdown, so a broken command cannot hide behind "tests pass".
  */
 import { createPreviewProviders, type PreviewProps } from "@alwith/module-editor/previews"
-import { Editor, editorViewCtx } from "@milkdown/core"
+import { commandsCtx, Editor, editorViewCtx } from "@milkdown/core"
+import { insertTableCommand } from "@milkdown/preset-gfm"
 import { TextSelection } from "@milkdown/prose/state"
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { ReactNode } from "react"
@@ -15,6 +16,7 @@ import { useMemo, useState } from "react"
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
 import { createWysiwygMarkdownIntegration } from "../markdown-wysiwyg"
+import { deleteTableColumnCommand, deleteTableRowCommand } from "../markdown-commands"
 import type { WysiwygLabels } from "../wysiwyg-types"
 
 const labels: WysiwygLabels = {
@@ -335,13 +337,18 @@ test("indent outside a list still produces a visible nesting change", async () =
   expect(s.published()).toMatch(/[-*]\s+plain paragraph/)
 })
 
-test("insert table publishes a real Markdown table and enables both delete buttons", async () => {
-  const s = await mount("before table\n", "Insert table")
+test("table editing left the toolbar; the commands still publish real Markdown tables", async () => {
+  const s = await mount("before table\n", "Bold")
+  // The toolbar no longer offers any table entry.
+  expect(screen.queryByRole("button", { name: "Insert table" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Delete row" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Delete column" })).toBeNull()
   s.caret("before")
-  // Outside a table the deletes must be disabled.
-  expect(screen.getByRole("button", { name: "Delete row" })).toBeDisabled()
-  expect(screen.getByRole("button", { name: "Delete column" })).toBeDisabled()
-  s.click("Insert table")
+  act(() => {
+    s.editor.action((ctx) => {
+      ctx.get(commandsCtx).call(insertTableCommand.key, { row: 3, col: 3 })
+    })
+  })
   await waitFor(() => expect(s.props.context.onChange).toHaveBeenCalled())
   const published = s.published()
   expect(published).toContain("|")
@@ -364,8 +371,18 @@ test("insert table publishes a real Markdown table and enables both delete butto
     return true
   })
   expect(inTable).toBe(true)
-  await waitFor(() => expect(screen.getByRole("button", { name: "Delete row" })).not.toBeDisabled())
-  expect(screen.getByRole("button", { name: "Delete column" })).not.toBeDisabled()
+  act(() => {
+    s.editor.action((ctx) => {
+      ctx.get(commandsCtx).call(deleteTableRowCommand.key)
+    })
+  })
+  await waitFor(() => expect(s.props.context.onChange).toHaveBeenCalled())
+  act(() => {
+    s.editor.action((ctx) => {
+      ctx.get(commandsCtx).call(deleteTableColumnCommand.key)
+    })
+  })
+  await waitFor(() => expect(s.props.context.onChange).toHaveBeenCalled())
 })
 
 // Regression guard for the QA round-1 defect: `computeFormatState` looked every mark up by

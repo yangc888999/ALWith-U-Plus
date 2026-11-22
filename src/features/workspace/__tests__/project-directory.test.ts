@@ -83,14 +83,33 @@ test("a quick-chat directory is temporary and never falls through to a stale pro
   ).toEqual({ directory: null, groupId: null, reason: "temporary" })
 })
 
-test("an ordinary project falls back to sessionCwd, then lastDirectory", () => {
+test("a conversation's own quick-chat folder is locatable; the root never is", async () => {
+  await primeQuickChatRoot()
+  const own = "/Users/me/Documents/ALwith/Chat/2026-11-22 10-00-00"
+  expect(
+    resolveProjectDirectory({ sessionId: "chat-own", sessionCwd: own, lastDirectory: "/other/project" })
+  ).toEqual({ directory: own, groupId: null, reason: "temporary" })
+  expect(shouldOpenFourColumns({ boundDirectory: null, sessionCwd: own, previewVisible: true })).toBe(true)
+  expect(
+    resolveProjectDirectory({
+      sessionId: "chat-root",
+      sessionCwd: "/Users/me/Documents/ALwith",
+      lastDirectory: "/other/project"
+    }).directory
+  ).toBeNull()
+  expect(
+    shouldOpenFourColumns({ boundDirectory: null, sessionCwd: "/Users/me/Documents/ALwith", previewVisible: true })
+  ).toBe(false)
+})
+
+test("an ordinary project falls back to sessionCwd, never to a stale lastDirectory", () => {
   expect(
     resolveProjectDirectory({ sessionId: "fallback-cwd", sessionCwd: "/projects/a", lastDirectory: "/projects/b" })
       .directory
   ).toBe("/projects/a")
   expect(
-    resolveProjectDirectory({ sessionId: "fallback-last", sessionCwd: null, lastDirectory: "/projects/b" }).directory
-  ).toBe("/projects/b")
+    resolveProjectDirectory({ sessionId: "fallback-last", sessionCwd: null, lastDirectory: "/projects/b" })
+  ).toEqual({ directory: null, groupId: null, reason: "missing" })
 })
 
 test("with nothing bound and nothing known the reason is missing", () => {
@@ -168,11 +187,14 @@ describe("shouldOpenFourColumns", () => {
     ).toBe(true)
   })
 
-  test("a temporary chat never opens four even when preview is enabled", async () => {
+  test("a chat's own folder opens four; the quick-chat root and Groups root never do", async () => {
     await primeQuickChatRoot()
     const QUICK_CHAT_ROOT = "/Users/me/Documents/ALwith"
     expect(
       shouldOpenFourColumns({ boundDirectory: `${QUICK_CHAT_ROOT}/Chat/2026-11-16`, sessionCwd: null, previewVisible: true })
+    ).toBe(true)
+    expect(
+      shouldOpenFourColumns({ boundDirectory: QUICK_CHAT_ROOT, sessionCwd: null, previewVisible: true })
     ).toBe(false)
     expect(
       shouldOpenFourColumns({ boundDirectory: null, sessionCwd: GROUPS_ROOT, previewVisible: true })

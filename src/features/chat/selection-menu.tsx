@@ -426,7 +426,10 @@ export function SelectionMenu({
           </button>
         </>
       )}
-      {(commentTarget !== null || onComment !== undefined || (external !== null && allowComment)) && (
+      {/* 评论 belongs to HTML previews only. A Markdown viewer may still expose module-drive's
+          native comment trigger in the document; discovering it must not add 评论 to a host that
+          never enabled comments (md preview, transcript). */}
+      {(onComment !== undefined || (allowComment && (commentTarget !== null || external !== null))) && (
         <>
           <span className="bg-border h-4 w-px" aria-hidden="true" />
           <button
