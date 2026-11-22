@@ -91,6 +91,7 @@ function environment(nativeWindow = false, resolveModel?: ClientOptions["resolve
 }
 
 const windowPreferences: Preferences = {
+  defaultStartSurface: "work",
   sidebarPinned: false,
   lastProjectDirectory: "/tmp/window-original",
   language: "en",
@@ -273,6 +274,70 @@ test("a quick-chat draft carries the neutral chat-mode badge with its icon", asy
     const badge = await view.findByText("Type to chat without a project")
     expect(badge.className).toContain("chat-mode-badge")
     expect(badge.querySelector(".lucide-message-circle")).not.toBeNull()
+  } finally {
+    await act(() => Promise.try(() => view.unmount()))
+    env.restore()
+  }
+})
+
+test("the new-task tabs keep Chat to one composer and open the newest recent conversation", async () => {
+  const env = await environment()
+  const onOpenProject = vi.fn()
+  const props = {
+    owner: "main" as const,
+    onCwdChange: () => {},
+    onCreated: () => {},
+    onSendingChange: () => {},
+    onAuthRequired: () => {},
+    onNewChat: () => {},
+    onOpenProject,
+    providerSnapshot: providers
+  }
+  await act(() => {
+    env.real.store.setState({
+      sessionListLoaded: true,
+      sessionList: [
+        {
+          sessionId: "a1",
+          cwd: "/work/alpha",
+          title: "older alpha",
+          updatedAt: "2026-11-20T10:00:00Z",
+          archived: false
+        },
+        {
+          sessionId: "b2",
+          cwd: "/work/beta",
+          title: "newest beta",
+          updatedAt: "2026-11-22T10:00:00Z",
+          archived: false
+        },
+        {
+          sessionId: "b1",
+          cwd: "/work/beta",
+          title: "older beta",
+          updatedAt: "2026-11-21T10:00:00Z",
+          archived: false
+        }
+      ]
+    })
+    return Promise.resolve()
+  })
+  const view = render(<DraftChat {...props} cwd="/tmp/chat-home" startSurface="chat" />)
+  try {
+    await waitFor(() => expect(view.getByRole("textbox")).toBeTruthy())
+    expect(view.getByRole("heading", { name: "How can I help you?" })).toBeVisible()
+    expect(view.getByRole("tab", { name: "Chat" })).toHaveAttribute("aria-selected", "true")
+    expect(view.container.querySelector(".chat-project-picker")).toBeNull()
+    expect(view.queryByRole("region", { name: "Recent projects" })).toBeNull()
+
+    fireEvent.click(view.getByRole("tab", { name: "Work" }))
+    expect(view.getByRole("tab", { name: "Work" })).toHaveAttribute("aria-selected", "true")
+    await waitFor(() => expect(view.container.querySelector(".chat-project-picker")).not.toBeNull())
+    const recent = view.getByRole("region", { name: "Recent projects" })
+    const beta = within(recent).getAllByRole("button").find((button) => button.title === "/work/beta")
+    expect(beta).toBeDefined()
+    fireEvent.click(beta!)
+    expect(onOpenProject).toHaveBeenCalledExactlyOnceWith("/work/beta", "b2")
   } finally {
     await act(() => Promise.try(() => view.unmount()))
     env.restore()

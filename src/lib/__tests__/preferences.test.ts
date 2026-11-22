@@ -95,6 +95,11 @@ test.each([undefined, false, true])("sidebar pin preference restores %p", async 
   expect((await loadPreferences()).sidebarPinned).toBe(saved ?? true)
 })
 
+test.each([undefined, "chat", "work"] as const)("default start surface restores %p", async (saved) => {
+  settingsFixture(saved === undefined ? {} : { "general.defaultStartSurface": saved })
+  expect((await loadPreferences()).defaultStartSurface).toBe(saved === "work" ? "work" : "chat")
+})
+
 test("input suggestions default to enabled and preserve an explicit saved choice", async () => {
   const values = savedProject(undefined)
   expect((await loadPreferences()).composerPredictions).toBe(true)

@@ -1,4 +1,5 @@
 export type RecentProject = {
+  sessionId: string | null
   cwd: string
   name: string
   title: string | null
@@ -6,6 +7,7 @@ export type RecentProject = {
 }
 
 type SessionRow = {
+  sessionId?: string
   cwd: string
   title: string | null
   updatedAt: string | null
@@ -34,6 +36,7 @@ export function recentProjectsFrom(
     if (cwd === "" || seen.has(cwd) || isExcluded(cwd)) continue
     seen.add(cwd)
     projects.push({
+      sessionId: row.sessionId ?? null,
       cwd,
       name: projectNameFromPath(cwd),
       title: row.title?.trim() || null,

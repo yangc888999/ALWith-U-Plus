@@ -5,12 +5,13 @@ import { projectNameFromPath, recentProjectsFrom } from "../welcome-projects"
 describe("recent projects", () => {
   test("keeps one row per folder, newest first", () => {
     const projects = recentProjectsFrom([
-      { cwd: "/work/alpha", title: "older alpha", updatedAt: "2026-11-20T10:00:00Z" },
-      { cwd: "/work/beta", title: "newest beta", updatedAt: "2026-11-22T10:00:00Z" },
-      { cwd: "/work/alpha", title: "newer alpha", updatedAt: "2026-11-21T10:00:00Z" }
+      { sessionId: "a1", cwd: "/work/alpha", title: "older alpha", updatedAt: "2026-11-20T10:00:00Z" },
+      { sessionId: "b1", cwd: "/work/beta", title: "newest beta", updatedAt: "2026-11-22T10:00:00Z" },
+      { sessionId: "a2", cwd: "/work/alpha", title: "newer alpha", updatedAt: "2026-11-21T10:00:00Z" }
     ])
     expect(projects.map((project) => project.name)).toEqual(["beta", "alpha"])
     expect(projects[1]?.title).toBe("newer alpha")
+    expect(projects[1]?.sessionId).toBe("a2")
   })
 
   test("drops temporary chats and respects the limit", () => {

@@ -2,7 +2,7 @@
 import type * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { createSession } from "@alwith/api"
 import { drafts, importDraft, SessionActions } from "@alwith/module-chat/conversation"
-import { isQuickChatDirectory, relativeTime } from "@alwith/module-chat/session-list"
+import { relativeTime } from "@alwith/module-chat/session-list"
 import { invoke } from "@tauri-apps/api/core"
 import { ArrowUpRightIcon, FolderIcon, MessageCircleIcon } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
@@ -15,8 +15,10 @@ import { useDisplayProfile } from "@/features/profile/use-display-profile"
 import { client, useApp, useSession } from "@/lib/client"
 import { describeError } from "@/lib/error-text"
 import type { ProviderSnapshot } from "@/lib/providers"
+import { isTemporaryChatDir } from "@/lib/quick-chat"
 import { startupSilent } from "@/lib/startup-window"
 import { useStartupSilent, useStartupStalled } from "@/lib/use-startup-silent"
+import { cn } from "@/lib/utils"
 
 import { ChatActionsMenu } from "./chat-actions-menu"
 import { focusComposer, SelectionMenu } from "./selection-menu"
@@ -72,7 +74,9 @@ export function DraftChat({
   headerTarget,
   projectMenu,
   onNewChat,
-  onNewProject
+  onNewProject,
+  startSurface = "work",
+  onOpenProject
 }: {
   owner: DraftOwner
   cwd: string | null
@@ -92,6 +96,10 @@ export function DraftChat({
   projectMenu?: ReactNode
   onNewChat: () => void
   onNewProject?: () => void
+  /** Which new-task tab opens first. Work stays the default for embedded surfaces. */
+  startSurface?: "chat" | "work"
+  /** Opens the newest conversation in a recent project, or a fresh draft when it has none. */
+  onOpenProject?: (cwd: string, sessionId?: string) => void
 }) {
   const { t, i18n } = useTranslation()
   const sessionRows = useApp((state) => state.sessionList)
@@ -111,9 +119,11 @@ export function DraftChat({
   // Select-text actions (copy / quote into the composer) work on the welcome screen too.
   const selectionRoot = useRef<HTMLDivElement>(null)
   // Temporary chats live in the quick-chat folder: no project may be picked from here.
-  const temporaryChat = (session?.cwd ?? cwd) !== null && isQuickChatDirectory((session?.cwd ?? cwd) as string)
+  const temporaryChat = isTemporaryChatDir(session?.cwd ?? cwd)
   const [preparing, setPreparing] = useState(true)
   const [error, setError] = useState<unknown>(null)
+  const [surface, setSurface] = useState<"chat" | "work">(startSurface)
+  const chatSurface = surface === "chat"
   // Startup config failures are transient: retry quietly instead of flashing the raw English ACP
   // error in the sidebar for one frame (the main window already has its own startup grace).
   const startupRecoveryAttempts = useRef(0)
@@ -158,7 +168,7 @@ export function DraftChat({
     [sessionRows]
   )
   const recentProjectItems = useMemo(
-    () => recentProjectsFrom(sessionRows, 4, isQuickChatDirectory),
+    () => recentProjectsFrom(sessionRows, 4, isTemporaryChatDir),
     [sessionRows]
   )
   const profile = useDisplayProfile()
@@ -343,20 +353,64 @@ export function DraftChat({
             />
           </ChatHeader>
         )}
-        <div className="welcome-hero flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6">
-          {/* WorkBuddy-style opening: two left-aligned bold lines flush with the composer's left
-              edge, not a centered hero with a muted tagline. */}
-          <div className="w-full max-w-3xl text-left">
-            <h1 className="text-[1.375rem] leading-snug font-semibold tracking-[-0.01em] sm:text-[1.5rem]">
-              {greeting}
-            </h1>
-            <p className="mt-1 text-[1.375rem] leading-snug font-semibold tracking-[-0.01em] sm:text-[1.5rem]">
-              {subtitle}
-            </p>
+        <div
+          className="welcome-hero flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6"
+          data-welcome-mode={surface}
+        >
+          <div className={cn("flex w-full flex-col items-center", chatSurface ? "gap-5" : "gap-7")}>
+            {chatSurface && (
+              <h1 className="text-center text-[1.75rem] leading-tight font-semibold tracking-[-0.02em] sm:text-[2rem]">
+                {t("welcome.chatTitle")}
+              </h1>
+            )}
+            <div
+              role="tablist"
+              aria-label={t("welcome.startMode")}
+              className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/55 p-1"
+            >
+              {(["chat", "work"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  role="tab"
+                  aria-selected={surface === mode}
+                  className={cn(
+                    "inline-flex h-8 items-center rounded-full px-4 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    surface === mode
+                      ? "bg-background text-foreground shadow-sm ring-1 ring-border/70"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                  onClick={() => {
+                    setSurface(mode)
+                    requestAnimationFrame(() => focusComposer())
+                  }}
+                >
+                  {t(mode === "chat" ? "welcome.tabChat" : "welcome.tabWork")}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="welcome-hero-composer mt-7 w-full max-w-3xl">
+          {/* WorkBuddy-style opening: two left-aligned bold lines flush with the composer's left
+              edge, not a centered hero with a muted tagline. The chat tab deliberately has no
+              greeting or project context: it is one large composer and nothing else. */}
+          {!chatSurface && (
+            <div className="mt-7 w-full max-w-3xl text-left">
+              <h1 className="text-[1.375rem] leading-snug font-semibold tracking-[-0.01em] sm:text-[1.5rem]">
+                {greeting}
+              </h1>
+              <p className="mt-1 text-[1.375rem] leading-snug font-semibold tracking-[-0.01em] sm:text-[1.5rem]">
+                {subtitle}
+              </p>
+            </div>
+          )}
+          <div
+            className={cn(
+              "welcome-hero-composer w-full",
+              chatSurface ? "mt-3 max-w-4xl" : "mt-7 max-w-3xl"
+            )}
+          >
             <ChatComposer
-              inputHeader={picker}
+              inputHeader={chatSurface ? undefined : picker}
               session={session ?? pendingComposer}
               allowPendingInput
               preparing={preparing}
@@ -430,7 +484,7 @@ export function DraftChat({
               <SessionActions sessionId={id} />
             </div>
           )}
-          {recentProjectItems.length > 0 && (
+          {!chatSurface && recentProjectItems.length > 0 && (
             <section className="mt-8 w-full max-w-3xl" aria-label={t("welcome.recentProjects")}>
               <h2 className="mb-2 px-1 text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
                 {t("welcome.recentProjects")}
@@ -443,6 +497,10 @@ export function DraftChat({
                     className="group flex min-w-0 items-center gap-3 rounded-xl border border-border/70 bg-background/45 px-3 py-2.5 text-left transition-colors hover:border-border hover:bg-muted/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     title={item.cwd}
                     onClick={() => {
+                      if (onOpenProject !== undefined) {
+                        onOpenProject(item.cwd, item.sessionId ?? undefined)
+                        return
+                      }
                       onCwdChange(item.cwd)
                       requestAnimationFrame(() => focusComposer())
                     }}
@@ -473,7 +531,7 @@ export function DraftChat({
             the project memory must stay reachable without first sending a message (it used to be
             missing exactly after 清除上下文 + reopening). Compress/clear have nothing to act on
             yet — compress listens on a live session, clearing is what produced this draft. */}
-        {!temporaryChat && (
+        {!temporaryChat && !chatSurface && (
           <ChatEdgeActions
             sessionId={id ?? DRAFT_SESSION_ID}
             onSend={

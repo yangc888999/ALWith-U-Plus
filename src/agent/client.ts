@@ -1602,7 +1602,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
           if (this.stalledTurn(id)) {
             const parked = this.pendingModelSwitches.get(id)
             if (parked !== undefined) this.clearParkedModel(id, parked)
-            await this.cancel(id).catch(() => {})
+            await this.cancelTurn(id).catch(() => {})
             try {
               await this.landModelSwitch(id, configId, value, requested)
               this.stoppedSessions.delete(id)
@@ -1775,7 +1775,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     const parked = this.pendingModelSwitches.get(id)
     if (parked !== undefined && parked !== value) this.clearParkedModel(id, parked)
     // End the turn even if its last token is still arriving: the user stopped it.
-    await this.cancel(id).catch(() => {})
+    await this.cancelTurn(id).catch(() => {})
     this.stoppedSessions.delete(id)
     const deadline = Date.now() + 3_000
     while (Date.now() < deadline && this.state.sessions[id]?.state !== "idle")
@@ -1791,13 +1791,12 @@ export class CodexClient extends CodexAcpClient<AppState> {
   }
 
   /**
-   * The stop button: the one gesture that means "this turn is over".
+   * Ends the current turn while keeping the ACP session attachable.
    *
-   * A message queued behind the turn would otherwise be sent the instant it settles — the extra
-   * round that appears right after pressing stop. Dropping the queue here is what makes the stop
-   * final; the composer puts the cancelled text back into the input.
+   * Internal model-switch recovery uses this narrower stop: it needs the turn to settle so the
+   * next `setConfig` can land, but it must not tear down the conversation underneath itself.
    */
-  override async cancel(id: string): Promise<void> {
+  private async cancelTurn(id: string): Promise<void> {
     cancelQueuedPrompt(id)
     this.stoppedSessions.add(id)
     await super.cancel(id)
@@ -1806,6 +1805,28 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // model — which is exactly what a stop followed by a model pick looked like.
     if (this.pendingModelSwitches.has(id) && !this.pendingModelApplies.has(id))
       void this.applyParkedModel(id, true)
+  }
+
+  /**
+   * The stop button: end this turn and close its ACP session, including every backend task it
+   * started. The transcript stays in the client; the next explicit action reopens the session.
+   *
+   * The previous implementation only sent `session/cancel`. That returned the UI to idle while
+   * shell commands, MCP calls and other work spawned by the turn could keep running. Sending the
+   * cancel notification first gives the agent a clean turn boundary, then `session/close` waits for
+   * the Runtime to retire the session and all of its child work.
+   */
+  override async cancel(id: string): Promise<void> {
+    cancelQueuedPrompt(id)
+    // The last gesture was Stop: a model pick made after reopening lands immediately instead of
+    // parking behind a turn that no longer exists. The next prompt clears this marker.
+    this.stoppedSessions.add(id)
+    const pending = this.pendingModelSwitches.get(id)
+    if (pending !== undefined) this.clearParkedModel(id, pending)
+    // A disconnect must not prevent the close attempt: the Runtime still owns the process and is
+    // the only authority that can stop the task tree.
+    await Promise.try(() => this.live().notify("session/cancel", { sessionId: id })).catch(() => {})
+    await this.stopSession(id)
   }
 
   /**
@@ -1891,7 +1912,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     if (pending === undefined) return
     void info(`[pending-model] applyNow id=${id} model=${pending} busy=${this.sessionBusy(id)} state=${this.state.sessions[id]?.state ?? "?"}`)
     if (this.sessionBusy(id)) {
-      await this.cancel(id).catch(() => {})
+      await this.cancelTurn(id).catch(() => {})
       const deadline = Date.now() + 3_000
       while (Date.now() < deadline && this.state.sessions[id]?.state !== "idle")
         await new Promise<void>((resolve) => setTimeout(resolve, 100))
@@ -3019,7 +3040,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
         if (cleared) return
         clear()
         // Free the shared agent so the rest of the app recovers.
-        void this.cancel(id).catch(() => {})
+        void this.cancelTurn(id).catch(() => {})
         if (!settled) {
           settled = true
           reject(new Error(message))

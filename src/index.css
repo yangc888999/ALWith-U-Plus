@@ -1861,6 +1861,9 @@ html[data-selection-menu] [data-testid="comment-selection-button"] {
 .welcome-hero-composer [data-composer] .alwith-composer-textarea {
   min-height: var(--composer-input-min, 3.5rem);
 }
+.welcome-hero[data-welcome-mode="chat"] .welcome-hero-composer [data-composer] .alwith-composer-textarea {
+  min-height: var(--composer-input-min, 7.5rem);
+}
 .welcome-hero-composer [data-chat-input-header] {
   background-color: transparent !important;
 }

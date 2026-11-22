@@ -102,10 +102,12 @@ export function GeneralSection() {
   const [externalEditor, setExternalEditor] = useState<string | null>(null)
   const [shortcut, setShortcut] = useState("")
   const [savingShortcut, setSavingShortcut] = useState(false)
+  const [startSurface, setStartSurface] = useState<"chat" | "work">("chat")
   useEffect(() => {
     void loadPreferences().then((preferences) => {
       setExternalEditor(preferences.externalEditor)
       setShortcut(preferences.chatWindowShortcut ?? "Alt+Space")
+      setStartSurface(preferences.defaultStartSurface)
     })
   }, [])
   const activeEditor = apps.find((app) => app.bundle_id === externalEditor) ?? apps[0]
@@ -150,6 +152,30 @@ export function GeneralSection() {
               }}
             />
           </div>
+        </SettingRow>
+        <SettingRow title={t("settings.defaultStartSurface")} desc={t("settings.defaultStartSurfaceDesc")}>
+          <Select
+            items={[
+              { value: "chat", label: t("settings.startSurfaceChat") },
+              { value: "work", label: t("settings.startSurfaceWork") }
+            ]}
+            value={startSurface}
+            onValueChange={(value) => {
+              if (value !== "chat" && value !== "work") return
+              setStartSurface(value)
+              void savePreference("defaultStartSurface", value)
+            }}
+          >
+            <SelectTrigger className="w-full" aria-label={t("settings.defaultStartSurface")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem value="chat">{t("settings.startSurfaceChat")}</SelectItem>
+                <SelectItem value="work">{t("settings.startSurfaceWork")}</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
         </SettingRow>
       </SettingsCard>
 

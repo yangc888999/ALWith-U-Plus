@@ -1013,6 +1013,27 @@ test("prompt acknowledgement is not completion; cancelling one session leaves th
   expect(client.state.sessions[b]).toBe(client.session(b))
 })
 
+test("the user's stop closes the ACP session so its backend task tree ends", async () => {
+  const { client, fake, port } = await make()
+  fake.promptHoldIdle.current = () => true
+  const id = await client.newSession("/tmp/stop-process")
+  await client.prompt(id, [{ type: "text", text: "long-running task" }])
+  await until(() => client.session(id).state === "running")
+  const request = vi.spyOn(port, "acpRequest")
+
+  await client.cancel(id)
+
+  expect(fake.cancels).toContain(id)
+  expect(
+    request.mock.calls.some(
+      (call) => call[1] === "session/close" && (call[2] as { sessionId: string }).sessionId === id
+    )
+  ).toBe(true)
+  expect(client.state.sessions[id]).toMatchObject({ attached: false, state: "idle" })
+  expect(client.session(id).items.some((item) => item.kind === "user")).toBe(true)
+  request.mockRestore()
+})
+
 test("stopping a session retains its transcript, cancels its permission and preserves the shared agent", async () => {
   const { client, port } = await make()
   const a = await client.newSession("/tmp/a")
@@ -1540,6 +1561,7 @@ test("a model picked right after Stop lands instead of parking behind the turn",
 
   // The user presses Stop, then picks another GPT model a moment later.
   await client.cancel(id)
+  await client.open(id, "/tmp/stop-switch")
   await client.setConfig(id, "model", "gpt-6.1-luna")
 
   expect(currentModel()).toBe("gpt-6.1-luna")
@@ -1567,6 +1589,7 @@ test("a new turn clears the stop, so the next model pick parks the ordinary way"
   }
   const id = await client.newSession("/tmp/stop-then-send")
   await client.cancel(id)
+  await client.open(id, "/tmp/stop-then-send")
 
   // The user sends again; this turn is genuinely running when they pick a model.
   turnRunning = true

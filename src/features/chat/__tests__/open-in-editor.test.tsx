@@ -24,6 +24,7 @@ test("main header preloads apps before opening its menu and remounts use the res
     })
   )
   const loadPreferences = vi.spyOn(preferences, "loadPreferences").mockResolvedValue({
+    defaultStartSurface: "chat",
     sidebarPinned: false,
     lastProjectDirectory: null,
     language: null,
@@ -77,6 +78,7 @@ test("main chat menu uses installed app shortcuts, remembers the choice and open
     .spyOn(openWithApp, "readAppsInfo")
     .mockResolvedValue([{ name: "Visual Studio Code", bundle_id: "com.microsoft.VSCode", icon: null }])
   const loadPreferences = vi.spyOn(preferences, "loadPreferences").mockResolvedValue({
+    defaultStartSurface: "chat",
     sidebarPinned: false,
     lastProjectDirectory: null,
     language: null,
@@ -126,6 +128,7 @@ test("main chat menu uses installed app shortcuts, remembers the choice and open
 
 function savedEditor(externalEditor: string | null): preferences.Preferences {
   return {
+    defaultStartSurface: "chat",
     sidebarPinned: false,
     lastProjectDirectory: null,
     language: null,

@@ -14,6 +14,8 @@ export type Preferences = {
   sidebarPinned: boolean
   chatWindowShortcut?: string
   lastProjectDirectory: string | null
+  /** Which new-task tab the next launch opens on. */
+  defaultStartSurface: "chat" | "work"
   language: string | null
   zoomLevel: number | null
   /** Explicit model choices are independent for the main and floating chat slots. */
@@ -34,6 +36,7 @@ const preferenceKeys: Record<keyof Preferences, string> = {
   sidebarPinned: "appearance.sidebarPinned",
   chatWindowShortcut: "chat.windowShortcut",
   lastProjectDirectory: "general.lastProjectDirectory",
+  defaultStartSurface: "general.defaultStartSurface",
   language: "general.language",
   zoomLevel: "appearance.zoomLevel",
   modelSelections: "chat.modelSelections",
@@ -59,6 +62,7 @@ export function defaultPreferences(): Preferences {
     sidebarPinned: true,
     chatWindowShortcut: "Alt+Space",
     lastProjectDirectory: null,
+    defaultStartSurface: "chat",
     language: null,
     zoomLevel: null,
     modelSelections: { main: null, chat: null },
@@ -75,6 +79,7 @@ export async function loadPreferences(): Promise<Preferences> {
   await settingsStore.read()
   const [
     lastProjectDirectory,
+    defaultStartSurface,
     language,
     zoomLevel,
     modelSelections,
@@ -84,6 +89,7 @@ export async function loadPreferences(): Promise<Preferences> {
     sidebarPinned
   ] = await Promise.all([
     store.get<string>("lastProjectDirectory"),
+    store.get<"chat" | "work">("defaultStartSurface"),
     store.get<string>("language"),
     store.get<number>("zoomLevel"),
     store.get<Preferences["modelSelections"]>("modelSelections"),
@@ -111,6 +117,7 @@ export async function loadPreferences(): Promise<Preferences> {
     sidebarPinned: sidebarPinned ?? true,
     chatWindowShortcut: (await store.get<string>("chatWindowShortcut")) ?? "Alt+Space",
     lastProjectDirectory: restoredDirectory,
+    defaultStartSurface: defaultStartSurface === "work" ? "work" : "chat",
     language: language ?? null,
     zoomLevel: zoomLevel ?? null,
     modelSelections: modelSelections ?? { main: null, chat: null },

@@ -193,7 +193,9 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   const [surfaceGeneration, setSurfaceGeneration] = useState(0)
   const voiceHandoff = useVoiceHandoff(selectedId, surfaceGeneration)
   const [chatRevealRequest, setChatRevealRequest] = useState(0)
-  const [lastDirectory, setLastDirectory] = useState<string | null>(initialPreferences.lastProjectDirectory)
+  const [lastDirectory, setLastDirectory] = useState<string | null>(() =>
+    initialPreferences.defaultStartSurface === "chat" ? null : initialPreferences.lastProjectDirectory
+  )
   const providerSnapshot = useProviders()
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [hotkeysOpen, setHotkeysOpen] = useState(false)
@@ -588,6 +590,24 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       .then((directory) => newChatInDirectory(directory))
       .catch((error: unknown) => toast.error(describeError(error)))
   }, [newChatInDirectory])
+
+  /** A recent-project card opens that project's newest conversation, not another blank draft. */
+  const openRecentProject = useCallback(
+    (cwd: string, sessionId?: string) => {
+      const exact = sessionId === undefined ? undefined : knownSessions.find((row) => row.sessionId === sessionId)
+      const latest =
+        exact ??
+        [...knownSessions]
+          .filter((row) => row.cwd === cwd && !row.archived)
+          .sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""))[0]
+      if (latest !== undefined) {
+        select(latest)
+        return
+      }
+      newChatInDirectory(cwd)
+    },
+    [knownSessions, newChatInDirectory, select]
+  )
 
   /** 新建项目: pick a directory, then start a chat inside it (four-column layout by default). */
   const newProject = useCallback(() => {
@@ -1300,6 +1320,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           owner="main"
           key={`draft-${surfaceGeneration}`}
           onNewChat={newProjectChat}
+          startSurface={initialPreferences.defaultStartSurface}
           cwd={lastDirectory}
           projectMenu={
             <ChatProjectMenu
@@ -1310,6 +1331,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
             />
           }
           onCwdChange={chooseDraftFolder}
+          onOpenProject={openRecentProject}
           onCreated={draftCreated}
           onSendingChange={(id, sending) =>
             setSubmittingDraftId((current) => (sending ? id : current === id ? null : current))
