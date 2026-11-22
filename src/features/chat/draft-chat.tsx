@@ -4,11 +4,21 @@ import { createSession } from "@alwith/api"
 import { drafts, importDraft, SessionActions } from "@alwith/module-chat/conversation"
 import { relativeTime } from "@alwith/module-chat/session-list"
 import { invoke } from "@tauri-apps/api/core"
-import { ArrowUpRightIcon, FolderIcon, MessageCircleIcon } from "lucide-react"
+import { ArrowUpRightIcon, FolderIcon } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { DraftOwner } from "@/agent/client"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { dispatchCollection, reportCollection } from "@/features/collection/store"
 import { useDisplayProfile } from "@/features/profile/use-display-profile"
@@ -28,7 +38,7 @@ import { ChatHostProvider } from "./chat-host"
 import { ChatComposer } from "./composer"
 import { ModelEntry } from "./composer/model-entry"
 import { FilePreviewModal } from "./dialogs/file-preview-modal"
-import { DraftProjectPicker } from "./draft-project-picker"
+import { chooseFolder, DraftProjectPicker } from "./draft-project-picker"
 import { greetingKey, greetingPeriod, welcomeName } from "./welcome-greeting"
 import { recentProjectsFrom } from "./welcome-projects"
 
@@ -96,7 +106,7 @@ export function DraftChat({
   projectMenu?: ReactNode
   onNewChat: () => void
   onNewProject?: () => void
-  /** Which new-task tab opens first. Work stays the default for embedded surfaces. */
+  /** Which new-task tab opens first. Embedded test surfaces keep Work unless they say otherwise. */
   startSurface?: "chat" | "work"
   /** Opens the newest conversation in a recent project, or a fresh draft when it has none. */
   onOpenProject?: (cwd: string, sessionId?: string) => void
@@ -120,9 +130,12 @@ export function DraftChat({
   const selectionRoot = useRef<HTMLDivElement>(null)
   // Temporary chats live in the quick-chat folder: no project may be picked from here.
   const temporaryChat = isTemporaryChatDir(session?.cwd ?? cwd)
+  const workProjectSelected = !temporaryChat
   const [preparing, setPreparing] = useState(true)
   const [error, setError] = useState<unknown>(null)
   const [surface, setSurface] = useState<"chat" | "work">(startSurface)
+  const [projectReminderOpen, setProjectReminderOpen] = useState(false)
+  const projectReminderShown = useRef(false)
   const chatSurface = surface === "chat"
   // Startup config failures are transient: retry quietly instead of flashing the raw English ACP
   // error in the sidebar for one frame (the main window already has its own startup grace).
@@ -182,6 +195,21 @@ export function DraftChat({
   const period = greetingPeriod(now)
   const greeting = t(greetingKey(period, name !== null), { name: name ?? "" })
   const subtitle = t(period === "lateNight" ? "welcome.lateNightSubtitle" : "welcome.subtitle")
+
+  // Work is project-scoped. Entering it without a real folder asks once instead of letting the
+  // first prompt silently land in the quick-chat workspace. Chat never requires a project.
+  useEffect(() => {
+    if (surface !== "work" || preparing) return
+    if (workProjectSelected) {
+      projectReminderShown.current = false
+      setProjectReminderOpen(false)
+      return
+    }
+    if (!projectReminderShown.current) {
+      projectReminderShown.current = true
+      setProjectReminderOpen(true)
+    }
+  }, [preparing, surface, workProjectSelected])
 
   useEffect(() => {
     // Explicit retries and provider revisions invalidate preparation. `connected` is deliberately
@@ -320,15 +348,6 @@ export function DraftChat({
           onChange={onCwdChange}
           preparing={preparing}
         />
-        {temporaryChat && (
-          <span
-            className="chat-mode-badge inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium"
-            title={t("chat.sessionMode")}
-          >
-            <MessageCircleIcon aria-hidden="true" className="size-3" />
-            {t("chat.sessionMode")}
-          </span>
-        )}
       </div>
     </div>
   )
@@ -357,12 +376,15 @@ export function DraftChat({
           className="welcome-hero flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6"
           data-welcome-mode={surface}
         >
-          <div className={cn("flex w-full flex-col items-center", chatSurface ? "gap-5" : "gap-7")}>
-            {chatSurface && (
-              <h1 className="text-center text-[1.75rem] leading-tight font-semibold tracking-[-0.02em] sm:text-[2rem]">
-                {t("welcome.chatTitle")}
+          <div className="flex w-full flex-col items-center gap-4">
+            <div className="w-full max-w-4xl text-center">
+              <h1 className="text-[1.375rem] leading-snug font-semibold tracking-[-0.01em] sm:text-[1.5rem]">
+                {greeting}
               </h1>
-            )}
+              <p className="mt-1 text-[1.375rem] leading-snug font-semibold tracking-[-0.01em] sm:text-[1.5rem]">
+                {subtitle}
+              </p>
+            </div>
             <div
               role="tablist"
               aria-label={t("welcome.startMode")}
@@ -382,6 +404,10 @@ export function DraftChat({
                   )}
                   onClick={() => {
                     setSurface(mode)
+                    if (mode === "work" && !workProjectSelected) {
+                      projectReminderShown.current = true
+                      setProjectReminderOpen(true)
+                    }
                     requestAnimationFrame(() => focusComposer())
                   }}
                 >
@@ -390,23 +416,10 @@ export function DraftChat({
               ))}
             </div>
           </div>
-          {/* WorkBuddy-style opening: two left-aligned bold lines flush with the composer's left
-              edge, not a centered hero with a muted tagline. The chat tab deliberately has no
-              greeting or project context: it is one large composer and nothing else. */}
-          {!chatSurface && (
-            <div className="mt-7 w-full max-w-3xl text-left">
-              <h1 className="text-[1.375rem] leading-snug font-semibold tracking-[-0.01em] sm:text-[1.5rem]">
-                {greeting}
-              </h1>
-              <p className="mt-1 text-[1.375rem] leading-snug font-semibold tracking-[-0.01em] sm:text-[1.5rem]">
-                {subtitle}
-              </p>
-            </div>
-          )}
           <div
             className={cn(
               "welcome-hero-composer w-full",
-              chatSurface ? "mt-3 max-w-4xl" : "mt-7 max-w-3xl"
+              chatSurface ? "mt-3 max-w-4xl" : "mt-5 max-w-3xl"
             )}
           >
             <ChatComposer
@@ -444,7 +457,13 @@ export function DraftChat({
                   }}
                 />
               }
-              disabled={session === null || preparing || error !== null || connection !== "ready"}
+              disabled={
+                session === null ||
+                preparing ||
+                error !== null ||
+                connection !== "ready" ||
+                (!chatSurface && !workProjectSelected)
+              }
               onSubmit={runOperation ? (prompt, accept) => runOperation(() => send(prompt, accept)) : send}
               onHandOff={onVoiceHandoff}
             />
@@ -547,6 +566,28 @@ export function DraftChat({
         )}
         <SelectionMenu containerRef={selectionRoot} sessionId={DRAFT_SESSION_ID} scope="transcript" />
         <FilePreviewModal />
+        <AlertDialog open={projectReminderOpen} onOpenChange={setProjectReminderOpen}>
+          <AlertDialogContent size="sm">
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t("chat.draft.projectRequiredTitle")}</AlertDialogTitle>
+              <AlertDialogDescription>{t("chat.draft.projectRequiredDesc")}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t("actions.cancel")}</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  void chooseFolder(session?.cwd ?? cwd).then((path) => {
+                    if (path === null) return
+                    onCwdChange(path)
+                    setProjectReminderOpen(false)
+                  })
+                }}
+              >
+                {t("chat.draft.chooseLocalFolder")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </ChatHostProvider>
   )

@@ -91,7 +91,7 @@ function environment(nativeWindow = false, resolveModel?: ClientOptions["resolve
 }
 
 const windowPreferences: Preferences = {
-  defaultStartSurface: "work",
+  defaultStartSurface: "chat",
   sidebarPinned: false,
   lastProjectDirectory: "/tmp/window-original",
   language: "en",
@@ -258,12 +258,16 @@ test.each([
   }
 })
 
-test("a quick-chat draft carries the neutral chat-mode badge with its icon", async () => {
+test("work without a project asks for a folder instead of offering a chat shortcut", async () => {
   const env = await windowEnvironment()
   const view = render(
     <ThemeProvider>
       <ChatWindow
-        preferences={{ ...windowPreferences, lastProjectDirectory: "/Users/mac/Documents/ALwith" }}
+        preferences={{
+          ...windowPreferences,
+          defaultStartSurface: "work",
+          lastProjectDirectory: "/Users/mac/Documents/ALwith"
+        }}
       />
     </ThemeProvider>
   )
@@ -271,9 +275,12 @@ test("a quick-chat draft carries the neutral chat-mode badge with its icon", asy
     await waitFor(() => expect(env.ready()).toBe(true))
     await act(() => env.present())
     await waitFor(() => expect(view.getByRole("textbox")).toBeTruthy())
-    const badge = await view.findByText("Type to chat without a project")
-    expect(badge.className).toContain("chat-mode-badge")
-    expect(badge.querySelector(".lucide-message-circle")).not.toBeNull()
+    const dialog = await view.findByRole("alertdialog")
+    expect(within(dialog).getByText("Select a project folder first")).toBeVisible()
+    expect(
+      within(dialog).getByText("Choose a project folder or another local folder before starting work.")
+    ).toBeVisible()
+    expect(view.queryByText("Type to chat without a project")).toBeNull()
   } finally {
     await act(() => Promise.try(() => view.unmount()))
     env.restore()
@@ -325,13 +332,16 @@ test("the new-task tabs keep Chat to one composer and open the newest recent con
   const view = render(<DraftChat {...props} cwd="/tmp/chat-home" startSurface="chat" />)
   try {
     await waitFor(() => expect(view.getByRole("textbox")).toBeTruthy())
-    expect(view.getByRole("heading", { name: "How can I help you?" })).toBeVisible()
+    const greeting = view.getByRole("heading", { level: 1 }).textContent
+    expect(greeting).toBeTruthy()
+    expect(view.queryByText("How can I help you?")).toBeNull()
     expect(view.getByRole("tab", { name: "Chat" })).toHaveAttribute("aria-selected", "true")
     expect(view.container.querySelector(".chat-project-picker")).toBeNull()
     expect(view.queryByRole("region", { name: "Recent projects" })).toBeNull()
 
     fireEvent.click(view.getByRole("tab", { name: "Work" }))
     expect(view.getByRole("tab", { name: "Work" })).toHaveAttribute("aria-selected", "true")
+    expect(view.getByRole("heading", { level: 1 }).textContent).toBe(greeting)
     await waitFor(() => expect(view.container.querySelector(".chat-project-picker")).not.toBeNull())
     const recent = view.getByRole("region", { name: "Recent projects" })
     const beta = within(recent).getAllByRole("button").find((button) => button.title === "/work/beta")
@@ -578,6 +588,7 @@ test("sending after default-directory resolution keeps the submitted conversatio
     return (
       <DraftChat
         owner="main"
+        startSurface="chat"
         cwd={cwd}
         onCwdChange={setCwd}
         onCreated={(value) => {
@@ -745,6 +756,7 @@ test("new chat prepares once under StrictMode and exposes the real model before 
     return (
       <DraftChat
         owner="main"
+        startSurface="chat"
         cwd={cwd}
         onCwdChange={setCwd}
         onCreated={(id) => {

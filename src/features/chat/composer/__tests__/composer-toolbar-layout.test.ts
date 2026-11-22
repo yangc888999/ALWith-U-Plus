@@ -59,8 +59,23 @@ test("composer is a distinct card inside the chat column", () => {
   expect(header).toMatch(/margin: 0/)
   expect(header).not.toMatch(/margin: 0 12px/)
   expect(header).not.toMatch(/-18px/)
+  // Once the preview and tree columns are closed, the input must use the same measure as the
+  // transcript instead of stopping at its old 56rem cap.
+  const dropZone = /\[data-composer\] > \[data-chat-drop-zone\]\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ""
+  expect(dropZone).toContain("max-width: var(--chat-column-width)")
+  expect(dropZone).not.toContain("max-width: 56rem")
   // An empty row must not leave a bare strip (and its divider) above the input.
   expect(styles).toMatch(/\[data-chat-input-header\]:not\(:has\(button, span\)\)\s*\{\s*display: none;/)
+})
+
+test("a populated composer status row has its own tint and hairline", () => {
+  const status = /\[data-composer\] > \[data-chat-drop-zone\] > \.relative > \[data-chat-input-header\]:has\(button, span\)\s*\{([^}]*)\}/.exec(
+    styles
+  )?.[1] ?? ""
+  expect(status).toContain("background-image: linear-gradient")
+  expect(status).toContain("var(--foreground) 6%")
+  expect(status).toContain("box-shadow: inset 0 -1px 0")
+  expect(status).toContain("border-radius: calc(1.25rem - 1px)")
 })
 
 test("the effort ladder is never dropped by a width breakpoint", () => {
@@ -130,4 +145,20 @@ test("the stop key uses a soft accent disc on the light theme", () => {
   expect(styles).toMatch(
     /\.dark \[data-composer\] \.chat-composer-toolbar button\.border-border\s*\{[^}]*background-color: var\(--settings-accent\);/
   )
+})
+
+test("send and stop glyphs invert the fill of their circular buttons", () => {
+  const disabledSend = ruleOf('[data-composer] .chat-composer-toolbar button[type="submit"]:disabled')
+  expect(disabledSend).toContain("color: var(--foreground)")
+  expect(disabledSend).not.toContain("color-mix(in oklab, var(--accent-on)")
+
+  const darkStop = ruleOf(".dark [data-composer] .chat-composer-toolbar button.border-border")
+  expect(darkStop).toContain("background-color: var(--settings-accent)")
+  expect(darkStop).toContain("color: var(--accent-on)")
+
+  // The default red/black discs are dark enough for a white glyph; only light discs switch to ink.
+  expect(styles).toMatch(/:root\s*\{\s*--accent-on: oklch\(0\.99/)
+  expect(styles).toMatch(/\.dark\s*\{\s*--accent-on: oklch\(0\.99/)
+  expect(styles).toMatch(/\.dark\[data-accent="snow-white"\][^{]*\{[^}]*--accent-on: oklch\(0\.17/)
+  expect(styles).toMatch(/\.dark\[data-accent="lemon-green"\][^{]*\{[^}]*--accent-on: oklch\(0\.17/)
 })

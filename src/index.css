@@ -1447,36 +1447,6 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.16);
 }
 
-/* A quiet accent tint marks the draft as a temporary chat: colour without reading as a
-   warning or a promotion. It now follows the chosen 主题色 preset via --settings-accent,
-   so it stays consistent with the settings page instead of being locked to a fixed sky tint. */
-.chat-mode-badge {
-  border: 1px solid color-mix(in oklab, var(--settings-accent) 26%, transparent);
-  background: color-mix(in oklab, var(--settings-accent) 9%, var(--background));
-  color: var(--settings-accent-ink);
-  box-shadow: 0 1px 1px rgb(0 0 0 / 0.025);
-  transition:
-    border-color 150ms ease,
-    background-color 150ms ease,
-    color 150ms ease;
-}
-.chat-mode-badge:hover {
-  border-color: color-mix(in oklab, var(--settings-accent) 42%, transparent);
-  background: color-mix(in oklab, var(--settings-accent) 14%, var(--background));
-  color: var(--settings-accent-ink);
-}
-.dark .chat-mode-badge {
-  border-color: color-mix(in oklab, var(--settings-accent) var(--accent-edge), transparent);
-  background: color-mix(in oklab, var(--settings-accent) var(--accent-surface), var(--background));
-  color: var(--settings-accent-ink);
-  box-shadow: inset 0 1px rgb(255 255 255 / 0.035);
-}
-.dark .chat-mode-badge:hover {
-  border-color: color-mix(in oklab, var(--settings-accent) var(--accent-strong), transparent);
-  background: color-mix(in oklab, var(--settings-accent) var(--accent-surface-hover), var(--background));
-  color: var(--settings-accent-ink);
-}
-
 /* ===========================================================================
    App-wide accent tokens
    The settings "主题色" picker writes data-accent on <html> (see accent-store); these
@@ -1654,28 +1624,26 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   --accent-preset-emerald: oklch(0.76 0.13 170);
 }
 
-/* ── 主题色上的前景（按钮填充主题色时，图标/文字必须读得清）────────────────────────
-   CSS 无法按明度自动选反色，所以按预设明度分组声明，而不是逐个写：
-   明亮档（明度 ≥0.70：柠檬绿 / 少女粉）配深墨；其余配白。
-   深色外观整体把 accent 提亮了，因此默认改深墨，唯独自带实色的「极致黑」仍配白。 */
+/* ── 主题色圆圈上的反色图标 ─────────────────────────────────────────────────────
+   The send/stop glyph must read as the inverse of its disc: red, blue, green and black
+   discs get a white glyph; only genuinely light discs (lemon, pink, snow) get dark ink.
+   This token is consumed by the composer action keys alone, so the rule follows the
+   reader's visual expectation rather than being reused as a general-purpose accent ink. */
 :root {
   --accent-on: oklch(0.99 0 0);
 }
-/* 亮色档按实测对比度分组，不再用「明度 ≥0.70」这种手感判断：柠檬绿 / 少女粉 /
-   翡翠绿 / 天蓝 / YUP 红在白字下都低于 3.6:1，换成深墨后最低 5.3:1；白马卡其与雪白本身
-   够暗，保留白字（4.4 / 4.9）。 */
 :root[data-accent="lemon-green"],
-:root[data-accent="girly-pink"],
-:root[data-accent="emerald"],
-:root[data-accent="sky-blue"],
-:root[data-accent="yup-red"] {
+:root[data-accent="girly-pink"] {
   --accent-on: oklch(0.22 0.02 90);
 }
 .dark {
+  --accent-on: oklch(0.99 0 0);
+}
+.dark[data-accent="snow-white"],
+.dark[data-accent="lemon-green"],
+.dark[data-accent="girly-pink"] {
   --accent-on: oklch(0.17 0.012 260);
 }
-/* 深色外观把每个 accent 都提亮了，深墨是唯一安全解：此前「极致黑」单独留白字，
-   实测只有 3.65:1，改深墨后 5.2:1。 */
 
 
 /* ── 布局预览条四段配色 ────────────────────────────────────────────────────────
@@ -1735,8 +1703,11 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   background: transparent;
 }
 [data-composer] > [data-chat-drop-zone] {
-  width: min(100%, 56rem);
-  max-width: 56rem;
+  /* The transcript, session actions and composer all share one measure. The composer used to
+     stop at 56rem while the transcript grew to 70rem, which left the input visibly narrower than
+     the text whenever the preview/tree columns were closed. */
+  width: min(100%, var(--chat-column-width));
+  max-width: var(--chat-column-width);
   margin-inline: auto;
   padding-inline: 16px;
   padding-bottom: 12px;
@@ -1813,6 +1784,18 @@ html[data-selection-menu] [data-testid="comment-selection-button"] {
   border-radius: 0 !important;
   background-color: transparent !important;
   background-image: none !important;
+}
+/* The status row is part of the composer card, but it must read as a distinct strip: the model
+   call notice, queued prompt, 分工 and turn progress used to sit on exactly the same fill as the
+   textarea. A foreground wash works on both themes and stays translucent under glass, while the
+   inset line keeps the two halves legible without adding layout height. */
+[data-composer] > [data-chat-drop-zone] > .relative > [data-chat-input-header]:has(button, span) {
+  border-radius: calc(1.25rem - 1px) calc(1.25rem - 1px) 0 0 !important;
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--foreground) 6%, transparent),
+    color-mix(in srgb, var(--foreground) 6%, transparent)
+  ) !important;
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--foreground) 9%, transparent) !important;
 }
 
 /* 标题条是栏目的第一行，不是嵌在栏目里的一枚药丸：vendored 的浮动标题会包一层带圆角、
@@ -2114,7 +2097,9 @@ body::after {
 }
 [data-composer] .chat-composer-toolbar button[type="submit"]:disabled {
   background-color: color-mix(in oklab, var(--settings-accent) 40%, var(--muted));
-  color: color-mix(in oklab, var(--accent-on) 70%, transparent);
+  /* The disabled disc collapses toward the neutral card, so the page foreground is the true
+     inverse there; the accent-on token belongs to the full-strength enabled disc. */
+  color: var(--foreground);
 }
 /* 发送与停止是同一个按钮的两种状态，不是并排的两个按钮。
    模块在会话运行时把停止键渲染在发送键之前；此时隐藏发送键，并让停止键沿用与发送键
@@ -2145,7 +2130,7 @@ body::after {
 }
 .dark [data-composer] .chat-composer-toolbar button.border-border {
   background-color: var(--settings-accent);
-  color: var(--settings-accent-ink);
+  color: var(--accent-on);
 }
 .dark [data-composer] .chat-composer-toolbar button.border-border:hover {
   background-color: color-mix(in oklab, var(--settings-accent) 86%, var(--foreground));

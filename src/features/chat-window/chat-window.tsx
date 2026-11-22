@@ -338,6 +338,7 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
           submittingDraftId === selectedId ? (
             <DraftChat
               owner="chat"
+              startSurface={preferences.defaultStartSurface}
               headerTarget={headerTarget}
               projectMenu={
                 <ChatProjectMenu cwd={cwd} currentSessionId={selectedId} onSelect={selectSession} onNewChat={newChat} />
