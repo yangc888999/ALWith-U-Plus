@@ -8,7 +8,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window"
 import {
   BlocksIcon,
   CalendarClockIcon,
-  ChartColumnIcon,
   CloudIcon,
   Code2Icon,
   ContrastIcon,
@@ -51,7 +50,6 @@ import { GeneralSection } from "./sections/general-section"
 import { ProviderSection } from "./sections/provider-section"
 import { SettingsPageHeader } from "./sections/shared"
 import { TrackpadRow } from "./sections/trackpad-row"
-import { UsageSection } from "./sections/usage-section"
 import { VoiceSection } from "./sections/voice-section"
 import { useAccentDataAttribute } from "./accent-store"
 import "./settings.css"
@@ -70,7 +68,6 @@ const ICONS: Record<SettingsSection, typeof InfoIcon> = {
   extensions: BlocksIcon,
   skills: PuzzleIcon,
   groups: UsersIcon,
-  usage: ChartColumnIcon,
   automation: CalendarClockIcon,
   about: InfoIcon
 }
@@ -81,7 +78,7 @@ const SECTION_GROUPS: Array<{ label: string; sections: SettingsSection[] }> = [
   { label: "settings.groupAccount", sections: ["account", "mobile"] },
   { label: "settings.groupPreferences", sections: ["general", "appearance", "editor", "voice", "trackpad", "computer"] },
   { label: "settings.groupCapabilities", sections: ["provider", "drive", "extensions", "skills", "automation", "groups"] },
-  { label: "settings.groupSystem", sections: ["usage", "about"] }
+  { label: "settings.groupSystem", sections: ["about"] }
 ]
 
 const KNOWN_SECTIONS = SECTION_GROUPS.flatMap((group) => group.sections)
@@ -94,6 +91,7 @@ function isSection(value: string | null): value is SettingsSection {
  *  否则 reopen 会掉回「通用」或渲染出空白页。 */
 function normalizeSection(value: string | null): SettingsSection | null {
   if (value === "support") return "extensions"
+  if (value === "usage") return "general"
   return isSection(value) ? value : null
 }
 
@@ -125,7 +123,7 @@ export function SettingsPage() {
   }, [section, extensionSection, scrollToTop])
 
   // Close hides this window instead of destroying it, so the DOM (and its scrollTop) survives.
-  // Every reopen explicitly returns to the top so the first card — the usage overview — is whole.
+  // Every reopen explicitly returns to the top so the first card is whole.
   useEffect(() => {
     const stop = listen<null>(SETTINGS_RESET_SCROLL, scrollToTop)
     return () => void stop.then((fn) => fn())
@@ -191,8 +189,6 @@ export function SettingsPage() {
             return <VoiceSection />
           case "provider":
             return <ProviderSection key={providerTarget.revision} initialProviderId={providerTarget.id} />
-          case "usage":
-            return <UsageSection />
           case "about":
             return <AboutSection />
           case "extensions":

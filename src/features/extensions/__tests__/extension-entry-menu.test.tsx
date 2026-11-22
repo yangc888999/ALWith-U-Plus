@@ -134,9 +134,10 @@ test("leading navigation goes directly to management", () => {
       onOpenArchives={vi.fn()}
       onOpenPlugins={vi.fn()}
       onOpenExtensions={props.onManage}
+      onOpenUsage={vi.fn()}
     />
   )
-  fireEvent.click(ui.getByRole("button", { name: "Extensions" }))
+  fireEvent.click(ui.getByRole("button", { name: "Features" }))
   expect(props.onManage).toHaveBeenCalledOnce()
   expect(ui.queryByRole("menu")).toBeNull()
 })

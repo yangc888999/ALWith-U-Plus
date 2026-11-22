@@ -559,11 +559,11 @@ export function PluginsPage({ cwd, active }: { cwd: string | null; active: boole
         />
       )}
       <div className={selected ? "hidden" : "flex min-h-0 flex-1 flex-col"}>
-        <div className="mx-auto w-full max-w-5xl shrink-0 px-6 pt-8">
+        <div className="w-full min-w-0 shrink-0 px-8 pt-8">
           <h1 className="text-2xl font-semibold">{t("plugins.catalog.title")}</h1>
           <p className="mt-2 text-sm text-muted-foreground">{t("plugins.catalog.description")}</p>
         </div>
-        <div className="mx-auto mt-4 flex min-h-0 w-full max-w-5xl flex-1 flex-col px-6 pb-6">
+        <div className="mt-4 flex min-h-0 w-full min-w-0 flex-1 flex-col px-8 pb-6">
           <Tabs
             value={kind}
             onValueChange={(value) => {

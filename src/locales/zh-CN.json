@@ -124,6 +124,7 @@
     "story": "故事",
     "plugins": "插件",
     "extensions": "扩展",
+    "features": "功能",
     "newTask": "新建任务",
     "newTaskWindow": "聊天浮窗",
     "toolbox": "插件 · 扩展 · 技能",
@@ -2188,6 +2189,7 @@
     "retry": "重试"
   },
   "mobile": {
+    "connectButton": "手机连接",
     "enable": "允许手机连接这台设备的 ALWith U⁺",
     "description": "绑定后，手机可查看会话、发送消息和处理授权。关闭后暂停连接，保留已绑定设备；恢复连接需保持 ALWith U⁺ 运行。",
     "pair": "绑定这台 ALWith U⁺",

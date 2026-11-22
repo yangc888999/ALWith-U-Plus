@@ -19,7 +19,6 @@ export type SettingsSection =
   | "skills"
   | "groups"
   | "drive"
-  | "usage"
   | "automation"
   | "about"
 export const SETTINGS_SECTIONS: SettingsSection[] = [
@@ -35,7 +34,6 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   "mobile",
   "extensions",
   "skills",
-  "usage",
   "automation",
   "about"
 ]

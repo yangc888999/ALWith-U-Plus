@@ -400,6 +400,26 @@ html[data-window-backdrop="acrylic"]
   padding-inline-end: 4px;
   overflow: hidden;
 }
+.leading-navigation-item[data-active] {
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+/* The active destination is a long rule, not another filled icon tile. */
+.leading-navigation-item[data-active]::after {
+  content: "";
+  position: absolute;
+  inset-inline: 6px;
+  bottom: 2px;
+  height: 2px;
+  border-radius: 9999px;
+  background: currentColor;
+}
+/* Vendored pages centre their 5xl content measure. The tool pages are a left-aligned workspace,
+   matching Plugins and Extensions instead of leaving a large dead gutter on the leading edge. */
+[data-archives-page] section > div:first-child {
+  margin-inline: 0;
+  max-width: none;
+  padding-inline: 2rem;
+}
 .main-screen-leading > .main-chat-surface {
   flex: 1;
   margin-inline-start: 0;

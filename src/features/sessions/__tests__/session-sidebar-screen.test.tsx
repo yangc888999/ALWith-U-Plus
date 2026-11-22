@@ -33,7 +33,7 @@ afterEach(async () => {
   })
 })
 
-test("footer arrows switch screens, plugins are selected only on the leading screen, and new chat returns to main", async () => {
+test("plugins are selected only on the leading screen, and new chat returns to main", async () => {
   useUpdaterStore.setState({
     state: {
       type: "ready",
@@ -72,23 +72,16 @@ test("footer arrows switch screens, plugins are selected only on the leading scr
   const view = render(<Harness />)
   // 插件 / 扩展 / 技能 share one row whose flyout lists them; a plain click opens the first one.
   const plugins = sidebarButton(view, { name: "Plugins · Extensions · Skills" })
-  const arrow = sidebarButton(view, { name: "Open -1 screen" })
   const updateCard = sidebarButton(view, { name: /Downloaded — click to update/ })
-  expect(updateCard.closest('[data-slot="sidebar-footer"]')).toBe(arrow.closest('[data-slot="sidebar-footer"]'))
-  expect(arrow.closest('[data-slot="sidebar-footer"]')).not.toBeNull()
-  expect(arrow.querySelector(".lucide-arrow-left")).toBeTruthy()
-  expect(arrow.classList.contains("justify-start")).toBe(true)
-  expect(arrow.classList.contains("justify-end")).toBe(false)
+  const phone = sidebarButton(view, { name: "Connect phone" })
+  expect(updateCard.closest('[data-slot="sidebar-footer"]')).toBe(phone.closest('[data-slot="sidebar-footer"]'))
+  expect(view.queryByRole("button", { name: "Open -1 screen" })).toBeNull()
+  expect(view.queryByRole("button", { name: "Back to main screen" })).toBeNull()
   expect(plugins.hasAttribute("aria-current")).toBe(false)
-  await act(() => Promise.try(() => fireEvent.click(arrow)))
+  await act(() => Promise.try(() => fireEvent.click(plugins)))
   expect(plugins.getAttribute("aria-current")).toBe("page")
-  expect(sidebarButton(view, { name: "Back to main screen" }).querySelector(".lucide-arrow-right")).toBeTruthy()
-  expect(arrow.classList.contains("justify-end")).toBe(true)
-  expect(arrow.classList.contains("justify-start")).toBe(false)
   expect(view.container.querySelector('[data-screen-panel="main"]')?.getAttribute("aria-hidden")).toBe("true")
-  await act(() => Promise.try(() => fireEvent.click(sidebarButton(view, { name: "Back to main screen" }))))
-  expect(sidebarButton(view, { name: "Open -1 screen" })).toBe(arrow)
-  expect(arrow.classList.contains("justify-start")).toBe(true)
+  await act(() => Promise.try(() => fireEvent.click(sidebarButton(view, { name: "New task" }))))
   expect(plugins.hasAttribute("aria-current")).toBe(false)
   await act(() => Promise.try(() => fireEvent.click(plugins)))
   expect(plugins.getAttribute("aria-current")).toBe("page")
@@ -97,7 +90,6 @@ test("footer arrows switch screens, plugins are selected only on the leading scr
   expect(newTask.hasAttribute("aria-haspopup")).toBe(false)
   await act(() => Promise.try(() => fireEvent.click(newTask)))
   expect(view.queryByRole("menu")).toBeNull()
-  expect(sidebarButton(view, { name: "Open -1 screen" })).toBeTruthy()
   expect(plugins.hasAttribute("aria-current")).toBe(false)
 })
 
@@ -166,10 +158,8 @@ test("extensions sit below plugins, select their own leading page and remain ava
   // Choosing a destination puts the flyout away again.
   expect(view.queryByRole("menu")).toBeNull()
 
-  await act(() => Promise.try(() => fireEvent.click(sidebarButton(view, { name: "Back to main screen" }))))
+  await act(() => Promise.try(() => fireEvent.click(sidebarButton(view, { name: "New task" }))))
   expect(toolbox.hasAttribute("aria-current")).toBe(false)
-  await act(() => Promise.try(() => fireEvent.click(sidebarButton(view, { name: "Open -1 screen" }))))
-  expect(toolbox.getAttribute("aria-current")).toBe("page")
 
   const reopened = await openFlyout()
   await act(() => Promise.try(() => fireEvent.click(within(reopened).getByRole("menuitem", { name: "Plugins" }))))
@@ -365,8 +355,6 @@ test("Extensions sits below plugins and selects its own leading page without an 
   await act(() => Promise.try(() => fireEvent.click(within(flyout).getByRole("menuitem", { name: "Extensions" }))))
   expect(toolbox.getAttribute("aria-current")).toBe("page")
   expect(view.container.querySelector('[data-screen-panel="main"]')?.getAttribute("aria-hidden")).toBe("true")
-  await act(() => Promise.try(() => fireEvent.click(sidebarButton(view, { name: "Back to main screen" }))))
+  await act(() => Promise.try(() => fireEvent.click(sidebarButton(view, { name: "New task" }))))
   expect(toolbox.hasAttribute("aria-current")).toBe(false)
-  await act(() => Promise.try(() => fireEvent.click(sidebarButton(view, { name: "Open -1 screen" }))))
-  expect(toolbox.getAttribute("aria-current")).toBe("page")
 })

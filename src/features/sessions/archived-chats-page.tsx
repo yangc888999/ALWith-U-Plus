@@ -19,8 +19,10 @@ function ArchiveScroll({ children }: { children: ReactNode }) {
 /** The archived chats page: `@alwith/module-chat`'s archive in the app's scroll pane. */
 export function ArchivedChatsPage(): ReactElement {
   return (
-    <SessionListHostProvider>
-      <ArchivedSessions Scroll={ArchiveScroll} />
-    </SessionListHostProvider>
+    <div data-archives-page="" className="flex min-h-0 flex-1 flex-col">
+      <SessionListHostProvider>
+        <ArchivedSessions Scroll={ArchiveScroll} />
+      </SessionListHostProvider>
+    </div>
   )
 }

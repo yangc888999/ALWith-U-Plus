@@ -124,6 +124,7 @@
     "story": "Story",
     "plugins": "Plugins",
     "extensions": "Extensions",
+    "features": "Features",
     "newTask": "New task",
     "newTaskWindow": "Chat window",
     "toolbox": "Plugins · Extensions · Skills",
@@ -2188,6 +2189,7 @@
     "retry": "Retry"
   },
   "mobile": {
+    "connectButton": "Connect phone",
     "enable": "Allow phones to connect to this device's ALWith U⁺",
     "description": "Paired phones can view chats, send messages and respond to permissions. Turning this off pauses connections and keeps paired devices. Keep ALWith U⁺ running to connect.",
     "pair": "Pair with this ALWith U⁺",

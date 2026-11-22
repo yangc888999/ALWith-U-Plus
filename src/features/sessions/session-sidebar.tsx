@@ -16,8 +16,6 @@ import {
 } from "@alwith/module-chat/session-list"
 import { ScrollArea } from "@base-ui/react/scroll-area"
 import {
-  ArrowLeftIcon,
-  ArrowRightIcon,
   BlocksIcon,
   BoxesIcon,
   CalendarClockIcon,
@@ -32,6 +30,7 @@ import {
   PuzzleIcon,
   SearchIcon,
   SettingsIcon,
+  SmartphoneIcon,
   SparklesIcon,
   UsersIcon
 } from "lucide-react"
@@ -271,7 +270,7 @@ function SidebarRailButton({ label, icon: Icon, active, muted, hint, onSelect, d
 
 type SessionSidebarProps = {
   screen: MainScreen
-  leadingPage: "plugins" | "extensions" | "archives" | "automation"
+  leadingPage: "plugins" | "extensions" | "archives" | "automation" | "usage"
   selectedId: string | null
   onSelect: (sessionRow: SessionSummary) => void
   onNewChat: () => void
@@ -772,20 +771,6 @@ function SidebarPanels({
         </SidebarContent>
         <SidebarFooter className="shrink-0 gap-1 p-1 px-2">
           <UpdateStatusButton />
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              className={cn(
-                "h-8 min-w-0 flex-1 rounded-[10px] px-2 [corner-shape:superellipse(1.5)] hover:bg-foreground/5",
-                screen === "main" ? "justify-start" : "justify-end"
-              )}
-              aria-label={t(screen === "main" ? "sidebar.openLeading" : "sidebar.backToMain")}
-              title={t(screen === "main" ? "sidebar.openLeading" : "sidebar.backToMain")}
-              onClick={onSwitchScreen}
-            >
-              {screen === "main" ? <ArrowLeftIcon /> : <ArrowRightIcon />}
-            </Button>
-          </div>
           {/* Hairline between the navigation rows above and the account block: identity is not
             another destination in the list. */}
           <Separator className="mx-1 my-1" />
@@ -793,6 +778,21 @@ function SidebarPanels({
             <div className="min-w-0 flex-1">
               <SidebarAccountMenu onOpenSettings={onOpenSettings} onEditProfile={onEditProfile} />
             </div>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={t("mobile.connectButton")}
+                    onClick={() => void openSettingsWindow("mobile")}
+                  >
+                    <SmartphoneIcon />
+                  </Button>
+                }
+              />
+              <TooltipContent side="inline-end">{t("mobile.connectButton")}</TooltipContent>
+            </Tooltip>
             <GuideButton />
           </div>
         </SidebarFooter>

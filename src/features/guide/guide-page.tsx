@@ -19,6 +19,7 @@ import {
   WrenchIcon
 } from "lucide-react"
 import { useMemo, useState } from "react"
+import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import { describeError } from "@/lib/error-text"
@@ -27,86 +28,41 @@ import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
 import { openExternal } from "@/lib/open"
 
-import content from "../../../guide/index.md?raw"
+import contentEn from "../../../guide/index.md?raw"
+import contentZh from "../../../guide/index.zh-CN.md?raw"
 import logo from "../../../src-tauri/icons/128x128.png"
 import "@alwith/module-chat/styles.css"
+import { guideCopy } from "./guide-locale"
 import "./guide.css"
 
-const chapters = content.split(/^## /m).map((chapter, index) => {
-  if (index === 0) return { title: "Welcome", text: chapter }
-  const end = chapter.indexOf("\n")
-  return { title: chapter.slice(0, end), text: chapter.slice(end + 1) }
-})
-const details = [
-  {
-    icon: BookOpenIcon,
-    summary: "A practical handbook for your everyday work with ALWith U⁺.",
-    group: "Overview",
-    takeaway: "Choose a task below, or follow the getting-started path."
-  },
-  {
-    icon: PlayIcon,
-    summary: "Set up access, choose a project, and complete your first useful task.",
-    group: "Getting started",
-    takeaway: "ALwith login and model access are configured separately."
-  },
-  {
-    icon: PanelLeftIcon,
-    summary: "Learn where conversations, tools, files, and settings live.",
-    group: "Getting started",
-    takeaway: "Keep the conversation and its project files in view together."
-  },
-  {
-    icon: MessageSquareIcon,
-    summary: "Write a clear request, manage a running turn, and review the result.",
-    group: "Daily work",
-    takeaway: "Ask for a concrete outcome and evidence that it works."
-  },
-  {
-    icon: CpuIcon,
-    summary: "Connect a provider and select the right model for each conversation.",
-    group: "Daily work",
-    takeaway: "The selected model belongs to the conversation you are working in."
-  },
-  {
-    icon: FolderIcon,
-    summary: "Navigate, preview, edit, and review files alongside the assistant.",
-    group: "Daily work",
-    takeaway: "Confirm the project folder before allowing file changes."
-  },
-  {
-    icon: LayersIcon,
-    summary: "Understand skills, Codex plugins, and application extensions.",
-    group: "Make it yours",
-    takeaway: "Inspect what an integration does and what access it needs."
-  },
-  {
-    icon: CloudIcon,
-    summary: "Check cloud transfers and resolve failed items.",
-    group: "Make it yours",
-    takeaway: "Verify transfer status before relying on a cloud copy."
-  },
-  {
-    icon: KeyboardIcon,
-    summary: "Adjust your workspace and learn the shortcuts you will use most.",
-    group: "Make it yours",
-    takeaway: "Use button tooltips to discover shortcuts as you work."
-  },
-  {
-    icon: WrenchIcon,
-    summary: "Diagnose connection, model, file, and integration problems.",
-    group: "Support",
-    takeaway: "Capture the exact error and check for partial changes before retrying."
-  }
-]
+const CHAPTER_ICONS = [
+  BookOpenIcon,
+  PlayIcon,
+  PanelLeftIcon,
+  MessageSquareIcon,
+  CpuIcon,
+  FolderIcon,
+  LayersIcon,
+  CloudIcon,
+  KeyboardIcon,
+  WrenchIcon
+] as const
 
-function InterfaceMap({ navigate }: { navigate: (index: number) => void }) {
+function chaptersFrom(content: string, welcomeTitle: string) {
+  return content.split(/^## /m).map((chapter, index) => {
+    if (index === 0) return { title: welcomeTitle, text: chapter }
+    const end = chapter.indexOf("\n")
+    return { title: chapter.slice(0, end), text: chapter.slice(end + 1) }
+  })
+}
+
+function InterfaceMap({ navigate, copy }: { navigate: (index: number) => void; copy: ReturnType<typeof guideCopy> }) {
   return (
     <div className="guide-interface">
       <div className="guide-interface-bar">
         <img className="guide-interface-mark" src={logo} alt="" />
         <strong>ALWith U⁺</strong>
-        <span>Interface map</span>
+        <span>{copy.interface.label}</span>
       </div>
       <div className="guide-interface-body">
         <div className="guide-interface-sidebar">
@@ -114,30 +70,30 @@ function InterfaceMap({ navigate }: { navigate: (index: number) => void }) {
             <SearchIcon />
             <PlusIcon />
           </div>
-          <span className="guide-interface-label">Your projects</span>
+          <span className="guide-interface-label">{copy.interface.yourProjects}</span>
           <div className="guide-interface-project">
-            <FolderIcon /> My project
+            <FolderIcon /> {copy.interface.myProject}
           </div>
           <Button variant="secondary" onClick={() => navigate(2)}>
-            <MessageSquareIcon /> First task
+            <MessageSquareIcon /> {copy.interface.firstTask}
           </Button>
           <div className="guide-interface-account">Account & settings</div>
         </div>
         <div className="guide-interface-chat">
-          <span className="guide-interface-label">A conversation with context</span>
-          <div className="guide-interface-request">Explain this project before making changes.</div>
+          <span className="guide-interface-label">{copy.interface.conversation}</span>
+          <div className="guide-interface-request">{copy.interface.request}</div>
           <div className="guide-interface-response">
             <ShieldCheckIcon />
             <span>
-              Read the files.
+              {copy.interface.response[0]}
               <br />
-              Explain the approach.
+              {copy.interface.response[1]}
               <br />
-              Review the result.
+              {copy.interface.response[2]}
             </span>
           </div>
           <Button variant="outline" className="guide-interface-compose" onClick={() => navigate(3)}>
-            Describe your next task
+            {copy.interface.describeNext}
             <ArrowRightIcon />
           </Button>
         </div>
@@ -148,66 +104,65 @@ function InterfaceMap({ navigate }: { navigate: (index: number) => void }) {
           <div />
           <div />
           <Button variant="ghost" onClick={() => navigate(5)}>
-            Open files
+            {copy.interface.openFiles}
           </Button>
         </div>
       </div>
-      <p>Click a part of the workspace to learn how it works.</p>
+      <p>{copy.interface.clickPart}</p>
     </div>
   )
 }
 
-function GuideHome({ navigate }: { navigate: (index: number) => void }) {
+function GuideHome({
+  navigate,
+  chapters,
+  details,
+  copy
+}: {
+  navigate: (index: number) => void
+  chapters: ReturnType<typeof chaptersFrom>
+  details: Array<{ icon: (typeof CHAPTER_ICONS)[number]; summary: string; group: string; takeaway: string }>
+  copy: ReturnType<typeof guideCopy>
+}) {
   return (
     <div className="guide-home">
       <section className="guide-hero">
         <div className="guide-hero-copy">
           <span className="guide-edition">
-            <BookOpenIcon /> The ALWith U⁺ handbook
+            <BookOpenIcon /> {copy.edition}
           </span>
           <h1>
-            Turn a clear request
+            {copy.heroTitle[0]}
             <br />
-            into work you can verify.
+            {copy.heroTitle[1]}
           </h1>
-          <p>
-            Get comfortable with your independent desktop client: start a conversation, bring the right files into
-            context, and review what your assistant produces.
-          </p>
+          <p>{copy.heroBody}</p>
           <div className="guide-hero-actions">
             <Button size="lg" onClick={() => navigate(1)}>
-              Start your first task
+              {copy.startAction}
               <ArrowRightIcon />
             </Button>
             <Button variant="outline" size="lg" onClick={() => navigate(2)}>
-              Explore the interface
+              {copy.exploreAction}
             </Button>
           </div>
-          <span className="guide-availability">English edition. Included with your app. Available offline.</span>
+          <span className="guide-availability">{copy.availability}</span>
         </div>
-        <InterfaceMap navigate={navigate} />
+        <InterfaceMap navigate={navigate} copy={copy} />
       </section>
-      <section className="guide-path" aria-label="Getting started path">
-        <div>
-          <span className="guide-step">1</span>
-          <strong>Connect</strong>
-          <p>Sign in and configure model access.</p>
-        </div>
-        <div>
-          <span className="guide-step">2</span>
-          <strong>Give context</strong>
-          <p>Choose a project and define the outcome.</p>
-        </div>
-        <div>
-          <span className="guide-step">3</span>
-          <strong>Review</strong>
-          <p>Inspect changes and check the evidence.</p>
-        </div>
+      <section className="guide-path" aria-label={copy.pathAria}>
+        {copy.path.map((step, index) => (
+          <div key={step.title}>
+            <span className="guide-step">{index + 1}</span>
+            <strong>{step.title}</strong>
+            <p>{step.body}</p>
+          </div>
+        ))}
       </section>
       <section className="guide-topics">
         <div className="guide-section-heading">
-          <h2>What would you like to do?</h2>
-          <p>Jump into the part of the workflow you need.</p>
+          <h2>{copy.topicsTitle}</h2>
+          <p>{copy.topicsDesc}</p>
         </div>
         <div className="guide-topic-grid">
           {[3, 4, 5, 6, 7, 9].map((index) => {
@@ -226,49 +181,56 @@ function GuideHome({ navigate }: { navigate: (index: number) => void }) {
       </section>
       <section className="guide-first-task">
         <div>
-          <span className="guide-example-label">Try it in your next chat</span>
-          <h2>A small task is the best place to start.</h2>
-          <p>Choose a project folder, then ask the assistant to explain it before editing anything.</p>
+          <span className="guide-example-label">{copy.firstTaskLabel}</span>
+          <h2>{copy.firstTaskTitle}</h2>
+          <p>{copy.firstTaskBody}</p>
         </div>
-        <blockquote>
-          Read this project's README and explain how to run it. Do not change files. Tell me which steps you verified
-          and which ones remain untested.
-        </blockquote>
+        <blockquote>{copy.firstTaskQuote}</blockquote>
       </section>
       <footer className="guide-home-footer">
-        <span>ALWith U⁺ Guide</span>
-        <span>An independent client powered by Codex CLI.</span>
+        <span>{copy.footerTitle}</span>
+        <span>{copy.footerTagline}</span>
       </footer>
     </div>
   )
 }
 
 export function GuidePage() {
+  const { i18n } = useTranslation()
+  const copy = guideCopy(i18n.language)
+  const chapters = useMemo(
+    () => chaptersFrom(i18n.language.toLowerCase().startsWith("zh") ? contentZh : contentEn, copy.welcomeTitle),
+    [copy.welcomeTitle, i18n.language]
+  )
+  const details = useMemo(
+    () => CHAPTER_ICONS.map((icon, index) => ({ icon, ...copy.details[index]! })),
+    [copy]
+  )
   const [selected, setSelected] = useState(0)
   const { resolvedTheme } = useTheme()
   const host = useMemo<MarkdownHost>(
     () => ({
       theme: resolvedTheme,
-      copyLabel: "Copy",
+      copyLabel: i18n.language.toLowerCase().startsWith("zh") ? "复制" : "Copy",
       openLink: (url) => {
         void openExternal(url).catch((error: unknown) => toast.error(describeError(error)))
       }
     }),
-    [resolvedTheme]
+    [i18n.language, resolvedTheme]
   )
   const chapter = chapters[selected]
   const detail = details[selected]
   return (
     <AuxWindowShell
-      title="ALWith U⁺ Guide"
+      title={copy.windowTitle}
       showTitleBar={!navigator.platform.includes("Win")}
       sidebarClassName="guide-sidebar"
       className="guide-window"
       sidebar={
-        <nav aria-label="Guide chapters" className="guide-navigation">
+        <nav aria-label={copy.chaptersAria} className="guide-navigation">
           <div className="guide-brand">
             <img src={logo} alt="" />
-            <strong>ALWith U⁺</strong>
+            <strong>{copy.brand}</strong>
           </div>
           {chapters.map((item, index) => {
             const Icon = details[index].icon
@@ -292,8 +254,9 @@ export function GuidePage() {
           <div className="guide-navigation-footer">
             <CheckIcon />
             <span>
-              Bundled with ALWith U⁺<br />
-              <small>English edition</small>
+              {copy.bundled}
+              <br />
+              <small>{copy.editionShort}</small>
             </span>
           </div>
         </nav>
@@ -301,13 +264,13 @@ export function GuidePage() {
     >
       <main key={selected} className="guide-main" aria-label={chapter.title}>
         {selected === 0 ? (
-          <GuideHome navigate={setSelected} />
+          <GuideHome navigate={setSelected} chapters={chapters} details={details} copy={copy} />
         ) : (
           <div className="guide-reading">
             <header className="guide-reading-header">
               <Button variant="ghost" size="sm" onClick={() => setSelected(0)}>
                 <ArrowLeftIcon />
-                Guide home
+                {copy.guideHome}
               </Button>
               <span>{detail.group}</span>
             </header>
@@ -327,7 +290,7 @@ export function GuidePage() {
                 </div>
               </article>
               <aside className="guide-reading-aside">
-                <strong>In this chapter</strong>
+                <strong>{copy.inThisChapter}</strong>
                 {chapter.text
                   .split(/^### /m)
                   .slice(1)
@@ -336,31 +299,31 @@ export function GuidePage() {
                   ))}
                 <div>
                   <BookOpenIcon />
-                  <p>Work through the steps with your own project open beside the guide.</p>
+                  <p>{copy.workThrough}</p>
                 </div>
               </aside>
             </div>
-            <nav className="guide-page-navigation" aria-label="Adjacent chapters">
+            <nav className="guide-page-navigation" aria-label={copy.adjacentAria}>
               <Button
                 variant="outline"
-                aria-label={`Previous ${chapters[selected - 1].title}`}
+                aria-label={`${copy.previous} ${chapters[selected - 1]!.title}`}
                 onClick={() => setSelected(selected - 1)}
               >
                 <ArrowLeftIcon />
                 <span>
-                  <small>Previous</small>
-                  {chapters[selected - 1].title}
+                  <small>{copy.previous}</small>
+                  {chapters[selected - 1]!.title}
                 </span>
               </Button>
               {selected < chapters.length - 1 && (
                 <Button
                   variant="outline"
-                  aria-label={`Next ${chapters[selected + 1].title}`}
+                  aria-label={`${copy.next} ${chapters[selected + 1]!.title}`}
                   onClick={() => setSelected(selected + 1)}
                 >
                   <span>
-                    <small>Next</small>
-                    {chapters[selected + 1].title}
+                    <small>{copy.next}</small>
+                    {chapters[selected + 1]!.title}
                   </span>
                   <ArrowRightIcon />
                 </Button>

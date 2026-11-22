@@ -1,6 +1,7 @@
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow"
 
 import { createWindowController } from "@/lib/window-controller"
+import i18n from "@/lib/i18n"
 
 const controller = createWindowController<void>({
   exists: async () => (await WebviewWindow.getByLabel("guide")) !== null,
@@ -8,7 +9,7 @@ const controller = createWindowController<void>({
     const windows = navigator.platform.includes("Win")
     const window = new WebviewWindow("guide", {
       url: "/guide.html",
-      title: "ALWith U⁺ Guide",
+      title: i18n.isInitialized ? i18n.t("guide.title") : "ALWith U⁺ Guide",
       width: 1000,
       height: 760,
       minWidth: 640,

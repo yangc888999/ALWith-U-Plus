@@ -57,8 +57,8 @@ test("keeps expired pairing visible with a refresh action and offers phone sign-
   render(<MobileSection />)
   await flush()
   expect(screen.getByText(/No phones paired yet/)).toBeVisible()
-  fireEvent.click(screen.getByRole("button", { name: "Show pairing QR code" }))
-  await flush()
+  // The connection page is the shortcut: it starts pairing as soon as the relay is ready.
+  expect(host.pair).toHaveBeenCalledOnce()
   await act(async () => {
     await vi.advanceTimersByTimeAsync(1100)
   })
@@ -71,8 +71,6 @@ test("keeps expired pairing visible with a refresh action and offers phone sign-
 test("successful polling does not erase an action failure", async () => {
   host.pair.mockRejectedValue(new Error("Pairing unavailable"))
   render(<MobileSection />)
-  await flush()
-  fireEvent.click(screen.getByRole("button", { name: "Show pairing QR code" }))
   await flush()
   await act(async () => {
     await vi.advanceTimersByTimeAsync(2100)

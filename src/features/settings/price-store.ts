@@ -224,6 +224,8 @@ const OPENROUTER_NOTE = "OpenRouter 路由价（USD/百万 token，2026-11-13 �
  */
 export const DEFAULT_PRICES: ModelPrice[] = [
   // OpenAI — USD.
+  entry("OpenAI", "gpt-6.2-astra", 8, 0.4, 40, { note: OPENAI_NOTE }),
+  entry("OpenAI", "gpt-6.2-sol", 2, 0.1, 10, { note: OPENAI_NOTE }),
   entry("OpenAI", "gpt-6-astra", 10, 1, 50, { note: OPENAI_NOTE }),
   entry("OpenAI", "gpt-6.1-sol", 2, 0.1, 10, { note: OPENAI_NOTE }),
   entry("OpenAI", "gpt-6.1-terra", 1, 0.05, 5, { note: OPENAI_NOTE }),

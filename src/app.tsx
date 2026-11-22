@@ -138,6 +138,7 @@ const ExtensionsSection = lazy(() =>
 const AutomationPage = lazy(() =>
   import("@/features/automation/automation-page").then((module) => ({ default: module.AutomationPage }))
 )
+const UsagePage = lazy(() => import("@/features/usage/usage-page").then((module) => ({ default: module.UsagePage })))
 
 export function App({ initialPreferences }: { initialPreferences: Preferences }) {
   useAccentDataAttribute()
@@ -201,11 +202,18 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   const [hotkeysOpen, setHotkeysOpen] = useState(false)
   // Management pages share the leading screen; the offscreen chat stays mounted.
   const [view, setView] = useState<
-    "chat" | "plugins" | "extensions" | "archives" | "story" | "extension" | "automation"
+    "chat" | "plugins" | "extensions" | "archives" | "story" | "extension" | "automation" | "usage"
   >("chat")
-  const [leadingPage, setLeadingPage] = useState<"plugins" | "extensions" | "archives" | "automation">("plugins")
+  const [leadingPage, setLeadingPage] = useState<"plugins" | "extensions" | "archives" | "automation" | "usage">(
+    "plugins"
+  )
   const leading =
-    view === "plugins" || view === "extensions" || view === "extension" || view === "archives" || view === "automation"
+    view === "plugins" ||
+    view === "extensions" ||
+    view === "extension" ||
+    view === "archives" ||
+    view === "automation" ||
+    view === "usage"
   const [extensionView, setExtensionView] = useState<string | null>(null)
   const openExtension = useCallback(
     (id: string): void => {
@@ -239,6 +247,10 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     setLeadingPage("automation")
     setView("automation")
   }, [])
+  const openUsage = useCallback(() => {
+    setLeadingPage("usage")
+    setView("usage")
+  }, [])
   /** 扩展 lives in Settings' 应用扩展 page; the leading screen stays for extension surfaces. */
   const openExtensionSettings = useCallback(() => {
     void openSettingsWindow("extensions").catch((error: unknown) => toast.error(describeError(error)))
@@ -247,8 +259,9 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     if (leadingPage === "extensions") openExtensions()
     else if (leadingPage === "archives") openArchives()
     else if (leadingPage === "automation") openAutomation()
+    else if (leadingPage === "usage") openUsage()
     else openPlugins()
-  }, [leadingPage, openExtensions, openArchives, openAutomation, openPlugins])
+  }, [leadingPage, openExtensions, openArchives, openAutomation, openUsage, openPlugins])
   // The online BI surface is a child webview of the main window, so it stays glued on top when the
   // canvas slides to the leading screen (the main content is only `inert`, never unmounted). Close
   // both the preview extension and the standalone BI window the moment we leave the main screen, so
@@ -1408,6 +1421,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                 onOpenArchives={openArchives}
                 onOpenPlugins={openPlugins}
                 onOpenExtensions={openExtensions}
+                onOpenUsage={openUsage}
               >
                 <ExtensionNavigation
                   host={extensions}
@@ -1418,7 +1432,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                 />
               </LeadingNavigation>
               <SidebarInset className="main-chat-surface flex min-h-0 flex-col">
-                {leading && actionCards}
                 {view === "archives" && (
                   <Suspense fallback={null}>
                     <ArchivedChatsPage />
@@ -1441,11 +1454,17 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                   </div>
                 ) : leadingPage === "extensions" ? (
                   <div className="min-h-0 flex-1 overflow-auto">
-                    <div className="mx-auto w-full max-w-5xl px-6 py-8">
+                    <div className="w-full min-w-0 px-8 py-8">
                       <Suspense fallback={null}>
                         <ExtensionsSection onOpenSurface={openExtension} />
                       </Suspense>
                     </div>
+                  </div>
+                ) : leadingPage === "usage" ? (
+                  <div className="min-h-0 flex-1 overflow-auto">
+                    <Suspense fallback={null}>
+                      <UsagePage />
+                    </Suspense>
                   </div>
                 ) : null}
               </SidebarInset>

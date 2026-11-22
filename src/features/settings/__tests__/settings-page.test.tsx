@@ -68,6 +68,17 @@ test("mobile connections are reachable from settings navigation", () => {
   expect(screen.getByRole("region", { name: "Mobile connection" })).toBeVisible()
 })
 
+test("usage is no longer a settings destination and old deep links land on General", () => {
+  window.history.replaceState({}, "", "/settings.html?tab=usage")
+  try {
+    render(<SettingsPage />)
+    expect(screen.queryByRole("button", { name: "Usage" })).toBeNull()
+    expect(screen.getByRole("heading", { level: 1, name: "General" })).toBeVisible()
+  } finally {
+    window.history.replaceState({}, "", "/")
+  }
+})
+
 test("a retired ?tab=external deep link lands on 通用 instead of a blank page", () => {
   // 外部调用页已下线：老链接（收藏、窗口 URL）不能掉进空白页，规范化后回落到「通用」。
   window.history.replaceState({}, "", "/settings.html?tab=external")

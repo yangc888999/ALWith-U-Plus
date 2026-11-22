@@ -62,6 +62,16 @@ describe("built-in snapshot", () => {
     expect(v4.offPeak).not.toBeNull()
     expect(DEFAULT_PRICES.filter((price) => price.model === "MiniMax-M3")).toHaveLength(1)
     expect(DEFAULT_PRICES.find((price) => price.model === "gpt-6.1-sol")!.currency).toBe("USD")
+    expect(DEFAULT_PRICES.find((price) => price.model === "gpt-6.2-sol")).toMatchObject({
+      input: 2,
+      cached: 0.1,
+      output: 10
+    })
+    expect(DEFAULT_PRICES.find((price) => price.model === "gpt-6.2-astra")).toMatchObject({
+      input: 8,
+      cached: 0.4,
+      output: 40
+    })
   })
 
   test("the OpenRouter group carries real routed prices, not zero placeholders", () => {

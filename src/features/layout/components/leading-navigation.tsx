@@ -1,4 +1,4 @@
-import { ArchiveIcon, BlocksIcon, PuzzleIcon } from "lucide-react"
+import { ArchiveIcon, BlocksIcon, ChartColumnIcon, PuzzleIcon } from "lucide-react"
 import type { ReactElement, ReactNode } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -10,19 +10,22 @@ export function LeadingNavigation({
   onOpenPlugins,
   onOpenExtensions,
   onOpenArchives,
+  onOpenUsage,
   children
 }: {
-  activePage: "plugins" | "extensions" | "archives" | null
+  activePage: "plugins" | "extensions" | "archives" | "usage" | null
   children?: ReactNode
   onOpenPlugins: () => void
   onOpenExtensions: () => void
   onOpenArchives: () => void
+  onOpenUsage: () => void
 }): ReactElement {
   const { t } = useTranslation()
   const items = [
     { id: "plugins", label: t("sidebar.plugins"), icon: PuzzleIcon, onClick: onOpenPlugins },
-    { id: "extensions", label: t("sidebar.extensions"), icon: BlocksIcon, onClick: onOpenExtensions },
-    { id: "archives", label: t("archives.title"), icon: ArchiveIcon, onClick: onOpenArchives }
+    { id: "extensions", label: t("sidebar.features"), icon: BlocksIcon, onClick: onOpenExtensions },
+    { id: "archives", label: t("archives.title"), icon: ArchiveIcon, onClick: onOpenArchives },
+    { id: "usage", label: t("settings.usage"), icon: ChartColumnIcon, onClick: onOpenUsage }
   ] as const
 
   return (
@@ -35,7 +38,8 @@ export function LeadingNavigation({
             aria-label={label}
             aria-current={activePage === id ? "page" : undefined}
             onClick={onClick}
-            className="size-9 rounded-[10px] text-muted-foreground hover:text-foreground aria-[current=page]:bg-foreground/5 aria-[current=page]:text-foreground motion-reduce:transition-none"
+            data-active={activePage === id ? "" : undefined}
+            className="leading-navigation-item relative size-9 rounded-[10px] text-muted-foreground hover:text-foreground aria-[current=page]:text-foreground motion-reduce:transition-none"
           >
             <Icon aria-hidden="true" className="size-[18px]" />
           </Button>

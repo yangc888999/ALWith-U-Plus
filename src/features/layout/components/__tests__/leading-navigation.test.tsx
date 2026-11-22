@@ -11,7 +11,7 @@ await initI18n("en")
 
 test("leading navigation switches pages and is inaccessible on the main screen", () => {
   function Screen() {
-    const [page, setPage] = useState<"plugins" | "extensions" | "archives">("plugins")
+    const [page, setPage] = useState<"plugins" | "extensions" | "archives" | "usage">("plugins")
     const [screen, setScreen] = useState<"leading" | "main">("leading")
     return (
       <MainSidebarLayout
@@ -29,6 +29,7 @@ test("leading navigation switches pages and is inaccessible on the main screen",
               onOpenPlugins={() => setPage("plugins")}
               onOpenExtensions={() => setPage("extensions")}
               onOpenArchives={() => setPage("archives")}
+              onOpenUsage={() => setPage("usage")}
             />
             <main aria-label="Current page">{page}</main>
           </>
@@ -40,9 +41,10 @@ test("leading navigation switches pages and is inaccessible on the main screen",
   const view = render(<Screen />)
   expect(view.getByRole("button", { name: "Plugins" })).toHaveAttribute("aria-current", "page")
   for (const [name, page] of [
-    ["Extensions", "extensions"],
+    ["Features", "extensions"],
     ["Plugins", "plugins"],
-    ["Archived chats", "archives"]
+    ["Archived chats", "archives"],
+    ["Usage", "usage"]
   ] as const) {
     fireEvent.click(view.getByRole("button", { name }))
     expect(view.getByRole("main", { name: "Current page" })).toHaveTextContent(page)

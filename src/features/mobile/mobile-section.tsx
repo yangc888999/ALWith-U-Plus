@@ -1,7 +1,7 @@
 import { listen } from "@tauri-apps/api/event"
 import { SmartphoneIcon } from "lucide-react"
 import { QRCodeSVG } from "qrcode.react"
-import { useEffect, useState, useSyncExternalStore } from "react"
+import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { useTranslation } from "react-i18next"
 
 import { commands, type MobileBridgeStatus, type PairingInfo, type TrustedDevice } from "@/bindings"
@@ -40,6 +40,8 @@ export function MobileSection() {
   const [loaded, setLoaded] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [revoking, setRevoking] = useState<TrustedDevice | null>(null)
+  const autoEnabled = useRef(false)
+  const autoPaired = useRef(false)
 
   useEffect(() => {
     let disposed = false
@@ -102,6 +104,23 @@ export function MobileSection() {
       setPending(false)
     }
   }
+  // Opening this page from the phone shortcut is a request to connect: turn the bridge on and
+  // fetch a pairing QR immediately, without making the reader press two more buttons first.
+  useEffect(() => {
+    if (!loaded) return
+    if (!enabled) {
+      if (autoEnabled.current) return
+      autoEnabled.current = true
+      void perform(async () => {
+        await setMobileEnabled(true)
+        setStatus(await commands.mobileBridgeStatus())
+      })
+      return
+    }
+    if (!status?.relayConnected || autoPaired.current) return
+    autoPaired.current = true
+    void perform(async () => setPairing(await commands.bridgePairingStart()))
+  }, [enabled, loaded, status?.relayConnected])
   return (
     <div className="space-y-6">
       {/* 扫码登录 lives here now: it is the first thing to do before binding a phone, and sending
