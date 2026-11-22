@@ -344,11 +344,15 @@ export function DraftChat({
           </ChatHeader>
         )}
         <div className="welcome-hero flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6">
-          <div className="w-full max-w-3xl text-center">
-            <h1 className="text-[2rem] leading-[1.15] font-semibold tracking-[-0.035em] sm:text-[2.25rem]">
+          {/* WorkBuddy-style opening: two left-aligned bold lines flush with the composer's left
+              edge, not a centered hero with a muted tagline. */}
+          <div className="w-full max-w-3xl text-left">
+            <h1 className="text-[1.375rem] leading-snug font-semibold tracking-[-0.01em] sm:text-[1.5rem]">
               {greeting}
             </h1>
-            <p className="mt-2 text-sm text-muted-foreground">{subtitle}</p>
+            <p className="mt-1 text-[1.375rem] leading-snug font-semibold tracking-[-0.01em] sm:text-[1.5rem]">
+              {subtitle}
+            </p>
           </div>
           <div className="welcome-hero-composer mt-7 w-full max-w-3xl">
             <ChatComposer
