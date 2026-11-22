@@ -233,10 +233,17 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     setView("archives")
   }, [])
   const [pluginsVisited, setPluginsVisited] = useState(false)
+  const [skillsRequest, setSkillsRequest] = useState(0)
   const openPlugins = useCallback(() => {
     setPluginsVisited(true)
     setLeadingPage("plugins")
     setView("plugins")
+  }, [])
+  const openSkills = useCallback(() => {
+    setPluginsVisited(true)
+    setLeadingPage("plugins")
+    setView("plugins")
+    setSkillsRequest((value) => value + 1)
   }, [])
   const openExtensions = useCallback(() => {
     setLeadingPage("extensions")
@@ -1403,7 +1410,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
               onOpenSettings={() => void openSettingsWindow()}
               onEditProfile={() => void openSettingsWindow("account")}
               onOpenPlugins={openPlugins}
-              onOpenSkills={() => void openSettingsWindow("skills")}
+              onOpenSkills={openSkills}
               onOpenExtensions={openExtensionSettings}
               onOpenAutomation={openAutomation}
               drivePanel={<div ref={setDriveSidebar} className="min-h-0 flex-1 overflow-auto" />}
@@ -1440,7 +1447,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                 {pluginsVisited && (
                   <div className={leadingPage === "plugins" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
                     <Suspense fallback={null}>
-                      <PluginsPage cwd={directory} active={view === "plugins"} />
+                      <PluginsPage cwd={directory} active={view === "plugins"} skillsRequest={skillsRequest} />
                     </Suspense>
                   </div>
                 )}

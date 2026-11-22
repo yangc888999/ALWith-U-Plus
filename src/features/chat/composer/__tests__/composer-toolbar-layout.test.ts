@@ -170,9 +170,10 @@ test("the resting send key matches WorkBuddy while active action glyphs invert",
   expect(styles).toMatch(/\.dark\[data-accent="lemon-green"\][^{]*\{[^}]*--accent-on: oklch\(0\.17/)
 })
 
-test("the default composer height is twenty percent taller", () => {
+test("the welcome composer keeps one fixed footprint across tabs", () => {
   expect(styles).toMatch(/min-height: var\(--composer-input-min, 3\.3rem\)/)
   expect(styles).toMatch(
-    /\.welcome-hero\[data-welcome-mode="chat"\] \.welcome-hero-composer \[data-composer\] \.alwith-composer-textarea\s*\{[^}]*min-height: var\(--composer-input-min, 9rem\)/
+    /\.welcome-hero-composer \[data-composer\] > \[data-chat-drop-zone\] > \.relative:has\(> form > \.codex-composer-surface\)\s*\{[^}]*min-height: 10\.5rem/
   )
+  expect(styles).not.toMatch(/data-welcome-mode="chat"\] \.welcome-hero-composer \[data-composer\] \.alwith-composer-textarea/)
 })

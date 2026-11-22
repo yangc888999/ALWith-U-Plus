@@ -356,7 +356,7 @@ export function DraftChat({
           </ChatHeader>
         )}
         <div
-          className="welcome-hero flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6"
+          className="welcome-hero flex min-h-0 flex-1 flex-col items-center justify-start overflow-y-auto px-6"
           data-welcome-mode={surface}
         >
           <div className="flex w-full flex-col items-center gap-5">
@@ -396,10 +396,7 @@ export function DraftChat({
             </div>
           </div>
           <div
-            className={cn(
-              "welcome-hero-composer w-full",
-              chatSurface ? "mt-3 max-w-4xl" : "mt-5 max-w-3xl"
-            )}
+            className="welcome-hero-composer mt-5 w-full max-w-3xl"
             // A capture-phase guard runs before the package clears its draft and dispatches the
             // prompt. Clicking send or pressing Enter without a project therefore opens the reminder
             // while leaving every typed character and attachment in place.

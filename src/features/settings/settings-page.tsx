@@ -15,7 +15,6 @@ import {
   InfoIcon,
   MicIcon,
   MonitorIcon,
-  PuzzleIcon,
   UsersIcon,
   SlidersHorizontalIcon,
   SmartphoneIcon,
@@ -42,7 +41,6 @@ import { SETTINGS_CHANGE_TAB, SETTINGS_RESET_SCROLL, type SettingsNavigation, ty
 
 import { AboutSection } from "./sections/about-section"
 import { GroupSection } from "./sections/group-section"
-import { SkillsSection } from "./sections/skills-section"
 import { AccountSection } from "./sections/account-section"
 import { AppearanceSection } from "./sections/appearance-section"
 import { ComputerSection } from "./sections/computer-section"
@@ -66,7 +64,6 @@ const ICONS: Record<SettingsSection, typeof InfoIcon> = {
   provider: CpuIcon,
   voice: MicIcon,
   extensions: BlocksIcon,
-  skills: PuzzleIcon,
   groups: UsersIcon,
   automation: CalendarClockIcon,
   about: InfoIcon
@@ -77,7 +74,7 @@ const ICONS: Record<SettingsSection, typeof InfoIcon> = {
 const SECTION_GROUPS: Array<{ label: string; sections: SettingsSection[] }> = [
   { label: "settings.groupAccount", sections: ["account", "mobile"] },
   { label: "settings.groupPreferences", sections: ["general", "appearance", "editor", "voice", "trackpad", "computer"] },
-  { label: "settings.groupCapabilities", sections: ["provider", "drive", "extensions", "skills", "automation", "groups"] },
+  { label: "settings.groupCapabilities", sections: ["provider", "drive", "extensions", "automation", "groups"] },
   { label: "settings.groupSystem", sections: ["about"] }
 ]
 
@@ -92,6 +89,7 @@ function isSection(value: string | null): value is SettingsSection {
 function normalizeSection(value: string | null): SettingsSection | null {
   if (value === "support") return "extensions"
   if (value === "usage") return "general"
+  if (value === "skills") return "general"
   return isSection(value) ? value : null
 }
 
@@ -193,8 +191,6 @@ export function SettingsPage() {
             return <AboutSection />
           case "extensions":
             return <ExtensionsSection />
-          case "skills":
-            return <SkillsSection />
           case "automation":
             return <AutomationSection />
           case "groups":

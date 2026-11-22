@@ -68,11 +68,12 @@ test("mobile connections are reachable from settings navigation", () => {
   expect(screen.getByRole("region", { name: "Mobile connection" })).toBeVisible()
 })
 
-test("usage is no longer a settings destination and old deep links land on General", () => {
-  window.history.replaceState({}, "", "/settings.html?tab=usage")
+test("usage and skills are no longer settings destinations and old deep links land on General", () => {
+  window.history.replaceState({}, "", "/settings.html?tab=skills")
   try {
     render(<SettingsPage />)
     expect(screen.queryByRole("button", { name: "Usage" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Skills" })).toBeNull()
     expect(screen.getByRole("heading", { level: 1, name: "General" })).toBeVisible()
   } finally {
     window.history.replaceState({}, "", "/")
