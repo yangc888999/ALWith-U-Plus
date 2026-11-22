@@ -6,6 +6,11 @@ import { companyModelConfig } from "@/lib/company-model-config"
 import { isEnterpriseModel } from "@/features/auth/enterprise-providers"
 import i18n from "@/lib/i18n"
 import { modelFastModeFor } from "@/lib/model-fast-mode"
+import {
+  canonicalModelSelection,
+  modelDisplayId,
+  modelVendorId
+} from "@/lib/model-identity"
 
 /** The per-model overrides mirrored by the settings window (`alwith:native-model-overrides`). */
 function readNativeEffortOverrides(): Array<{
@@ -160,24 +165,18 @@ const ACCOUNT_MODEL_REQUIRED = "account_model_required"
  * for one of Codex's own models. All three resolve to one vendor here.
  */
 export function modelVendor(model: string): string {
-  const gateway = /^gateway:([^:]+):/.exec(model)
-  if (gateway !== null) {
-    try {
-      return decodeURIComponent(gateway[1])
-    } catch {
-      return gateway[1]
-    }
-  }
-  const slash = model.indexOf("/")
-  return slash > 0 ? model.slice(0, slash) : "native"
+  return modelVendorId(model)
 }
 
 /** `_meta.alwith.model`: open the thread on that gateway model (codex-acp-v2 catalog mode). */
 function modelHint(model: string | null): Record<string, unknown> | undefined {
-  return model === null ? undefined : { alwith: { model } }
+  return model === null ? undefined : { alwith: { model: canonicalModelSelection(model) } }
 }
 
-const selectedModel = selectedModelId
+const selectedModel = (options: acp.SessionConfigOption[]): string | null => {
+  const value = selectedModelId(options)
+  return value === null ? null : canonicalModelSelection(value)
+}
 
 /** `YYYY-MM-DD HH:mm` in local time: the stamp a group record's rounds and speeches carry. */
 function stamp(): string {
@@ -261,6 +260,34 @@ function replayRefusal(message: string): boolean {
   return /array too long|Invalid 'input\[\d+\]\.content'|input\[\d+\]\.content/i.test(message)
 }
 
+/**
+ * The one human explanation for a replay/open refusal. Callers own the toast; this function only
+ * classifies the engine text so the same failure cannot be shown once here and once at the surface.
+ */
+export function explainReplayFailure(
+  message: string,
+  options: { internalError?: boolean } = {}
+): string | null {
+  const deletedProvider =
+    /This chat uses model provider [`“"]([^`”"]+)[`”"], which is (?:no longer configured|not found)/.exec(message)
+  if (deletedProvider !== null) {
+    const provider = deletedProvider[1]
+    return i18n.t(provider === "alwith" ? "chat.routerRecovering" : "chat.providerDeleted", { provider })
+  }
+  const providerChanged =
+    /Cannot change this thread's model provider from [`“"]([^`”"]+)[`”"] to [`“"]([^`”"]+)[`”"]/i.exec(
+      message
+    )
+  if (providerChanged !== null)
+    return i18n.t("chat.providerLocked", { from: providerChanged[1], to: providerChanged[2] })
+  const providerConflict = /This chat uses (.+?), but your current provider is (.+?)\./.exec(message)
+  if (providerConflict !== null)
+    return i18n.t("chat.providerLocked", { from: providerConflict[1], to: providerConflict[2] })
+  if ((options.internalError !== false && /internal error/i.test(message)) || replayRefusal(message))
+    return i18n.t("chat.historyUnreplayable")
+  return null
+}
+
 /** Every model id the session's picker offers right now, flat across its groups. */
 function modelValues(options: acp.SessionConfigOption[]): string[] {
   const option = options.find((entry) => entry.category === "model" && entry.type === "select")
@@ -341,14 +368,7 @@ function plannerInstruction(): acp.ContentBlock {
  */
 export function readableModelId(value: string): string {
   const trimmed = value.trim()
-  const gateway = /^gateway:[^:]+:(.+)$/.exec(trimmed)
-  const bare = gateway?.[1] ?? trimmed
-  let decoded = bare
-  try {
-    decoded = decodeURIComponent(bare)
-  } catch {
-    // 保留原样：%XX 不完整时解码会抛错，这时原字符串仍然是可读的。
-  }
+  const decoded = modelDisplayId(trimmed)
   // `{max}` / `{high}` 是 effort 标记，保留它（读者靠它区分同名的两档）。
   return decoded.replace(/%7B/g, "{").replace(/%7D/g, "}")
 }
@@ -542,7 +562,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
       for (const [id, value] of Object.entries(parsed)) {
         if (typeof id !== "string") continue
         this.sessionModels.set(id, {
-          model: value.model ?? null,
+          model: value.model == null ? null : canonicalModelSelection(value.model),
           effort: value.effort ?? null,
           ...(typeof value.fastMode === "boolean" ? { fastMode: value.fastMode } : {}),
           // A record written before the flags existed cannot prove the user changed anything:
@@ -590,8 +610,12 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // Nothing a role writes is the reader's choice. Guarding here as well as at the call sites
     // keeps one forgotten branch from persisting a speaker's model as this chat's own.
     if (this.inRoleScope(id)) return
+    const normalized =
+      patch.model === undefined || patch.model === null
+        ? patch
+        : { ...patch, model: canonicalModelSelection(patch.model) }
     const current = this.sessionModels.get(id) ?? { model: null, effort: null }
-    const next = { ...current, ...patch }
+    const next = { ...current, ...normalized }
     if (
       next.model === current.model &&
       next.effort === current.effort &&
@@ -1115,7 +1139,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
       if (this.replayRetryOwners.delete(owner)) this.replayFailures.delete(`${owner}:${id}`)
       else {
         if (existing !== undefined) this.publishSession({ ...existing, cwd, restoring: false })
-        throw new Error(refused)
+        const explanation = explainReplayFailure(refused)
+        throw explanation !== null ? new Error(explanation) : new Error(refused)
       }
     }
     await this.replayForOwner(id, cwd, owner)
@@ -1147,7 +1172,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
       if (this.replayRetryOwners.delete(owner)) this.replayFailures.delete(slot)
       else {
         if (this.holds(id)) this.publishSession({ ...this.session(id), cwd, restoring: false })
-        throw new Error(refused)
+        const explanation = explainReplayFailure(refused)
+        throw explanation !== null ? new Error(explanation) : new Error(refused)
       }
     }
     // Snapshot before replay: replay's noteModel seeds the live config into the same map, which
@@ -1230,51 +1256,17 @@ export class CodexClient extends CodexAcpClient<AppState> {
               // fall through to the guidance below
             }
           }
-          // codex runs one provider per process. The agent now restarts its own Codex process for the
-          // chat's provider and retries the resume, so reaching this point means that restart could
-          // not happen at all (crashed engine, unsupported override). Name both sides so the user
-          // knows what is going on instead of reading a bare "internal error".
-          const providerConflict = /This chat uses (.+?), but your current provider is (.+?)\./.exec(text)
-          const deletedProvider = /This chat uses model provider [“"]([^”"]+)[”"], which is (?:no longer configured|not found)/.exec(text)
-          if (deletedProvider !== null) {
-            // The chat's provider was removed from settings, so nothing can serve it: say that
-            // instead of offering a switch that cannot happen. `alwith` is this app's own router
-            // (Rust `bridge::ROUTER_ID`), not a vendor the reader added — "restore that provider"
-            // would send them looking for a setting that does not exist.
-            //
-            // The router is injected into every engine this app spawns (`-c model_providers.alwith.*`
-            // in `codex_launcher.rs`), so the engine only reports it as missing when the replay
-            // landed on a process started before that injection existed. Reopening the conversation
-            // is the real remedy, the provider name is noise, and 15 s of red is what made this
-            // look like a permanent failure (2026-11-08). Keep it short and name the action.
-            const provider = deletedProvider[1]
-            toast.error(i18n.t(provider === "alwith" ? "chat.routerRecovering" : "chat.providerDeleted", { provider }), {
-              duration: provider === "alwith" ? 6_000 : 15_000
-            })
-          } else if (providerConflict !== null) {
-            toast.error(
-              i18n.t("chat.providerLocked", {
-                from: providerConflict[1],
-                to: providerConflict[2]
-              }),
-              {
-                duration: 15_000
-              }
-            )
-          } else if (providerMismatch) {
-            // A replay the agent cannot honour (mixed-provider history) leaves the "打开这个聊天"
-            // card. Say what the user can actually do about it.
-            toast.error(i18n.t("chat.historyUnreplayable"), {
-              duration: 15_000
-            })
-          }
+          // Do not toast here: `open()` has many callers, and the caller that shows the failed
+          // open already turns this thrown error into one toast. Toasting here as well produced
+          // two stacked notices — one friendly, one the raw ACP error (2026-11-22).
+          const explanation = explainReplayFailure(text)
           // Whatever happened, the surface must not keep a spinner up: this replay is over, so
           // say so before the error travels.
           this.publishSession({ ...this.session(id), cwd, restoring: false })
           // Remember the refusal for this slot so the next attempt cannot start another replay.
           // Only the reason the agent gave is kept: it is what the card and the toast show.
           this.replayFailures.set(slot, text)
-          throw error
+          throw explanation !== null ? new Error(explanation) : error
         }
       }
     } finally {
@@ -1320,13 +1312,17 @@ export class CodexClient extends CodexAcpClient<AppState> {
     const owner = this.openingOwners.get(id)
     const session = this.holds(id) ? this.session(id) : undefined
     const draft = this.state.draftSessions[id] !== undefined
-    const model =
+    const stored =
       draft && owner !== undefined
-        ? await this.resolveModel(this.slotModels[owner])
+        ? this.slotModels[owner]
         : (this.sessionModels.get(id)?.model ??
           (session ? selectedModel(session.configOptions) : null) ??
           this.gatewayModels.get(id) ??
           null)
+    // A rollout can carry a legacy bare external id. Resolve it through the same identity API as
+    // every picker before it becomes the thread's model hint; otherwise the Router receives a
+    // native-looking name and sends it to ChatGPT.
+    const model = stored === null ? null : await this.resolveModel(stored)
     return super.requestContext(
       cwd,
       operation,
@@ -1628,12 +1624,13 @@ export class CodexClient extends CodexAcpClient<AppState> {
         // `invalid_request` used to stand in for that, but every gateway words its 400s that way,
         // so a vendor refusing a model id was reported as a broken transcript. Match the two
         // shapes the Responses API uses for a refused replay, and name the model case separately.
-        if (/This chat uses|no longer configured/i.test(message) || replayRefusal(message)) {
+        const explanation = explainReplayFailure(message, { internalError: false })
+        if (explanation !== null) {
           // The switch is refused, not deferred: drop a parked pick for this value or the two
           // second retry in `applyParkedModel` replays the refusal forever — one toast per pass,
           // and 「本轮后切换」 stuck on a conversation that will never accept it (2026-11-17).
           if (typeof value === "string") this.clearParkedModel(id, value)
-          toast.error(i18n.t("chat.historyUnreplayable"), { duration: 12_000 })
+          toast.error(explanation, { duration: 12_000 })
           return
         }
         const served = /supported API model names are (.+?), but you passed (\S+?)[.\s]*$/i.exec(message)

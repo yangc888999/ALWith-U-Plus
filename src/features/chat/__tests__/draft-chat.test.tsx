@@ -1400,7 +1400,7 @@ test("the main window's draft drops its title bar while the floating window keep
   try {
     // Nothing to title before the first message: the conversation starts at the greeting.
     expect(view.container.querySelector("[data-main-chat-header]")).toBeNull()
-    expect(view.getByText("What would you like to build?")).toBeVisible()
+    expect(view.getByRole("heading", { level: 1 })).toBeVisible()
 
     const floating = document.createElement("div")
     document.body.append(floating)

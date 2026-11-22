@@ -304,7 +304,7 @@ export function NewTaskDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[90vh] min-h-0 flex-col overflow-hidden border-border/70 bg-background p-0 shadow-2xl sm:max-w-2xl">
+      <DialogContent className="flex max-h-[90vh] min-h-0 flex-col overflow-hidden border-border/70 p-0 shadow-2xl sm:max-w-2xl">
         <DialogHeader className="shrink-0 border-b border-border/60 px-4 pt-5 pb-4 sm:px-6 sm:pt-6">
           <DialogTitle className="text-base">
             {t(task === null ? "automation.newTitle" : "automation.editTitle")}

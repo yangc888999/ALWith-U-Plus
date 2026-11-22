@@ -1,5 +1,5 @@
 import { drafts, importDraft } from "@alwith/module-chat/conversation"
-import { act, cleanup, render, screen } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 
 import { initI18n } from "@/lib/i18n"
@@ -152,8 +152,10 @@ describe("selection menu placement", () => {
   test("the same selection still offers the pill while the Markdown preview is read-only", async () => {
     render(
       <div>
-        <div className="ProseMirror" data-alwith-markdown-editing="false">
-          <span data-testid="preview-text">预览里的正文</span>
+        <div className="file-workspace-editor">
+          <div className="ProseMirror" data-alwith-markdown-editing="false">
+            <span data-testid="preview-text">预览里的正文</span>
+          </div>
         </div>
         <SelectionMenu containerRef={{ current: null }} sessionId="" />
       </div>
@@ -172,6 +174,119 @@ describe("selection menu placement", () => {
     })
     expect(screen.queryByRole("menu")).not.toBeNull()
   })
+
+  // 2026-11-21: the pill is allowed in exactly two surfaces. Everything else keeps the native
+  // gesture, including new panels nobody remembered to add to the old denylist.
+  const selectAndWait = async (testId: string): Promise<void> => {
+    const node = screen.getByTestId(testId)
+    const range = document.createRange()
+    range.selectNodeContents(node)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    act(() => {
+      document.dispatchEvent(new Event("selectionchange"))
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    })
+  }
+
+  test("the transcript opens the pill", async () => {
+    render(
+      <div>
+        <div data-chat-content>
+          <span data-testid="message-text">对话正文</span>
+        </div>
+        <SelectionMenu containerRef={{ current: null }} sessionId="s" />
+      </div>
+    )
+    await selectAndWait("message-text")
+    expect(screen.queryByRole("menu")).not.toBeNull()
+  })
+
+  test("a sidebar selection never opens the pill", async () => {
+    render(
+      <div>
+        <div className="main-sidebar-panel">
+          <span data-testid="sidebar-text">会话标题</span>
+        </div>
+        <SelectionMenu containerRef={{ current: null }} sessionId="s" />
+      </div>
+    )
+    await selectAndWait("sidebar-text")
+    expect(screen.queryByRole("menu")).toBeNull()
+  })
+
+  test("a source editor showing .md or .html never opens the pill", async () => {
+    render(
+      <div>
+        <div className="file-workspace-editor">
+          <div className="monaco-editor">
+            <span data-testid="code-text"># 标题</span>
+          </div>
+        </div>
+        <SelectionMenu containerRef={{ current: null }} sessionId="s" />
+      </div>
+    )
+    await selectAndWait("code-text")
+    expect(screen.queryByRole("menu")).toBeNull()
+  })
+})
+
+describe("comment integration", () => {
+  // The document viewer draws its own floating 评论 button; the bar absorbs it instead of
+  // stacking two pills on one selection (2026-11-21).
+  test("the bar offers 评论 when the viewer's trigger exists, and clicks it", async () => {
+    const viewerClick = vi.fn()
+    const trigger = document.createElement("button")
+    trigger.dataset.testid = "comment-selection-button"
+    trigger.addEventListener("click", viewerClick)
+    document.body.append(trigger)
+    try {
+      render(
+        <div>
+          <div className="file-workspace-editor">
+            <div className="ProseMirror" data-alwith-markdown-editing="false">
+              <span data-testid="doc-text">文档正文</span>
+            </div>
+          </div>
+          <SelectionMenu containerRef={{ current: null }} sessionId="s" />
+        </div>
+      )
+      const node = screen.getByTestId("doc-text")
+      const range = document.createRange()
+      range.selectNodeContents(node)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      act(() => {
+        document.dispatchEvent(new Event("selectionchange"))
+      })
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      })
+      const comment = screen.getByRole("menuitem", { name: /评论|Comment/ })
+      fireEvent.click(comment)
+      expect(viewerClick).toHaveBeenCalledOnce()
+    } finally {
+      trigger.remove()
+    }
+  })
+
+  test("a host-owned comment composer opens from 点评 without a DOM trigger", () => {
+    const openComment = vi.fn()
+    render(
+      <SelectionMenu
+        containerRef={{ current: null }}
+        sessionId="session-1"
+        external={{ left: 40, top: 40, text: "报告里选中的文字" }}
+        onComment={openComment}
+      />
+    )
+    fireEvent.click(screen.getByRole("menuitem", { name: /评论|Comment/ }))
+    expect(openComment).toHaveBeenCalledOnce()
+  })
 })
 
 describe("preview selection", () => {
@@ -179,10 +294,15 @@ describe("preview selection", () => {
 
   test("a forwarded iframe selection can be quoted into the conversation", () => {
     render(
-      <SelectionMenu containerRef={{ current: null }} sessionId="session-1" external={placement} />
+      <SelectionMenu
+        containerRef={{ current: null }}
+        sessionId="session-1"
+        external={placement}
+        allowComment
+      />
     )
-    // Copy + add-to-chat. An empty session id used to make the second action unreachable.
-    expect(screen.getAllByRole("menuitem")).toHaveLength(2)
+    // Copy + add-to-chat + comment stay in one preview action bar.
+    expect(screen.getAllByRole("menuitem")).toHaveLength(3)
   })
 
   test("explicit dismissal clears the placement held by the preview host", () => {

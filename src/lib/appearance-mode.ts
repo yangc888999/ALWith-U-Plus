@@ -1,4 +1,4 @@
-// 外观材质：三档（Liquid Glass / Aero / 纯色），同时驱动**窗口**和 **CSS** 两层。
+// 外观材质：两档（玻璃 / 纯色），同时驱动**窗口**和 **CSS** 两层。
 //
 // 为什么要两层：
 //   * 真正把桌面内容折射进来的材质来自 AppKit（`NSVisualEffectView` / macOS 26 的
@@ -18,82 +18,57 @@ import { useSyncExternalStore } from "react"
 
 import { commands, type AppearanceEffect } from "@/bindings"
 
-export const APPEARANCE_MODES = ["solid", "liquid-glass", "aero"] as const
+export const APPEARANCE_MODES = ["solid", "aero"] as const
 export type AppearanceMode = (typeof APPEARANCE_MODES)[number]
 
 const STORAGE_KEY = "alwith:appearance-mode"
 
 const listeners = new Set<() => void>()
 
-/** 当前模式；`solid` 是默认值，也是唯一「不透明」的一档。 */
+/** 当前模式；纯色是默认，`aero` 是固定的毛玻璃档。 */
 let mode: AppearanceMode = readStored()
 
-/** 透明度（0-100，越大越透）：只缩放窗口底色 / 卡片 / 侧栏的 alpha，不动文字与边框。 */
-const TRANSPARENCY_KEY = "alwith:appearance-transparency"
-/** 100 档把底色压到原 alpha 的 15%：再低就开始看不清内容，属于「看不见」而不是「透明」。 */
-const TRANSPARENCY_FLOOR = 0.15
-let transparency = readTransparency()
+/**
+ * 毛玻璃档的固定不透明度。工作工具优先可读性，不再暴露透明度滑块：
+ * 纯色档 alpha = 1；毛玻璃固定到 0.82（约 18% 透出桌面），既看得到雾面，
+ * 又不会让壁纸杂色压过正文。
+ */
+const FROSTED_ALPHA = 0.82
+const LEGACY_TRANSPARENCY_KEYS = [
+  "alwith:appearance-transparency",
+  "alwith:appearance-transparency:solid",
+  "alwith:appearance-transparency:liquid-glass"
+]
 
-function readTransparency(): number {
-  try {
-    const raw = localStorage.getItem(TRANSPARENCY_KEY)
-    if (raw === null || raw === "") return 0
-    const value = Number(raw)
-    if (!Number.isFinite(value)) return 0
-    return Math.min(100, Math.max(0, Math.round(value)))
-  } catch {
-    return 0
+/** 旧版透明度只留清理：不读取、不写入，避免残留值继续影响底色。 */
+try {
+  for (const key of [...LEGACY_TRANSPARENCY_KEYS, "alwith:appearance-optimal-default"]) {
+    localStorage.removeItem(key)
   }
+} catch {
+  // 存储不可用：本次运行就是默认值。
 }
 
 /**
- * 把透明度写成 `--appearance-alpha`，由 `index.css` 里各材质的 `calc()` 乘进 alpha。
- *
- * 用变量而不是逐档改 token：三个材质各有自己的基准透明度，乘同一个系数才能保证
- * 「同一根滑块，三档观感一致」。默认 0（系数 1）时与升级前逐像素相同。
+ * 把固定透明度写成 `--appearance-alpha`，由 `index.css` 里各材质的 `calc()` 乘进 alpha。
+ * 这一段不再读取用户输入：材质档只决定「纯色 / 毛玻璃」，不决定透明度。
  */
-function paintTransparency(): void {
+function paintSurfaceAlpha(): void {
   if (typeof document === "undefined") return
-  // 纯色档不接受透明度：它存在的意义就是「不透明、不叠窗口材质、省 GPU」。
-  // 把系数钉在 1，滑块残留的值不会把它悄悄变回半透明（切到别的档位时值仍然保留）。
-  const alpha = mode === "solid" ? 1 : 1 - (transparency / 100) * (1 - TRANSPARENCY_FLOOR)
+  const alpha = mode === "solid" ? 1 : FROSTED_ALPHA
   document.documentElement.style.setProperty("--appearance-alpha", alpha.toFixed(3))
-  document.documentElement.dataset.appearanceTransparency = String(transparency)
 }
 
-/** 设置透明度：先落 CSS，再落存储。同一个值重复设置是无操作。 */
 /**
  * 跨窗口广播：WKWebView 的多个 webview 各有独立 JS 上下文，localStorage 写入**不会**在
- * 另一个 webview 里触发 `storage` 事件（设置页改成纯色、主窗口仍半透明就是这么来的）。
+ * 另一个 webview 里触发 `storage` 事件（设置页换成玻璃、主窗口没跟着变就是这么来的）。
  * Tauri 的全局事件才是可靠通道：谁改了，就把值广播给所有窗口。
  */
 const APPEARANCE_EVENT = "appearance:changed"
 
 function broadcast(): void {
   if (!isTauri()) return
-  void emit(APPEARANCE_EVENT, { mode, transparency }).catch(() => undefined)
-}
-
-export function setAppearanceTransparency(next: number): void {
-  const value = Math.min(100, Math.max(0, Math.round(next)))
-  if (value === transparency) return
-  transparency = value
-  try {
-    localStorage.setItem(TRANSPARENCY_KEY, String(value))
-  } catch {
-    // 存储不可用：本次运行有效。
-  }
-  paintTransparency()
-  publish()
-  broadcast()
-}
-
-export function appearanceTransparencySnapshot(): number {
-  return transparency
-}
-
-export function useAppearanceTransparency(): number {
-  return useSyncExternalStore(subscribeAppearanceMode, appearanceTransparencySnapshot, appearanceTransparencySnapshot)
+  void emit(APPEARANCE_EVENT, { mode }).catch(() => undefined)
 }
 /** 最近一次原生切换的结果。`null` = 还没试过 / 不在 Tauri 里。 */
 let effect: AppearanceEffect | null = null
@@ -103,7 +78,9 @@ let failure: string | null = null
 function readStored(): AppearanceMode {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw !== null && (APPEARANCE_MODES as readonly string[]).includes(raw)) return raw as AppearanceMode
+    if (raw === "solid" || raw === "aero") return raw
+    // The old Liquid Glass choice becomes the product's frosted-glass choice.
+    if (raw === "liquid-glass") return "aero"
   } catch {
     // 存储不可用：本次运行就是默认的纯色。
   }
@@ -172,8 +149,8 @@ export function setAppearanceMode(next: AppearanceMode): void {
     // 存储不可用：本次运行有效，下次启动回默认。
   }
   paint(next)
-  // 切档同时重算底色 alpha：从玻璃档带着 60% 透明度回到纯色，不重算就会留下一层透底。
-  paintTransparency()
+  // 切档同时重算底色 alpha：纯色恒为 1，玻璃固定到清晰优先的 0.90。
+  paintSurfaceAlpha()
   publish()
   broadcast()
   void applyNative(next)
@@ -187,7 +164,7 @@ export function setAppearanceMode(next: AppearanceMode): void {
  * 看起来像闪了一下。同步写在这里，样式表一到就是对的。
  */
 paint(mode)
-paintTransparency()
+paintSurfaceAlpha()
 
 export function startAppearanceMode(): () => void {
   paint(mode)
@@ -196,7 +173,7 @@ export function startAppearanceMode(): () => void {
   return () => undefined
 }
 
-/** 给「跟着系统深浅色切换」留的钩子：材质不需要重挂，但 CSS 透明度要靠 data 属性重算。 */
+/** 给「跟着系统深浅色切换」留的钩子：材质不需要重挂，但 CSS 底色 alpha 要靠 data 属性重算。 */
 export function currentAppearanceMode(): AppearanceMode {
   return mode
 }
@@ -237,42 +214,33 @@ export function useAppearanceFailure(): string | null {
 // ---------------------------------------------------------------------------------------------
 // 跨窗口同步（主窗口 ↔ 设置窗口）
 //
-// 设置窗口与主窗口是两个 webview：在设置里拖透明度、换材质，改的是**本窗口**的
+// 设置窗口与主窗口是两个 webview：在设置里换材质，改的是**本窗口**的
 // `--appearance-alpha` / `data-appearance`，主窗口既没有 storage 监听也不会重绘 —— 于是
-// 「透明度只对设置页有效、主界面没反应」。localStorage 同源共享，`storage` 事件就是那条
-// 现成的通道：读到别人的写入后，本窗口按同一份值重绘（材质那层由 Rust 命令作用于主窗口，
-// 这里只负责 DOM）。
-/** 由 App 启动时调用一次：订阅别的窗口发来的外观变更。 */
+// 「设置页换了、主界面没反应」。localStorage 同源共享，`storage` 事件就是那条现成的通道：
+// 读到别人的写入后，本窗口按同一份值重绘（材质那层由 Rust 命令作用于主窗口，这里只负责 DOM）。
+/** 由 App 启动时调用一次：订阅别的窗口发来的材质变更。 */
 export function startAppearanceSync(): void {
   if (!isTauri()) return
-  void listen<{ mode: AppearanceMode; transparency: number }>(APPEARANCE_EVENT, (event) => {
+  void listen<{ mode: AppearanceMode }>(APPEARANCE_EVENT, (event) => {
     const payload = event.payload
     if (payload === null || typeof payload !== "object") return
     const nextMode = (APPEARANCE_MODES as readonly string[]).includes(payload.mode) ? payload.mode : mode
-    const nextTransparency = Number.isFinite(payload.transparency) ? payload.transparency : transparency
-    const modeChanged = nextMode !== mode
-    const transparencyChanged = nextTransparency !== transparency
-    if (!modeChanged && !transparencyChanged) return
+    if (nextMode === mode) return
     mode = nextMode
-    transparency = nextTransparency
-    if (modeChanged) paint(mode)
-    paintTransparency()
+    paint(mode)
+    paintSurfaceAlpha()
     publish()
   }).catch(() => undefined)
 }
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("storage", (event) => {
-    if (event.key !== null && event.key !== STORAGE_KEY && event.key !== TRANSPARENCY_KEY) return
+    if (event.key !== null && event.key !== STORAGE_KEY) return
     const nextMode = readStored()
-    const nextTransparency = readTransparency()
-    const modeChanged = nextMode !== mode
-    const transparencyChanged = nextTransparency !== transparency
-    if (!modeChanged && !transparencyChanged) return
+    if (nextMode === mode) return
     mode = nextMode
-    transparency = nextTransparency
-    if (modeChanged) paint(mode)
-    paintTransparency()
+    paint(mode)
+    paintSurfaceAlpha()
     publish()
   })
 }

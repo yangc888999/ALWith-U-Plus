@@ -10,26 +10,35 @@ export function watchWindowMovement(): () => void {
   const root = document.documentElement
   let timer: number | undefined
   let disposed = false
-  let unlisten: (() => void) | undefined
+  const unlisteners: Array<() => void> = []
 
-  void getCurrentWindow()
-    .onMoved(() => {
-      root.dataset.windowMoving = ""
-      window.clearTimeout(timer)
-      timer = window.setTimeout(() => {
-        delete root.dataset.windowMoving
-      }, 240)
-    })
-    .then((off) => {
-      if (disposed) off()
-      else unlisten = off
-    })
-    .catch(() => undefined)
+  const mark = () => {
+    root.dataset.windowMoving = ""
+    window.clearTimeout(timer)
+    timer = window.setTimeout(() => {
+      delete root.dataset.windowMoving
+    }, 240)
+  }
+
+  const attach = (listening: Promise<() => void>) => {
+    void listening
+      .then((off) => {
+        if (disposed) off()
+        else unlisteners.push(off)
+      })
+      .catch(() => undefined)
+  }
+
+  const current = getCurrentWindow()
+  attach(current.onMoved(mark))
+  // Dragging an edge or a corner only emits `Resized` — `Moved` fires when the origin changes, so
+  // a right/bottom-edge drag never set this flag and kept paying for blur on every frame.
+  attach(current.onResized(mark))
 
   return () => {
     disposed = true
     window.clearTimeout(timer)
-    unlisten?.()
+    for (const off of unlisteners) off()
     delete root.dataset.windowMoving
   }
 }

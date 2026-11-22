@@ -619,6 +619,33 @@ test("unpriced models sit on top, ordered by usage, and one click inserts a matc
   expect(inputs.map((input) => input.value)).toContain("deepseek-x9-sample")
 })
 
+test("custom gateway models display as bare ids under Finture", async () => {
+  usePriceStore.setState({ prices: [] })
+  const customId = "custom-example/deepseek-V4.1-flash"
+  native.report.mockResolvedValue(
+    report({
+      points: [
+        { date: today, hour: 3, provider: "custom", model: customId, requests: 1, input: 100, cached: 0, output: 10, reasoning: 0, tokens: 110 }
+      ],
+      recent: [
+        { at: `${today}T10:05:00.000Z`, date: today, provider: "custom", model: customId, input: 100, cached: 0, output: 10, tokens: 110 }
+      ]
+    })
+  )
+  render(<UsageSection />)
+  await waitForStagedCards()
+  expect(screen.getAllByText("deepseek-V4.1-flash").length).toBeGreaterThan(0)
+  expect(screen.queryByText(customId)).toBeNull()
+
+  openPriceConfig()
+  const finture = screen.getAllByTestId("price-vendor").find((node) => node.getAttribute("data-vendor") === "Finture")
+  expect(finture).toBeTruthy()
+  fireEvent.click(finture!.querySelector("button[aria-expanded]")!)
+  expect(
+    Array.from(finture!.querySelectorAll('input[aria-label="usageReport.priceModelId"]')).map((input) => (input as HTMLInputElement).value)
+  ).toContain("deepseek-V4.1-flash")
+})
+
 test("a model marked free stops being unpriced, and a typed name replaces the id", async () => {
   native.report.mockResolvedValue(
     report({

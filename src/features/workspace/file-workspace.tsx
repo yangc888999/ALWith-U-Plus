@@ -581,11 +581,24 @@ export function FileWorkspace({
   // Text selected inside the previewed HTML frame (forwarded by the bridge): the frame's own
   // selection never reaches this document, so the host renders the copy pill itself.
   const [previewSelection, setPreviewSelection] = useState<{ left: number; top: number; text: string } | null>(null)
+  // The frame that reported the current preview selection. 点评 is forwarded to that frame so
+  // the report's own annotation editor opens on the exact range the reader selected.
+  const previewCommentWindow = useRef<Window | null>(null)
+  const [previewCommentsAvailable, setPreviewCommentsAvailable] = useState(false)
   const noSelectionRoot = useRef<HTMLDivElement | null>(null)
   // The composer on screen belongs to the selected conversation; before the first message the
   // draft chat owns it. Both the floating pill and the right-click menu quote into that composer.
   const composerSessionId = sessionId ?? DRAFT_SESSION_ID
   const dismissPreviewSelection = useCallback(() => setPreviewSelection(null), [])
+  const openPreviewComment = useCallback(() => {
+    const target = previewCommentWindow.current
+    if (target === null) return
+    try {
+      target.postMessage({ source: "alwith-preview-host", type: "comment" }, "*")
+    } catch {
+      // The preview was replaced between selection and click; the next selection re-binds it.
+    }
+  }, [])
   const addSelectionToChat = useCallback(
     (text: string): void => {
       if (!appendQuote(composerSessionId, text)) {
@@ -621,8 +634,13 @@ export function FileWorkspace({
         x?: unknown
         y?: unknown
         rect?: unknown
+        available?: unknown
       } | null
       if (data === null || data.source !== "alwith-preview") return
+      if (data.type === "comments-available") {
+        setPreviewCommentsAvailable(data.available === true)
+        return
+      }
       if (data.type === "selection") {
         const text = typeof data.text === "string" ? data.text.trim() : ""
         const frame = Array.from(document.querySelectorAll("iframe")).find(
@@ -640,6 +658,7 @@ export function FileWorkspace({
           setPreviewSelection(null)
           return
         }
+        previewCommentWindow.current = event.source as Window
         // Account for iframe zoom: rect is in the iframe's own coordinate space, so scale by the
         // ratio of the on-screen box width to the frame's intrinsic offsetWidth.
         const a = box.width / (frame ? frame.offsetWidth || box.width : box.width)
@@ -1551,6 +1570,8 @@ export function FileWorkspace({
         containerRef={noSelectionRoot}
         sessionId={composerSessionId}
         external={previewSelection}
+        allowComment={previewCommentsAvailable}
+        onComment={previewCommentsAvailable ? openPreviewComment : undefined}
         onDismiss={dismissPreviewSelection}
       />
       {showMainControls &&

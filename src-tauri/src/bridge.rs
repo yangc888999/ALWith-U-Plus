@@ -17,6 +17,8 @@ use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 
+use crate::model_identity::ModelIdentity;
+
 /// Set once at startup so a bridge worker can tell the webview that the backend refused a turn.
 /// The engine itself swallows this error into a silent `retry-after` sleep.
 static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
@@ -296,6 +298,51 @@ fn normalize_item_ids(parsed: &mut Value) -> usize {
         }
     }
     dropped
+}
+
+/// The Responses API validates every historical `function_call.name` against
+/// `^[a-zA-Z0-9_.-]+$`. Codex namespaces tools with `::` (`multi_agent_v1::spawn_agent`), which
+/// Codex accepts but the backend refuses on every replay. One such item poisons the whole thread
+/// at a fixed input index, so every later turn fails before the model can answer.
+///
+/// The name is descriptive in replayed history; the executable link is `call_id`, which is left
+/// untouched. Turn `::` into a dot and map other unsafe characters to an underscore.
+fn normalize_tool_call_names(parsed: &mut Value) -> usize {
+    let Some(input) = parsed.get_mut("input").and_then(Value::as_array_mut) else {
+        return 0;
+    };
+    let mut repaired = 0usize;
+    for item in input {
+        if item.get("type").and_then(Value::as_str) != Some("function_call") {
+            continue;
+        }
+        let Some(name) = item.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let normalized = portable_function_name(name);
+        if normalized != name
+            && let Some(object) = item.as_object_mut()
+        {
+            object.insert("name".into(), Value::String(normalized));
+            repaired += 1;
+        }
+    }
+    repaired
+}
+
+fn portable_function_name(name: &str) -> String {
+    let mut normalized = String::with_capacity(name.len());
+    let mut chars = name.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == ':' && chars.peek() == Some(&':') {
+            chars.next();
+            normalized.push('.');
+            continue;
+        }
+        let safe = character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-');
+        normalized.push(if safe { character } else { '_' });
+    }
+    if normalized.is_empty() { "tool".to_string() } else { normalized }
 }
 
 /// True for the "wrong id prefix for this item type" refusal. Kept separate from
@@ -607,6 +654,10 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
     };
     if strip_web_search_tools(&mut parsed) > 0 {
         log::info!("bridge: dropped web_search tool declaration(s) the gateway cannot run");
+    }
+    let renamed = normalize_tool_call_names(&mut parsed);
+    if renamed > 0 {
+        log::warn!("bridge: normalized {renamed} tool call name(s) for the Responses schema");
     }
     let payload = serde_json::to_vec(&parsed).unwrap_or(body);
     relay(
@@ -996,6 +1047,10 @@ fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
     let Ok(mut parsed) = serde_json::from_slice::<Value>(&body) else {
         return respond(request, 400, "application/json", br#"{"error":{"message":"router: body is not JSON"}}"#);
     };
+    let renamed = normalize_tool_call_names(&mut parsed);
+    if renamed > 0 {
+        log::warn!("bridge: normalized {renamed} tool call name(s) for the Responses schema");
+    }
     let Some(requested) = parsed.get("model").and_then(Value::as_str).map(str::to_string) else {
         return respond(request, 400, "application/json", br#"{"error":{"message":"router: missing model"}}"#);
     };
@@ -1007,16 +1062,26 @@ fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
         Some(target) => crate::external_models::routed_target(&target),
         None => requested.clone(),
     };
-    // Model names arrive as `<gateway>/<model>`; the rest is the vendor's own identifier, which
-    // may itself contain slashes, so split on the first one only. A name with no slash is one of
-    // Codex's own models: those belong to the ChatGPT backend, not to any gateway.
-    let Some((gateway, upstream_model)) = selection.split_once('/') else {
-        // An alias may point at one of Codex's own models as well. The backend validates the name it
-        // receives, so the resolved model has to replace the alias id here too.
-        if selection != requested {
-            parsed["model"] = Value::String(selection.clone());
+    // All three model spellings go through one parser. A malformed `gateway:` value must never be
+    // mistaken for a native id, because that is how an external model once reached ChatGPT.
+    let identity = ModelIdentity::parse(&selection);
+    let (gateway, upstream_model) = match &identity {
+        ModelIdentity::Gateway { gateway_id, model_id, .. } => (gateway_id.as_str(), model_id.as_str()),
+        ModelIdentity::Native { .. } => {
+            // An alias may point at one of Codex's own models as well. The backend validates the
+            // name it receives, so the resolved model has to replace the alias id here too.
+            if selection != requested {
+                parsed["model"] = Value::String(selection.clone());
+            }
+            return forward_chatgpt(request, &parsed);
         }
-        return forward_chatgpt(request, &parsed);
+        ModelIdentity::Invalid(_) => {
+            let body = json!({"error":{
+                "message":"model_route_required: gateway model names need a provider route",
+                "type":"model_route_required"
+            }});
+            return respond(request, 400, "application/json", body.to_string().as_bytes());
+        }
     };
     let Some(route) = router_routes().read().ok().and_then(|map| map.get(gateway).cloned()) else {
         let (status, body) = missing_gateway_response(gateway, &requested);
@@ -3303,6 +3368,33 @@ data: [DONE]
     }
 
     #[test]
+    fn namespaced_tool_calls_are_made_replayable() {
+        // Codex's own multi-agent namespace uses `::`; the Responses API only accepts
+        // `[a-zA-Z0-9_.-]`. A single historical call otherwise poisons every later turn.
+        let body = br#"{"model":"m","input":[
+            {"type":"function_call","call_id":"c1","name":"multi_agent_v1::spawn_agent","arguments":"{}"},
+            {"type":"function_call","call_id":"c2","name":"mcp__apps__space/_patch_page","arguments":"{}"},
+            {"type":"function_call","call_id":"c3","name":"shell","arguments":"{}"},
+            {"type":"function_call_output","call_id":"c1","output":"ok"}
+        ]}"#;
+        let mut parsed: Value = serde_json::from_slice(body).unwrap();
+        assert_eq!(normalize_tool_call_names(&mut parsed), 2);
+        let input = parsed["input"].as_array().unwrap();
+        assert_eq!(input[0]["name"], "multi_agent_v1.spawn_agent");
+        assert_eq!(input[1]["name"], "mcp__apps__space__patch_page");
+        assert_eq!(input[2]["name"], "shell", "valid names stay untouched");
+        assert_eq!(input[0]["call_id"], "c1", "the executable call id is preserved");
+        assert_eq!(input[3]["output"], "ok");
+    }
+
+    #[test]
+    fn an_already_portable_tool_name_is_not_rewritten() {
+        assert_eq!(portable_function_name("multi_agent_v1.spawn_agent"), "multi_agent_v1.spawn_agent");
+        assert_eq!(portable_function_name("mcp__apps__space._patch_page"), "mcp__apps__space._patch_page");
+        assert_eq!(portable_function_name(""), "tool");
+    }
+
+    #[test]
     fn the_refusal_names_the_item_to_repair() {
         let body = r#"{"error":{"message":"Invalid 'input[74].id': 'msg_2540f66c-e563-4b51-8d77-ae28e3f0529d'. Expected an ID that begins with 'rs'.","type":"invalid_request_error","param":"input[74].id","code":"invalid_value"}}"#;
         assert!(is_id_prefix_mismatch(body));
@@ -3703,6 +3795,26 @@ data: [DONE]
         assert!(described.contains("items=4"), "got: {described}");
         assert!(described.contains("function_call"), "got: {described}");
         assert!(described.contains("bytes"), "got: {described}");
+    }
+
+    #[test]
+    fn a_malformed_gateway_selection_never_falls_through_to_chatgpt() {
+        let payload = serde_json::to_vec(&json!({"model":"gateway:deepseek","input":[]})).unwrap();
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let address = server.server_addr().to_ip().unwrap();
+        let client = std::thread::spawn(move || {
+            reqwest::blocking::Client::new()
+                .post(format!("http://{address}/alwith/responses"))
+                .body(payload)
+                .send()
+                .unwrap()
+                .text()
+                .unwrap()
+        });
+        handle(server.recv_timeout(Duration::from_secs(5)).unwrap().unwrap()).unwrap();
+        let body = client.join().unwrap();
+        assert!(body.contains("model_route_required"), "got: {body}");
+        assert!(!body.contains("native models need a ChatGPT sign-in"), "must not reach native dispatch");
     }
 
     #[test]

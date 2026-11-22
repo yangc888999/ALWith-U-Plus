@@ -20,6 +20,8 @@ import { commands } from "@/bindings"
 import {
   blankPrice,
   canonicalVendor,
+  customModelVendor,
+  displayModelName,
   guessVendor,
   modelMatchKey,
   parseOpenRouterPrices,
@@ -191,10 +193,11 @@ export function addUnpricedModels(
     if (tracked.has(bare)) continue
     // The provider catalog's group name ("Qwen") folds onto the price table's vendor group
     // ("千问 Qwen") so the new row lands in the card that already has a price source.
-    const vendor = canonicalVendor(vendorForModel.get(key) ?? guessVendor(model))
-    prices = [...prices, { ...blankPrice(vendor), model, free: model.toLowerCase().endsWith(":free") }]
+    const vendor = customModelVendor(model) ?? canonicalVendor(vendorForModel.get(key) ?? guessVendor(model))
+    const normalizedModel = displayModelName(model)
+    prices = [...prices, { ...blankPrice(vendor), model: normalizedModel, free: model.toLowerCase().endsWith(":free") }]
     tracked.add(key)
-    added.push(model)
+    added.push(normalizedModel)
   }
   if (added.length > 0) usePriceStore.getState().setPrices(prices)
   return added

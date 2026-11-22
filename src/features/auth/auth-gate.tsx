@@ -1,4 +1,6 @@
 import { isValidPassword } from "@alwith/module-auth"
+import { isTauri } from "@tauri-apps/api/core"
+import { emit, listen } from "@tauri-apps/api/event"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import { type ReactNode, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
@@ -23,6 +25,7 @@ const SKIP_KEY = "alwith:platform-login-skipped"
  *  days the account service cannot be reached, not a second credential system. */
 export const LOCAL_PASSPHRASE = "YUP"
 const PASSPHRASE_KEY = "alwith:platform-passphrase-unlocked"
+const PASSPHRASE_EVENT = "alwith:platform-passphrase-unlocked"
 
 /** Exported for the test that pins the escape hatch; not part of the public surface. */
 export function readSkipped(): boolean {
@@ -57,12 +60,42 @@ export function rememberPassphraseUnlocked(): void {
   } catch {
     // Same as above: the current session still works without persistence.
   }
+  // Settings can be the only window with the passphrase form on screen. The main window keeps its
+  // own `unlocked` state, so persist and announce in one place instead of leaving it gated.
+  if (isTauri()) void emit(PASSPHRASE_EVENT).catch(() => undefined)
 }
 
 export function AuthGate({ children, auxiliary = false }: { children: ReactNode; auxiliary?: boolean }) {
   const authenticated = usePlatformAuth((s) => s.isAuthenticated)
   const loading = usePlatformAuth((s) => s.isLoading)
   const [unlocked, setUnlocked] = useState(readPassphraseUnlocked)
+  // A saved account can take a network round trip to restore. The local door must not wait for
+  // that service: after a short grace it is offered instead of an indefinite spinner.
+  const [localEntryReady, setLocalEntryReady] = useState(false)
+  useEffect(() => {
+    if (!loading || localEntryReady) return
+    const timer = window.setTimeout(() => setLocalEntryReady(true), 500)
+    return () => window.clearTimeout(timer)
+  }, [loading, localEntryReady])
+  // A local unlock in the settings window has to reach the main window immediately. localStorage
+  // covers the next launch; this subscription covers the window that is already open.
+  useEffect(() => {
+    if (unlocked) return
+    const sync = (): void => {
+      if (readPassphraseUnlocked()) setUnlocked(true)
+    }
+    const onStorage = (event: StorageEvent): void => {
+      if (event.key === null || event.key === PASSPHRASE_KEY) sync()
+    }
+    window.addEventListener("storage", onStorage)
+    const stop = isTauri()
+      ? listen(PASSPHRASE_EVENT, sync).catch(() => () => {})
+      : Promise.resolve(() => {})
+    return () => {
+      window.removeEventListener("storage", onStorage)
+      void stop.then((off) => off()).catch(() => undefined)
+    }
+  }, [unlocked])
   // The passphrase is a local fallback, not a login: `isAuthenticated` stays false, so Drive and
   // the account-managed ALwith provider stay hidden exactly as they should, while the Codex engine
   // and every other vendor's models keep working.
@@ -72,7 +105,7 @@ export function AuthGate({ children, auxiliary = false }: { children: ReactNode;
   // reader who already walked through the local door must never be sent back to a spinner — the
   // escape hatch would be held hostage by exactly the service it exists to bypass (2026-11-16).
   if (authenticated || unlocked) return children
-  if (loading)
+  if (loading && !localEntryReady)
     return (
       <div className="flex h-dvh items-center justify-center">
         <Spinner />
@@ -84,22 +117,26 @@ export function AuthGate({ children, auxiliary = false }: { children: ReactNode;
   // every section, so the reader could not reach any of them (2026-11-08).
   if (getCurrentWindow().label === "settings") return children
   return auxiliary ? null : (
-    <PlatformLogin
-      onPassphrase={() => {
-        rememberPassphraseUnlocked()
-        setUnlocked(true)
-      }}
-    />
+    <PlatformLogin initialMode={loading ? "passphrase" : "code"} onPassphrase={() => setUnlocked(true)} />
   )
 }
 
-export function PlatformLogin({ onPassphrase, embedded = false }: { onPassphrase?: () => void; embedded?: boolean }) {
+export function PlatformLogin({
+  onPassphrase,
+  embedded = false,
+  initialMode = "code"
+}: {
+  onPassphrase?: () => void
+  embedded?: boolean
+  /** Slow account restores open on the local door; a normal signed-out launch opens on code login. */
+  initialMode?: Mode
+}) {
   const { t } = useTranslation()
-  const [mode, setMode] = useState<Mode>("code")
+  const [mode, setMode] = useState<Mode>(initialMode)
   const [email, setEmail] = useState("")
   const [code, setCode] = useState("")
   const [password, setPassword] = useState("")
-  const [passphrase, setPassphrase] = useState("")
+  const [passphrase, setPassphrase] = useState(LOCAL_PASSPHRASE)
   const [pendingAction, setPendingAction] = useState<"sendCode" | "submit" | null>(null)
   const busy = pendingAction !== null
   const [error, setError] = useState("")
@@ -157,7 +194,10 @@ export function PlatformLogin({ onPassphrase, embedded = false }: { onPassphrase
     // The local passphrase never touches the network: it is the way in when the account service
     // cannot be reached at all.
     if (mode === "passphrase") {
-      if (passphrase.trim() !== LOCAL_PASSPHRASE) throw new Error(t("platformAuth.passphraseWrong"))
+      // Empty also means the documented default, so pressing Enter on a cleared field still enters.
+      if ((passphrase.trim() || LOCAL_PASSPHRASE) !== LOCAL_PASSPHRASE)
+        throw new Error(t("platformAuth.passphraseWrong"))
+      rememberPassphraseUnlocked()
       onPassphrase?.()
       return
     }
@@ -170,6 +210,7 @@ export function PlatformLogin({ onPassphrase, embedded = false }: { onPassphrase
           : await authClient.loginWithCode(email.trim(), code.trim())
     await loginPlatform(response)
   }
+  const passphraseHint = t("platformAuth.passphraseHint", { passphrase: LOCAL_PASSPHRASE })
   return (
     <div
       className={embedded ? "flex flex-col gap-4" : "flex h-dvh flex-col overflow-auto bg-background text-foreground"}
@@ -240,7 +281,7 @@ export function PlatformLogin({ onPassphrase, embedded = false }: { onPassphrase
                   value={passphrase}
                   onChange={(event) => setPassphrase(event.target.value)}
                 />
-                <FieldDescription>{t("platformAuth.passphraseHint")}</FieldDescription>
+                <FieldDescription>{passphraseHint}</FieldDescription>
               </Field>
             )}
             {mode !== "password" && mode !== "passphrase" && (
@@ -301,7 +342,6 @@ export function PlatformLogin({ onPassphrase, embedded = false }: { onPassphrase
             </Button>
           </FieldGroup>
         </form>
-        <p className="text-xs text-muted-foreground">{t("platformAuth.independent")}</p>
         {/* The account service only answers inside the company network, so a reader away from it
             would otherwise face a wall they cannot pass. The passphrase is that door: local only,
             never sent anywhere, and it does not fake an account. */}
@@ -319,7 +359,7 @@ export function PlatformLogin({ onPassphrase, embedded = false }: { onPassphrase
             >
               {t("platformAuth.usePassphrase")}
             </Button>
-            <p className="text-center text-xs text-muted-foreground">{t("platformAuth.passphraseHint")}</p>
+            <p className="text-center text-xs text-muted-foreground">{passphraseHint}</p>
           </div>
         )}
       </div>

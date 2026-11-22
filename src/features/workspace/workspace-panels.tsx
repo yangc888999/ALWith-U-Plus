@@ -171,7 +171,10 @@ export function WorkspacePanels({
           >
             <div
               className="file-workspace-slide"
-              style={{ width: !visible && !maximized && !canvas ? "100%" : chatWidth }}
+              // With the preview shut, the conversation fills the live content column in CSS.
+              // Its measured budget is intentionally settled later during a window resize, so a
+              // numeric width here would leave a blank strip until that measurement lands.
+              style={{ width: !visible && !maximized ? "100%" : chatWidth }}
               inert={maximized || (canvas?.split && canvas.selected === 2)}
               aria-hidden={maximized}
             >

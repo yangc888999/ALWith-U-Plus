@@ -4,6 +4,8 @@ import {
   blankPrice,
   canonicalVendor,
   costOf,
+  customModelName,
+  customModelVendor,
   DEFAULT_PRICES,
   DEFAULT_USD_TO_CNY,
   DEFAULT_UTC_OFFSET,
@@ -13,9 +15,11 @@ import {
   matchesModel,
   mergeVendorAliases,
   migratePriceState,
+  modelMatchKey,
   parseOpenRouterPrices,
   parseVendorPrices,
-  parseWindows
+  parseWindows,
+  displayModelName
 } from "../price-store"
 
 const deepseek = DEFAULT_PRICES.find((price) => price.model === "deepseek-flash")!
@@ -325,6 +329,15 @@ describe("model id matching", () => {
     expect(guessVendor("some-unknown-model")).toBe("其他")
   })
 
+  test("custom gateway ids use the Finture vendor and bare model name", () => {
+    const id = "custom-637573746f6d5f616c776974685f656e74657270726973655f61363936363261613965643062613732663735656635313166383663366132643965636438616561613634356565373636333230613832303734396461333439/deepseek-V4.1-flash"
+    expect(customModelName(id)).toBe("deepseek-V4.1-flash")
+    expect(customModelVendor(id)).toBe("Finture")
+    expect(displayModelName(id)).toBe("deepseek-V4.1-flash")
+    expect(guessVendor(id)).toBe("Finture")
+    expect(modelMatchKey(id)).toBe(modelMatchKey("deepseek-V4.1-flash"))
+  })
+
   test("provider-catalog names fold onto the price table's vendor groups", () => {
     expect(canonicalVendor("Qwen")).toBe("千问 Qwen")
     expect(canonicalVendor("Anthropic")).toBe("Claude")
@@ -366,7 +379,7 @@ describe("mergeVendorAliases", () => {
   })
 })
 
-describe("migratePriceState (v6)", () => {
+describe("migratePriceState (v7)", () => {
   test("a persisted vendor-source map from the upstream app is replaced wholesale", () => {
     // The upstream app shares this bundle id, so its localStorage can arrive with the old
     // platform.openai.com URL and a flat model-list regex — exactly the state that produced the
@@ -408,6 +421,19 @@ describe("migratePriceState (v6)", () => {
     expect(preview?.vendor).toBe("千问 Qwen")
     expect(migrated.vendorSources.Qwen).toBeUndefined()
     expect(migrated.vendorSources["千问 Qwen"].url).toContain("aliyun")
+  })
+
+  test("v7 normalizes persisted custom gateway rows into Finture", () => {
+    const customId = "custom-example/deepseek-V4.1-flash"
+    const migrated = migratePriceState({
+      prices: [{ ...blankPrice("DeepSeek"), model: customId, input: 1, cached: 0, output: 2 }],
+      vendorSources: {},
+      updatedAt: null
+    })
+    const row = migrated.prices.find((price) => price.model === "deepseek-V4.1-flash")
+    expect(row?.vendor).toBe("Finture")
+    expect(row?.input).toBe(1)
+    expect(migrated.prices.some((price) => price.model === customId)).toBe(false)
   })
 
   test("a fresh (versionless) state still gets the full default source map", () => {

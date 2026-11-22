@@ -92,35 +92,23 @@ test("an idle session shows no progress strip", () => {
   expect(view.container.querySelector("[data-turn-progress]")).toBeNull()
 })
 
-test("a turn that just started offers stop but no model switch", () => {
-  // Stop moved from the toolbar (where the model picker crowded it out of reach in narrow
-  // windows) to this full-width row, so it is present from the first moment a turn runs.
+test("a turn that just started keeps the progress row informational", () => {
+  // Send and stop are one mutually exclusive control in the composer toolbar. The progress row
+  // must not introduce a second stop entry above the input.
   const view = render(<TurnProgressBar session={session({ id: "turn-fresh" })} />)
-  expect(view.getByRole("button", { name: "停止" })).toBeTruthy()
+  expect(view.queryByRole("button", { name: "停止" })).toBeNull()
   expect(view.queryByRole("button", { name: "切换默认模型" })).toBeNull()
 })
 
-test("the stop button cancels the running turn", async () => {
-  const { client } = await import("@/lib/client")
-  const cancel = vi.spyOn(client, "cancel").mockResolvedValue(undefined)
-  try {
-    const view = render(<TurnProgressBar session={session({ id: "turn-stop" })} />)
-    fireEvent.click(view.getByRole("button", { name: "停止" }))
-    expect(cancel).toHaveBeenCalledTimes(1)
-    expect(cancel).toHaveBeenCalledWith("turn-stop")
-  } finally {
-    cancel.mockRestore()
-  }
+test("the progress row never owns cancellation", () => {
+  const view = render(<TurnProgressBar session={session({ id: "turn-stop" })} />)
+  expect(view.container.querySelector("[data-turn-stop]")).toBeNull()
 })
 
-test("the stop button stays reachable while the turn is quiet", () => {
-  // The whole point of the move: even a long, silent turn keeps stop on screen. The row's text
-  // truncates; the shrink-0 stop button never does.
+test("a quiet turn keeps cancellation out of the progress row", () => {
   const view = render(<TurnProgressBar session={session({ id: "turn-stop-quiet", clock: Date.now() - 190_000 })} />)
   act(() => {})
-  const stop = view.container.querySelector("[data-turn-stop]")
-  expect(stop).not.toBeNull()
-  expect(stop?.className).toContain("shrink-0")
+  expect(view.container.querySelector("[data-turn-stop]")).toBeNull()
 })
 
 test("a running turn shows one short connecting line and the elapsed clock", () => {

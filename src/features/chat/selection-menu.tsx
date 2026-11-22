@@ -11,7 +11,7 @@
 // - Scrolling, an empty selection, Escape and outside clicks all dismiss it.
 // - A selection spanning several blocks has no sensible single rect: the last visual line is
 //   used, which is where the eye (and the pointer) ends up.
-import { CopyIcon, MessageSquarePlusIcon } from "lucide-react"
+import { CopyIcon, MessageSquareIcon, MessageSquarePlusIcon } from "lucide-react"
 import {
   type RefObject,
   type ReactNode,
@@ -35,7 +35,10 @@ interface Placement {
   text: string
 }
 
-const MENU_WIDTH = 196
+/** module-drive's own floating comment trigger for a text selection. */
+const COMMENT_BUTTON = '[data-testid="comment-selection-button"]'
+
+const MENU_WIDTH = 260
 const MENU_HEIGHT = 34
 
 /** The quote form dropped into the composer: every selected line becomes a blockquote line. */
@@ -118,6 +121,8 @@ export function SelectionMenu({
   sessionId,
   external = null,
   allowAdd = true,
+  allowComment = false,
+  onComment,
   onDismiss
 }: {
   /** The transcript root: selections outside it (sidebar, header) never open the menu. */
@@ -130,14 +135,100 @@ export function SelectionMenu({
   external?: { left: number; top: number; text: string } | null
   /** Only for hosts with no composer at all; previews quote into the conversation by default. */
   allowAdd?: boolean
+  /** Preview hosts with the Drive comment bridge keep comment as a unified selection action. */
+  allowComment?: boolean
+  /**
+   * A host that owns the comment composer itself, such as the HTML preview bridge. When set,
+   * 点评 calls this instead of looking for module-drive's hidden trigger in the document.
+   */
+  onComment?: () => void
   /** Clears an `external` placement held by the host, which `hide` cannot reach. */
   onDismiss?: () => void
 }): ReactNode {
   const { t } = useTranslation()
   const [placement, setPlacement] = useState<Placement | null>(null)
+  // The document viewer (module-drive) draws its own floating "评论" button above the selection.
+  // Two pills stacked on one selection read as a glitch, so the action moves into this bar and
+  // that button is hidden while the bar is up (see `html[data-selection-menu]` in index.css).
+  const [commentTarget, setCommentTarget] = useState<HTMLButtonElement | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
+  // Comments are not owned by the host selection bar. module-drive renders its own trigger
+  // through a React portal in the host document; the bar must delegate to that trigger, while
+  // Copy/Add remain local actions implemented below.
+  const commentOwner = document
+  const commentDocuments = useCallback((): Document[] => {
+    const documents = [commentOwner]
+    for (const frame of commentOwner.querySelectorAll<HTMLIFrameElement>("iframe")) {
+      try {
+        const frameDocument = frame.contentDocument
+        if (frameDocument !== null && !documents.includes(frameDocument)) documents.push(frameDocument)
+      } catch {
+        // Cross-origin frames cannot expose their document; the host button remains discoverable.
+      }
+    }
+    return documents
+  }, [commentOwner])
+  const findCommentButtons = useCallback(
+    (): HTMLButtonElement[] =>
+      commentDocuments().flatMap((owner) => [...owner.querySelectorAll<HTMLButtonElement>(COMMENT_BUTTON)]),
+    [commentDocuments]
+  )
+  const findCommentButton = useCallback((): HTMLButtonElement | null => findCommentButtons()[0] ?? null, [findCommentButtons])
 
   const hide = useCallback((): void => setPlacement(null), [])
+  // The preview module also renders a native 评论 trigger. While the unified white action bar is
+  // visible, that trigger is hidden (not removed) so the bar owns the only visible entry point;
+  // clicking 评论 below still delegates to the module's original composer.
+  useEffect(() => {
+    const shown = external ?? placement
+    if (shown === null) return
+    document.documentElement.dataset.selectionMenu = ""
+    return () => {
+      delete document.documentElement.dataset.selectionMenu
+    }
+  }, [external, placement])
+  // module-drive inserts its trigger after its own selection state commits. A single query during
+  // measure() races that commit, which is why the screenshot could still show a standalone button
+  // while the white bar had only Copy/Add. Observe the portal until the trigger appears, hide it
+  // imperatively as a belt-and-suspenders fallback to the CSS rule, and keep the DOM node so the
+  // unified bar can delegate the original comment flow.
+  useEffect(() => {
+    const shown = external ?? placement
+    if (shown === null) {
+      setCommentTarget(null)
+      return
+    }
+    const sync = (): void => {
+      const buttons = findCommentButtons()
+      setCommentTarget(buttons[0] ?? null)
+      for (const button of buttons) {
+        button.style.setProperty("opacity", "0", "important")
+        button.style.setProperty("pointer-events", "none", "important")
+      }
+    }
+    sync()
+    const observer = new MutationObserver(sync)
+    observer.observe(commentOwner.body, { childList: true, subtree: true })
+    let frameCount = 0
+    let frameId = 0
+    const schedule = (): void => {
+      frameId = requestAnimationFrame(() => {
+        sync()
+        frameCount += 1
+        if (frameCount < 16) schedule()
+      })
+    }
+    schedule()
+    return () => {
+      observer.disconnect()
+      cancelAnimationFrame(frameId)
+      for (const button of findCommentButtons()) {
+        button.style.removeProperty("opacity")
+        button.style.removeProperty("pointer-events")
+      }
+      setCommentTarget(null)
+    }
+  }, [commentOwner, external, findCommentButtons, placement])
   // `hide` only clears this component's own placement. An `external` placement (an iframe
   // selection forwarded by the preview host) lives in the host's state, so explicit dismissal
   // has to tell the host to drop it too — otherwise the pill stays on screen after copy/add.
@@ -163,12 +254,29 @@ export function SelectionMenu({
     // rows, the sidebar selects chats, tabs switch documents): a copy pill there would steal
     // their right-click menu and read as a bug.
     if (element === null || !document.body.contains(element)) return hide()
-    if (
+    // 2026-11-21: the pill lives in exactly two places — the transcript (对话框) and the preview
+    // pane (预览栏). Everywhere else keeps the native gesture: the sidebar, the file tree, the
+    // tab strip, the title/status bars, the settings surface and the composer each own their
+    // selection, and a copy pill on top of them reads as a bug.
+    //
+    // Now that the container ref is only a hint, a denylist was the wrong shape: any surface
+    // nobody remembered to list (a new panel, an extension view) silently got the pill. So the
+    // rule is an allow-list, and editing surfaces are excluded inside it — a .md/.html document
+    // in edit mode is a text editor (native cut/copy/paste), not a preview.
+    const inTranscript =
+      element.closest("[data-chat-content]") !== null ||
+      (containerRef.current?.contains(element) ?? false)
+    const inPreview = element.closest(".file-workspace-editor") !== null
+    const editing =
       element.closest(
-        '[data-composer], .file-workspace-tree, .main-sidebar-panel, .main-window-statusbar, .main-window-titlebar, [role="tab"], [role="tablist"], [data-alwith-markdown-editing="true"]'
+        '.monaco-editor, .cm-editor, [data-editor], [contenteditable="true"], [contenteditable=""], [data-alwith-markdown-editing="true"], [data-alwith-html-editing="true"], textarea, input, [data-chat-input-header]'
       ) !== null
-    )
-      return hide()
+    const chrome =
+      element.closest(
+        '[data-composer], [role="tab"], [role="tablist"], .main-window-titlebar, .main-window-statusbar, .main-sidebar-panel, .main-sidebar-shell, .file-workspace-tree, .alwith-file-tree'
+      ) !== null
+    if (editing || chrome) return hide()
+    if (!inTranscript && !inPreview) return hide()
     const rects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 || rect.height > 0)
     // WebKit reports no client rects for some inline-spanning selections; the bounding rect is
     // still valid and keeps the pill anchored to the selection.
@@ -177,6 +285,8 @@ export function SelectionMenu({
     // Below the selection when there is room, above it otherwise.
     const top = last.bottom + MENU_HEIGHT + 8 < window.innerHeight ? last.bottom + 8 : Math.max(8, last.top - MENU_HEIGHT - 8)
     setPlacement({ left, top, text: text.slice(0, 20_000) })
+    // The comment trigger is synchronized by the owner-document observers above; no single-document
+    // query here can win the iframe/portal race reliably.
   }, [containerRef, hide])
 
   useEffect(() => {
@@ -254,6 +364,17 @@ export function SelectionMenu({
       .catch(() => toast.error(t("chat.contextCopyFailed")))
     dismiss()
   }
+  const comment = (): void => {
+    dismiss()
+    if (onComment !== undefined) {
+      onComment()
+      return
+    }
+    // The viewer owns the comment composer: click its trigger instead of reimplementing the flow.
+    // It stays in the DOM (hidden by CSS), so a programmatic click still opens it.
+    const button = commentTarget ?? findCommentButton()
+    button?.click()
+  }
   const addToChat = (): void => {
     if (!appendQuote(sessionId, shown.text)) {
       toast.error(t("chat.selectionAddFailed"))
@@ -302,6 +423,20 @@ export function SelectionMenu({
           >
             <MessageSquarePlusIcon className="size-3.5" />
             {t("chat.selectionAdd")}
+          </button>
+        </>
+      )}
+      {(commentTarget !== null || onComment !== undefined || (external !== null && allowComment)) && (
+        <>
+          <span className="bg-border h-4 w-px" aria-hidden="true" />
+          <button
+            type="button"
+            role="menuitem"
+            className="hover:bg-muted flex flex-1 items-center justify-center gap-1.5 rounded-full px-2 py-1 whitespace-nowrap"
+            onClick={comment}
+          >
+            <MessageSquareIcon className="size-3.5" />
+            {t("chat.selectionComment")}
           </button>
         </>
       )}

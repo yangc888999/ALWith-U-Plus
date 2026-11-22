@@ -1,7 +1,6 @@
 {
   "platformAuth": {
     "intro": "Sign in to your ALwith account",
-    "independent": "L and Desktop sign in independently. Your ALwith account, pets and entitlements remain the same. Model provider login is configured separately.",
     "skip": "Continue without signing in",
     "skipHint": "Drive and the ALwith enterprise models need an account. Conversations, the Codex engine and other vendors' models do not. You can sign in later from Settings → Account.",
     "localEntry": "Sign in locally (no company account)",
@@ -23,9 +22,10 @@
     "passwordLogin": "Password",
     "passphraseLogin": "Passphrase",
     "passphrase": "Passphrase",
-    "passphraseHint": "Local fallback for when online sign-in is unavailable: checked on this machine only, never sent anywhere.",
+    "passphraseHint": "Local fallback for when online sign-in is unavailable: checked on this machine only, never sent anywhere. Default passphrase: {{passphrase}}.",
     "passphraseWrong": "Wrong passphrase.",
     "passphraseUnlock": "Unlock with passphrase",
+    "passphraseAccepted": "Local passphrase accepted. The main window is ready.",
     "usePassphrase": "Use the offline passphrase",
     "register": "Register",
     "email": "Email",
@@ -159,7 +159,19 @@
   "welcome": {
     "title": "What would you like to build?",
     "description": "Pick a project with “Select project”, or just start typing to chat.",
-    "chooseFolder": "Choose folder"
+    "chooseFolder": "Choose folder",
+    "morning": "Good morning, {{name}}",
+    "morningAnon": "Good morning",
+    "afternoon": "Good afternoon, {{name}}",
+    "afternoonAnon": "Good afternoon",
+    "evening": "Good evening, {{name}}",
+    "eveningAnon": "Good evening",
+    "lateNight": "It's late, {{name}}",
+    "lateNightAnon": "It's late",
+    "subtitle": "What would you like to do?",
+    "lateNightSubtitle": "Get some rest — tell me if something cannot wait.",
+    "recentProjects": "Recent projects",
+    "recentProjectEmpty": "No recent projects yet"
   },
   "chat": {
     "memoryPrompt": "Read memory.md in the project root (skip if it does not exist), learn the project background, conventions and TODOs, then summarize the key points and wait for my next instruction.",
@@ -539,7 +551,8 @@
     "modelNotInCatalog": "This chat's model list no longer includes “{{from}}”; it is temporarily using “{{to}}”. Check 可用模型 in settings to confirm.",
     "modelFallbackApplied": "This chat's account model is unavailable; switched to “{{to}}”. History is intact — just send again.",
     "modelFallbackManual": "Automatic model switch failed. Pick a model below and send again — history is intact.",
-    "orchestrationModelReplaced": "The {{role}} model is no longer available; switched to “{{to}}”."
+    "orchestrationModelReplaced": "The {{role}} model is no longer available; switched to “{{to}}”.",
+    "selectionComment": "Comment"
   },
   "composer": {
     "mode": "Permissions",
@@ -623,9 +636,9 @@
     "appearanceDesc": "Adjust theme, zoom, column layout and conversation display.",
     "themeDesc": "System follows the macOS appearance automatically.",
     "materialMode": "Window material",
-    "materialModeDesc": "The material behind the window: each option explains itself.",
-    "materialSolid": "Solid",
-    "materialAero": "Aero",
+    "materialModeDesc": "Solid by default; frosted glass is optional and fixed for readability.",
+    "materialSolid": "Solid (default)",
+    "materialAero": "Frosted glass",
     "materialLiquidGlass": "Liquid Glass",
     "materialUnavailable": "This system has no window material; falling back to a CSS approximation.",
     "zoomDesc": "Changes the interface's type size and spacing, not system settings.",
@@ -663,7 +676,7 @@
     "themeLight": "Light",
     "themeDark": "Dark",
     "themeSystem": "System",
-    "accentDesc": "The highlight colour for settings pages — page glyphs, card headers and notes. Applies to the settings window only and does not affect other features.",
+    "accentDesc": "Global accent colour: the send key, sidebar selection, mode badges and notes all follow it — the whole interface, not just the settings window.",
     "accent": {
       "yupRed": "YUP Red",
       "lemonGreen": "Lemon Green",
@@ -672,8 +685,8 @@
       "warmBrown": "Warm Brown",
       "skyBlue": "Sky Blue",
       "emerald": "Emerald",
-      "snowWhite": "Snow White",
-      "elegantBlack": "Absolute Black"
+      "snowWhite": "Pearl White",
+      "elegantBlack": "Elegant Black"
     },
     "navigationSoundMode": "Navigation melody",
     "navigationSoundModes": {
@@ -884,12 +897,12 @@
     "sidebarVisibleDesc": "Project chats open with the sidebar docked; off keeps the icon rail — click an icon to expand.",
     "close": "Close settings",
     "materialDesc": {
-      "solid": "Opaque, cheapest.",
-      "aero": "Frosted blur.",
-      "glass": "Desktop refraction, macOS 26+."
+      "solid": "Default, clearest, cheapest.",
+      "aero": "Frosted blur, about 18% desktop show-through for clarity and effect.",
+      "glass": "Optional desktop refraction, fixed for readability."
     },
     "transparency": "Transparency",
-    "transparencyDesc": "Higher is more transparent.",
+    "transparencyDesc": "Higher is more transparent. Popovers, borders and the input box stay opaque.",
     "transparencySolid": "Solid is always opaque.",
     "transparencySolidValue": "Always opaque"
   },

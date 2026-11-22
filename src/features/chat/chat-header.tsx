@@ -30,7 +30,7 @@ export function ChatHeader({
         {project}
         <OverflowMarquee
           className={cn(
-            "block min-w-0 text-sm font-medium select-none [&>span]:pointer-events-none",
+            "block min-w-0 text-[13px] font-medium select-none [&>span]:pointer-events-none",
             floating ? "max-w-[50vw]" : "flex-1"
           )}
           data-tauri-drag-region
@@ -41,7 +41,7 @@ export function ChatHeader({
           // No frame: the header already carries a title and two icon actions, and a boxed badge
           // read as a third button.
           <span
-            className="text-muted-foreground shrink-0 px-1 text-xs font-medium tabular-nums select-none"
+            className="text-muted-foreground shrink-0 px-0.5 text-[11px] font-normal tabular-nums select-none"
             title={t("chat.turnCountTitle", { count: turnCount })}
           >
             {t("chat.turnCountBadge", { count: turnCount })}
@@ -54,7 +54,7 @@ export function ChatHeader({
   if (floating) return target === null ? null : createPortal(content, target)
   return (
     <header
-      className="@container relative flex min-h-10 shrink-0 flex-wrap items-center gap-1 border-b border-border px-1"
+      className="@container relative flex min-h-9 shrink-0 flex-wrap items-center gap-1.5 border-b border-border/70 px-3"
       data-main-chat-header
       data-tauri-drag-region="deep"
     >

@@ -14,6 +14,35 @@ afterEach(() => {
   localStorage.clear()
 })
 
+test("a closed preview lets the conversation fill the live column", () => {
+  const view = render(
+    <CanvasContext.Provider
+      value={{
+        viewportWidth: 1256,
+        budget: 1000,
+        selected: 1,
+        split: false,
+        moving: false,
+        setWorkspace: vi.fn(),
+        navigate: vi.fn(),
+        setDividerDragging: vi.fn()
+      }}
+    >
+      <WorkspacePanels
+        visible={false}
+        maximized={false}
+        onVisibleChange={vi.fn()}
+        onMaximizedChange={vi.fn()}
+        chat={<div>Chat</div>}
+        preview={<div>Preview</div>}
+      />
+    </CanvasContext.Provider>
+  )
+  // A numeric budget would hold the old pixel width while the window grows. `100%` follows the
+  // live content column, so only the conversation changes width during a resize.
+  expect(view.container.querySelector(".file-workspace-slide")).toHaveStyle({ width: "100%" })
+})
+
 test("dragging past the minimum keeps preview open on the next screen and reversing restores shared layout", () => {
   const onVisibleChange = vi.fn()
   const setWorkspace = vi.fn()

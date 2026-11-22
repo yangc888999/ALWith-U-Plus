@@ -23,8 +23,6 @@ export type Preferences = {
   navigationInstrument: NavigationInstrument
   /** Bundle id (Windows: exe path) of the app "Open in …" last used for a project. */
   externalEditor: string | null
-  /** Conversation that was on screen at quit, reopened at launch. */
-  lastSession?: { id: string; cwd: string } | null
   /** Local profile overrides, attributed to the account that set them. */
   profileNickname: string | null
   profileAvatar: string | null
@@ -42,7 +40,6 @@ const preferenceKeys: Record<keyof Preferences, string> = {
   navigationSoundMode: "chat.navigationSoundMode",
   navigationInstrument: "chat.navigationInstrument",
   externalEditor: "general.externalEditor",
-  lastSession: "chat.lastSession",
   profileNickname: "profile.nickname",
   profileAvatar: "profile.avatar",
   profileOwner: "profile.owner"
@@ -68,7 +65,6 @@ export function defaultPreferences(): Preferences {
     navigationSoundMode: "scale",
     navigationInstrument: "acoustic_grand_piano",
     externalEditor: null,
-    lastSession: null,
     profileNickname: null,
     profileAvatar: null,
     profileOwner: null
@@ -121,7 +117,6 @@ export async function loadPreferences(): Promise<Preferences> {
     navigationSoundMode: navigationSoundMode ?? "scale",
     navigationInstrument: navigationInstrument ?? "acoustic_grand_piano",
     externalEditor: externalEditor ?? null,
-    lastSession: (await store.get<Preferences["lastSession"]>("lastSession")) ?? null,
     profileNickname: (await store.get<string>("profileNickname")) ?? null,
     profileAvatar: (await store.get<string>("profileAvatar")) ?? null,
     profileOwner: (await store.get<string>("profileOwner")) ?? null

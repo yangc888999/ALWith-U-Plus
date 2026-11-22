@@ -9,8 +9,6 @@ export type AccentId =
   | "yup-red"
   | "lemon-green"
   | "girly-pink"
-  | "linen-gray"
-  | "warm-brown"
   | "sky-blue"
   | "emerald"
   | "snow-white"
@@ -24,23 +22,26 @@ export interface AccentPreset {
   swatch: string
 }
 
-// Order is the order they appear in the picker. YUP红 is the default brand colour, sampled
-// from the YUP logo gradient (orange → red → pink).
+// Order is the order they appear in the picker. Elegant black / pearl white are the two neutral
+// presets; the five colour presets follow. YUP red remains the default brand colour.
 export const ACCENT_PRESETS: AccentPreset[] = [
-  { id: "yup-red", labelKey: "settings.accent.yupRed", swatch: "oklch(0.64 0.20 29)" },
-  { id: "lemon-green", labelKey: "settings.accent.lemonGreen", swatch: "oklch(0.80 0.16 125)" },
-  { id: "girly-pink", labelKey: "settings.accent.girlyPink", swatch: "oklch(0.74 0.14 350)" },
-  { id: "linen-gray", labelKey: "settings.accent.linenGray", swatch: "oklch(0.72 0.025 85)" },
-  { id: "warm-brown", labelKey: "settings.accent.warmBrown", swatch: "oklch(0.62 0.09 55)" },
-  { id: "sky-blue", labelKey: "settings.accent.skyBlue", swatch: "oklch(0.66 0.13 240)" },
-  { id: "emerald", labelKey: "settings.accent.emerald", swatch: "oklch(0.68 0.12 168)" },
-  // 与「纯色」材质配套的两档中性色：浅色选雪域白、深色选极致黑，整窗只有黑白灰，
-  // 不再有彩色强调点与纯色底打架。
+  { id: "elegant-black", labelKey: "settings.accent.elegantBlack", swatch: "oklch(0.24 0.006 265)" },
   { id: "snow-white", labelKey: "settings.accent.snowWhite", swatch: "oklch(0.97 0.004 250)" },
-  { id: "elegant-black", labelKey: "settings.accent.elegantBlack", swatch: "oklch(0.24 0.006 265)" }
+  { id: "yup-red", labelKey: "settings.accent.yupRed", swatch: "oklch(0.64 0.20 29)" },
+  { id: "girly-pink", labelKey: "settings.accent.girlyPink", swatch: "oklch(0.74 0.14 350)" },
+  { id: "lemon-green", labelKey: "settings.accent.lemonGreen", swatch: "oklch(0.80 0.16 125)" },
+  { id: "sky-blue", labelKey: "settings.accent.skyBlue", swatch: "oklch(0.66 0.13 240)" },
+  { id: "emerald", labelKey: "settings.accent.emerald", swatch: "oklch(0.68 0.12 168)" }
 ]
 
 export const DEFAULT_ACCENT: AccentId = "yup-red"
+
+/** A stored accent from an older build may have been removed from the picker. */
+export function normalizeAccentId(value: string | null | undefined): AccentId {
+  return value !== null && value !== undefined && ACCENT_PRESETS.some((preset) => preset.id === value)
+    ? (value as AccentId)
+    : DEFAULT_ACCENT
+}
 
 type AccentState = {
   accent: AccentId
@@ -73,8 +74,7 @@ export function adoptRemoteAccent(raw: string | null): void {
   if (raw === null) return
   try {
     const parsed = JSON.parse(raw) as { state?: { accent?: AccentId } }
-    const next = parsed.state?.accent
-    if (next === undefined) return
+    const next = normalizeAccentId(parsed.state?.accent)
     if (useAccentStore.getState().accent === next) return
     useAccentStore.setState({ accent: next })
   } catch {
@@ -94,10 +94,12 @@ if (typeof window !== "undefined" && "addEventListener" in window) {
  * re-theme the whole window. Call once per window (main + settings).
  */
 export function useAccentDataAttribute(): void {
-  const accent = useAccentStore((state) => state.accent)
+  const stored = useAccentStore((state) => state.accent)
+  const accent = normalizeAccentId(stored)
   useEffect(() => {
+    if (accent !== stored) useAccentStore.setState({ accent })
     document.documentElement.setAttribute("data-accent", accent)
-  }, [accent])
+  }, [accent, stored])
 }
 
 /**
@@ -106,12 +108,12 @@ export function useAccentDataAttribute(): void {
  * 两个必须遵守的约束（2026-11-17 现场踩过）：**唯一写入者**与**合并瞬态**。
  *
  * 1. 唯一写入者：主窗口（`app.tsx`）传入 `writer: true`，设置窗口只读。
- *    两个窗口各按自己的 `html.dark` 决定「该用雪域白还是极致黑」时，一旦明暗不一致就会
- *    互相覆盖——A 写雪域白、B 读到来又写回极致黑、A 再写……配色就这样一直跳。
+ *    两个窗口各按自己的 `html.dark` 决定「该用珍珠白还是雅致黑」时，一旦明暗不一致就会
+ *    互相覆盖——A 写珍珠白、B 读到来又写回雅致黑、A 再写……配色就这样一直跳。
  *    设置窗口通过 accent-store 的 storage 事件同步主窗口的结论即可。
  *
  * 2. 合并瞬态：`ThemeProvider` 应用主题时是 `classList.remove("light","dark")` 再 `add()`，
- *    这一瞬间没有任何 dark class。逐次读会先判成「浅色 → 雪域白」，再判回深色，视觉上闪一下。
+ *    这一瞬间没有任何 dark class。逐次读会先判成「浅色 → 珍珠白」，再判回深色，视觉上闪一下。
  *    所以回调统一推迟到下一帧，只认最终态。
  */
 export function syncNeutralAccentWithTheme(options?: { writer?: boolean }): void {

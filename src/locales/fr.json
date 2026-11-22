@@ -130,7 +130,8 @@
     },
     "retryAlertTitle": "“{{model}}” has been retried {{count}} times with no response; the system is still retrying in the background.",
     "retryAlertJump": "Open conversation",
-    "retryAlertDescription": "Open the conversation to check progress, or switch to another model."
+    "retryAlertDescription": "Open the conversation to check progress, or switch to another model.",
+    "selectionComment": "Comment"
   },
   "composer": {
     "model": "Modèle",

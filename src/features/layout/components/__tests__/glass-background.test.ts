@@ -13,6 +13,18 @@ test("the docked navigation leaves native vibrancy visible", () => {
   )
 })
 
+test("the solid dark theme is charcoal, not a pure-black slab", () => {
+  const dark = /\.dark\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ""
+  expect(dark).toContain("--foreground: #d2d2d2")
+  expect(dark).toContain("--background: color-mix(in srgb, #1f1f1f")
+  expect(dark).not.toContain("--foreground: oklch(0.985")
+
+  const solid = /html\.dark\[data-appearance="solid"\]\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ""
+  expect(solid).toContain("--background: #1f1f1f")
+  expect(solid).toContain("--sidebar: #1b1b1b")
+  expect(solid).not.toContain("--background: #000")
+})
+
 test("the floating navigation paints a separate surface over the chat", () => {
   expect(styles).toMatch(
     /\[data-sidebar-mode="floating"\] \[data-slot="sidebar"\]\s*\{\s*background-color:\s*var\(--background\);\s*\}/
@@ -29,4 +41,60 @@ test("the trailing apps screen paints a themed surface in translucent appearance
   // 纯色档不得额外铺底色：0.4.3 基线里 .main-screen-trailing 没有任何 background 声明。
   const plainRule = /\.main-screen-trailing\s*\{[^}]*\}/.exec(styles)?.[0] ?? ""
   expect(plainRule).not.toContain("background")
+})
+
+// 玻璃/雾面档的「控件色」必须和底色用同一根透明度系数。`--muted` 是输入区卡面
+// （`--chat-input-bg-color` 在深色档取它）、按钮与 chip 的填充：它若漏乘 alpha，透明度拉满时
+// 页面已经透成桌面，输入区却仍是 64% 的深色板 —— 用户看到的就是「上面和输入框下面两种背景色」。
+test("every glass mode scales secondary/muted/accent with the transparency factor", () => {
+  const blocks = [
+    /html\[data-appearance="liquid-glass"\]:not\(\.dark\)\s*\{([^}]*)\}/,
+    /html\[data-appearance="liquid-glass"\]\.dark\s*\{([^}]*)\}/,
+    /html\[data-appearance="aero"\]:not\(\.dark\)\s*\{([^}]*)\}/,
+    /html\[data-appearance="aero"\]\.dark\s*\{([^}]*)\}/
+  ]
+  for (const block of blocks) {
+    const body = block.exec(styles)?.[1] ?? ""
+    expect(body).not.toBe("")
+    for (const token of ["secondary", "muted", "accent"]) {
+      const declaration = new RegExp(`--${token}:[^;]*;`).exec(body)?.[0] ?? ""
+      expect(declaration).toContain("var(--appearance-alpha, 1)")
+    }
+  }
+})
+
+test("floating menus and panels share a readable transparency-controlled surface", () => {
+  const blocks = [
+    /html\[data-appearance="liquid-glass"\]:not\(\.dark\)\s*\{([^}]*)\}/,
+    /html\[data-appearance="liquid-glass"\]\.dark\s*\{([^}]*)\}/,
+    /html\[data-appearance="aero"\]:not\(\.dark\)\s*\{([^}]*)\}/,
+    /html\[data-appearance="aero"\]\.dark\s*\{([^}]*)\}/
+  ]
+  for (const block of blocks) {
+    const body = block.exec(styles)?.[1] ?? ""
+    expect(body).toContain("--overlay-alpha: calc(")
+    expect(body).toMatch(/--popover:\s*oklch\([^;]*\/ var\(--overlay-alpha\)/)
+  }
+  expect(styles).toMatch(
+    /html\[data-appearance="liquid-glass"\][\s\S]*?\[data-appearance-surface="overlay"\][\s\S]*?background-color:\s*var\(--popover\);/
+  )
+  expect(styles).toContain('[data-appearance-surface="overlay"]')
+  expect(styles).toContain('[data-slot="popover-content"]')
+  expect(styles).not.toMatch(/\[data-slot="popover"\]/)
+  expect(styles).toMatch(
+    /\[data-wallpaper="active"\]\s*:is\(\s*\[data-slot="popover-content"\],[\s\S]*?background-color:\s*var\(--popover\);/
+  )
+  const translucentSettingsRule =
+    /\[data-wallpaper="active"\] \.settings-card\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--card\) 96%, transparent\)/.exec(styles)?.[0] ?? ""
+  expect(translucentSettingsRule).toContain('.settings-card')
+  expect(translucentSettingsRule).not.toContain('[data-slot="popover"]')
+  expect(styles).not.toContain('--popover: oklch(0.995 0.006 240 / 0.92)')
+  expect(styles).not.toContain('--popover: oklch(0.22 0.014 250 / 0.94)')
+})
+
+test("frosted accents adapt in both light and dark appearances", () => {
+  expect(styles).toMatch(
+    /html\[data-appearance="aero"\]:not\(\.dark\)\s*\{[^}]*--settings-accent:\s*color-mix/
+  )
+  expect(styles).toMatch(/html\[data-appearance="aero"\]\.dark\s*\{[^}]*--settings-accent:\s*color-mix/)
 })

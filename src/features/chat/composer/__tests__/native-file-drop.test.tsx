@@ -118,6 +118,24 @@ test("rapid duplicate drops are serialized and a duplicate image is dropped", as
   expect(host.listen).toHaveBeenCalledTimes(1)
 })
 
+test("the attachment policy drops a browser copy of an image already added natively", () => {
+  const file = new File(["png"], "qa.png", { type: "image/png" })
+  const existing = [
+    {
+      id: "native",
+      type: "file" as const,
+      url: "blob:qa",
+      filename: "qa.png",
+      size: file.size,
+      lastModified: file.lastModified,
+      mediaType: "image/png"
+    }
+  ]
+  expect(nativeAttachmentPolicy.uniqueFiles([file], existing)).toEqual([])
+  const other = new File(["other"], "other.png", { type: "image/png" })
+  expect(nativeAttachmentPolicy.uniqueFiles([other], existing)).toEqual([other])
+})
+
 test("workspace drops are left to its importer and unavailable composers reject with feedback", () => {
   return Promise.try(() => {
     const view = render(<Harness enabled={false} />)

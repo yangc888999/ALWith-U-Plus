@@ -129,6 +129,45 @@ test("Desktop defaults prefer configured providers and leave native defaults to 
   expect(resolveSessionModel("gpt-6-astra", snapshot)).toBe("gpt-6-astra")
 })
 
+test("a historical bare external model is recovered to its provider route", () => {
+  const snapshot: ProviderSnapshot = {
+    revision: 1,
+    appliedRevision: 1,
+    status: "applied",
+    error: null,
+    providers: {
+      deepseek: { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" },
+      qwen: { configured: true, disabled: false, region: "plan", base_url: null, protocol: "responses" }
+    },
+    customProviders: [],
+    builtInModels: { openai: [{ api_id: "gpt-6.2-sol", label: "GPT-6.2-Sol" }] },
+    managedProviders: []
+  }
+  const deepseek = PROVIDERS.find((provider) => provider.id === "deepseek")!
+  const model = deepseek.models[0]!.id
+  expect(resolveSessionModel(model, snapshot)).toBe(gatewayModelId("deepseek", model))
+  // A native id stays native even when another provider resells the same slug.
+  expect(resolveSessionModel("gpt-6.2-sol", snapshot)).toBe("gpt-6.2-sol")
+})
+
+test("a routed gateway model is converted back to the persisted session selection", () => {
+  const snapshot: ProviderSnapshot = {
+    revision: 1,
+    appliedRevision: 1,
+    status: "applied",
+    error: null,
+    providers: {
+      deepseek: { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" }
+    },
+    customProviders: [],
+    builtInModels: {},
+    managedProviders: []
+  }
+  const deepseek = PROVIDERS.find((provider) => provider.id === "deepseek")!
+  const model = deepseek.models[0]!.id
+  expect(resolveSessionModel(`deepseek/${model}`, snapshot)).toBe(gatewayModelId("deepseek", model))
+})
+
 test("custom model selections use adapter-compatible IDs without colliding with other saved providers", () => {
   expect(gatewayModelId("custom_a", "deepseek-flash")).toBe("gateway:custom-637573746f6d5f61:deepseek-flash")
   expect(gatewayModelId("custom_a-b", "model")).not.toBe(gatewayModelId("custom_a_b", "model"))

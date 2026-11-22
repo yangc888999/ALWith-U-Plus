@@ -39,6 +39,12 @@ import { defaultModelChoice } from "./default-model"
 // The GPT catalog rules live in `model-config.ts`; the four exports below are kept for their old
 // call sites and delegate to it, so no surface can drift back to its own copy of the rule.
 import { catalogStatusOf, type NativeCatalog, resolveModelConfig } from "./model-config"
+import {
+  isGatewayModelIdentity,
+  modelDisplayId,
+  modelSelectionId,
+  parseModelIdentity
+} from "./model-identity"
 import catalog from "./provider-catalog.json"
 
 export type { CustomModel } from "@/bindings"
@@ -256,17 +262,21 @@ export function pickerProviderGroups(snapshot: ProviderSnapshot): ReturnType<typ
   return providerGroups(snapshot).filter((provider) => provider.id !== "litellm")
 }
 
-export function gatewayModelId(providerId: string, modelId: string): string {
+/** Runtime id Codex and the Router use for a provider (custom public ids become `custom-<hex>`). */
+export function gatewayRuntimeId(providerId: string): string {
   // Keep persisted IDs stable; the adapter accepts only [a-z0-9-]+. Match providers.rs.
-  const runtimeId = providerId.startsWith("custom_")
+  return providerId.startsWith("custom_")
     ? `custom-${Array.from(new TextEncoder().encode(providerId), (byte) => byte.toString(16).padStart(2, "0")).join("")}`
     : providerId
-  return `gateway:${encodeURIComponent(runtimeId)}:${encodeURIComponent(modelId)}`
+}
+
+export function gatewayModelId(providerId: string, modelId: string): string {
+  return modelSelectionId(gatewayRuntimeId(providerId), modelId)
 }
 
 /** Account-owned models: the ALwith account catalog (litellm) and the Finture enterprise gateway. */
 export function isAccountModel(model: string | null | undefined): boolean {
-  return (!!model && model.startsWith("gateway:litellm:")) || isEnterpriseModel(model)
+  return (!!model && parseModelIdentity(model).gatewayId === "litellm") || isEnterpriseModel(model)
 }
 
 /** Desktop's default selection prefers a user-configured provider; native defaults stay engine-owned. */
@@ -280,12 +290,12 @@ export function isAccountModel(model: string | null | undefined): boolean {
  * 数字尾巴，再做前缀包含匹配；命中多个视为有歧义，交回原来的回落顺序而不是猜。
  */
 function normalizeModelId(id: string): string {
-  const bare = /^gateway:[^:]+:(.+)$/.exec(id)?.[1] ?? id
+  const bare = modelDisplayId(id)
   return bare.toLowerCase().replace(/[-_.\s]/g, "").replace(/\d{4,}$/, "")
 }
 
 function rebindRenamedModel(stored: string, models: readonly string[]): string | null {
-  if (!stored.startsWith("gateway:")) return null
+  if (!isGatewayModelIdentity(stored)) return null
   const target = normalizeModelId(stored)
   if (target === "") return null
   const hits = models.filter((candidate) => {
@@ -300,21 +310,57 @@ export function resolveSessionModel(
   snapshot: ProviderSnapshot,
   purpose: "session" | "draft" = "session"
 ): string | null {
-  const models = providerGroups(snapshot).flatMap((group) =>
+  const groups = providerGroups(snapshot)
+  const models = groups.flatMap((group) =>
     group.models.map((entry) => gatewayModelId(group.id, entry.id))
   )
-  if (model?.startsWith("gateway:finture-enterprise:")) {
-    const apiId = model.slice("gateway:finture-enterprise:".length)
+  const identity = model === null ? null : parseModelIdentity(model)
+  if (identity?.gatewayId === "finture-enterprise") {
+    const apiId = identity.modelId
     const migrated = (snapshot.managedProviders ?? [])
       .filter((provider) => provider.id.startsWith(ENTERPRISE_PROVIDER_PREFIX))
       .flatMap((provider) => provider.models.map((entry) => gatewayModelId(provider.id, entry.api_id)))
-      .find((candidate) => candidate.endsWith(`:${apiId}`))
+      .find((candidate) => parseModelIdentity(candidate).modelId === apiId)
     if (migrated) return migrated
   }
-  if (model !== null && (!model.startsWith("gateway:") || models.includes(model))) return model
+  if (identity?.kind === "gateway") {
+    if (models.includes(identity.selectionId)) return identity.selectionId
+  } else if (model !== null && identity?.kind === "native") {
+    // A native id is the only spelling allowed to stay bare. Historical records may still hold an
+    // external model that lost its routing prefix; resolve it against the configured gateways
+    // only when exactly one gateway owns that model id.
+    const nativeIds = new Set([
+      ...providerBuiltInModels(snapshot, "openai").map((entry) => entry.api_id),
+      ...(nativeModelOverrides() ?? []).map((entry) => entry.api_id)
+    ])
+    if (!nativeIds.has(identity.modelId)) {
+      const aliases = [
+        ...new Set(
+          groups
+            .filter((group) => group.id !== "openai")
+            .flatMap((group) =>
+              group.models
+                .filter((entry) => entry.id === identity.modelId)
+                .map((entry) => gatewayModelId(group.id, entry.id))
+            )
+        )
+      ]
+      if (aliases.length === 1) {
+        console.info(`[models] recovered bare model ${identity.modelId} -> ${aliases[0]}`)
+        return aliases[0] ?? null
+      }
+      if (aliases.length > 1)
+        console.warn(`[models] ambiguous bare model ${identity.modelId}: ${aliases.join(", ")}`)
+    }
+    return model
+  } else if (identity?.kind === "invalid") {
+    // Never let a malformed `gateway:` value fall through as a native id: that is exactly how an
+    // external model used to reach ChatGPT and return model_not_found.
+    console.warn(`[models] invalid gateway selection ${model}`)
+  }
   // 目录换了写法（日期后缀、大小写、连字符）时按归一化 id 重绑，避免静默换到 models[0]。
-  if (model !== null) {
-    const rebound = rebindRenamedModel(model, models)
+  if (identity?.kind === "gateway") {
+    const rebound = rebindRenamedModel(identity.selectionId, models)
     if (rebound !== null) {
       console.info(`[models] rebound stale selection ${model} -> ${rebound}`)
       return rebound
@@ -325,9 +371,9 @@ export function resolveSessionModel(
   // 目录里的第一个；并把替换记进日志，便于排查「会话记 A、实际跑 B」。
   // 之所以不改成「保留记录 + 亮恢复卡」：企业模型失效往往伴随登录态变化，用户此刻只想继续
   // 干活；恢复卡会在下一次真正被引擎拒绝时由 `accountModelRecovery` 亮起，两条路并不冲突。
-  if (isAccountModel(model) && purpose === "session") {
+  if (isAccountModel(identity?.selectionId ?? model) && purpose === "session") {
     const replacement = defaultModelFallback(snapshot) ?? models[0] ?? null
-    if (replacement !== null && replacement !== model) {
+    if (replacement !== null && replacement !== identity?.selectionId) {
       console.info(`[models] account model unavailable, substituted ${model} -> ${replacement}`)
     }
     return replacement
@@ -345,7 +391,7 @@ export function resolveSessionModel(
 export function defaultModelFallback(snapshot: ProviderSnapshot): string | null {
   const model = defaultModelChoice()?.model ?? null
   if (model === null) return null
-  if (!model.startsWith("gateway:")) return model
+  if (!isGatewayModelIdentity(model)) return model
   const models = providerGroups(snapshot).flatMap((group) =>
     group.models.map((entry) => gatewayModelId(group.id, entry.id))
   )
@@ -631,18 +677,10 @@ export function nativeModelOverrides(): CustomModel[] | null {
  */
 export function displayModelLabel(apiId: string, fallback?: string | null): string | null {
   const fallbackLabel = fallback ?? null
-  if (apiId.startsWith("gateway:")) {
-    const rest = apiId.slice("gateway:".length)
-    const separator = rest.indexOf(":")
-    if (separator < 0) return fallbackLabel
-    let providerId: string
-    let modelId: string
-    try {
-      providerId = decodeURIComponent(rest.slice(0, separator))
-      modelId = decodeURIComponent(rest.slice(separator + 1))
-    } catch {
-      return fallbackLabel
-    }
+  const identity = parseModelIdentity(apiId)
+  if (identity.kind === "gateway" && identity.gatewayId !== null) {
+    const providerId = identity.gatewayId
+    const modelId = identity.modelId
     const snapshot = getProviderSnapshot()
     if (snapshot === null) return fallbackLabel
     const builtIn = snapshot.builtInModels?.[providerId] ?? []

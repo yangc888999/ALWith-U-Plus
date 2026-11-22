@@ -32,6 +32,7 @@ mod installed_apps;
 mod legacy_extensions;
 mod menu;
 mod mobile;
+mod model_identity;
 mod named_store;
 mod native;
 #[cfg(target_os = "macos")]
@@ -124,7 +125,10 @@ pub fn run() {
                 .with_state_flags(
                     tauri_plugin_window_state::StateFlags::all() - tauri_plugin_window_state::StateFlags::VISIBLE,
                 )
-                .with_denylist(&["chat", "settings"])
+                // `main` opens at the size its display asks for (`window::designed_size`), so a
+                // cached frame is never the right answer — and a frame cached while leaving native
+                // fullscreen came back in physical pixels applied as points (2x wide, half off-screen).
+                .with_denylist(&["chat", "settings", "main"])
                 // Windows guide windows must not restore their legacy undecorated state.
                 .map_label(|label| if cfg!(target_os = "windows") && label == "guide" { "guide-native" } else { label })
                 .build(),

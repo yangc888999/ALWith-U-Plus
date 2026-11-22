@@ -307,6 +307,7 @@ export function OrchestrationControl({ session }: { session: Session }): ReactNo
           <>
             <div className="fixed inset-0 z-40" aria-hidden onClick={() => setOpen(false)} />
             <div
+              data-appearance-surface="overlay"
               className="fixed z-50 rounded-2xl border border-border bg-popover p-4 text-xs text-popover-foreground shadow-xl ring-1 ring-black/[0.03] dark:ring-white/[0.06]"
               style={{ left: placement.left, bottom: placement.bottom, width: PANEL_WIDTH }}
             >

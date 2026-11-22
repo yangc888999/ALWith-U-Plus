@@ -1,5 +1,38 @@
 @import "@alwith/module-chat/styles.css";
 
+/* Keep Codex-owned activity cards on the host surface. The vendored dark default is a fixed
+   #181818, which becomes an opaque black slab over wallpaper and breaks material continuity. */
+[data-stream-style="compact"],
+[data-stream-style="codexUI"] {
+  --codex-background: var(--background);
+  /* The vendored dark palette hard-codes pure white here; route markdown text, list markers,
+     table headers and command labels through the work surface's softer foreground instead. */
+  --codex-foreground: var(--foreground);
+}
+
+.dark [data-chat-content] {
+  --codex-foreground: var(--foreground);
+}
+
+.dark .codex-markdown-code-block[data-theme="dark"] code.hljs {
+  color: var(--foreground);
+}
+
+/* The edited-files summary is a bordered summary, not a second background panel. The transcript
+   already owns the surface; painting another --background here doubled the alpha and made the
+   card darker than the text around it. */
+.codex-edited-files-card {
+  background: transparent !important;
+  background-image: none !important;
+}
+
+/* Command rows used the vendored 8% white "user background" fill. On the chat surface that
+   created a visibly lighter strip behind every "已运行" row; keep the border and let the one
+   transcript background show through. */
+.codex-command-card {
+  background: transparent;
+}
+
 /* A group discussion reads like a meeting transcript: each member's internal reasoning is hidden
    so only the spoken answer shows, and the human host's turns sit right while the AI members sit
    left — the symmetric, chat-like layout. */
@@ -129,13 +162,11 @@
 }
 
 .codex-composer-surface {
-  overflow: clip;
-  border-width: 0;
-  border-radius: 24px;
-  background: var(--chat-input-bg-color);
-  box-shadow:
-    0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent),
-    0 2px 8px color-mix(in oklab, var(--foreground) 4%, transparent);
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 /* Long drafts scroll within the textarea without exposing native scrollbar chrome. */

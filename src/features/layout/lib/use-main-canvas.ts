@@ -20,6 +20,13 @@ import type { CanvasContext, CanvasWorkspace } from "./canvas-context"
 import { resolveMainCanvasGeometry } from "./canvas-geometry"
 
 /**
+ * A window resize delivers a new viewport width on every frame. The conversation column grows
+ * with CSS while the window moves, so geometry only needs the settled width; measuring each frame
+ * re-rendered the whole shell and made the track chase the pointer with its 240ms easing.
+ */
+const VIEWPORT_MEASURE_SETTLE_MS = 120
+
+/**
  * The main canvas is a single flex track translated by one CSS variable. There is no carousel
  * library and no snap engine: the app's `screen` prop is the one owner of "which screen", and a
  * translate offset is derived from it. Nothing reads the DOM position back into state, so the
@@ -145,6 +152,7 @@ export function useMainCanvas(
     const root = viewport.current
     const nav = navigation.current
     if (!root || !nav) return
+    let timer: number | undefined
     const measure = (): void => {
       const nextViewport = root.clientWidth
       const nextNav = nav.offsetWidth
@@ -155,11 +163,31 @@ export function useMainCanvas(
           : { viewport: nextViewport, navigation: navigationWidth }
       })
     }
+    // Navigation width changes (collapse/expand, zoom) own the layout immediately. A viewport
+    // resize is coalesced: the chat column stretches by CSS in the meantime, and only the final
+    // width has to reach the navigation stops and split geometry.
+    const measureNavigation = (): void => {
+      window.clearTimeout(timer)
+      timer = undefined
+      measure()
+    }
+    const measureViewportWhenSettled = (): void => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        timer = undefined
+        measure()
+      }, VIEWPORT_MEASURE_SETTLE_MS)
+    }
     measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(root)
-    observer.observe(nav)
-    return () => observer.disconnect()
+    const navigationObserver = new ResizeObserver(measureNavigation)
+    navigationObserver.observe(nav)
+    const viewportObserver = new ResizeObserver(measureViewportWhenSettled)
+    viewportObserver.observe(root)
+    return () => {
+      window.clearTimeout(timer)
+      navigationObserver.disconnect()
+      viewportObserver.disconnect()
+    }
   }, [])
 
   const goTo = useCallback(

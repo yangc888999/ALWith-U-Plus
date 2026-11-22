@@ -209,6 +209,13 @@ test("the removed WeCom placeholder is no longer offered", () => {
   expect((screen.getByLabelText("Model") as HTMLSelectElement).value).toBe("")
 })
 
+test("the dialog keeps the shared translucent overlay surface", () => {
+  renderDialog()
+  const dialog = screen.getByRole("dialog")
+  expect(dialog).toHaveClass("bg-popover")
+  expect(dialog).not.toHaveClass("bg-background")
+})
+
 test("effort comes from the selected model and fast mode is GPT-only", async () => {
   const { onSubmit } = renderDialog()
   fillRequiredFields()

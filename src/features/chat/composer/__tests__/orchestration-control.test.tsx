@@ -102,6 +102,9 @@ test("a chat whose model left the catalog disables the split and clears a stored
 test("every catalog model is offered and a ladder-less role hides its effort selector", () => {
   const view = render(<OrchestrationControl session={session(NATIVE_A)} />)
   fireEvent.click(view.getByRole("button"))
+  // The split panel is a custom portal, not a shared popover. It must opt into the same appearance
+  // surface so menus and dialogs follow one transparency contract instead of a fixed card color.
+  expect(document.querySelector('[data-appearance-surface="overlay"]')).not.toBeNull()
   fireEvent.click(view.getByRole("switch"))
 
   const planner = view.getByLabelText("Planner (expensive)") as HTMLSelectElement

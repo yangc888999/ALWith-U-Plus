@@ -21,6 +21,7 @@ import { toast } from "sonner"
 
 import { commands } from "@/bindings"
 import { defaultModelChoice } from "@/lib/default-model"
+import { modelDisplayId } from "@/lib/model-identity"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -274,12 +275,7 @@ export function AutomationSection() {
 
 /** `gateway:vendor:path%2Fmodel` → `path/model`; engine-native ids stay as they are. */
 function shortModelId(id: string): string {
-  const tail = id.includes(":") ? id.slice(id.lastIndexOf(":") + 1) : id
-  try {
-    return decodeURIComponent(tail)
-  } catch {
-    return tail
-  }
+  return modelDisplayId(id)
 }
 
 function TabButton({

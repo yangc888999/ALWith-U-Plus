@@ -13,6 +13,8 @@ import {
   costOf,
   blankPrice,
   canonicalVendor,
+  customModelVendor,
+  displayModelName,
   guessVendor,
   matchesModel,
   modelMatchKey,
@@ -94,6 +96,10 @@ function formatTokens(value: number, locale: string): string {
 
 function exact(value: number, locale: string): string {
   return new Intl.NumberFormat(locale).format(value)
+}
+
+function usageVendor(model: string, provider: string): string {
+  return customModelVendor(model) ?? provider
 }
 
 /** The day before a `yyyy-MM-dd` key, for naming the previous comparison window. */
@@ -412,7 +418,10 @@ export function UsageSection() {
   }, [providers, prices])
   /** Display name for a raw ledger id; falls back to the id itself. Never used for matching. */
   const displayName = useCallback(
-    (id: string): string => modelNames.get(modelMatchKey(id)) ?? id,
+    (id: string): string => {
+      const normalized = displayModelName(id)
+      return customModelVendor(id) === null ? modelNames.get(modelMatchKey(id)) ?? normalized : normalized
+    },
     [modelNames]
   )
   /** Which provider group a model belongs to, so an unpriced model lands in the right vendor card
@@ -574,6 +583,7 @@ export function UsageSection() {
   const view = useMemo(() => {
     const all: CostedPoint[] = scopedPoints.map((point) => ({
       ...point,
+      provider: usageVendor(point.model, point.provider),
       // Pricing still wants the original UTC day/hour bucket, not the localized calendar day.
       cost: costOf({ ...point, date: utcDayOf(point) }, prices, usdToCny, utcOffset) ?? 0
     }))
@@ -586,7 +596,7 @@ export function UsageSection() {
     const models = ranking(points, "model", "tokens", 1)
     const topModel = models[0] === undefined ? undefined : {
       ...models[0],
-      label: modelNames.get(modelMatchKey(models[0].key)) ?? models[0].label
+      label: displayName(models[0].key)
     }
     const activeDays = days.filter((day) => day.requests > 0).length
     const streak = longestStreak(days)
@@ -595,14 +605,14 @@ export function UsageSection() {
     const allLabel = t("usageReport.groupAll")
     const groups = ranking(points, groupBy, metric, top).map((entry) => ({
       ...entry,
-      label: entry.key === ALL_GROUP ? allLabel : (modelNames.get(modelMatchKey(entry.key)) ?? entry.label)
+      label: entry.key === ALL_GROUP ? allLabel : displayName(entry.key)
     }))
     const stackedRaw = seriesByGroup(points, grain === "total" ? "day" : grain, groupBy, metric, top, from, to)
     const stacked = {
       ...stackedRaw,
       groups: stackedRaw.groups.map((group) => ({
         ...group,
-        label: group.key === ALL_GROUP ? allLabel : (modelNames.get(modelMatchKey(group.key)) ?? group.label)
+        label: group.key === ALL_GROUP ? allLabel : displayName(group.key)
       }))
     }
     return {
@@ -626,7 +636,7 @@ export function UsageSection() {
       // Per-day spend, for the cost stat's daily-trend sparkline.
       dailyCost: days.map((day) => day.cost)
     }
-  }, [scopedPoints, from, to, previousFrom, grain, groupBy, metric, top, prices, usdToCny, utcOffset, t, modelNames])
+  }, [scopedPoints, from, to, previousFrom, grain, groupBy, metric, top, prices, usdToCny, utcOffset, t, displayName])
 
   // Analysis reuses the overview's range: one window drives both cards, so the chart always
   // matches what the stat blocks above it are summarizing.
@@ -634,23 +644,27 @@ export function UsageSection() {
 
   const analysisView = useMemo(() => {
     const points = scopedPoints
-      .map((point) => ({ ...point, cost: costOf({ ...point, date: utcDayOf(point) }, prices, usdToCny, utcOffset) ?? 0 }))
+      .map((point) => ({
+        ...point,
+        provider: usageVendor(point.model, point.provider),
+        cost: costOf({ ...point, date: utcDayOf(point) }, prices, usdToCny, utcOffset) ?? 0
+      }))
       .filter((point) => point.date >= analysisRange.from && point.date <= analysisRange.to)
     const allLabel = t("usageReport.groupAll")
     const groups = ranking(points, groupBy, metric, top).map((entry) => ({
       ...entry,
-      label: entry.key === ALL_GROUP ? allLabel : (modelNames.get(modelMatchKey(entry.key)) ?? entry.label)
+      label: entry.key === ALL_GROUP ? allLabel : displayName(entry.key)
     }))
     const stackedRaw = seriesByGroup(points, grain === "total" ? "day" : grain, groupBy, metric, top, analysisRange.from, analysisRange.to)
     const stacked = {
       ...stackedRaw,
       groups: stackedRaw.groups.map((group) => ({
         ...group,
-        label: group.key === ALL_GROUP ? allLabel : (modelNames.get(modelMatchKey(group.key)) ?? group.label)
+        label: group.key === ALL_GROUP ? allLabel : displayName(group.key)
       }))
     }
     return { groups, stacked }
-  }, [scopedPoints, analysisRange, grain, groupBy, metric, top, prices, usdToCny, utcOffset, t, modelNames])
+  }, [scopedPoints, analysisRange, grain, groupBy, metric, top, prices, usdToCny, utcOffset, t, displayName])
 
   // ---- Model prices & estimated spend ------------------------------------------------
   const patchPrice = (index: number, patch: Partial<ModelPrice>) => {
@@ -721,8 +735,9 @@ export function UsageSection() {
       setExpandedVendors((previous) => new Set(previous).add(existing.vendor))
       return
     }
-    const vendor = canonicalVendor(vendorForModel.get(modelMatchKey(model)) ?? guessVendor(model))
-    setPrices([...prices, { ...blankPrice(vendor), model, free: isFreeModelId(model) }])
+    const vendor = customModelVendor(model) ?? canonicalVendor(vendorForModel.get(modelMatchKey(model)) ?? guessVendor(model))
+    const normalizedModel = displayModelName(model)
+    setPrices([...prices, { ...blankPrice(vendor), model: normalizedModel, free: isFreeModelId(model) }])
     setExpandedVendors((previous) => new Set(previous).add(vendor))
   }
   const renameVendor = (from: string, to: string) =>
@@ -969,8 +984,8 @@ export function UsageSection() {
         (turn) =>
           (detailFrom === "" || turn.date >= detailFrom) &&
           turn.date <= detailTo &&
-          (detailVendor === "" || turn.provider === detailVendor) &&
-          (detailModel === "" || turn.model === detailModel)
+          (detailVendor === "" || usageVendor(turn.model, turn.provider) === detailVendor) &&
+          (detailModel === "" || displayModelName(turn.model) === detailModel)
       ),
     [scopedRecent, detailFrom, detailTo, detailVendor, detailModel]
   )
@@ -978,12 +993,15 @@ export function UsageSection() {
   // ids that actually appear in the log.
   const detailVendors = useMemo(() => {
     const set = new Set<string>()
-    for (const turn of scopedRecent) if (turn.provider !== "") set.add(turn.provider)
+    for (const turn of scopedRecent) {
+      const vendor = usageVendor(turn.model, turn.provider)
+      if (vendor !== "") set.add(vendor)
+    }
     return [...set].sort()
   }, [scopedRecent])
   const detailModels = useMemo(() => {
     const set = new Set<string>()
-    for (const turn of scopedRecent) if (turn.model !== "") set.add(turn.model)
+    for (const turn of scopedRecent) if (turn.model !== "") set.add(displayModelName(turn.model))
     return [...set].sort()
   }, [scopedRecent])
   const detailPages = Math.max(1, Math.ceil(detailTurns.length / DETAIL_PAGE_SIZE))
@@ -1601,7 +1619,7 @@ export function UsageSection() {
                 </SelectContent>
               </Select>
               <Select
-                items={[{ value: "", label: t("usageReport.allModels") }, ...detailModels.map((model) => ({ value: model, label: model }))]}
+                items={[{ value: "", label: t("usageReport.allModels") }, ...detailModels.map((model) => ({ value: model, label: displayName(model) }))]}
                 value={detailModel}
                 onValueChange={(value) => setDetailModel(value ?? "")}
               >
@@ -1612,7 +1630,7 @@ export function UsageSection() {
                   <SelectItem value="">{t("usageReport.allModels")}</SelectItem>
                   {detailModels.map((model) => (
                     <SelectItem key={model} value={model}>
-                      {model}
+                      {displayName(model)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1879,7 +1897,9 @@ export function UsageSection() {
                           <div className="truncate text-xs font-medium text-foreground" title={entry.model}>
                             {displayName(entry.model)}
                           </div>
-                          <div className="truncate font-mono text-[10px] text-muted-foreground">{entry.model}</div>
+                          <div className="truncate font-mono text-[10px] text-muted-foreground" title={entry.model}>
+                            {displayName(entry.model)}
+                          </div>
                         </div>
                         <span
                           className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground"

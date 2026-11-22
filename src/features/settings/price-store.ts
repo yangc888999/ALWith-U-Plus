@@ -108,11 +108,32 @@ function looksCny(vendor: string): boolean {
   return CNY_VENDORS.some((keyword) => name.includes(keyword))
 }
 
+const CUSTOM_MODEL_PATTERN = /^custom-[^/]+\/(.+)$/i
+
+/** Return the model name after a custom gateway prefix, or null for ordinary model ids. */
+export function customModelName(model: string): string | null {
+  const match = CUSTOM_MODEL_PATTERN.exec(model.trim())
+  const name = match?.[1]?.trim() ?? ""
+  return name === "" ? null : name
+}
+
+/** Custom gateway ids are reported as Finture in the usage page. */
+export function customModelVendor(model: string): string | null {
+  return customModelName(model) === null ? null : "Finture"
+}
+
+/** The stable name shown and priced for a model in the usage report. */
+export function displayModelName(model: string): string {
+  return customModelName(model) ?? model.trim()
+}
+
 /** Best-effort vendor for a persisted entry that predates the vendor column. The names must match
  *  the curated table's vendor groups — a guess that invents a second spelling ("Qwen" next to
  *  "千问 Qwen") splits one vendor into two cards, one of them without a price source. */
 export function guessVendor(model: string): string {
-  const name = model.toLowerCase()
+  const customVendor = customModelVendor(model)
+  if (customVendor !== null) return customVendor
+  const name = displayModelName(model).toLowerCase()
   if (name.includes("claude")) return "Claude"
   if (name.includes("gpt") || name.startsWith("o3") || name.startsWith("o4")) return "OpenAI"
   if (name.includes("gemini")) return "Google"
@@ -352,7 +373,7 @@ function toPrice(raw: string | undefined): number | undefined {
 
 /** Matching key that folds dots/dashes and case, so `claude-opus-5.5` and `claude-opus-5-5` agree. */
 export function modelMatchKey(model: string): string {
-  return model.trim().toLowerCase().replace(/[\s.]/g, "-")
+  return displayModelName(model).toLowerCase().replace(/[\s.]/g, "-")
 }
 
 /**
@@ -613,7 +634,14 @@ export function migratePriceState(persisted: unknown): PriceState {
   // v6 folds alias vendor cards into their canonical group (the auto-add path used to mint a
   // second "Qwen" card next to "千问 Qwen", with no price source). The user's numbers survive;
   // only the grouping and the source map's keys move.
-  const folded = mergeVendorAliases(state.prices ?? DEFAULT_PRICES, DEFAULT_VENDOR_SOURCES)
+  // v7 normalizes custom gateway ids used by Finture so persisted rows do not keep the long
+  // `custom-.../model` name or remain under the model family guessed from the suffix.
+  const normalized = (state.prices ?? DEFAULT_PRICES).map((price) => {
+    const vendor = customModelVendor(price.model)
+    if (vendor === null) return price
+    return { ...price, vendor, model: displayModelName(price.model) }
+  })
+  const folded = mergeVendorAliases(normalized, DEFAULT_VENDOR_SOURCES)
   // Migration v7: append default rows the persisted table is missing. The curated snapshot gains
   // rows over time (e.g. the `deepseek-v4.1-flash` marketing-id alias); without this merge an
   // upgraded install never sees them, because its persisted table replaced the defaults wholesale.
@@ -652,7 +680,7 @@ export const usePriceStore = create<PriceState>()(
     }),
     {
       name: "alwith-settings-prices",
-      version: 6,
+      version: 7,
       migrate: migratePriceState
     }
   )

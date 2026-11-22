@@ -1,10 +1,9 @@
 /**
  * Two composer layout contracts, both reported from a narrow window (2026-11-20):
  *
- * 1. The strip above the input (quoted document · running state · 分工) must keep a visible
- *    rounded-top surface. The package paints it `bg-sidebar`; v1.0.13 folded the solid
- *    appearance's --sidebar into the same colour as --card/--background, so the strip lost its
- *    background without any markup change. The contrast is restored on the strip itself.
+ * 1. The header, textarea and toolbar must share one integrated dock. The package owns the nested
+ *    drop zone, so the dock geometry belongs to explicit host attributes rather than broad wrapper
+ *    selectors.
  *
  * 2. The send key must never sit on top of the model picker. The toolbar's right group used to
  *    overflow LEFT (justify-end + unshrinkable children) once it outgrew its grid track, so a
@@ -27,22 +26,35 @@ function ruleOf(selector: string): string {
   return (match?.[0] ?? "").replace(/\/\*[\s\S]*?\*\//g, "")
 }
 
-test("composer is ONE painted surface; the chip row is divided by a line, not a gap", () => {
-  // Five shapes were tried. What finally ruled out the "narrower strip with a gap" variant is
-  // measurable: both boxes were the SAME colour (233,240,251) and the 6px gap between them showed
-  // the blue page — the block read as blue/white/blue/white. A gap is not a divider, it exposes
-  // the backdrop. So the fill lives on the parent that contains BOTH halves.
-  const shell = /\[data-composer\] div:has\(> form > \.codex-composer-surface\)\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ""
-  expect(shell).toContain("var(--chat-input-bg-color")
-  expect(shell).toContain("border-radius: 24px")
+test("composer keeps the WorkBuddy-style attachment affordance", () => {
+  expect(styles).not.toMatch(/\[data-composer-mode="chat"\][^{]*\.chat-composer-toolbar[^}]*\{\s*display: none;/)
+})
+
+test("composer is a distinct card inside the chat column", () => {
+  const dock = /\[data-composer\]\[data-composer-dock\]\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ""
+  expect(dock).toContain("width: 100%")
+  expect(dock).toContain("background: transparent")
+  expect(dock).not.toContain("border-block-start: 1px solid")
+
+  // The card is the one raised control at the bottom: a real border, radius and fill separate it
+  // from the transcript instead of letting the input disappear into the page background.
+  const shell = /\[data-composer\] > \[data-chat-drop-zone\] > \.relative:has\(> form > \.codex-composer-surface\)\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ""
+  expect(shell).toContain("border: 1px solid")
+  expect(shell).toContain("border-radius: 1.25rem")
+  expect(shell).toContain("background: color-mix")
+  expect(shell).toContain("box-shadow:")
+  expect(shell).not.toContain("background: transparent")
+  expect(shell).toContain("background-image: none")
+  expect(styles).toMatch(/\[data-chat-drop-zone\] > \[data-composer\]:has\(form > \.codex-composer-surface\)/)
   // Both children are transparent: no second fill can disagree with the first by construction.
   const surface = /\[data-composer\] \.codex-composer-surface\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ""
-  const header = /\[data-composer\] \[data-chat-input-header\]\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ""
-  expect(surface).toContain("background-color: transparent")
+  const header = /\[data-composer\] > \[data-chat-drop-zone\] \.relative > \[data-chat-input-header\]\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ""
+  expect(styles).not.toMatch(/\[data-composer\] \[data-chat-input-header\]/)
+  expect(surface).toContain("background: transparent")
   expect(surface).toContain("box-shadow: none")
   expect(header).toContain("background-color: transparent")
-  // A hairline is the divider: an intentional element, not a shade that reads as a rendering fault.
-  expect(header).toMatch(/box-shadow: inset 0 -1px 0 0 color-mix/)
+  // The header is context, not another painted surface.
+  expect(header).toContain("box-shadow: none")
   // No gap and no side inset — either would carve the block into stripes of page colour.
   expect(header).toMatch(/margin: 0/)
   expect(header).not.toMatch(/margin: 0 12px/)
@@ -91,13 +103,15 @@ test("the toolbar stays one line: the send key is pinned and the picker yields",
   expect(styles).toMatch(/@container input-footer \(max-width: 21rem\)/)
 })
 
-test("the accent reaches the main window through controls, not a global wash", () => {
+test("the accent reaches the main window through the send key, not a global wash", () => {
   // "选了主题色，主界面几乎看不到" was not a weak accent — the main window had no consumer at
-  // all: the send key is `bg-foreground` (achromatic) and the composer gave no focus feedback.
+  // all: the send key used to be `bg-foreground` (achromatic). The send key is the one consumer
+  // now: a focus ring on `.codex-composer-surface` drew a box inside the card (the fill lives on
+  // the parent and that surface has square top corners), so it must not come back.
   const send = /\[data-composer\] \.chat-composer-toolbar button\[type="submit"\]\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ""
   expect(send).toContain("background-color: var(--settings-accent)")
   expect(send).toContain("color: var(--accent-on)")
-  expect(styles).toMatch(/\[data-composer\] \.codex-composer-surface:focus-within\s*\{[^}]*var\(--settings-accent\)/)
+  expect(styles).not.toMatch(/\[data-composer\] \.codex-composer-surface:focus-within/)
   // The whole-window wash must stay a whisper: raising it again is what dyed the neutral
   // surfaces and fought the white documents.
   expect(styles).toMatch(/--accent-wash: 1\.2%/)

@@ -171,6 +171,9 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   // macOS docks the workspace toolbar (condense + workspace toggle) in the top-right header.
   // Windows keeps the focused-window controls, so this target is only used when it exists.
   const [workspaceTrailing, setWorkspaceTrailing] = useState<HTMLDivElement | null>(null)
+  // Every launch opens a fresh draft. A conversation is only opened by an explicit click; there
+  // is deliberately no "last session" restore, because reopening the thread from the previous
+  // quit hid the new-task screen that is now the launch surface (2026-11-22).
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // While a picked conversation is being prepared, show an explicit "opening" surface instead of
   // the draft composer. A stalled cloud/engine call must neither look like a dead click nor invite
@@ -613,10 +616,8 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           client.rememberCurrentForNextChat(sessionId)
           await client.discardDraft("main")
           await client.archive(sessionId)
-          // The archived thread must not be what the next launch reopens: clearing the context
-          // means the next visit starts on a fresh draft in the same project, not on the chat
-          // that was just archived. The project itself is remembered separately below.
-          await savePreference("lastSession", null).catch(() => {})
+          // Clearing the context means the next visit starts on a fresh draft in the same project,
+          // not on the chat that was just archived. The project itself is remembered separately.
           chooseDraftFolder(cwd)
           importDraft(DRAFT_SESSION_ID, null)
           setSurfaceGeneration((value) => value + 1)
@@ -761,39 +762,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       window.clearTimeout(timer)
     }
   }, [connection, connect])
-
-  // Reopen the conversation that was on screen when the app quit, in its own project. The client
-  // restores that conversation's model and effort as part of the replay, so launch lands exactly
-  // where the last session left off instead of an empty draft in the wrong folder.
-  const restoredLastSession = useRef(false)
-  useEffect(() => {
-    const saved = initialPreferences.lastSession
-    if (restoredLastSession.current || connection !== "ready" || !saved) return
-    restoredLastSession.current = true
-    void (async () => {
-      try {
-        await client.discardDraft("main")
-        await client.open(saved.id, saved.cwd, "main")
-        void ensureProjectMemory(saved.cwd)
-        setLastDirectory(saved.cwd)
-        setSelectedId(saved.id)
-        setView("chat")
-      } catch {
-        // The conversation may have been deleted since; the home screen is still correct. Forget
-        // it here: a stored id whose rollout is gone fails every launch, and the card it leaves
-        // behind ("reopen the chat") would be advice that can never work (2026-11-17).
-        void savePreference("lastSession", null).catch(() => undefined)
-      }
-    })()
-  }, [connection, initialPreferences.lastSession])
-
-  // Remember the conversation on screen, so the next launch can reopen it.
-  useEffect(() => {
-    if (selectedId === null) return
-    const cwd = client.state.sessions[selectedId]?.cwd
-    if (!cwd) return
-    void savePreference("lastSession", { id: selectedId, cwd }).catch(() => {})
-  }, [selectedId])
 
   useEffect(() => {
     if (focused && connection === "ready" && client.state.sessionListLoaded)

@@ -59,6 +59,7 @@ import { Switch } from "@/components/ui/switch"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { defaultModelSnapshot, subscribeDefaultModel } from "@/lib/default-model"
+import { parseModelIdentity } from "@/lib/model-identity"
 import {
   overloadNoticeEnabled,
   setOverloadNoticeEnabled,
@@ -261,7 +262,11 @@ function writeStored(key: string, value: string | null): void {
  * belongs to the native provider. `null` means "the built-in default", which is native as well.
  */
 function providerIdForModel(model: string | null): string | null {
-  if (model !== null && model.startsWith("gateway:")) return decodeURIComponent(model.split(":")[1] ?? "") || null
+  if (model !== null) {
+    const identity = parseModelIdentity(model)
+    if (identity.kind === "gateway") return identity.gatewayId
+    if (identity.kind === "invalid") return null
+  }
   return PROVIDERS.find((provider) => provider.native === true)?.id ?? null
 }
 
@@ -520,10 +525,12 @@ export function ProviderSection({ initialProviderId }: { initialProviderId?: str
       <ModelSection
         onApplied={(model) => {
           if (model === null) return
-          const providerId = model.startsWith("gateway:")
-            ? decodeURIComponent(model.split(":")[1] ?? "")
-            : PROVIDERS.find((provider) => provider.native === true)?.id
-          if (providerId !== undefined && providerId !== "") setActiveId(providerId)
+          const identity = parseModelIdentity(model)
+          const providerId =
+            identity.kind === "gateway"
+              ? identity.gatewayId
+              : PROVIDERS.find((provider) => provider.native === true)?.id
+          if (providerId != null && providerId !== "") setActiveId(providerId)
         }}
       />
       <div id="provider-config">

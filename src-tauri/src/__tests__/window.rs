@@ -220,6 +220,25 @@ fn a_maximized_window_is_never_rebuilt() {
 }
 
 #[test]
+fn a_window_double_the_panel_is_rebuilt_even_on_a_routine_reclamp() {
+    // Leaving native fullscreen on a 2x panel restored the pre-fullscreen frame measured in
+    // physical pixels and applied it as points: 11520x3000px (share 2.00x1.00) at (-5760,60).
+    // The routine re-clamp runs with `validate_size: false`, and it used to read that as a size
+    // the reader had chosen, so the doubled frame survived every display change.
+    let doubled = plan_geometry(GeometryInput {
+        share: (2.0, 1.0),
+        current: (5760.0, 1500.0),
+        work: (2880.0, 1500.0),
+        display_changed: false,
+        landed_here: false,
+        maximized: false,
+        fullscreen: false,
+        validate_size: false,
+    });
+    assert_eq!(doubled, GeometryPlan::Rebuild { width: 1720.0, height: 1103.0 });
+}
+
+#[test]
 fn a_fullscreen_window_is_never_rebuilt() {
     let plan = plan_geometry(GeometryInput {
         share: (0.2, 0.2),

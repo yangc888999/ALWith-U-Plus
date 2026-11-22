@@ -58,6 +58,7 @@ import {
   resolveModelConfig
 } from "@/lib/model-config"
 import { modelFastModeFor } from "@/lib/model-fast-mode"
+import { isGatewayModelIdentity, modelDisplayId } from "@/lib/model-identity"
 import {
   displayModelLabel,
   isAccountModel,
@@ -161,8 +162,10 @@ const presentationTable: Record<string, { shortLabel?: string } | undefined> = (
     // 设置里存的是裸 id（`deepseek-flash`），而短名表按 `gateway:<provider>:<id>` 登记。
     // 只查全键会让裸 id 落回服务端给的短名（用户看到的是「Flash」这种没头没尾的词），
     // 所以同时登记去掉网关前缀的裸 id；全键优先，冲突时以显式全键为准。
-    const bare = /^gateway:[^:]+:(.+)$/.exec(key)?.[1]
-    if (bare !== undefined && table[bare] === undefined) table[bare] = value
+    if (isGatewayModelIdentity(key)) {
+      const bare = modelDisplayId(key)
+      if (table[bare] === undefined) table[bare] = value
+    }
   }
   return table
 })()
@@ -186,7 +189,7 @@ export function cleanModelLabel(raw: string): string {
 
 /** 上游口径：GPT 家族按 groupId 或 id 判定，不用静态 `gpt-` 白名单。 */
 export function isNativeGroupId(groupId: string, id: string): boolean {
-  return groupId === NATIVE_MODEL_GROUP.id || !id.startsWith("gateway:")
+  return groupId === NATIVE_MODEL_GROUP.id || !isGatewayModelIdentity(id)
 }
 
 function isEnterpriseGroupId(groupId: string): boolean {
@@ -315,7 +318,7 @@ function signatureOf(groups: readonly ModelOptionGroup[]): string {
 function engineNativeIds(source: ModelOptionsSource): Set<string> | null {
   const ids = new Set<string>()
   for (const entry of nativeModelCatalogSafe(source)) {
-    if (entry.id !== "" && !entry.id.startsWith("gateway:")) ids.add(entry.id)
+    if (entry.id !== "" && !isGatewayModelIdentity(entry.id)) ids.add(entry.id)
   }
   return ids.size === 0 ? null : ids
 }
@@ -345,7 +348,7 @@ export function resolveModelOptions(source: ModelOptionsSource): ModelOptionsRes
   const corrected =
     engineIds === null
       ? shortlist
-      : shortlist.filter((model) => model.api_id.startsWith("gateway:") || engineIds.has(model.api_id))
+      : shortlist.filter((model) => isGatewayModelIdentity(model.api_id) || engineIds.has(model.api_id))
   // 区分「首启，还没有任何可用模型」与「用户明确把模型全关了」：前者才允许引擎目录做初始清单。
   const fromSnapshot = source.providerSnapshot === null ? [] : providerBuiltInModels(source.providerSnapshot, "openai")
   const shortlistConfigured =
@@ -408,6 +411,5 @@ export function resolveModelOptions(source: ModelOptionsSource): ModelOptionsRes
 /** 触发器显示名：紧凑名优先，并去掉网关路由前缀（发送仍用完整 id）。 */
 export function modelTriggerLabel(option: Pick<ModelOption, "label" | "shortLabel">): string {
   const raw = cleanModelLabel(option.shortLabel ?? option.label)
-  const match = /^gateway:[^:]+:(.+)$/.exec(raw)
-  return match?.[1] ?? raw
+  return modelDisplayId(raw)
 }

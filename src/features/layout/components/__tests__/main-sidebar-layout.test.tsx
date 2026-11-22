@@ -388,6 +388,29 @@ test("resizing follows the pointer one pixel per pixel however fast it moves", a
   }
 })
 
+test("a window resize leaves the docked sidebar width alone", async () => {
+  const innerWidth = Object.getOwnPropertyDescriptor(window, "innerWidth")
+  let reported = 1600
+  Object.defineProperty(window, "innerWidth", { configurable: true, get: () => reported })
+  try {
+    await withCanvasGeometry(async () => {
+      const view = setup(true)
+      const divider = view.getByRole("separator")
+      const width = Number(divider.getAttribute("aria-valuenow"))
+      expect(width).toBe(192)
+
+      // The conversation absorbs the extra width. Re-resolving the sidebar share against the live
+      // window would make this column grow on every frame of a window drag.
+      reported = 2200
+      await act(() => Promise.resolve(window.dispatchEvent(new Event("resize"))))
+      expect(Number(divider.getAttribute("aria-valuenow"))).toBe(width)
+      view.unmount()
+    })
+  } finally {
+    if (innerWidth) Object.defineProperty(window, "innerWidth", innerWidth)
+  }
+})
+
 // ── A canvas parked off the chat screen ────────────────────────────────────────────────────────
 // The canvas has one snap per region and the reader parks it with the status-bar dots, so "the
 // sidebar is pinned" and "the canvas is on the chat screen" are two different facts. Tying the

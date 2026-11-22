@@ -84,3 +84,17 @@ test("geometry follows a real window resize monotonically, with no feedback loop
   remeasure()
   expect(screen.getByTestId("stops").dataset.value).toBe("0:1265")
 })
+
+test("a live viewport resize is coalesced until the drag settles", async () => {
+  render(<Harness />)
+  expect(screen.getByTestId("leading").dataset.width).toBe("1513")
+  viewportWidth = 1424
+  // The first observer tracks the navigation width, the second tracks the viewport. A window drag
+  // only changes the viewport; feeding the shell on every frame is what made the sidebar flash.
+  act(() => observers[1]?.())
+  expect(screen.getByTestId("leading").dataset.width).toBe("1513")
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 160))
+  })
+  expect(screen.getByTestId("leading").dataset.width).toBe("1265")
+})

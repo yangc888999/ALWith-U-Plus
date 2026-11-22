@@ -54,6 +54,23 @@ test("an idle passphrase form runs no clock at all", async () => {
   expect(vi.getTimerCount()).toBe(0)
 })
 
+test("the passphrase door starts with the documented default and enters in one click", async () => {
+  const onPassphrase = vi.fn()
+  const { field, unlock } = openPassphrase(onPassphrase)
+  expect(field).toHaveValue(LOCAL_PASSPHRASE)
+  expect(screen.getByText(/Default passphrase: YUP/)).toBeInTheDocument()
+  await act(async () => {
+    fireEvent.click(unlock)
+  })
+  expect(onPassphrase).toHaveBeenCalledOnce()
+  expect(readPassphraseUnlocked()).toBe(true)
+})
+
+test("the login form no longer carries the Desktop sign-in footnote", () => {
+  render(<PlatformLogin onPassphrase={() => {}} />)
+  expect(screen.queryByText(/sign in independently/i)).toBeNull()
+})
+
 test("the verification-code cooldown still counts down and frees the resend button", async () => {
   vi.useFakeTimers()
   vi.spyOn(authClient, "sendVerificationCode").mockResolvedValue(undefined)
@@ -131,6 +148,26 @@ test("an account login still waits for the restore before rendering", () => {
   // No account, no passphrase: the form is the answer once the restore is done.
   expect(view.queryByTestId("app")).toBeNull()
   expect(view.getByRole("tab", { name: "Email code" })).toBeInTheDocument()
+})
+
+test("a slow account restore offers the local door instead of holding the spinner", async () => {
+  vi.useFakeTimers()
+  usePlatformAuth.setState({ isLoading: true, isAuthenticated: false })
+  const view = render(
+    <AuthGate>
+      <div data-testid="app">App</div>
+    </AuthGate>
+  )
+  expect(view.queryByTestId("app")).toBeNull()
+  expect(screen.queryByRole("tab", { name: "Passphrase" })).toBeNull()
+
+  await advance(500)
+  expect(screen.getByRole("tab", { name: "Passphrase" })).toHaveAttribute("aria-selected", "true")
+  expect(screen.getByLabelText("Passphrase")).toHaveValue(LOCAL_PASSPHRASE)
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Unlock with passphrase" }))
+  })
+  expect(view.getByTestId("app")).toBeInTheDocument()
 })
 
 test("unlocking while the account service is still restoring mounts the app, not a spinner", async () => {

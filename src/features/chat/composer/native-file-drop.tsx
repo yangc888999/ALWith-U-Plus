@@ -18,11 +18,21 @@ export const nativeAttachmentPolicy: AttachmentPolicy = {
   sourcePath: (file) => sourcePaths.get(file),
   uniqueFiles(incoming, existing) {
     const paths = new Set(existing.map((file) => file.sourcePath))
+    // A native drop and the package's browser drop can both deliver the same image. The browser
+    // copy has no sourcePath, so path-only dedup let it through as a second attachment. Compare
+    // name/size/type as well; this is stable across both APIs and does not depend on timestamps.
+    const fingerprints = new Set(
+      existing.map((file) => `${file.filename}\0${file.size ?? 0}\0${file.mediaType ?? ""}`)
+    )
     return incoming.filter((file) => {
       const path = sourcePaths.get(file)
-      if (path === undefined) return true
-      if (paths.has(path)) return false
-      paths.add(path)
+      if (path !== undefined) {
+        if (paths.has(path)) return false
+        paths.add(path)
+      }
+      const fingerprint = `${file.name}\0${file.size}\0${file.type}`
+      if (fingerprints.has(fingerprint)) return false
+      fingerprints.add(fingerprint)
       return true
     })
   }
@@ -71,6 +81,19 @@ export function NativeFileDrop({
     let pending = 0
     const writable = () => !disposed && current.current.sessionId === sessionId && current.current.enabled
     current.current.onBusyChange(false)
+    // In Tauri the OS drop arrives through `onDragDropEvent` below. WebKit can also emit the
+    // browser drop, which would make the package add the same file again; consume the DOM event
+    // in capture so only the native path owns composer drops.
+    const suppressBrowserDrop = (event: DragEvent): void => {
+      if (!event.dataTransfer?.types?.includes("Files")) return
+      const target = event.target
+      if (!(target instanceof Element) || target.closest("[data-chat-drop-zone]") === null) return
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+    }
+    document.addEventListener("dragover", suppressBrowserDrop, true)
+    document.addEventListener("drop", suppressBrowserDrop, true)
     const listener = getCurrentWebview().onDragDropEvent((event) => {
       if (disposed || event.payload.type !== "drop") return
       const { paths, position } = event.payload
@@ -152,6 +175,8 @@ export function NativeFileDrop({
       })
     return () => {
       disposed = true
+      document.removeEventListener("dragover", suppressBrowserDrop, true)
+      document.removeEventListener("drop", suppressBrowserDrop, true)
       stop?.()
     }
   }, [sessionId])

@@ -523,6 +523,16 @@ fn plan_geometry(input: GeometryInput) -> GeometryPlan {
     if input.landed_here || input.display_changed {
         return rebuild();
     }
+    // Bigger than the display is never a deliberate choice. macOS restores a "normal" frame when
+    // leaving native fullscreen, and a frame that was saved in physical pixels comes back applied
+    // as points — a 2880pt panel produced a 5760pt-wide window parked half off-screen (log:
+    // `11520x3000px at (-5760,60)`, share 2.00x1.00). That check used to live only in the startup
+    // branch, so the routine re-clamp after a display change read the doubled frame as "the
+    // reader's own size" and kept it. It has to run on every path.
+    let oversized = input.share.0 > 1.0 || input.share.1 > 1.0;
+    if oversized {
+        return rebuild();
+    }
     let smaller_than_intended = input.share.0 < MIN_WIDTH_FRACTION || input.share.1 < MIN_HEIGHT_FRACTION;
     if smaller_than_intended {
         return rebuild();
@@ -536,8 +546,7 @@ fn plan_geometry(input: GeometryInput) -> GeometryPlan {
     let (designed_width, designed_height) = designed_size(input.work.0, input.work.1);
     let drifted = (input.current.0 / designed_width - 1.0).abs() > SIZE_TOLERANCE
         || (input.current.1 / designed_height - 1.0).abs() > SIZE_TOLERANCE;
-    let oversized = input.share.0 > 1.0 || input.share.1 > 1.0;
-    if drifted || oversized {
+    if drifted {
         return rebuild();
     }
     GeometryPlan::Keep

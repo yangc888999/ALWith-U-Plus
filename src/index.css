@@ -122,13 +122,14 @@ pre,
   /* 外观透明度系数：1 = 原样，越小越透。由 `appearance-mode.ts` 写到 <html> 行内样式上。
      只乘进底色 / 卡片 / 侧栏的 alpha，文字与边框不受影响。 */
   --appearance-alpha: 1;
+  --overlay-alpha: 1;
   /* 画布圆点在浅色底上必须是深色，深色底上才是白色 —— 反过来写就是「浅色模式下看不见」。 */
   --canvas-page-indicator: oklch(0.25 0 0);
   --background: oklch(1 0 0 / var(--appearance-alpha, 1));
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0 / var(--appearance-alpha, 1));
   --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
+  --popover: oklch(1 0 0 / var(--overlay-alpha, 1));
   --popover-foreground: oklch(0.145 0 0);
   --primary: oklch(0.205 0 0);
   --link: oklch(0.42 0.17 264);
@@ -164,44 +165,51 @@ pre,
   --main-surface-gutter: 8px;
   --main-surface-border-width: 1px;
   --main-surface-radius: 14px;
+  /* The composer is a floating control, not another cutout in the chat surface. Its fill and
+     alpha are independent of --card/--appearance-alpha, so the transcript underneath stays one
+     uninterrupted colour. */
+  --composer-surface: #ffffff;
+  --composer-surface-alpha: 0.97;
 }
 
 .dark {
-  --canvas-page-indicator: oklch(0.985 0 0);
-  --background: color-mix(in srgb, #181818 calc(var(--appearance-alpha, 1) * 100%), transparent);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0 / var(--appearance-alpha, 1));
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
+  --canvas-page-indicator: #a0a0a0;
+  --background: color-mix(in srgb, #1f1f1f calc(var(--appearance-alpha, 1) * 100%), transparent);
+  --foreground: #d2d2d2;
+  --card: color-mix(in srgb, #262626 calc(var(--appearance-alpha, 1) * 100%), transparent);
+  --card-foreground: #d2d2d2;
+  --popover: color-mix(in srgb, #2a2a2a calc(var(--overlay-alpha, 1) * 100%), transparent);
+  --popover-foreground: #d2d2d2;
+  --primary: #d6d6d6;
   --link: oklch(0.64 0.13 255);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  --primary-foreground: #1f1f1f;
+  --secondary: #2c2c2c;
+  --secondary-foreground: #d2d2d2;
+  --muted: #2c2c2c;
+  --muted-foreground: #9a9a9a;
+  --accent: #2c2c2c;
+  --accent-foreground: #d2d2d2;
   --destructive: oklch(0.704 0.191 22.216);
   --permission-warning: #ff8549;
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 14%);
+  --ring: #6f6f6f;
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: color-mix(in srgb, #3a3a3a calc(var(--appearance-alpha, 1) * 100%), transparent);
-  --sidebar-foreground: #ffffff;
+  --sidebar: color-mix(in srgb, #1b1b1b calc(var(--appearance-alpha, 1) * 100%), transparent);
+  --sidebar-foreground: #cbcbcb;
   --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-primary-foreground: #1f1f1f;
+  --sidebar-accent: #2c2c2c;
+  --sidebar-accent-foreground: #ededed;
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar-ring: #6f6f6f;
   --sidebar-floating-shadow: oklch(0 0 0 / 32%);
+  --composer-surface: #252525;
+  --composer-surface-alpha: 0.97;
 }
 
 @layer base {
@@ -456,6 +464,20 @@ html[data-window-backdrop="acrylic"]
   inset-block: 0;
   inset-inline-start: 0;
   width: var(--sidebar-width);
+  color: var(--sidebar-foreground);
+}
+/* module-chat wraps group headers in a hard-coded `dark:text-white`. On a work surface that
+   reads as a pure-white label above every recent section; route it back through the softer
+   sidebar foreground instead. */
+.dark .main-sidebar-panel [class~="dark:text-white"] {
+  color: var(--sidebar-foreground) !important;
+}
+/* Run-state dots come from the shared palette at full saturation. On a charcoal sidebar that
+   reads as a neon bulb next to every row; keep the state readable, but pull the dot toward the
+   surface the way the rest of the dark theme is pulled down. */
+.dark .main-sidebar-panel :is(.bg-green-500, .bg-yellow-500, .bg-blue-500, .bg-red-500) {
+  opacity: 0.72;
+  filter: saturate(0.62) brightness(0.9);
 }
 /* Resize handle on the pinned sidebar's trailing edge. The divider itself is shared with the
    workspace panes, so the drag affordance and hover ring match the other three columns. */
@@ -1117,10 +1139,28 @@ pre::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--sidebar) 90%, transparent);
 }
 [data-wallpaper="active"] .main-chat-surface {
-  background: color-mix(in srgb, var(--background) 94%, transparent);
+  /* Keep the same translucent surface across the transcript and composer. Forcing alpha to 1 here
+     made the upper conversation area and the lower input card composite against different layers. */
+  background: var(--background);
 }
-[data-wallpaper="active"] :is(.settings-card, [data-slot="popover"], [data-slot="dialog-content"]) {
+[data-wallpaper="active"] .settings-card {
   background: color-mix(in srgb, var(--card) 96%, transparent);
+}
+[data-wallpaper="active"]
+  :is(
+    [data-slot="popover-content"],
+    [data-slot="dialog-content"],
+    [data-slot="dropdown-menu-content"],
+    [data-slot="dropdown-menu-sub-content"],
+    [data-slot="select-content"],
+    [data-appearance-surface="overlay"]
+  ) {
+  background-color: var(--popover);
+  background-image: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--settings-accent) var(--accent-wash-top), transparent),
+    transparent 52%
+  );
 }
 
 /* 纯色档（solid）与壁纸互斥：纯色的定义就是「不透明、不叠层、不费 GPU」。
@@ -1147,7 +1187,7 @@ html[data-appearance="solid"] body::after {
 }
 html[data-appearance="solid"]
   [data-wallpaper="active"]
-  :is(.settings-card, [data-slot="popover"], [data-slot="dialog-content"]) {
+  :is(.settings-card, [data-slot="popover-content"], [data-slot="dialog-content"]) {
   background: var(--card);
 }
 
@@ -1265,30 +1305,32 @@ html[data-appearance="solid"]
    「半透明但没有材质」的脏底。 */
 html[data-appearance="solid"] {
   --appearance-alpha: 1 !important;
+  --overlay-alpha: 1 !important;
   /* 纯色的定义就是字面意义上的纯白/纯黑：不再经过 token 的 color-mix 计算，
      也不依赖窗口是否真透明。三处（html / body / #root）都写死，避免某一层没铺到
      而露出桌面——用户看到的「选了纯色还是透」就是这种漏层。 */
   --background: #fff;
-  /* 纯色档**只有一个层面**：侧栏、卡片、菜单都取同一个底色，区域之间只用 1px 边框划分。
-     此前侧栏 #101010、卡片 oklch(.205)、正文 #000 三层灰摞在一起，观感上就是「一层层的色层」，
-     与「纯色」相反。悬停/选中这类临时态才允许高一档（--muted）。 */
+  /* 纯色档只表示「不接受透明度」，不等于深色必须纯黑。深色保留侧栏 / 卡片 / 菜单的轻微
+     层次，避免整屏一块死黑把正文衬得刺眼；浅色仍是纯白。 */
   --sidebar: #fff;
   --card: #fff;
   --popover: #fff;
   --muted: #f4f4f5;
   --secondary: #f4f4f5;
   --accent: #f4f4f5;
+  --composer-surface-alpha: 1;
   background-color: #fff;
 }
 html.dark[data-appearance="solid"] {
-  --background: #000;
-  --sidebar: #000;
-  --card: #000;
-  --popover: #000;
-  --muted: #141414;
-  --secondary: #141414;
-  --accent: #141414;
-  background-color: #000;
+  --background: #1f1f1f;
+  --sidebar: #1b1b1b;
+  --card: #262626;
+  --popover: #2a2a2a;
+  --muted: #2c2c2c;
+  --secondary: #2c2c2c;
+  --accent: #2c2c2c;
+  --composer-surface-alpha: 1;
+  background-color: #1f1f1f;
 }
 html[data-appearance="solid"] body,
 html[data-appearance="solid"] #root {
@@ -1296,7 +1338,7 @@ html[data-appearance="solid"] #root {
 }
 html.dark[data-appearance="solid"] body,
 html.dark[data-appearance="solid"] #root {
-  background-color: #000;
+  background-color: #1f1f1f;
 }
 
 /* 功能屏要和聊天面板一样有自己的表面底色。透明度系数只乘进 --background/--card/--sidebar，
@@ -1443,8 +1485,10 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
    The soft tint recomputes from --settings-accent via color-mix, so it follows per preset.
    =========================================================================== */
 :root {
-  --settings-accent: oklch(0.62 0.21 28);
-  --settings-accent-ink: oklch(0.49 0.19 26);
+  --accent-base: oklch(0.62 0.21 28);
+  --accent-ink-base: oklch(0.49 0.19 26);
+  --settings-accent: var(--accent-base);
+  --settings-accent-ink: var(--accent-ink-base);
   --settings-accent-soft: color-mix(in oklab, var(--settings-accent) var(--accent-surface), var(--card));
 
   /* ── 浅色主题色强度标尺 ────────────────────────────────────────────────────
@@ -1461,13 +1505,15 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
 }
 
 /* ── 深色主题色强度标尺 ────────────────────────────────────────────────────────
-   感知强度 ≈ 彩度 × 混入比例。7 个主题深色 accent 的彩度从 0.02(亚麻灰) 到 0.18(YUP红)
+   感知强度 ≈ 彩度 × 混入比例。7 个主题深色 accent 的彩度从 0.006(珍珠白) 到 0.18(YUP红)
    差 9 倍，但过去每个消费点各写死一个百分比，于是彩色主题看得见、低彩度主题等于没主题。
    现在把深色下所有主题色叠加收成这一组语义变量：消费点只引用语义，不再各自写数字；
    低彩度主题只需覆盖这一组（配合略提彩度）即可把感知强度补齐，全窗表现一致。 */
 .dark {
-  --settings-accent: oklch(0.74 0.18 30);
-  --settings-accent-ink: oklch(0.85 0.15 30);
+  --accent-base: oklch(0.74 0.18 30);
+  --accent-ink-base: oklch(0.85 0.15 30);
+  --settings-accent: var(--accent-base);
+  --settings-accent-ink: var(--accent-ink-base);
   --settings-accent-soft: color-mix(in oklab, var(--settings-accent) var(--accent-surface), var(--card));
 
   --accent-wash: 1%; /* 整窗常驻底色：只留一点氛围，不让中性面染上主题色 */
@@ -1489,49 +1535,69 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   --accent-preset-elegant-black: oklch(0.30 0.008 265);
 }
 :root[data-accent="snow-white"] {
-  --settings-accent: oklch(0.55 0.012 255);
-  --settings-accent-ink: oklch(0.28 0.012 255);
+  --accent-base: oklch(0.55 0.012 255);
+  --accent-ink-base: oklch(0.28 0.012 255);
+  --settings-accent: var(--accent-base);
+  --settings-accent-ink: var(--accent-ink-base);
 }
 .dark[data-accent="snow-white"] {
-  --settings-accent: oklch(0.93 0.006 250);
-  --settings-accent-ink: oklch(0.97 0.004 250);
+  --accent-base: oklch(0.93 0.006 250);
+  --accent-ink-base: oklch(0.97 0.004 250);
+  --settings-accent: var(--accent-base);
+  --settings-accent-ink: var(--accent-ink-base);
 }
 :root[data-accent="elegant-black"] {
-  --settings-accent: oklch(0.30 0.010 265);
-  --settings-accent-ink: oklch(0.20 0.010 265);
+  --accent-base: oklch(0.30 0.010 265);
+  --accent-ink-base: oklch(0.20 0.010 265);
+  --settings-accent: var(--accent-base);
+  --settings-accent-ink: var(--accent-ink-base);
 }
 .dark[data-accent="elegant-black"] {
-  --settings-accent: oklch(0.62 0.010 265);
-  --settings-accent-ink: oklch(0.86 0.006 265);
+  --accent-base: oklch(0.62 0.010 265);
+  --accent-ink-base: oklch(0.86 0.006 265);
+  --settings-accent: var(--accent-base);
+  --settings-accent-ink: var(--accent-ink-base);
 }
 :root[data-accent="lemon-green"] {
-  --settings-accent: oklch(0.76 0.18 128);
-  --settings-accent-ink: oklch(0.52 0.15 128);
+  --accent-base: oklch(0.76 0.18 128);
+  --accent-ink-base: oklch(0.52 0.15 128);
+  --settings-accent: var(--accent-base);
+  --settings-accent-ink: var(--accent-ink-base);
 }
 .dark[data-accent="lemon-green"] {
-  --settings-accent: oklch(0.82 0.16 128);
-  --settings-accent-ink: oklch(0.86 0.13 128);
+  --accent-base: oklch(0.82 0.16 128);
+  --accent-ink-base: oklch(0.86 0.13 128);
+  --settings-accent: var(--accent-base);
+  --settings-accent-ink: var(--accent-ink-base);
 }
 
 :root[data-accent="girly-pink"] {
-  --settings-accent: oklch(0.70 0.17 350);
-  --settings-accent-ink: oklch(0.52 0.15 350);
+  --accent-base: oklch(0.70 0.17 350);
+  --accent-ink-base: oklch(0.52 0.15 350);
+  --settings-accent: var(--accent-base);
+  --settings-accent-ink: var(--accent-ink-base);
 }
 .dark[data-accent="girly-pink"] {
-  --settings-accent: oklch(0.80 0.13 352);
-  --settings-accent-ink: oklch(0.85 0.12 352);
+  --accent-base: oklch(0.80 0.13 352);
+  --accent-ink-base: oklch(0.85 0.12 352);
+  --settings-accent: var(--accent-base);
+  --settings-accent-ink: var(--accent-ink-base);
 }
 
-:root[data-accent="linen-gray"] {
-  --settings-accent: oklch(0.71 0.03 85);
-  --settings-accent-ink: oklch(0.45 0.025 85);
+/* 珍珠白 / 雅致黑是「弱强调」主题：彩度 ≤0.012，默认混入比在侧栏选中态上只有 2.4 的
+   RGB 距离，等于没有。按中性色的比例抬高，让它们仍然读得出「选了色」，但不染整片底。 */
+:root[data-accent="snow-white"],
+:root[data-accent="elegant-black"] {
+  --accent-wash: 1.4%;
+  --accent-wash-top: 3%;
+  --accent-surface: 18%;
+  --accent-surface-hover: 24%;
+  --accent-edge: 40%;
+  --accent-strong: 56%;
+  --accent-active: 18%;
 }
-/* 亚麻灰：彩度只有 0.02，是唯一「几乎无色」的主题。先把色相从纯中立灰拉回暖亚麻
-   (0.045)，再把整组混入比例上调，两者相乘后感知强度才接近其它主题，而不失灰调。 */
-.dark[data-accent="linen-gray"] {
-  --settings-accent: oklch(0.78 0.045 85);
-  --settings-accent-ink: oklch(0.86 0.035 85);
-
+.dark[data-accent="snow-white"],
+.dark[data-accent="elegant-black"] {
   --accent-wash: 1.6%;
   --accent-wash-top: 3.5%;
   --accent-surface: 24%;
@@ -1541,31 +1607,30 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   --accent-active: 22%;
 }
 
-:root[data-accent="warm-brown"] {
-  --settings-accent: oklch(0.58 0.12 55);
-  --settings-accent-ink: oklch(0.44 0.10 52);
-}
-.dark[data-accent="warm-brown"] {
-  --settings-accent: oklch(0.70 0.11 58);
-  --settings-accent-ink: oklch(0.82 0.09 58);
-}
-
 :root[data-accent="sky-blue"] {
-  --settings-accent: oklch(0.62 0.16 242);
-  --settings-accent-ink: oklch(0.46 0.15 242);
+  --accent-base: oklch(0.62 0.16 242);
+  --accent-ink-base: oklch(0.46 0.15 242);
+  --settings-accent: var(--accent-base);
+  --settings-accent-ink: var(--accent-ink-base);
 }
 .dark[data-accent="sky-blue"] {
-  --settings-accent: oklch(0.74 0.14 242);
-  --settings-accent-ink: oklch(0.84 0.12 242);
+  --accent-base: oklch(0.74 0.14 242);
+  --accent-ink-base: oklch(0.84 0.12 242);
+  --settings-accent: var(--accent-base);
+  --settings-accent-ink: var(--accent-ink-base);
 }
 
 :root[data-accent="emerald"] {
-  --settings-accent: oklch(0.64 0.15 170);
-  --settings-accent-ink: oklch(0.46 0.13 170);
+  --accent-base: oklch(0.64 0.15 170);
+  --accent-ink-base: oklch(0.46 0.13 170);
+  --settings-accent: var(--accent-base);
+  --settings-accent-ink: var(--accent-ink-base);
 }
 .dark[data-accent="emerald"] {
-  --settings-accent: oklch(0.76 0.13 170);
-  --settings-accent-ink: oklch(0.85 0.11 170);
+  --accent-base: oklch(0.76 0.13 170);
+  --accent-ink-base: oklch(0.85 0.11 170);
+  --settings-accent: var(--accent-base);
+  --settings-accent-ink: var(--accent-ink-base);
 }
 
 /* ── 主题色色板的双外观取值 ──────────────────────────────────────────────────
@@ -1578,8 +1643,6 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   --accent-preset-yup-red: oklch(0.64 0.20 29);
   --accent-preset-lemon-green: oklch(0.80 0.16 125);
   --accent-preset-girly-pink: oklch(0.74 0.14 350);
-  --accent-preset-linen-gray: oklch(0.72 0.025 85);
-  --accent-preset-warm-brown: oklch(0.62 0.09 55);
   --accent-preset-sky-blue: oklch(0.66 0.13 240);
   --accent-preset-emerald: oklch(0.68 0.12 168);
 }
@@ -1587,30 +1650,33 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   --accent-preset-yup-red: oklch(0.74 0.18 30);
   --accent-preset-lemon-green: oklch(0.82 0.16 128);
   --accent-preset-girly-pink: oklch(0.80 0.13 352);
-  --accent-preset-linen-gray: oklch(0.78 0.045 85);
-  --accent-preset-warm-brown: oklch(0.70 0.11 58);
   --accent-preset-sky-blue: oklch(0.74 0.14 242);
   --accent-preset-emerald: oklch(0.76 0.13 170);
 }
 
 /* ── 主题色上的前景（按钮填充主题色时，图标/文字必须读得清）────────────────────────
    CSS 无法按明度自动选反色，所以按预设明度分组声明，而不是逐个写：
-   明亮档（明度 ≥0.70：柠檬绿 / 少女粉 / 亚麻灰）配深墨；其余配白。
+   明亮档（明度 ≥0.70：柠檬绿 / 少女粉）配深墨；其余配白。
    深色外观整体把 accent 提亮了，因此默认改深墨，唯独自带实色的「极致黑」仍配白。 */
 :root {
   --accent-on: oklch(0.99 0 0);
 }
+/* 亮色档按实测对比度分组，不再用「明度 ≥0.70」这种手感判断：柠檬绿 / 少女粉 /
+   翡翠绿 / 天蓝 / YUP 红在白字下都低于 3.6:1，换成深墨后最低 5.3:1；白马卡其与雪白本身
+   够暗，保留白字（4.4 / 4.9）。 */
 :root[data-accent="lemon-green"],
 :root[data-accent="girly-pink"],
-:root[data-accent="linen-gray"] {
+:root[data-accent="emerald"],
+:root[data-accent="sky-blue"],
+:root[data-accent="yup-red"] {
   --accent-on: oklch(0.22 0.02 90);
 }
 .dark {
   --accent-on: oklch(0.17 0.012 260);
 }
-.dark[data-accent="elegant-black"] {
-  --accent-on: oklch(0.98 0 0);
-}
+/* 深色外观把每个 accent 都提亮了，深墨是唯一安全解：此前「极致黑」单独留白字，
+   实测只有 3.65:1，改深墨后 5.2:1。 */
+
 
 /* ── 布局预览条四段配色 ────────────────────────────────────────────────────────
    浅色沿用「主题色混入背景」(26/46/68/100%)，本身辨识度够；深色必须拆开处理：
@@ -1646,41 +1712,128 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--settings-accent) 22%, transparent);
 }
 
-/* ── 输入区：一块白卡，chip 行靠「分割线」分层 ─────────────────────────────────────────────
-   这一处前后改了五版，每版的失败原因都值得留档，因为它们排除了三种看似合理的做法：
-   1. 包内原样（内缩 13px + `-mb-[18px]` 负边距）——一块塞进另一块底下，圆角对不上；
-   2. 合成一张卡（无间距）——缝没了，但功能区与输入区毫无区分，chip 读起来像正文；
-   3. 窄一圈 + 自己的 4% 墨底——成了压在卡上的灰盖子，且相邻表面差 4% 只会读成「渲染出错」；
-   4. 纯透明——chip 悬空，没有东西托着；
-   5. 窄一圈 + 实房间距（上一版）——两个框内部颜色其实**完全相同**（实测都是 233,240,251），
-      刺眼的是中间 6px 的**间距露出了蓝色页面底**，整块被切成「蓝／白／蓝／白」四段。
-   结论：在壁纸/半透明底上，「间距」不是分层手段，它是**露底**。能用的分层只有两种——
-   分割线，或阴影。这里选分割线：它是一条明确的 UI 元素，不会被读成色差，也不挖开底色。
-   所以填充落在把两者都包住的父级上（`div.relative > form > .codex-composer-surface`），
-   两个子元素全透明；chip 行与输入区因此是**同一块被涂色的表面**，色差在构造上不可能出现。 */
-[data-composer] div:has(> form > .codex-composer-surface) {
-  border-radius: 24px;
-  background-color: var(--chat-input-bg-color, var(--card));
-  box-shadow:
-    0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent),
-    0 2px 8px color-mix(in oklab, var(--foreground) 4%, transparent);
-}
-/* 输入区交出填充与描边，只保留自己的滚动裁剪；顶部圆角让给父级，底部自己收口。 */
-[data-composer] .codex-composer-surface {
-  border-radius: 0 0 24px 24px;
-  background-color: transparent;
+/* Composer geometry. Drop zones handle file interaction and width; the chat surface owns the
+   material. Keep the outer wrapper transparent so a glass mode is composited exactly once. */
+[data-chat-drop-zone] > [data-composer]:has(form > .codex-composer-surface),
+[data-chat-content] > [data-chat-drop-zone]:has(> [data-composer] form > .codex-composer-surface) {
+  /* The host wrapper only reserves the composer area. The actual card is the inner relative node,
+     which contains both the header and the form. */
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   background-image: none;
   box-shadow: none;
 }
+
+/* The composer is a card inside the chat column. The page owns the material; the card is the
+   one raised control at the bottom, which is what makes the input distinguishable from the
+   transcript instead of blending into a black rectangle. */
+[data-composer][data-composer-dock] {
+  width: 100%;
+  flex: none;
+  border-block-start: 0;
+  background: transparent;
+}
+[data-composer] > [data-chat-drop-zone] {
+  width: min(100%, 56rem);
+  max-width: 56rem;
+  margin-inline: auto;
+  padding-inline: 16px;
+  padding-bottom: 12px;
+}
+[data-composer] > [data-chat-drop-zone] > .relative:has(> form > .codex-composer-surface) {
+  overflow: visible;
+  border: 1px solid color-mix(in oklab, var(--foreground) 10%, transparent);
+  border-radius: 1.25rem;
+  background: color-mix(
+    in srgb,
+    var(--composer-surface) calc(var(--composer-surface-alpha, 1) * 100%),
+    transparent
+  );
+  background-image: none;
+  box-shadow: 0 18px 44px -34px color-mix(in oklab, #000 60%, transparent);
+}
+/* While the selection bar is up, the document viewer's own floating 评论 button is redundant:
+   the action lives in the bar. Hidden, not removed — the bar clicks it to open the composer. */
+html[data-selection-menu] [data-testid="comment-selection-button"] {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+/* 输入区交出填充与描边，只保留自己的滚动裁剪；顶部圆角让给父级，底部自己收口。 */
+[data-composer] .codex-composer-surface {
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+/* Vendored 的输入面自己也画了一层：24px 圆角 + 0.5px 描边 + 8px 柔影，而且从卡片边缘往里缩了
+   一点。两层叠在一起就是"双胶囊"——外面一枚、里面又一枚，四个角各多一道弧。卡片是唯一的表面：
+   这一层不画任何框，也不占外边距。 */
+[data-chat-drop-zone] .codex-composer-surface {
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* The package's textarea wrapper ships with a 64px minimum and generous padding. Keep an empty
+   composer at two lines; the saved drag height is a ceiling, not a fixed height, so an old
+   288px drag cannot keep the input three times taller than its content. */
+[data-composer] .codex-composer-surface .alwith-composer-textarea {
+  min-height: var(--composer-input-min, 2.75rem);
+  max-height: min(var(--composer-input-height, 12rem), 12rem);
+}
+[data-composer] .codex-composer-surface > div:has(> .alwith-composer-textarea) {
+  min-height: 0;
+  padding: 10px 14px 6px !important;
+}
+
 /* chip 行：整宽、无填充，靠一条 1px 分割线与输入区隔开。分割线用 inset 阴影画，
    这样不占高度、不会因为 subpixel 把行高顶掉 1px。 */
-[data-composer] [data-chat-input-header] {
+[data-composer] > [data-chat-drop-zone] .relative > [data-chat-input-header] {
   top: 0;
   margin: 0;
-  padding: 7px 12px;
+  min-height: 30px;
+  padding: 6px 14px 5px;
+  border: 0;
   border-radius: 0;
   background-color: transparent;
-  box-shadow: inset 0 -1px 0 0 color-mix(in oklab, var(--foreground) 9%, transparent);
+  box-shadow: none;
+}
+/* Vendored 的 chip 行自带 `rounded-t-2xl mx-[13px] top-1`，是"贴在卡片上方的小标签"：
+   16px 圆角 + 13px 内缩落在 24px 圆角的卡片里，左上角就出现两道弧和一条内描边。
+   这里用 !important 压平——它属于"必须消失的容器框"，不是可覆盖的主题样式。 */
+[data-chat-input-header] {
+  top: 0 !important;
+  margin: 0 !important;
+  min-height: 0;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+/* 标题条是栏目的第一行，不是嵌在栏目里的一枚药丸：vendored 的浮动标题会包一层带圆角、
+   描边和底色的容器，标题被做成 24px 圆角的大药丸，跟右边 32px 的编辑器标签完全不成套。
+   只压平"直接包着标题的那一层"，栏目卡片本身不动。 */
+/* 一层不够：标题行外面还套着一层圆角描边容器（只包标题、不包正文），旧的「直接父级」
+   选择器匹配不到它，于是标题仍是一枚独立药丸、正文是另一张卡，中间露缝。这里反过来取
+   「包含标题、但不包含正文」的所有祖先，一次性压平，正文那张卡不动。 */
+:is(div, section, header, aside, nav):has([data-main-chat-header]):not(:has([data-chat-content])) {
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+[data-main-chat-header] {
+  min-height: 36px;
+  padding-inline: 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 72%, transparent);
 }
 /* An empty row is an empty strip, and that is the normal state of a plain chat (nothing quoted,
    nothing running, no 分工). The row is always in the DOM because every chip renders
@@ -1689,19 +1842,42 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   display: none;
 }
 
+/* New-task hero: the composer is a standalone module under the greeting, not the bottom dock
+   a conversation uses. The package still supplies its drop zone and toolbar; only the outer
+   geometry and the card surface change here. These overrides come after the dock contract so
+   the base composer rules stay the canonical definition. */
+.welcome-hero {
+  padding-block: clamp(1.5rem, 5vh, 4rem) 2rem;
+}
+.welcome-hero-composer [data-composer][data-composer-dock] {
+  border-block-start: 0;
+}
+.welcome-hero-composer [data-composer] > [data-chat-drop-zone] {
+  width: 100%;
+  max-width: 100%;
+  padding-inline: 0;
+  padding-bottom: 0;
+}
+.welcome-hero-composer [data-composer] .alwith-composer-textarea {
+  min-height: var(--composer-input-min, 3.5rem);
+}
+.welcome-hero-composer [data-chat-input-header] {
+  background-color: transparent !important;
+}
+
 /* Model rows are reordered with pointer events; never let WebKit start a native drag image. */
 .model-drag-handle {
   -webkit-user-drag: none;
   touch-action: none;
 }
 
-/* Composer input height: the drag handle on the card's top edge writes this variable. Unset, the
-   textarea keeps its content height (2.5rem floor); set, it is pinned to that height and scrolls. */
+/* Composer input height: the drag handle on the card's top edge writes this variable. It is the
+   maximum the textarea may grow to; an empty composer always returns to its two-line floor. */
 [data-composer] .alwith-composer-textarea {
   /* Never let a persisted drag (or a malformed stored value) collapse the box below two rows:
      the placeholder and resize grip must stay visible or the composer reads as "missing". */
-  min-height: max(var(--composer-input-height, 0px), 4.5rem);
-  max-height: var(--composer-input-height, none);
+  min-height: var(--composer-input-min, 2.75rem);
+  max-height: min(var(--composer-input-height, 12rem), 12rem);
   overflow-y: auto;
   /* The shared textarea primitive carries a visible form border. The composer already has its
      rounded shell; a second rectangle inside it is the large black frame seen in screenshots. */
@@ -1714,6 +1890,21 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   border: 0 !important;
   outline: none !important;
   box-shadow: none !important;
+}
+
+/* The footer is the action rail on the same card: one-line controls, a consistent inset, and no
+   second divider that would carve the input into two stacked surfaces. */
+[data-composer] .chat-composer-toolbar {
+  margin: 0 !important;
+  padding: 6px 12px 8px !important;
+  border-top: 0;
+}
+[data-composer] .chat-composer-toolbar > div {
+  padding-inline: 0;
+  column-gap: 8px;
+}
+[data-composer] .chat-composer-toolbar > div > div:first-child {
+  gap: 4px;
 }
 
 /* A revoked account model used to pin the textarea to one row and hide its resize grip here. It is
@@ -1840,17 +2031,14 @@ body::after {
   inset: 0;
   z-index: var(--overlay-z);
   pointer-events: none;
-  background-image:
-    linear-gradient(
-      to bottom,
-      color-mix(in oklab, var(--settings-accent) var(--wash-top), transparent) 0,
-      transparent 420px
-    ),
-    linear-gradient(
-      to bottom,
-      color-mix(in oklab, var(--settings-accent) var(--wash-base), transparent) 0,
-      color-mix(in oklab, var(--settings-accent) var(--wash-base), transparent) 100%
-    );
+  /* 只保留一层均匀的薄雾。旧的「顶部光带、420px 处散尽」在 z-index 60 盖住整个窗口：
+     正文在上半屏吃到主题色光带，底部输入区吃不到，于是输入区看起来比上方暗一块。
+     均匀的一层不会造成这种上下分层。 */
+  background-image: linear-gradient(
+    to bottom,
+    color-mix(in oklab, var(--settings-accent) var(--wash-base), transparent) 0,
+    color-mix(in oklab, var(--settings-accent) var(--wash-base), transparent) 100%
+  );
 }
 
 /* 选中项是主题色唯一「实色」的落脚点。 */
@@ -1884,27 +2072,8 @@ body::after {
   order: 4;
 }
 
-/* 仅在聊天模式隐藏输入框左侧的「+」（attachImage）。项目对话保留它——那里附件是常规操作。
-   按钮由 @alwith/module-chat 硬编码渲染、没有开关属性，所以按工具栏结构 + 模式标记定位；
-   上游改层级时这条会失效而不是隐藏错东西。 */
-[data-composer-mode="chat"] .chat-composer-toolbar > div > div:first-child > button:first-child {
-  display: none;
-}
-
-/* 停止按钮已移到上方状态行（TurnProgressBar）右端：包内联在工具栏里的那份夹在模型选择器和
-   发送键之间，而模型选择器按名字定宽、拒绝收缩，窄窗口会把停止键挤到发送键底下按不到。
-   状态行整行宽、文字可截断，shrink-0 的停止键在任何窗宽都够得着。这里隐藏包内联的那份，
-   避免两个停止键。
-
-   定位只能用 `border-border`：包里的 Button 基类自带 `border border-transparent`，所以
-   `button.rounded-full.border` 会命中工具栏里**每一个**圆形按钮（模型选择器、发送键、附件、命令…），
-   曾把整条工具栏隐藏掉，表现为「对话框没有模型选择器」。只有停止键额外传了 `border-border`，
-   tailwind-merge 会用它覆盖基类的 `border-transparent`，因此这是唯一稳定的区分点，也不依赖
-   语言文案；上游改层级时这条会失效而不是隐藏错东西。 */
-.chat-composer-toolbar button.border-border {
-  display: none;
-}
-
+/* WorkBuddy-style composer: the attachment entry remains visible in direct chat too. */
+/* 发送与停止是同一操作位的互斥状态：发送中由模块按钮切换为停止，不再在状态条额外渲染第二个停止入口。 */
 /* ── 工具栏：永远一行，宽度不够就让模型名让位 ────────────────────────────────────────────────
    右组（模型选择器 · 语音 · 发送）是 `minmax(0,1fr)` 轨道里的 `flex justify-end`。以前子元素
    拒绝收缩，整组比轨道宽时向左溢出，盖住左边的按钮——点发送实际点到选择器。
@@ -1933,7 +2102,9 @@ body::after {
    主操作（发送）与激活态（输入焦点），读起来是「这个产品的颜色」，而不是「屏幕脏了」。 */
 [data-composer] .chat-composer-toolbar button[type="submit"] {
   background-color: var(--settings-accent);
+  background-image: none;
   color: var(--accent-on);
+  box-shadow: none;
 }
 [data-composer] .chat-composer-toolbar button[type="submit"]:hover:not(:disabled) {
   background-color: color-mix(in oklab, var(--settings-accent) 86%, var(--foreground));
@@ -1942,13 +2113,34 @@ body::after {
   background-color: color-mix(in oklab, var(--settings-accent) 40%, var(--muted));
   color: color-mix(in oklab, var(--accent-on) 70%, transparent);
 }
-/* 输入态：焦点一进来，卡片描边转成主题色。这是「正在这里输入」的唯一强信号，也是主题色在
-   主窗口里出现频率最高的一处。壁纸档卡片本身透明，所以描边用 1.5px 而不是发丝线。 */
-[data-composer] .codex-composer-surface:focus-within {
-  box-shadow:
-    0 0 0 1.5px color-mix(in oklab, var(--settings-accent) 72%, transparent),
-    0 2px 8px color-mix(in oklab, var(--settings-accent) 14%, transparent);
+/* 发送与停止是同一个按钮的两种状态，不是并排的两个按钮。
+   模块在会话运行时把停止键渲染在发送键之前；此时隐藏发送键，并让停止键沿用与发送键
+   完全相同的圆形主题色外观，于是同一位置只会出现一个控件，状态切换不产生位移。
+   `.border-border` 是停止键唯一稳定的标记（基类是 border-transparent，只有它覆盖成可见边框）。 */
+[data-composer] .chat-composer-toolbar:has(button.border-border) button[type="submit"] {
+  display: none;
 }
+[data-composer] .chat-composer-toolbar button.border-border {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background-color: var(--settings-accent);
+  background-image: none;
+  color: var(--settings-accent-ink);
+  box-shadow: none;
+}
+[data-composer] .chat-composer-toolbar button.border-border > svg {
+  color: inherit;
+  fill: currentColor;
+}
+[data-composer] .chat-composer-toolbar button.border-border:hover {
+  background-color: color-mix(in oklab, var(--settings-accent) 86%, var(--foreground));
+}
+/* 输入态不画主题色描边。填充已经抬到父级（chip 行 + 输入区共用一张卡），而描边只能挂在
+   `.codex-composer-surface` 上：那个盒子的上两个角是直角、顶边在 chip 行下面，于是焦点色
+   会在卡片内部多出一个横切的内嵌方框，底边还会压住卡片的圆角。主题色只落在发送键上。 */
 
 @container input-footer (max-width: 30rem) {
   .alwith-model-pill[data-testid="model-trigger"] {
@@ -1982,16 +2174,24 @@ body::after {
 
    只改 token，不改组件：卡片读 `--card`、侧栏读 `--sidebar`、弹层读 `--popover`，所以
    一处覆盖就够，不需要在几十个组件里加 class。
+
+   **每一个带底色的 token 都必须乘 `--appearance-alpha`**。`--muted` 不是「次要文本色」，
+   它是输入区卡面（深色档 `--chat-input-bg-color: var(--muted)`）、按钮和 chip 的填充；
+   `--secondary` / `--accent` 同理是控件底。这四个玻璃块最初只把 alpha 乘进了
+   background / card / sidebar，漏掉了 muted / secondary / accent：透明度拉满时页面已经
+   透成桌面，输入区却还是固定 64% 的深色板，看上去就是「上面的背景和输入框下面不是同一个
+   颜色」，主题色和材质也被这块板子挡住。`glass-background.test.ts` 里有断言守着。
    ========================================================================== */
 
 /* Liquid Glass · 浅色：更透、更亮，留给原生玻璃去折射；文字仍压在高对比的卡面上。 */
 html[data-appearance="liquid-glass"]:not(.dark) {
+  --overlay-alpha: calc(0.7 + 0.3 * var(--appearance-alpha, 1));
   --background: oklch(1 0 0 / calc(0.58 * var(--appearance-alpha, 1)));
   --card: oklch(1 0 0 / calc(0.66 * var(--appearance-alpha, 1)));
-  --popover: oklch(1 0 0 / 0.86);
-  --secondary: oklch(0.97 0 0 / 0.62);
-  --muted: oklch(0.97 0 0 / 0.55);
-  --accent: oklch(0.97 0 0 / 0.6);
+  --popover: oklch(1 0 0 / var(--overlay-alpha));
+  --secondary: oklch(0.97 0 0 / calc(0.62 * var(--appearance-alpha, 1)));
+  --muted: oklch(0.97 0 0 / calc(0.55 * var(--appearance-alpha, 1)));
+  --accent: oklch(0.97 0 0 / calc(0.6 * var(--appearance-alpha, 1)));
   --sidebar: oklch(0.975 0 0 / calc(0.48 * var(--appearance-alpha, 1)));
   --border: oklch(0.922 0 0 / 0.7);
   --input: oklch(0.922 0 0 / 0.7);
@@ -1999,12 +2199,13 @@ html[data-appearance="liquid-glass"]:not(.dark) {
 
 /* Liquid Glass · 深色：同样更透，但保留足够黑度，白字不会糊在桌面壁纸上。 */
 html[data-appearance="liquid-glass"].dark {
+  --overlay-alpha: calc(0.7 + 0.3 * var(--appearance-alpha, 1));
   --background: oklch(0.145 0 0 / calc(0.62 * var(--appearance-alpha, 1)));
   --card: oklch(0.205 0 0 / calc(0.62 * var(--appearance-alpha, 1)));
-  --popover: oklch(0.205 0 0 / 0.9);
-  --secondary: oklch(0.269 0 0 / 0.6);
-  --muted: oklch(0.269 0 0 / 0.55);
-  --accent: oklch(0.269 0 0 / 0.6);
+  --popover: oklch(0.205 0 0 / var(--overlay-alpha));
+  --secondary: oklch(0.269 0 0 / calc(0.6 * var(--appearance-alpha, 1)));
+  --muted: oklch(0.269 0 0 / calc(0.55 * var(--appearance-alpha, 1)));
+  --accent: oklch(0.269 0 0 / calc(0.6 * var(--appearance-alpha, 1)));
   --sidebar: oklch(0.2 0 0 / calc(0.48 * var(--appearance-alpha, 1)));
   --border: oklch(1 0 0 / 0.14);
   --input: oklch(1 0 0 / 0.16);
@@ -2012,24 +2213,26 @@ html[data-appearance="liquid-glass"].dark {
 
 /* Aero：比 Liquid Glass 更「厚」、偏冷蓝，模糊弱一档——经典 Aero 的观感是雾面而不是玻璃。 */
 html[data-appearance="aero"]:not(.dark) {
+  --overlay-alpha: calc(0.74 + 0.26 * var(--appearance-alpha, 1));
   --background: oklch(0.985 0.008 240 / calc(0.74 * var(--appearance-alpha, 1)));
   --card: oklch(0.995 0.006 240 / calc(0.78 * var(--appearance-alpha, 1)));
-  --popover: oklch(0.995 0.006 240 / 0.92);
-  --secondary: oklch(0.96 0.012 240 / 0.72);
-  --muted: oklch(0.96 0.012 240 / 0.66);
-  --accent: oklch(0.96 0.012 240 / 0.7);
+  --popover: oklch(0.995 0.006 240 / var(--overlay-alpha));
+  --secondary: oklch(0.96 0.012 240 / calc(0.72 * var(--appearance-alpha, 1)));
+  --muted: oklch(0.96 0.012 240 / calc(0.66 * var(--appearance-alpha, 1)));
+  --accent: oklch(0.96 0.012 240 / calc(0.7 * var(--appearance-alpha, 1)));
   --sidebar: oklch(0.965 0.014 240 / calc(0.62 * var(--appearance-alpha, 1)));
   --border: oklch(0.9 0.02 240 / 0.78);
   --input: oklch(0.9 0.02 240 / 0.78);
 }
 
 html[data-appearance="aero"].dark {
+  --overlay-alpha: calc(0.74 + 0.26 * var(--appearance-alpha, 1));
   --background: oklch(0.16 0.012 250 / calc(0.78 * var(--appearance-alpha, 1)));
   --card: oklch(0.22 0.014 250 / calc(0.74 * var(--appearance-alpha, 1)));
-  --popover: oklch(0.22 0.014 250 / 0.94);
-  --secondary: oklch(0.28 0.016 250 / 0.7);
-  --muted: oklch(0.28 0.016 250 / 0.64);
-  --accent: oklch(0.28 0.016 250 / 0.7);
+  --popover: oklch(0.22 0.014 250 / var(--overlay-alpha));
+  --secondary: oklch(0.28 0.016 250 / calc(0.7 * var(--appearance-alpha, 1)));
+  --muted: oklch(0.28 0.016 250 / calc(0.64 * var(--appearance-alpha, 1)));
+  --accent: oklch(0.28 0.016 250 / calc(0.7 * var(--appearance-alpha, 1)));
   --sidebar: oklch(0.21 0.016 250 / calc(0.62 * var(--appearance-alpha, 1)));
   --border: oklch(1 0 0 / 0.16);
   --input: oklch(1 0 0 / 0.18);
@@ -2037,24 +2240,45 @@ html[data-appearance="aero"].dark {
 
 /* 没有原生材质时，把透明度收回来：厚一档，但仍然读得出「玻璃 / 雾面」的区别。 */
 html[data-appearance="liquid-glass"][data-appearance-fallback="css"]:not(.dark) {
+  --overlay-alpha: calc(0.8 + 0.2 * var(--appearance-alpha, 1));
   --background: oklch(1 0 0 / calc(0.86 * var(--appearance-alpha, 1)));
   --card: oklch(1 0 0 / calc(0.9 * var(--appearance-alpha, 1)));
+  --popover: oklch(1 0 0 / var(--overlay-alpha));
   --sidebar: oklch(0.975 0 0 / calc(0.84 * var(--appearance-alpha, 1)));
 }
 html[data-appearance="liquid-glass"][data-appearance-fallback="css"].dark {
+  --overlay-alpha: calc(0.8 + 0.2 * var(--appearance-alpha, 1));
   --background: oklch(0.145 0 0 / calc(0.88 * var(--appearance-alpha, 1)));
   --card: oklch(0.205 0 0 / calc(0.9 * var(--appearance-alpha, 1)));
+  --popover: oklch(0.205 0 0 / var(--overlay-alpha));
   --sidebar: oklch(0.2 0 0 / calc(0.84 * var(--appearance-alpha, 1)));
 }
 html[data-appearance="aero"][data-appearance-fallback="css"]:not(.dark) {
+  --overlay-alpha: calc(0.82 + 0.18 * var(--appearance-alpha, 1));
   --background: oklch(0.985 0.008 240 / calc(0.92 * var(--appearance-alpha, 1)));
   --card: oklch(0.995 0.006 240 / calc(0.94 * var(--appearance-alpha, 1)));
+  --popover: oklch(0.995 0.006 240 / var(--overlay-alpha));
   --sidebar: oklch(0.965 0.014 240 / calc(0.88 * var(--appearance-alpha, 1)));
 }
 html[data-appearance="aero"][data-appearance-fallback="css"].dark {
+  --overlay-alpha: calc(0.82 + 0.18 * var(--appearance-alpha, 1));
   --background: oklch(0.16 0.012 250 / calc(0.92 * var(--appearance-alpha, 1)));
   --card: oklch(0.22 0.014 250 / calc(0.92 * var(--appearance-alpha, 1)));
+  --popover: oklch(0.22 0.014 250 / var(--overlay-alpha));
   --sidebar: oklch(0.21 0.016 250 / calc(0.88 * var(--appearance-alpha, 1)));
+}
+
+/* Frosted glass: the underlying surface can be a wallpaper, so nudge every accent 6% toward the
+   reading colour and its ink 8% in the same direction. Solid keeps the exact base values. This is
+   one rule for all seven presets, not seven hand-tuned copies — light/dark × solid/frosted is
+   covered by the two base pairs plus these two adjustments. */
+html[data-appearance="aero"]:not(.dark) {
+  --settings-accent: color-mix(in oklab, var(--accent-base) 94%, var(--foreground));
+  --settings-accent-ink: color-mix(in oklab, var(--accent-ink-base) 92%, var(--foreground));
+}
+html[data-appearance="aero"].dark {
+  --settings-accent: color-mix(in oklab, var(--accent-base) 94%, white);
+  --settings-accent-ink: color-mix(in oklab, var(--accent-ink-base) 92%, white);
 }
 
 /* 玻璃档的两块「高光」：设置浮层与侧栏顶部的 1px 亮边 + 一层极淡的折射渐变。
@@ -2068,6 +2292,27 @@ html[data-appearance="aero"] [data-settings-surface]::after {
   pointer-events: none;
   background: linear-gradient(160deg, oklch(1 0 0 / 0.22), transparent 42%, oklch(1 0 0 / 0.06));
 }
+
+/* The settings window is a full-window surface. Let the glass mode reveal the same native
+   material as the main window instead of putting an opaque `bg-background` slab over it. */
+html[data-appearance="liquid-glass"] .settings-window {
+  background-color: transparent !important;
+}
+
+html[data-appearance="liquid-glass"]
+  :is(
+    [data-slot="dropdown-menu-content"],
+    [data-slot="dropdown-menu-sub-content"],
+    [data-slot="select-content"],
+    [data-appearance-surface="overlay"]
+  ) {
+  background-color: var(--popover);
+  background-image: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--settings-accent) var(--accent-wash-top), transparent),
+    transparent 52%
+  );
+}
 html[data-appearance="liquid-glass"].dark [data-settings-surface]::after,
 html[data-appearance="aero"].dark [data-settings-surface]::after {
   background: linear-gradient(160deg, oklch(1 0 0 / 0.12), transparent 46%, oklch(1 0 0 / 0.04));
@@ -2076,23 +2321,57 @@ html[data-appearance="aero"].dark [data-settings-surface]::after {
 /* 玻璃档下，卡片与浮层自带一层 backdrop-filter：即使原生材质缺席（CSS fallback），
    chrome 之间也有「隔着玻璃看下一层」的层次，而不是一堆同等透明度的方块。 */
 html[data-appearance="liquid-glass"] [data-settings-surface],
-html[data-appearance="liquid-glass"] [data-radix-popper-content-wrapper] > * {
+html[data-appearance="liquid-glass"]
+  :is(
+    [data-radix-popper-content-wrapper] > *,
+    [data-slot="dropdown-menu-content"],
+    [data-slot="dropdown-menu-sub-content"],
+    [data-slot="select-content"],
+    [data-slot="popover-content"],
+    [data-slot="dialog-content"],
+    [data-appearance-surface="overlay"]
+  ) {
   backdrop-filter: blur(28px) saturate(1.7);
 }
 html[data-appearance="aero"] [data-settings-surface],
-html[data-appearance="aero"] [data-radix-popper-content-wrapper] > * {
-  backdrop-filter: blur(18px) saturate(1.35);
+html[data-appearance="aero"]
+  :is(
+    [data-radix-popper-content-wrapper] > *,
+    [data-slot="dropdown-menu-content"],
+    [data-slot="dropdown-menu-sub-content"],
+    [data-slot="select-content"],
+    [data-slot="popover-content"],
+    [data-slot="dialog-content"],
+    [data-appearance-surface="overlay"]
+  ) {
+  backdrop-filter: blur(14px) saturate(1.25);
 }
 
 /* 拖动窗口时 macOS 会逐帧重绘整个透明 webview，模糊是最贵的部分。拖动期间直接关掉模糊与
    侧栏过渡，松手 240ms 后恢复——否则第一下拖动常被看成「卡住了、拖不动」。 */
 html[data-window-moving] [data-settings-surface],
-html[data-window-moving] [data-radix-popper-content-wrapper] > * {
+html[data-window-moving]
+  :is(
+    [data-radix-popper-content-wrapper] > *,
+    [data-slot="dropdown-menu-content"],
+    [data-slot="dropdown-menu-sub-content"],
+    [data-slot="select-content"],
+    [data-slot="popover-content"],
+    [data-slot="dialog-content"],
+    [data-appearance-surface="overlay"]
+  ) {
   backdrop-filter: none !important;
 }
+html[data-window-moving] .main-screen-track,
 html[data-window-moving] .main-sidebar-viewport,
 html[data-window-moving] .main-sidebar-rail,
 html[data-window-moving] .main-screen-content > .main-chat-surface {
   transition: none !important;
+}
+/* Blurred chips and float bars (vendored `backdrop-blur-*` utilities included) are the other
+   per-frame cost: an edge drag resizes the whole surface, so every blur is recomputed while
+   WebKit is already repainting a transparent window. Drop them for the duration of the drag. */
+html[data-window-moving] [class*="backdrop-blur"] {
+  backdrop-filter: none !important;
 }
 

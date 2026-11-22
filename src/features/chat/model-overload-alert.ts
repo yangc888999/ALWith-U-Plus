@@ -17,6 +17,7 @@ import { info } from "@tauri-apps/plugin-log"
 
 import { selectedModelId } from "@/agent/native-models"
 import { client } from "@/lib/client"
+import { parseModelIdentity, sameModelIdentity } from "@/lib/model-identity"
 import { activeTool } from "./turn-activity"
 import { overloadNoticeEnabled } from "@/lib/overload-retry-settings"
 
@@ -107,15 +108,9 @@ function isRunningLocally(session: Session): boolean {
 export function matchesReportedModel(selected: string | null, reported: string): boolean {
   if (selected === null) return false
   if (selected === reported) return true
-  if (!selected.startsWith("gateway:")) return false
-  const rest = selected.slice("gateway:".length)
-  const separator = rest.indexOf(":")
-  if (separator < 0) return false
-  try {
-    return `${decodeURIComponent(rest.slice(0, separator))}/${decodeURIComponent(rest.slice(separator + 1))}` === reported
-  } catch {
-    return false
-  }
+  const identity = parseModelIdentity(selected)
+  if (identity.kind !== "gateway") return sameModelIdentity(selected, reported)
+  return identity.routeId === reported || sameModelIdentity(selected, reported)
 }
 
 export function runningSession(model: string): Session | null {

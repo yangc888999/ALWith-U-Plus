@@ -347,12 +347,12 @@ index 9f50c40..3a03ab6 100755
 +    if (!model) {
 +      // The gateway is gone: the provider was removed, disabled, or reconfigured. Throwing here
 +      // aborted the request outright, which stranded a conversation on "session terminated" and
-+      // made both opening it and switching models impossible. Fall back to the bare model part so
-+      // opening and switching still work -- routing then treats it as a plain model.
++      // made both opening it and switching models impossible. Keep the gateway prefix so the
++      // router can never mistake the fallback for one of Codex's native ChatGPT models.
 +      const rest = selectionId.slice("gateway:".length);
 +      const colon = rest.indexOf(":");
 +      const bare = colon === -1 ? rest : rest.slice(colon + 1);
-+      return bare.length > 0 ? bare : selectionId;
++      return colon > 0 && bare.length > 0 ? `${rest.slice(0, colon)}/${bare}` : selectionId;
 +    }
 +    // A routed gateway shares Codex's single provider with its peers, so the model name must carry
 +    // the gateway it belongs to; the local router strips it back off before the vendor sees it.

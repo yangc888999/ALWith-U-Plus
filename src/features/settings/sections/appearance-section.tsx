@@ -49,13 +49,10 @@ import { setZoomLevel, ZOOM_LEVELS, zoomStore } from "@/lib/zoom"
 import {
   type AppearanceMode,
   setAppearanceMode,
-  setAppearanceTransparency,
   useAppearanceEffect,
   useAppearanceFailure,
-  useAppearanceMode,
-  useAppearanceTransparency
+  useAppearanceMode
 } from "@/lib/appearance-mode"
-
 import { ACCENT_PRESETS, useAccentStore } from "../accent-store"
 import { PreviewVisibleRow } from "./preview-visible-row"
 import { SettingRow, SettingsCard } from "./shared"
@@ -153,13 +150,10 @@ function ThemeSegmented({
 }
 
 /**
- * 外观材质三档：简洁 / Aero / Liquid Glass。
+ * 外观材质两档：纯色 / 毛玻璃。
  *
- * 和主题正好相反的一对：主题选的是**明暗**，材质选的是**透明与折射**。两者可以任意组合，
- * 所以这里是独立的一组按钮，而不是塞进 ThemeSegmented。
- *
- * 原生材质要 macOS 26+ 才有；不支持的机器上 CSS 仍按该档收紧透明度（厚玻璃），
- * 并在下面用一行灰字说明「窗口材质没生效」——不假装有效果。
+ * 工作工具优先可读性，所以不提供 Liquid Glass 折射，也不提供透明度滑杆；毛玻璃是固定的
+ * 雾面材质（原生 vibrancy + CSS 近似），纯色是默认档。
  */
 function MaterialSegmented({
   value,
@@ -171,14 +165,13 @@ function MaterialSegmented({
   const { t } = useTranslation()
   const options: Array<[AppearanceMode, string]> = [
     ["solid", t("settings.materialSolid")],
-    ["aero", t("settings.materialAero")],
-    ["liquid-glass", t("settings.materialLiquidGlass")]
+    ["aero", t("settings.materialAero")]
   ]
   return (
     <div
       role="group"
       aria-label={t("settings.materialMode")}
-      className="grid w-[300px] max-w-full grid-cols-3 gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5"
+      className="grid w-[300px] max-w-full grid-cols-2 gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5"
     >
       {options.map(([mode, label]) => (
         <button
@@ -256,9 +249,8 @@ export function AppearanceSection() {
   const queueMode = useSyncExternalStore(subscribeChatDisplayPreferences, getQueueSendMode, getQueueSendMode)
   const detail = useSyncExternalStore(subscribeChatDisplayPreferences, getConversationDetail, getConversationDetail)
   const { theme, setTheme } = useTheme()
-  // 材质与主题相互独立：主题管明暗，材质管透明与折射。
+  // 外观只有纯色与毛玻璃两档；毛玻璃的透明度固定，不提供滑杆。
   const materialMode = useAppearanceMode()
-  const transparency = useAppearanceTransparency()
   const materialEffect = useAppearanceEffect()
   const materialFailure = useAppearanceFailure()
   const zoom = useStore(zoomStore, (state) => state.level)
@@ -333,23 +325,19 @@ export function AppearanceSection() {
         <SettingRow
           compact
           title={t("settings.materialMode")}
-          desc={t(`settings.materialDesc.${materialMode === "solid" ? "solid" : materialMode === "aero" ? "aero" : "glass"}`)}
+          desc={t(`settings.materialDesc.${materialMode === "solid" ? "solid" : "aero"}`)}
         >
           <div className="flex w-[300px] max-w-full flex-col items-end gap-1">
             <MaterialSegmented
               value={materialMode}
               onChange={(next) => {
                 setAppearanceMode(next)
-                // 纯色档配中性配色：浅色默认雪域白、深色默认极致黑。只在「切到纯色」这一下
-                // 生效——用户之后仍可以自己改回彩色的强调色。
                 if (next === "solid") {
                   const dark = document.documentElement.classList.contains("dark")
                   setAccent(dark ? "elegant-black" : "snow-white", { auto: true })
                 }
               }}
             />
-            {/* 这一行必须始终占位：只在出错时渲染会让卡片高度随档位跳变，
-                下面的「透明度 / 界面缩放」跟着上下移动，看起来像 Tab 自己在动。 */}
             <p
               className={cn(
                 "min-h-4 max-w-[300px] text-end text-[11px] leading-4",
@@ -361,44 +349,6 @@ export function AppearanceSection() {
               {materialFailure ?? materialEffect?.detail ?? t("settings.materialUnavailable")}
             </p>
           </div>
-        </SettingRow>
-        <SettingRow
-          compact
-          title={t("settings.transparency")}
-          desc={materialMode === "solid" ? t("settings.transparencySolid") : t("settings.transparencyDesc")}
-        >
-          {materialMode === "solid" ? (
-            <span className="flex h-5 w-[300px] max-w-full items-center justify-end text-xs text-muted-foreground">
-              {t("settings.transparencySolidValue")}
-            </span>
-          ) : (
-          <div className="flex w-[300px] max-w-full items-center gap-3">
-            <Slider.Root
-              value={[transparency]}
-              min={0}
-              max={100}
-              step={1}
-              onValueChange={(next) =>
-                setAppearanceTransparency(Math.round(Array.isArray(next) ? Number(next[0] ?? 0) : Number(next)))
-              }
-              className="flex-1"
-            >
-              <Slider.Control className="relative flex h-5 w-full items-center">
-                <Slider.Track className="relative h-1 w-full rounded-full bg-muted">
-                  <Slider.Indicator
-                    className="absolute h-full rounded-full"
-                    style={{ background: "var(--settings-accent)" }}
-                  />
-                </Slider.Track>
-                <Slider.Thumb
-                  aria-label={t("settings.transparency")}
-                  className="size-3.5 rounded-full border border-border bg-background shadow-sm transition-shadow outline-none hover:shadow focus-visible:ring-2 focus-visible:ring-ring"
-                />
-              </Slider.Control>
-            </Slider.Root>
-            <span className="w-9 shrink-0 text-right text-xs text-muted-foreground tabular-nums">{transparency}</span>
-          </div>
-          )}
         </SettingRow>
         <SettingRow compact title={t("zoom.label")} desc={t("settings.zoomDesc")}>
           <Select

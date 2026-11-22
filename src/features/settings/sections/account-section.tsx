@@ -27,7 +27,10 @@ export function AccountSection() {
   if (!authenticated) {
     return (
       <SettingsCard title={t("settings.account")} desc={t("platformAuth.intro")}>
-        <PlatformLogin embedded />
+        <PlatformLogin
+          embedded
+          onPassphrase={() => toast.success(t("platformAuth.passphraseAccepted"))}
+        />
       </SettingsCard>
     )
   }

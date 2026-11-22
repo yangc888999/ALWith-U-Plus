@@ -90,19 +90,20 @@ export function MainSidebarLayout({
   const layout = useWorkspaceLayout()
   const chatLayout = useChatLayout()
   const zoom = useStore(zoomStore, (state) => state.level)
-  // The sidebar is stored as a window fraction so it adapts to any window size; resolve it to a
-  // pixel width clamped to a usable range before handing it to the canvas.
-  const [viewportWidth, setViewportWidth] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 0))
-  useEffect(() => {
-    if (typeof window === "undefined") return
-    const onResize = (): void => setViewportWidth(window.innerWidth)
-    window.addEventListener("resize", onResize)
-    return () => window.removeEventListener("resize", onResize)
-  }, [])
+  // The share is resolved against the width the window **opened** at, never the live one.
+  //
+  // Resolving it against `window.innerWidth` on every resize made the sidebar grow and shrink
+  // together with the conversation, so a window drag re-laid out the whole column on every frame:
+  // every label re-truncated, the rail re-measured, and the sidebar read as "flashing" (most
+  // visible in the two-column chat, where the column is expanded text rather than a bare rail).
+  // A sidebar is a fixed column: resizing the window must give the extra width to the
+  // conversation. It still adapts across displays because a launch on another screen opens at a
+  // different width, and the divider drag still sets its own pixel width.
+  const [referenceWidth] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 0))
   // No pixel ceiling: the Settings percentage has to describe the real column even on a wide
   // window. The old 460px cap turned 18% into 16% there and made the numbers look wrong.
   const navigationRatio = chatMode === true ? chatLayout.navigationRatio : layout.navigationRatio
-  const sidebarPx = resolveRatioToPixels(navigationRatio, viewportWidth, 0, viewportWidth)
+  const sidebarPx = resolveRatioToPixels(navigationRatio, referenceWidth, 0, referenceWidth)
   // A drag owns the pixel width until release; the persisted share takes over afterwards, so the
   // next launch (or the Settings number) decides the column again.
   const [dragPx, setDragPx] = useState<number | null>(null)
@@ -347,7 +348,7 @@ export function MainSidebarLayout({
                             // then swallow the first pixels of the drag and snap the divider in one go.
                             const start = dragStartPxRef.current
                             const floor = Math.min(NAVIGATION_PX_MIN, start)
-                            const ceiling = Math.max(Math.round(viewportWidth * 0.6), start)
+                            const ceiling = Math.max(Math.round(referenceWidth * 0.6), start)
                             const next = Math.min(ceiling, Math.max(floor, start - dx))
                             dragPxRef.current = next
                             setDragPx(next)
@@ -355,8 +356,8 @@ export function MainSidebarLayout({
                           onEnd={() => {
                             // Persist the settled share: the four-column model keeps chat/tree put and
                             // lets the preview absorb the difference, so the total stays 100%.
-                            if (viewportWidth > 0) {
-                              const percent = (dragPxRef.current / viewportWidth) * 100
+                            if (referenceWidth > 0) {
+                              const percent = (dragPxRef.current / referenceWidth) * 100
                               // A chat stores its own sidebar width; a project writes the four-column
                               // budget. Keeping them apart is what lets the two surfaces differ.
                               if (chatMode === true) saveChatLayout({ navigationRatio: percent / 100 })

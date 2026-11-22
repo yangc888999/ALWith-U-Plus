@@ -32,11 +32,13 @@ import {
 } from "@/lib/model-options"
 import {
   displayModelLabel,
+  gatewayRuntimeId,
   gatewayModelId,
   getProviderSnapshot,
   pickerProviderGroups,
   type ProviderSnapshot
 } from "@/lib/providers"
+import { modelDisplayId } from "@/lib/model-identity"
 
 import { ModelSettingsAction } from "./model-settings-action"
 
@@ -53,8 +55,7 @@ export function modelTriggerLabel(model: { label: string; shortLabel?: string | 
 
 /** 网关 id 的路由前缀是展示噪音，菜单行与触发器都只显示模型部分（发送仍用完整 id）。 */
 function stripGatewayPrefix(label: string): string {
-  const match = /^gateway:[^:]+:(.+)$/.exec(label)
-  return match?.[1] ?? label
+  return modelDisplayId(label)
 }
 
 /**
@@ -70,7 +71,7 @@ function withSnapshotModels(groups: ModelGroup[], snapshot: ProviderSnapshot | n
   if (snapshot === null) return next
   for (const provider of pickerProviderGroups(snapshot)) {
     // The snapshot keeps the public ID; session catalogs use the gateway's encoded runtime ID.
-    const runtimeId = decodeURIComponent(gatewayModelId(provider.id, "").split(":")[1])
+    const runtimeId = gatewayRuntimeId(provider.id)
     const matches = next.filter((group) => group.id === provider.id || group.id === runtimeId)
     let target = matches[0]
     if (target === undefined) {

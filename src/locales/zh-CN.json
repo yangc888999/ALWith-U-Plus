@@ -17,7 +17,6 @@
   },
   "platformAuth": {
     "intro": "登录你的 ALwith 账号",
-    "independent": "L 与 Desktop 分别登录，同一 ALwith 账号的宠物和权益不变。模型供应商登录单独设置。",
     "skip": "暂不登录，先用本地功能",
     "skipHint": "云盘和 ALwith 企业模型需要登录；对话、Codex 引擎和其它厂商模型不受影响。之后可以在「设置 → 账号」里登录。",
     "localEntry": "本地登录（不连公司账号）",
@@ -39,9 +38,10 @@
     "passwordLogin": "密码登录",
     "passphraseLogin": "口令登录",
     "passphrase": "口令",
-    "passphraseHint": "在线登录不可用时的本地兜底：口令只在本机校验，不联网。",
+    "passphraseHint": "在线登录不可用时的本地兜底：口令只在本机校验，不联网。默认口令：{{passphrase}}。",
     "passphraseWrong": "口令不对。",
     "passphraseUnlock": "用口令进入",
+    "passphraseAccepted": "已用本地口令解锁，主窗口可以直接使用。",
     "usePassphrase": "用口令登录（离线兜底）",
     "register": "注册",
     "email": "邮箱",
@@ -159,7 +159,19 @@
   "welcome": {
     "title": "想做点什么?",
     "description": "点「选择项目」创建一个项目，或直接输入开始聊天。",
-    "chooseFolder": "选择文件夹"
+    "chooseFolder": "选择文件夹",
+    "morning": "早上好，{{name}}",
+    "morningAnon": "早上好",
+    "afternoon": "下午好，{{name}}",
+    "afternoonAnon": "下午好",
+    "evening": "晚上好，{{name}}",
+    "eveningAnon": "晚上好",
+    "lateNight": "夜深了，{{name}}",
+    "lateNightAnon": "夜深了",
+    "subtitle": "想做点什么？",
+    "lateNightSubtitle": "早点休息；需要我处理的事，直接说。",
+    "recentProjects": "最近项目",
+    "recentProjectEmpty": "还没有最近项目"
   },
   "chat": {
     "memoryPrompt": "请读取项目根目录下的 memory.md（若不存在则跳过），了解项目背景、既有约定和待办，然后简要复述要点，等我下一步指令。",
@@ -539,7 +551,8 @@
     "modelNotInCatalog": "此会话的模型列表里没有「{{from}}」，已临时切到「{{to}}」。可在 设置 → 可用模型 里确认它是否仍然可用。",
     "modelFallbackApplied": "这条会话原来用的账号模型已失效，已自动切换到「{{to}}」。历史记录仍在，直接发送即可。",
     "modelFallbackManual": "自动切换模型没有成功。请在下方选择器里挑一个模型，再点一次发送；历史记录不会丢。",
-    "orchestrationModelReplaced": "分工的{{role}}已经下线，已改用「{{to}}」。要继续用原模型，请先把它加回可用模型。"
+    "orchestrationModelReplaced": "分工的{{role}}已经下线，已改用「{{to}}」。要继续用原模型，请先把它加回可用模型。",
+    "selectionComment": "评论"
   },
   "composer": {
     "mode": "权限",
@@ -623,9 +636,9 @@
     "appearanceDesc": "调整主题、缩放、界面分栏和对话展示方式。",
     "themeDesc": "跟随系统会随 macOS 外观自动切换。",
     "materialMode": "外观材质",
-    "materialModeDesc": "窗口背后的材质：点到哪一档就介绍哪一档。",
-    "materialSolid": "纯色",
-    "materialAero": "Aero",
+    "materialModeDesc": "默认纯色；毛玻璃为可选项，雾面固定清晰优先。",
+    "materialSolid": "纯色（默认）",
+    "materialAero": "毛玻璃",
     "materialLiquidGlass": "Liquid Glass",
     "materialUnavailable": "此系统不支持窗口材质，已退回 CSS 近似。",
     "zoomDesc": "影响整个界面的字号与间距，不改变系统设置。",
@@ -658,7 +671,7 @@
     "themeLight": "浅色",
     "themeDark": "深色",
     "themeSystem": "系统",
-    "accentDesc": "设置页的强调色，用于页面图标、卡片标题与提示。仅作用于设置窗口，不影响其他功能。",
+    "accentDesc": "全局强调色：主界面发送键、侧栏选中态、模式徽章与提示都会跟随。改的是整套界面，不只是设置窗口。",
     "accent": {
       "yupRed": "YUP 红",
       "lemonGreen": "柠檬绿",
@@ -667,8 +680,8 @@
       "warmBrown": "暖心棕",
       "skyBlue": "晴空蓝",
       "emerald": "翡冷翠",
-      "snowWhite": "雪域白",
-      "elegantBlack": "极致黑"
+      "snowWhite": "珍珠白",
+      "elegantBlack": "雅致黑"
     },
     "navigationSoundMode": "导航旋律",
     "navigationSoundModes": {
@@ -884,12 +897,12 @@
     "autoNudgeDesc": "模型超过 90 秒没有输出时，自动发送一条「继续」，每个回合最多两次。",
     "close": "关闭设置",
     "materialDesc": {
-      "solid": "不透明，最省资源。",
-      "aero": "毛玻璃雾面。",
-      "glass": "桌面折射，macOS 26+。"
+      "solid": "默认，清晰优先，最省资源。",
+      "aero": "毛玻璃雾面，约 18% 透出桌面，兼顾清晰与效果。",
+      "glass": "可选，桌面折射，固定清晰优先。"
     },
     "transparency": "透明度",
-    "transparencyDesc": "数值越大越透明。",
+    "transparencyDesc": "数值越大越透明。弹层、边框与输入框不随透明度变化。",
     "transparencySolid": "纯色档固定不透明。",
     "transparencySolidValue": "固定不透明"
   },

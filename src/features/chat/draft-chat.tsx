@@ -2,15 +2,16 @@
 import type * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { createSession } from "@alwith/api"
 import { drafts, importDraft, SessionActions } from "@alwith/module-chat/conversation"
+import { isQuickChatDirectory, relativeTime } from "@alwith/module-chat/session-list"
 import { invoke } from "@tauri-apps/api/core"
-import { MessageCircleIcon, SparklesIcon } from "lucide-react"
+import { ArrowUpRightIcon, FolderIcon, MessageCircleIcon } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { DraftOwner } from "@/agent/client"
 import { Button } from "@/components/ui/button"
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { dispatchCollection, reportCollection } from "@/features/collection/store"
+import { useDisplayProfile } from "@/features/profile/use-display-profile"
 import { client, useApp, useSession } from "@/lib/client"
 import { describeError } from "@/lib/error-text"
 import type { ProviderSnapshot } from "@/lib/providers"
@@ -18,8 +19,7 @@ import { startupSilent } from "@/lib/startup-window"
 import { useStartupSilent, useStartupStalled } from "@/lib/use-startup-silent"
 
 import { ChatActionsMenu } from "./chat-actions-menu"
-import { SelectionMenu } from "./selection-menu"
-import { isQuickChatDirectory } from "@alwith/module-chat/session-list"
+import { focusComposer, SelectionMenu } from "./selection-menu"
 import { ChatEdgeActions } from "./chat-edge-actions"
 import { ChatHeader } from "./chat-header"
 import { ChatHostProvider } from "./chat-host"
@@ -27,6 +27,8 @@ import { ChatComposer } from "./composer"
 import { ModelEntry } from "./composer/model-entry"
 import { FilePreviewModal } from "./dialogs/file-preview-modal"
 import { DraftProjectPicker } from "./draft-project-picker"
+import { greetingKey, greetingPeriod, welcomeName } from "./welcome-greeting"
+import { recentProjectsFrom } from "./welcome-projects"
 
 export const DRAFT_SESSION_ID = "draft"
 
@@ -91,7 +93,7 @@ export function DraftChat({
   onNewChat: () => void
   onNewProject?: () => void
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const sessionRows = useApp((state) => state.sessionList)
   const connection = useApp((state) => state.connection)
   // 准备 effect 不再观察"连上了没有"：连接抖动重跑它会顺手调 connect()，
@@ -155,6 +157,21 @@ export function DraftChat({
     ],
     [sessionRows]
   )
+  const recentProjectItems = useMemo(
+    () => recentProjectsFrom(sessionRows, 4, isQuickChatDirectory),
+    [sessionRows]
+  )
+  const profile = useDisplayProfile()
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => {
+    // A window left open across noon or midnight should not keep saying "早上好".
+    const timer = window.setInterval(() => setNow(new Date()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
+  const name = welcomeName(profile?.displayName, profile?.email)
+  const period = greetingPeriod(now)
+  const greeting = t(greetingKey(period, name !== null), { name: name ?? "" })
+  const subtitle = t(period === "lateNight" ? "welcome.lateNightSubtitle" : "welcome.subtitle")
 
   useEffect(() => {
     // Explicit retries and provider revisions invalidate preparation. `connected` is deliberately
@@ -326,46 +343,128 @@ export function DraftChat({
             />
           </ChatHeader>
         )}
-        <Empty className="flex-1">
-          <EmptyHeader>
-            <div className="welcome-accent-chip mb-2" aria-hidden="true">
-              <SparklesIcon className="size-7" />
+        <div className="welcome-hero flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6">
+          <div className="w-full max-w-3xl text-center">
+            <h1 className="text-[2rem] leading-[1.15] font-semibold tracking-[-0.035em] sm:text-[2.25rem]">
+              {greeting}
+            </h1>
+            <p className="mt-2 text-sm text-muted-foreground">{subtitle}</p>
+          </div>
+          <div className="welcome-hero-composer mt-7 w-full max-w-3xl">
+            <ChatComposer
+              inputHeader={picker}
+              session={session ?? pendingComposer}
+              allowPendingInput
+              preparing={preparing}
+              modelSelector={
+                <ModelEntry
+                  surface="draft"
+                  session={session}
+                  snapshot={providerSnapshot}
+                  model={model}
+                  preparing={preparing}
+                  failure={error}
+                  connected={connection === "ready"}
+                  onChange={(value) => {
+                    // A conversation that already started keeps its stream: park the choice for the
+                    // next turn instead of re-preparing a draft, which would swap the surface out
+                    // from under a running first turn. `null` is the picker's "native default" and
+                    // only ever comes from the pre-session picker, which has no config option to write.
+                    const started =
+                      session !== null &&
+                      value !== null &&
+                      (session.items.length > 0 ||
+                        session.state !== "idle" ||
+                        client.state.runStates[session.id]?.state === "running" ||
+                        client.state.draftSessions[session.id] === undefined)
+                    if (started) {
+                      void client.setConfig(session.id, "model", value).catch(() => {})
+                      return
+                    }
+                    setPreparing(true)
+                    setModel(value)
+                  }}
+                />
+              }
+              disabled={session === null || preparing || error !== null || connection !== "ready"}
+              onSubmit={runOperation ? (prompt, accept) => runOperation(() => send(prompt, accept)) : send}
+              onHandOff={onVoiceHandoff}
+            />
+          </div>
+          {/* 启动静默期（引擎还没 ready）里只说「正在启动」：这段时间的失败是冷启动 / config 自愈的
+              过程态，红卡一闪再消失就是用户说的"启动就报错"。静默窗结束仍失败才走下面的错误卡。 */}
+          {stalled && (
+            <div className="mt-3 flex w-full max-w-3xl justify-center px-2 text-xs text-muted-foreground" role="status">
+              {t("connection.connecting")}
             </div>
-            <EmptyTitle className="text-[28px] font-normal">{t("welcome.title")}</EmptyTitle>
-            <EmptyDescription>{t("welcome.description")}</EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-        {/* 启动静默期（引擎还没 ready）里只说「正在启动」：这段时间的失败是冷启动 / config 自愈的
-            过程态，红卡一闪再消失就是用户说的"启动就报错"。静默窗结束仍失败才走下面的错误卡。 */}
-        {stalled && (
-          <div className="mx-auto flex w-full max-w-3xl px-6 py-2 text-sm text-muted-foreground" role="status">
-            {t("connection.connecting")}
-          </div>
-        )}
-        {!silent && !preparing && (error !== null || connection !== "ready") && (
-          <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-2 px-6 py-2 text-sm" role="status">
-            <span>{error !== null ? describeError(error) : t("connection.disconnected")}</span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                // An explicit press must reach the engine: the replay breaker answers automatic
-                // re-asks with the cached failure, and without this the button looked dead.
-                client.retryReplay(owner)
-                setAttempt((value) => value + 1)
-              }}
-            >
-              {t("actions.retry")}
-            </Button>
-            {/* The picker belongs to the composer's bottom-right slot, never to this row: the
-                composer always renders a model entry, so a second one here showed two controls
-                for the same choice (2026-11-17). */}
-            <Button variant="outline" size="sm" onClick={onAuthRequired}>
-              {t("chat.draft.configureProvider")}
-            </Button>
-          </div>
-        )}
-        {id !== null && <SessionActions sessionId={id} />}
+          )}
+          {!silent && !preparing && (error !== null || connection !== "ready") && (
+            <div className="mt-3 flex w-full max-w-3xl flex-wrap items-center justify-center gap-2 px-2 text-sm" role="status">
+              <span>{error !== null ? describeError(error) : t("connection.disconnected")}</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  // An explicit press must reach the engine: the replay breaker answers automatic
+                  // re-asks with the cached failure, and without this the button looked dead.
+                  client.retryReplay(owner)
+                  setAttempt((value) => value + 1)
+                }}
+              >
+                {t("actions.retry")}
+              </Button>
+              {/* The picker belongs to the composer's bottom-right slot, never to this row: the
+                  composer always renders a model entry, so a second one here showed two controls
+                  for the same choice (2026-11-17). */}
+              <Button variant="outline" size="sm" onClick={onAuthRequired}>
+                {t("chat.draft.configureProvider")}
+              </Button>
+            </div>
+          )}
+          {id !== null && (
+            <div className="mt-3 w-full max-w-3xl">
+              <SessionActions sessionId={id} />
+            </div>
+          )}
+          {recentProjectItems.length > 0 && (
+            <section className="mt-8 w-full max-w-3xl" aria-label={t("welcome.recentProjects")}>
+              <h2 className="mb-2 px-1 text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
+                {t("welcome.recentProjects")}
+              </h2>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {recentProjectItems.map((item) => (
+                  <button
+                    key={item.cwd}
+                    type="button"
+                    className="group flex min-w-0 items-center gap-3 rounded-xl border border-border/70 bg-background/45 px-3 py-2.5 text-left transition-colors hover:border-border hover:bg-muted/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    title={item.cwd}
+                    onClick={() => {
+                      onCwdChange(item.cwd)
+                      requestAnimationFrame(() => focusComposer())
+                    }}
+                  >
+                    <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
+                      <FolderIcon aria-hidden="true" className="size-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">{item.name}</span>
+                      <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                        {item.title ?? item.cwd}
+                      </span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground/75">
+                      {item.updatedAt !== null && relativeTime(item.updatedAt, i18n.language)}
+                      <ArrowUpRightIcon
+                        aria-hidden="true"
+                        className="size-3.5 opacity-0 transition-opacity group-hover:opacity-70"
+                      />
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
         {/* A draft is still a conversation in this project: clearing the context lands here, and
             the project memory must stay reachable without first sending a message (it used to be
             missing exactly after 清除上下文 + reopening). Compress/clear have nothing to act on
@@ -385,45 +484,6 @@ export function DraftChat({
           />
         )}
         <SelectionMenu containerRef={selectionRoot} sessionId={DRAFT_SESSION_ID} />
-        <ChatComposer
-          inputHeader={picker}
-          session={session ?? pendingComposer}
-          allowPendingInput
-          preparing={preparing}
-          modelSelector={
-            <ModelEntry
-              surface="draft"
-              session={session}
-              snapshot={providerSnapshot}
-              model={model}
-              preparing={preparing}
-              failure={error}
-              connected={connection === "ready"}
-              onChange={(value) => {
-                // A conversation that already started keeps its stream: park the choice for the
-                // next turn instead of re-preparing a draft, which would swap the surface out
-                // from under a running first turn. `null` is the picker's "native default" and
-                // only ever comes from the pre-session picker, which has no config option to write.
-                const started =
-                  session !== null &&
-                  value !== null &&
-                  (session.items.length > 0 ||
-                    session.state !== "idle" ||
-                    client.state.runStates[session.id]?.state === "running" ||
-                    client.state.draftSessions[session.id] === undefined)
-                if (started) {
-                  void client.setConfig(session.id, "model", value).catch(() => {})
-                  return
-                }
-                setPreparing(true)
-                setModel(value)
-              }}
-            />
-          }
-          disabled={session === null || preparing || error !== null || connection !== "ready"}
-          onSubmit={runOperation ? (prompt, accept) => runOperation(() => send(prompt, accept)) : send}
-          onHandOff={onVoiceHandoff}
-        />
         <FilePreviewModal />
       </div>
     </ChatHostProvider>

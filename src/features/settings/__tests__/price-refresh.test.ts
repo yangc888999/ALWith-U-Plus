@@ -94,6 +94,14 @@ test("a ledger model from the Qwen provider lands in the 千问 Qwen card", () =
   expect(prices.filter((price) => price.vendor === "Qwen")).toHaveLength(0)
 })
 
+test("a custom gateway model lands in Finture under its bare model id", () => {
+  const id = "custom-example/deepseek-V4.1-flash-enterprise"
+  const added = addUnpricedModels([id], new Map([[modelMatchKey("deepseek-V4.1-flash"), "DeepSeek"]]))
+  expect(added).toEqual(["deepseek-V4.1-flash-enterprise"])
+  const row = usePriceStore.getState().prices.find((price) => price.model === "deepseek-V4.1-flash-enterprise")
+  expect(row?.vendor).toBe("Finture")
+})
+
 test("a bare id already tracked under a full vendor/model id is not added twice", () => {
   usePriceStore.setState({
     prices: [{ ...blankPrice("OpenRouter"), model: "moonshotai/kimi-k3", input: 1, cached: 0, output: 1 }]

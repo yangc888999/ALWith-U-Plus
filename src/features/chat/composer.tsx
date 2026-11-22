@@ -42,20 +42,21 @@ const noHandOff: NonNullable<ComposerProps["onHandOff"]> = () => {}
 
 /** The input's height, dragged from the top edge of the card and remembered across launches. */
 const INPUT_HEIGHT_KEY = "alwith:composer-input-height"
-// At least two rows must stay visible. A smaller drag (the old floor was 40px) can hide the
-// placeholder and resize grip entirely, which reads as "the input box is gone" — the same class of
-// bug the account-recovery CSS used to cause. Stored values below this floor are ignored on load,
-// so a hand-edited or malformed localStorage value cannot collapse the composer either.
-const INPUT_MIN = 72
-const INPUT_MAX = 720
+// The saved value is a ceiling, not a fixed height: an empty composer stays at its two-line floor.
+// A smaller drag can still hide the placeholder and resize grip, so values below the floor are
+// ignored on load; a hand-edited or malformed localStorage value cannot collapse the composer.
+const INPUT_MIN = 44
+const INPUT_MAX = 192
+/** Restore a deliberately small drag on launch; larger historical values stay ceilings only. */
+const INPUT_RESTORE_MAX = 96
 
 /**
  * A grab strip along the composer's top edge.
  *
  * The package composer grows its textarea with the text and caps nothing, so a long paste pushed
  * the toolbar off the bottom of the window. Dragging here writes `--composer-input-height` on the
- * wrapping `[data-composer]`, which `index.css` turns into the textarea's height: it keeps growing
- * up to the chosen size and then scrolls, so both "make it taller" and "make it shorter" work.
+ * wrapping `[data-composer]`, which `index.css` uses as the textarea's maximum: it grows with the
+ * text up to that ceiling and then scrolls. The empty composer always returns to its compact floor.
  */
 function ComposerResizeHandle({ shellRef }: { shellRef: React.RefObject<HTMLDivElement | null> }) {
   const drag = useRef<{ startY: number; startHeight: number; shell: HTMLElement } | null>(null)
@@ -63,7 +64,12 @@ function ComposerResizeHandle({ shellRef }: { shellRef: React.RefObject<HTMLDivE
     const shell = shellRef.current
     if (shell === null) return
     const saved = Number(localStorage.getItem(INPUT_HEIGHT_KEY))
-    if (Number.isFinite(saved) && saved >= INPUT_MIN) shell.style.setProperty("--composer-input-height", `${saved}px`)
+    if (Number.isFinite(saved) && saved >= INPUT_MIN && saved <= INPUT_MAX) {
+      shell.style.setProperty("--composer-input-height", `${saved}px`)
+      if (saved <= INPUT_RESTORE_MAX) shell.style.setProperty("--composer-input-min", `${saved}px`)
+    } else if (localStorage.getItem(INPUT_HEIGHT_KEY) !== null) {
+      localStorage.removeItem(INPUT_HEIGHT_KEY)
+    }
   }, [shellRef])
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
     const shell = event.currentTarget.parentElement
@@ -79,6 +85,11 @@ function ComposerResizeHandle({ shellRef }: { shellRef: React.RefObject<HTMLDivE
     const next = Math.round(
       Math.min(INPUT_MAX, Math.max(INPUT_MIN, state.startHeight + (state.startY - event.clientY)))
     )
+    // `min` grows with the pointer as well: with only `max-height`, an empty composer stays at
+    // its content floor and the drag appears dead. The chosen height is session-pinned; on the
+    // next mount the saved value is restored as a ceiling so an old 288px drag cannot make the
+    // first screen huge again.
+    state.shell.style.setProperty("--composer-input-min", `${next}px`)
     state.shell.style.setProperty("--composer-input-height", `${next}px`)
   }
   const onPointerUp = (event: React.PointerEvent<HTMLDivElement>): void => {
@@ -94,7 +105,7 @@ function ComposerResizeHandle({ shellRef }: { shellRef: React.RefObject<HTMLDivE
     <div
       role="separator"
       aria-orientation="horizontal"
-      className="group absolute inset-x-6 -top-2.5 z-20 flex h-2.5 cursor-ns-resize items-center justify-center"
+      className="group absolute inset-x-6 -top-3 z-20 flex h-3 cursor-ns-resize items-center justify-center"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -317,6 +328,8 @@ export function ChatComposer({
   return (
     <div
       data-composer
+      data-composer-dock
+      data-composer-shell
       data-composer-mode={project === null ? "chat" : "project"}
       ref={shellRef}
       className="relative"

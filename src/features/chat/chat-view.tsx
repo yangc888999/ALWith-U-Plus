@@ -398,18 +398,14 @@ export function ChatView(props: ChatViewProps) {
       // the file tree all opened the transcript's text menu, and their own menus never ran. Only
       // the conversation (and its portalled header) belongs to this menu now.
       const element = target instanceof Element ? target : null
+      // 2026-11-21: the transcript's own menu ("添加到对话") is transcript-only. Whatever the
+      // module binds or does not bind, a click outside the conversation is somebody else's
+      // gesture — the preview has its own menu, the tree and the sidebar have theirs.
       const inConversation =
         (root?.contains(target) ?? false) ||
         (headerRef.current?.contains(target) ?? false) ||
-        element?.closest("[data-chat-drop-zone]") !== null
-      // Fallback for the case the module never binds a conversation root: everything that is
-      // visibly app chrome opts out by selector, and only genuinely unknown surfaces keep the old
-      // "open anywhere" behaviour.
-      const chrome =
-        element?.closest(
-          ".main-sidebar-shell, .main-sidebar-viewport, .session-list-content, .leading-navigation, .file-workspace-panel, .alwith-file-tree, [data-file-path]"
-        ) ?? null
-      if (!inConversation && (chrome !== null || root !== null)) return
+        element?.closest("[data-chat-drop-zone], [data-chat-content]") !== null
+      if (!inConversation) return
       try {
         event.preventDefault()
         event.stopPropagation()
