@@ -258,8 +258,9 @@ test.each([
   }
 })
 
-test("work without a project asks for a folder instead of offering a chat shortcut", async () => {
+test("work without a project asks for a folder only when the reader tries to send", async () => {
   const env = await windowEnvironment()
+  const prompt = vi.spyOn(client, "prompt")
   const view = render(
     <ThemeProvider>
       <ChatWindow
@@ -275,14 +276,26 @@ test("work without a project asks for a folder instead of offering a chat shortc
     await waitFor(() => expect(env.ready()).toBe(true))
     await act(() => env.present())
     await waitFor(() => expect(view.getByRole("textbox")).toBeTruthy())
+
+    // Entering Work is not itself a send: the reader can type first, and no modal interrupts the
+    // empty state or the project picker.
+    expect(view.queryByRole("alertdialog")).toBeNull()
+    fireEvent.input(view.getByRole("textbox"), { target: { value: "draft stays here" } })
+    await waitFor(() => expect(view.getByRole("button", { name: "Send" }).hasAttribute("disabled")).toBe(false))
+    await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Send" }))))
+
     const dialog = await view.findByRole("alertdialog")
-    expect(within(dialog).getByText("Select a project folder first")).toBeVisible()
-    expect(
-      within(dialog).getByText("Choose a project folder or another local folder before starting work.")
-    ).toBeVisible()
-    expect(view.queryByText("Type to chat without a project")).toBeNull()
+    expect(within(dialog).getByText("Add a project folder before chatting.")).toBeVisible()
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeVisible()
+    expect(within(dialog).getByRole("button", { name: "Add" })).toBeVisible()
+    expect(prompt).not.toHaveBeenCalled()
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+    await waitFor(() => expect(view.queryByRole("alertdialog")).toBeNull())
+    expect(view.getByRole("textbox")).toHaveValue("draft stays here")
   } finally {
     await act(() => Promise.try(() => view.unmount()))
+    prompt.mockRestore()
     env.restore()
   }
 })

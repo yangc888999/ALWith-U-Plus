@@ -1,4 +1,4 @@
-export type GreetingPeriod = "morning" | "afternoon" | "evening" | "lateNight"
+export type GreetingPeriod = "morning" | "afternoon" | "evening" | "lateEvening" | "lateNight"
 
 /**
  * The greeting follows the reader's own clock. Late night is its own period because the
@@ -8,6 +8,7 @@ export function greetingPeriod(date: Date): GreetingPeriod {
   const hour = date.getHours()
   if (hour >= 5 && hour < 12) return "morning"
   if (hour >= 12 && hour < 18) return "afternoon"
+  if (hour >= 22) return "lateEvening"
   if (hour >= 18) return "evening"
   return "lateNight"
 }
@@ -36,8 +37,17 @@ export function greetingKey(period: GreetingPeriod, hasName: boolean): string {
       return `welcome.afternoon${suffix}`
     case "evening":
       return `welcome.evening${suffix}`
+    case "lateEvening":
+      return `welcome.lateEvening${suffix}`
     case "lateNight":
       return `welcome.lateNight${suffix}`
   }
+}
+
+/** The second welcome line follows the same clock but changes the reminder, not the greeting. */
+export function welcomeSubtitleKey(period: GreetingPeriod): string {
+  if (period === "lateNight") return "welcome.lateNightSubtitle"
+  if (period === "lateEvening") return "welcome.lateEveningSubtitle"
+  return "welcome.subtitle"
 }
 

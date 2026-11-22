@@ -14,7 +14,6 @@ import {
   AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
-  AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle
@@ -39,7 +38,7 @@ import { ChatComposer } from "./composer"
 import { ModelEntry } from "./composer/model-entry"
 import { FilePreviewModal } from "./dialogs/file-preview-modal"
 import { chooseFolder, DraftProjectPicker } from "./draft-project-picker"
-import { greetingKey, greetingPeriod, welcomeName } from "./welcome-greeting"
+import { greetingKey, greetingPeriod, welcomeName, welcomeSubtitleKey } from "./welcome-greeting"
 import { recentProjectsFrom } from "./welcome-projects"
 
 export const DRAFT_SESSION_ID = "draft"
@@ -135,7 +134,6 @@ export function DraftChat({
   const [error, setError] = useState<unknown>(null)
   const [surface, setSurface] = useState<"chat" | "work">(startSurface)
   const [projectReminderOpen, setProjectReminderOpen] = useState(false)
-  const projectReminderShown = useRef(false)
   const chatSurface = surface === "chat"
   // Startup config failures are transient: retry quietly instead of flashing the raw English ACP
   // error in the sidebar for one frame (the main window already has its own startup grace).
@@ -194,22 +192,7 @@ export function DraftChat({
   const name = welcomeName(profile?.displayName, profile?.email)
   const period = greetingPeriod(now)
   const greeting = t(greetingKey(period, name !== null), { name: name ?? "" })
-  const subtitle = t(period === "lateNight" ? "welcome.lateNightSubtitle" : "welcome.subtitle")
-
-  // Work is project-scoped. Entering it without a real folder asks once instead of letting the
-  // first prompt silently land in the quick-chat workspace. Chat never requires a project.
-  useEffect(() => {
-    if (surface !== "work" || preparing) return
-    if (workProjectSelected) {
-      projectReminderShown.current = false
-      setProjectReminderOpen(false)
-      return
-    }
-    if (!projectReminderShown.current) {
-      projectReminderShown.current = true
-      setProjectReminderOpen(true)
-    }
-  }, [preparing, surface, workProjectSelected])
+  const subtitle = t(welcomeSubtitleKey(period))
 
   useEffect(() => {
     // Explicit retries and provider revisions invalidate preparation. `connected` is deliberately
@@ -376,19 +359,19 @@ export function DraftChat({
           className="welcome-hero flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6"
           data-welcome-mode={surface}
         >
-          <div className="flex w-full flex-col items-center gap-4">
+          <div className="flex w-full flex-col items-center gap-5">
             <div className="w-full max-w-4xl text-center">
-              <h1 className="text-[1.375rem] leading-snug font-semibold tracking-[-0.01em] sm:text-[1.5rem]">
+              <p className="text-[0.8125rem] leading-5 font-medium tracking-[0.01em] text-muted-foreground">
                 {greeting}
-              </h1>
-              <p className="mt-1 text-[1.375rem] leading-snug font-semibold tracking-[-0.01em] sm:text-[1.5rem]">
-                {subtitle}
               </p>
+              <h1 className="mt-1 text-[1.125rem] leading-7 font-medium tracking-[-0.01em] text-foreground/85 sm:text-[1.25rem]">
+                {subtitle}
+              </h1>
             </div>
             <div
               role="tablist"
               aria-label={t("welcome.startMode")}
-              className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/55 p-1"
+              className="grid w-[16rem] grid-cols-2 gap-1 rounded-full border border-border/70 bg-muted/55 p-1.5"
             >
               {(["chat", "work"] as const).map((mode) => (
                 <button
@@ -397,17 +380,13 @@ export function DraftChat({
                   role="tab"
                   aria-selected={surface === mode}
                   className={cn(
-                    "inline-flex h-8 items-center rounded-full px-4 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    "inline-flex h-10 w-full items-center justify-center rounded-full text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     surface === mode
                       ? "bg-background text-foreground shadow-sm ring-1 ring-border/70"
                       : "text-muted-foreground hover:text-foreground"
                   )}
                   onClick={() => {
                     setSurface(mode)
-                    if (mode === "work" && !workProjectSelected) {
-                      projectReminderShown.current = true
-                      setProjectReminderOpen(true)
-                    }
                     requestAnimationFrame(() => focusComposer())
                   }}
                 >
@@ -421,6 +400,15 @@ export function DraftChat({
               "welcome-hero-composer w-full",
               chatSurface ? "mt-3 max-w-4xl" : "mt-5 max-w-3xl"
             )}
+            // A capture-phase guard runs before the package clears its draft and dispatches the
+            // prompt. Clicking send or pressing Enter without a project therefore opens the reminder
+            // while leaving every typed character and attachment in place.
+            onSubmitCapture={(event) => {
+              if (chatSurface || workProjectSelected) return
+              event.preventDefault()
+              event.stopPropagation()
+              setProjectReminderOpen(true)
+            }}
           >
             <ChatComposer
               inputHeader={chatSurface ? undefined : picker}
@@ -461,8 +449,7 @@ export function DraftChat({
                 session === null ||
                 preparing ||
                 error !== null ||
-                connection !== "ready" ||
-                (!chatSurface && !workProjectSelected)
+                connection !== "ready"
               }
               onSubmit={runOperation ? (prompt, accept) => runOperation(() => send(prompt, accept)) : send}
               onHandOff={onVoiceHandoff}
@@ -570,7 +557,6 @@ export function DraftChat({
           <AlertDialogContent size="sm">
             <AlertDialogHeader>
               <AlertDialogTitle>{t("chat.draft.projectRequiredTitle")}</AlertDialogTitle>
-              <AlertDialogDescription>{t("chat.draft.projectRequiredDesc")}</AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>{t("actions.cancel")}</AlertDialogCancel>
@@ -583,7 +569,7 @@ export function DraftChat({
                   })
                 }}
               >
-                {t("chat.draft.chooseLocalFolder")}
+                {t("chat.draft.addProject")}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

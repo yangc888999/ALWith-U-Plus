@@ -1842,10 +1842,10 @@ html[data-selection-menu] [data-testid="comment-selection-button"] {
   padding-bottom: 0;
 }
 .welcome-hero-composer [data-composer] .alwith-composer-textarea {
-  min-height: var(--composer-input-min, 3.5rem);
+  min-height: var(--composer-input-min, 4.2rem);
 }
 .welcome-hero[data-welcome-mode="chat"] .welcome-hero-composer [data-composer] .alwith-composer-textarea {
-  min-height: var(--composer-input-min, 7.5rem);
+  min-height: var(--composer-input-min, 9rem);
 }
 .welcome-hero-composer [data-chat-input-header] {
   background-color: transparent !important;
@@ -1862,7 +1862,7 @@ html[data-selection-menu] [data-testid="comment-selection-button"] {
 [data-composer] .alwith-composer-textarea {
   /* Never let a persisted drag (or a malformed stored value) collapse the box below two rows:
      the placeholder and resize grip must stay visible or the composer reads as "missing". */
-  min-height: var(--composer-input-min, 2.75rem);
+  min-height: var(--composer-input-min, 3.3rem);
   max-height: min(var(--composer-input-height, 12rem), 12rem);
   overflow-y: auto;
   /* The shared textarea primitive carries a visible form border. The composer already has its
@@ -2077,6 +2077,8 @@ body::after {
 /* The send key never yields: it is the one control that must sit in the same place at every width. */
 .chat-composer-toolbar button[type="submit"] {
   flex: none;
+  width: 34px;
+  height: 34px;
 }
 
 /* ── 主题色在主界面的落点：主操作 + 输入态 ──────────────────────────────────────
@@ -2096,10 +2098,10 @@ body::after {
   background-color: color-mix(in oklab, var(--settings-accent) 86%, var(--foreground));
 }
 [data-composer] .chat-composer-toolbar button[type="submit"]:disabled {
-  background-color: color-mix(in oklab, var(--settings-accent) 40%, var(--muted));
-  /* The disabled disc collapses toward the neutral card, so the page foreground is the true
-     inverse there; the accent-on token belongs to the full-strength enabled disc. */
-  color: var(--foreground);
+  /* WorkBuddy's resting send key is a quiet neutral disc with a recessed glyph. Keeping it
+     achromatic makes "nothing to send yet" read as a state, not as a disabled accent action. */
+  background-color: color-mix(in oklab, var(--foreground) 10%, var(--muted));
+  color: color-mix(in oklab, var(--foreground) 18%, #000);
 }
 /* 发送与停止是同一个按钮的两种状态，不是并排的两个按钮。
    模块在会话运行时把停止键渲染在发送键之前；此时隐藏发送键，并让停止键沿用与发送键
@@ -2109,8 +2111,8 @@ body::after {
   display: none;
 }
 [data-composer] .chat-composer-toolbar button.border-border {
-  width: 28px;
-  height: 28px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   border: 0;
   border-radius: 9999px;

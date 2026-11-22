@@ -107,9 +107,8 @@ test("the toolbar stays one line: the send key is pinned and the picker yields",
   expect(group).toContain("min-width: 0")
   // Stacking the group onto a second line was the previous fallback and was rejected on sight.
   expect(group).not.toContain("flex-wrap: wrap")
-  expect(styles).toMatch(
-    /\.chat-composer-toolbar button\[type="submit"\]\s*\{\s*flex: none;\s*\}/
-  )
+  const sendKey = ruleOf('.chat-composer-toolbar button[type="submit"]')
+  expect(sendKey).toContain("flex: none")
   // Degradation runs on the toolbar's own width, never the window's. Only two steps remain: the
   // ladder no longer competes with the name for horizontal space, so there is nothing to drop at
   // 25rem — the name just gets its hard cap at the narrowest width.
@@ -147,10 +146,18 @@ test("the stop key uses a soft accent disc on the light theme", () => {
   )
 })
 
-test("send and stop glyphs invert the fill of their circular buttons", () => {
+test("the resting send key matches WorkBuddy while active action glyphs invert", () => {
   const disabledSend = ruleOf('[data-composer] .chat-composer-toolbar button[type="submit"]:disabled')
-  expect(disabledSend).toContain("color: var(--foreground)")
+  expect(disabledSend).toContain("background-color: color-mix(in oklab, var(--foreground) 10%, var(--muted))")
+  expect(disabledSend).toContain("color: color-mix(in oklab, var(--foreground) 18%, #000)")
   expect(disabledSend).not.toContain("color-mix(in oklab, var(--accent-on)")
+
+  const sendKey = ruleOf('.chat-composer-toolbar button[type="submit"]')
+  expect(sendKey).toContain("width: 34px")
+  expect(sendKey).toContain("height: 34px")
+  const stopKey = ruleOf("[data-composer] .chat-composer-toolbar button.border-border")
+  expect(stopKey).toContain("width: 34px")
+  expect(stopKey).toContain("height: 34px")
 
   const darkStop = ruleOf(".dark [data-composer] .chat-composer-toolbar button.border-border")
   expect(darkStop).toContain("background-color: var(--settings-accent)")
@@ -161,4 +168,11 @@ test("send and stop glyphs invert the fill of their circular buttons", () => {
   expect(styles).toMatch(/\.dark\s*\{\s*--accent-on: oklch\(0\.99/)
   expect(styles).toMatch(/\.dark\[data-accent="snow-white"\][^{]*\{[^}]*--accent-on: oklch\(0\.17/)
   expect(styles).toMatch(/\.dark\[data-accent="lemon-green"\][^{]*\{[^}]*--accent-on: oklch\(0\.17/)
+})
+
+test("the default composer height is twenty percent taller", () => {
+  expect(styles).toMatch(/min-height: var\(--composer-input-min, 3\.3rem\)/)
+  expect(styles).toMatch(
+    /\.welcome-hero\[data-welcome-mode="chat"\] \.welcome-hero-composer \[data-composer\] \.alwith-composer-textarea\s*\{[^}]*min-height: var\(--composer-input-min, 9rem\)/
+  )
 })
