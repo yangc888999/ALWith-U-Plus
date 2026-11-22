@@ -192,7 +192,8 @@ export function FileWorkspace({
   guidance = null,
   invalidDirectory = null,
   directoryKey,
-  draft = false
+  draft = false,
+  chat = false
 }: {
   cwd: string | null
   children: ReactNode
@@ -223,6 +224,8 @@ export function FileWorkspace({
   directoryKey?: string
   /** A brand-new task: the workspace and file tree must not be openable at all. */
   draft?: boolean
+  /** A temporary conversation (quick chat): it owns a folder for its own files, but no workspace UI. */
+  chat?: boolean
 }) {
   const windowsControls = useContext(WindowsWorkspaceControlsContext)
   const { resolvedTheme } = useTheme()
@@ -332,8 +335,10 @@ export function FileWorkspace({
   // A temporary chat has none of these columns, so its window header carries no switches for them.
   // Leaving them visible offered 评论栏 / 文件树 / 工作区 on a surface that has no tree to hide.
   const temporaryChat = isTemporaryChatDir(cwd) && !isChatOwnDirectory(cwd)
-  // A draft has no directory of its own yet; every workspace entry point stays shut.
-  const workspaceAllowed = !draft
+  // A draft has no directory yet, and a temporary chat is not a project: every workspace entry
+  // point stays shut for both. The chat keeps its own folder for file operations, but the tree,
+  // preview and 四方格 controls never appear.
+  const workspaceAllowed = !draft && !chat
   // P0-5: hiding the *whole* toolbar for a temporary chat (or a chat whose directory has not
   // arrived) removed the only buttons that could explain why 文件栏 does nothing. Keep 四方格 and
   // 文件栏 always reachable; only the chat-specific actions are hidden when there is no directory.

@@ -173,7 +173,8 @@ function Surface({
   guidance = null,
   invalidDirectory = null,
   directoryKey = undefined,
-  sessionId = null
+  sessionId = null,
+  chat = false
 }: {
   cwd: string | null
   chatRevealRequest?: number
@@ -184,6 +185,7 @@ function Surface({
   invalidDirectory?: string | null
   directoryKey?: string
   sessionId?: string | null
+  chat?: boolean
 }) {
   const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null)
   return (
@@ -199,6 +201,7 @@ function Surface({
         reason={reason}
         guidance={guidance}
         invalidDirectory={invalidDirectory}
+        chat={chat}
       >
         <ChatHeader title="Conversation" project={<span>Project</span>}>
           {null}
@@ -844,6 +847,19 @@ test("a temporary chat that lands in a project opens the four-column layout", as
   expect(screen.queryByRole("tree")).toBeNull()
   view.rerender(<Surface cwd="/a" defaultOpen />)
   expect(await screen.findByRole("treeitem", { name: /one.txt/ })).toBeVisible()
+})
+
+test("a temporary chat never shows or opens the workspace, even with its own folder", async () => {
+  render(<Surface cwd="/quick/Chat/2026-11-22" reason="temporary" defaultOpen chat />)
+  // No workspace switch is mounted at all: not the tree, comments, or 四方格.
+  expect(screen.queryByTestId("header-tree-toggle")).toBeNull()
+  expect(screen.queryByTestId("header-comments-toggle")).toBeNull()
+  expect(screen.queryByRole("button", { name: "Open preview area" })).toBeNull()
+  expect(document.querySelector(".file-workspace-layout")).toHaveAttribute("data-open", "false")
+  // The project-tree shortcut is inert on a chat surface.
+  fireEvent.keyDown(window, { key: "E", ctrlKey: true, shiftKey: true })
+  await act(() => Promise.resolve())
+  expect(document.querySelector(".file-workspace-layout")).toHaveAttribute("data-open", "false")
 })
 
 test("a column the reader closed stays closed when the next project opens", async () => {

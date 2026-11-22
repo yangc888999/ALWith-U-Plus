@@ -1473,6 +1473,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                   // `readOnly` never suppresses the columns: a recovery session is still a project.
                   defaultOpen={defaultFourColumns}
                   draft={selectedId === null || draftSessions[selectedId] !== undefined}
+                  chat={isTemporaryChat}
                 >
                   <DriveDeleteConfirmation />
                   <div className="flex min-h-0 flex-1 flex-col">{main}</div>

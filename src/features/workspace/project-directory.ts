@@ -144,9 +144,9 @@ export function shouldOpenFourColumns(input: {
   if (!input.previewVisible) return false
   const explicit = input.boundDirectory ?? input.sessionCwd
   if (explicit === null || explicit.trim() === "") return false
-  // A conversation's own quick-chat folder is locatable like a project; the quick-chat root and
-  // a directory-less draft are not.
-  return (!isTemporaryChatDir(explicit) || isChatOwnDirectory(explicit)) && !isGroupsRoot(explicit)
+  // Temporary chats never open the four-column workspace, even though the conversation's own
+  // folder is resolvable for file operations.
+  return !isTemporaryChatDir(explicit) && !isGroupsRoot(explicit)
 }
 
 /**

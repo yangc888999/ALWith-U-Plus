@@ -82,6 +82,7 @@ import {
   subscribeFreeModels
 } from "@/features/providers/free-model-watch"
 import { freeModelProfiles, type FreeModelProfile } from "@/features/providers/free-model-capability"
+import { pinCheckedFreeModels } from "@/features/settings/free-model-order"
 import {
   overload429ReminderDisabled,
   setOverload429ReminderDisabled,
@@ -1183,6 +1184,12 @@ export function ProviderRow({
       if (query === "") return true
       return row.label.toLowerCase().includes(query) || id.includes(query)
     })
+    // OpenRouter's default list pins the free models the reader has already checked. The saved
+    // order is a click history and buries them under hundreds of paid rows; checked free models
+    // are the ones a new conversation can actually use without spending credits.
+    if (showFreeFilter && !freeOnly) {
+      return pinCheckedFreeModels(matched, (id) => freeModelIdSet.has(id) || isFreeModelId(id))
+    }
     // 「免费」视图按能力参考分排序，而不是按保存顺序：读者打开这个筛选就是想找「先用哪个」，
     // 而保存顺序是历史上点选的次序，和模型好坏无关。推荐位（前三）因此总在顶部。
     if (!showFreeFilter || !freeOnly || freeProfiles === undefined) return matched

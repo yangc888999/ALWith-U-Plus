@@ -89,7 +89,7 @@ test("a conversation's own quick-chat folder is locatable; the root never is", a
   expect(
     resolveProjectDirectory({ sessionId: "chat-own", sessionCwd: own, lastDirectory: "/other/project" })
   ).toEqual({ directory: own, groupId: null, reason: "temporary" })
-  expect(shouldOpenFourColumns({ boundDirectory: null, sessionCwd: own, previewVisible: true })).toBe(true)
+  expect(shouldOpenFourColumns({ boundDirectory: null, sessionCwd: own, previewVisible: true })).toBe(false)
   expect(
     resolveProjectDirectory({
       sessionId: "chat-root",
@@ -187,12 +187,12 @@ describe("shouldOpenFourColumns", () => {
     ).toBe(true)
   })
 
-  test("a chat's own folder opens four; the quick-chat root and Groups root never do", async () => {
+  test("temporary chats never open four; the quick-chat root and Groups root never do", async () => {
     await primeQuickChatRoot()
     const QUICK_CHAT_ROOT = "/Users/me/Documents/ALwith"
     expect(
       shouldOpenFourColumns({ boundDirectory: `${QUICK_CHAT_ROOT}/Chat/2026-11-16`, sessionCwd: null, previewVisible: true })
-    ).toBe(true)
+    ).toBe(false)
     expect(
       shouldOpenFourColumns({ boundDirectory: QUICK_CHAT_ROOT, sessionCwd: null, previewVisible: true })
     ).toBe(false)
