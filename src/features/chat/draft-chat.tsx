@@ -487,7 +487,7 @@ export function DraftChat({
             }
           />
         )}
-        <SelectionMenu containerRef={selectionRoot} sessionId={DRAFT_SESSION_ID} />
+        <SelectionMenu containerRef={selectionRoot} sessionId={DRAFT_SESSION_ID} scope="transcript" />
         <FilePreviewModal />
       </div>
     </ChatHostProvider>

@@ -123,7 +123,8 @@ export function SelectionMenu({
   allowAdd = true,
   allowComment = false,
   onComment,
-  onDismiss
+  onDismiss,
+  scope
 }: {
   /** The transcript root: selections outside it (sidebar, header) never open the menu. */
   containerRef: RefObject<HTMLElement | null>
@@ -144,6 +145,12 @@ export function SelectionMenu({
   onComment?: () => void
   /** Clears an `external` placement held by the host, which `hide` cannot reach. */
   onDismiss?: () => void
+  /**
+   * Which surface this bar owns. The preview host's bar is the only one that may carry 评论
+   * (HTML previews); without a scope it also answered transcript selections, which put 评论
+   * over the conversation. The transcript bar likewise must not answer preview selections.
+   */
+  scope?: "transcript" | "preview"
 }): ReactNode {
   const { t } = useTranslation()
   const [placement, setPlacement] = useState<Placement | null>(null)
@@ -276,6 +283,8 @@ export function SelectionMenu({
         '[data-composer], [role="tab"], [role="tablist"], .main-window-titlebar, .main-window-statusbar, .main-sidebar-panel, .main-sidebar-shell, .file-workspace-tree, .alwith-file-tree'
       ) !== null
     if (editing || chrome) return hide()
+    if (scope === "transcript" && !inTranscript) return hide()
+    if (scope === "preview" && !inPreview) return hide()
     if (!inTranscript && !inPreview) return hide()
     const rects = Array.from(range.getClientRects()).filter((rect) => rect.width > 0 || rect.height > 0)
     // WebKit reports no client rects for some inline-spanning selections; the bounding rect is
@@ -287,7 +296,7 @@ export function SelectionMenu({
     setPlacement({ left, top, text: text.slice(0, 20_000) })
     // The comment trigger is synchronized by the owner-document observers above; no single-document
     // query here can win the iframe/portal race reliably.
-  }, [containerRef, hide])
+  }, [containerRef, hide, scope])
 
   useEffect(() => {
     const onPointerUp = (event: PointerEvent): void => {

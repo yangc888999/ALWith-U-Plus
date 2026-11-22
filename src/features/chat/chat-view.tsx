@@ -527,7 +527,7 @@ export function ChatView(props: ChatViewProps) {
               }}
             />
             {/* Select-text floating actions: copy, or quote the passage into the composer. */}
-            <SelectionMenu containerRef={rootRef} sessionId={session.id} />
+            <SelectionMenu containerRef={rootRef} sessionId={session.id} scope="transcript" />
           </div>
         </ChatDirectoryContext>
       </ChatOpenSessionContext>

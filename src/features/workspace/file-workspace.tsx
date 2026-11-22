@@ -1588,6 +1588,7 @@ export function FileWorkspace({
         allowComment={previewCommentsAvailable}
         onComment={previewCommentsAvailable ? openPreviewComment : undefined}
         onDismiss={dismissPreviewSelection}
+        scope="preview"
       />
       {showMainControls &&
         headerTarget !== null &&

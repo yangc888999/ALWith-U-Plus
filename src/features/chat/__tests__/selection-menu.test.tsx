@@ -370,3 +370,74 @@ describe("preview selection", () => {
     expect(screen.getAllByRole("menuitem")).toHaveLength(1)
   })
 })
+
+describe("comment scope", () => {
+  const selectAndWait = async (testId: string): Promise<void> => {
+    const node = screen.getByTestId(testId)
+    const range = document.createRange()
+    range.selectNodeContents(node)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    act(() => {
+      document.dispatchEvent(new Event("selectionchange"))
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    })
+  }
+
+  test("the preview-scoped bar never answers a transcript selection, even with comments enabled", async () => {
+    render(
+      <div>
+        <div data-chat-content>
+          <span data-testid="scope-transcript-text">对话正文</span>
+        </div>
+        <SelectionMenu containerRef={{ current: null }} sessionId="s" scope="preview" allowComment />
+      </div>
+    )
+    await selectAndWait("scope-transcript-text")
+    expect(screen.queryByRole("menu")).toBeNull()
+  })
+
+  test("the transcript-scoped bar never offers 评论 even when a viewer trigger exists", async () => {
+    const trigger = document.createElement("button")
+    trigger.dataset.testid = "comment-selection-button"
+    document.body.append(trigger)
+    try {
+      render(
+        <div>
+          <div data-chat-content>
+            <span data-testid="scope-transcript-comment">对话正文</span>
+          </div>
+          <SelectionMenu containerRef={{ current: null }} sessionId="s" scope="transcript" />
+        </div>
+      )
+      await selectAndWait("scope-transcript-comment")
+      expect(screen.queryByRole("menu")).not.toBeNull()
+      expect(screen.queryByRole("menuitem", { name: /评论|Comment/ })).toBeNull()
+    } finally {
+      trigger.remove()
+    }
+  })
+
+  test("the preview-scoped bar offers 评论 inside the preview only", async () => {
+    const trigger = document.createElement("button")
+    trigger.dataset.testid = "comment-selection-button"
+    document.body.append(trigger)
+    try {
+      render(
+        <div>
+          <div className="file-workspace-editor">
+            <span data-testid="scope-preview-text">预览正文</span>
+          </div>
+          <SelectionMenu containerRef={{ current: null }} sessionId="s" scope="preview" allowComment />
+        </div>
+      )
+      await selectAndWait("scope-preview-text")
+      expect(screen.queryByRole("menuitem", { name: /评论|Comment/ })).not.toBeNull()
+    } finally {
+      trigger.remove()
+    }
+  })
+})
