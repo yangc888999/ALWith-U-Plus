@@ -119,3 +119,15 @@ test("the accent reaches the main window through the send key, not a global wash
   expect(styles).toMatch(/:root\[data-accent="lemon-green"\][^{]*\{[^}]*--accent-on:/)
   expect(styles).toMatch(/\.dark\s*\{\s*--accent-on:/)
 })
+
+test("the stop key uses a soft accent disc on the light theme", () => {
+  const stop = ruleOf("[data-composer] .chat-composer-toolbar button.border-border")
+  // A solid accent disc becomes a heavy grey blob in light mode with a neutral accent.
+  expect(stop).toContain("background-color: color-mix")
+  expect(stop).toContain("var(--card)")
+  expect(stop).not.toContain("background-color: var(--settings-accent)")
+  // Dark mode keeps the filled accent for a clear stop affordance.
+  expect(styles).toMatch(
+    /\.dark \[data-composer\] \.chat-composer-toolbar button\.border-border\s*\{[^}]*background-color: var\(--settings-accent\);/
+  )
+})

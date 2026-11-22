@@ -91,10 +91,22 @@ test("macOS settings keeps the overlay title bar and opens as an independent win
       titleBarStyle: "overlay"
     })
   )
-  // Independent window: no child-window attachment (the attached path made edge-resize janky),
-  // and no start-hidden flag — the created handler shows it.
-  expect(host.create.mock.calls[0]?.[1]?.visible).not.toBe(false)
+  // Independent window: no child-window attachment (the attached path made edge-resize janky).
+  // It is created hidden and centred, then the created handler shows it: a visible first frame
+  // at the platform default position was the first-click flash/jump.
+  expect(host.create.mock.calls[0]?.[1]?.visible).toBe(false)
+  expect(host.create.mock.calls[0]?.[1]?.center).toBe(true)
   expect(host.attach).not.toHaveBeenCalled()
+})
+
+test("a new settings window is shown only after it has been created and positioned", async () => {
+  await openSettingsWindow("general")
+  expect(host.create).toHaveBeenCalledWith(
+    "settings",
+    expect.objectContaining({ visible: false, center: true })
+  )
+  expect(host.show).toHaveBeenCalled()
+  expect(host.focus).toHaveBeenCalled()
 })
 
 test("reopening hidden Windows settings reuses the window and selects the requested tab", async () => {

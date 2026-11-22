@@ -2126,9 +2126,11 @@ body::after {
   padding: 0;
   border: 0;
   border-radius: 9999px;
-  background-color: var(--settings-accent);
+  /* A solid accent disc reads as a heavy grey blob in the light theme, especially with a neutral
+     accent such as 雅致黑. Keep the stop action tinted but let the card show through. */
+  background-color: color-mix(in oklab, var(--settings-accent) 24%, var(--card));
   background-image: none;
-  color: var(--settings-accent-ink);
+  color: color-mix(in oklab, var(--settings-accent-ink) 88%, var(--foreground));
   box-shadow: none;
 }
 [data-composer] .chat-composer-toolbar button.border-border > svg {
@@ -2136,6 +2138,13 @@ body::after {
   fill: currentColor;
 }
 [data-composer] .chat-composer-toolbar button.border-border:hover {
+  background-color: color-mix(in oklab, var(--settings-accent) 34%, var(--card));
+}
+.dark [data-composer] .chat-composer-toolbar button.border-border {
+  background-color: var(--settings-accent);
+  color: var(--settings-accent-ink);
+}
+.dark [data-composer] .chat-composer-toolbar button.border-border:hover {
   background-color: color-mix(in oklab, var(--settings-accent) 86%, var(--foreground));
 }
 /* 输入态不画主题色描边。填充已经抬到父级（chip 行 + 输入区共用一张卡），而描边只能挂在

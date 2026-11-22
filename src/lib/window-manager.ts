@@ -120,6 +120,10 @@ export async function openSettingsWindow(section?: SettingsSection, target: Sett
     title: i18n.t("settings.title"),
     width: SETTINGS_DEFAULT_WIDTH,
     height: SETTINGS_DEFAULT_HEIGHT,
+    // Build and position the window before the first frame is painted. Showing it while the
+    // platform is still placing it made the first click flash at a default frame and then jump.
+    visible: false,
+    center: true,
     // Resizable by dragging any edge; the content column stretches with the window.
     resizable: true,
     // 下限就是设计宽度：再窄就要走「整行竖排」的另一套布局，用户拉到最小仍会觉得「有点不正常」。
