@@ -38,21 +38,24 @@ import { usePreviewVisiblePreference } from "@/features/workspace/preview-visibl
 import { useTreeVisiblePreference } from "@/features/workspace/tree-visible-preference"
 import { useWorkspaceLayout } from "@/features/workspace/use-workspace-layout"
 import {
-  getConversationDetail,
-  getQueueSendMode,
-  setConversationDetail,
-  setQueueSendMode,
-  subscribeChatDisplayPreferences
-} from "@/lib/chat-display-preferences"
-import { cn } from "@/lib/utils"
-import { setZoomLevel, ZOOM_LEVELS, zoomStore } from "@/lib/zoom"
-import {
   type AppearanceMode,
   setAppearanceMode,
   useAppearanceEffect,
   useAppearanceFailure,
   useAppearanceMode
 } from "@/lib/appearance-mode"
+import {
+  getConversationDetail,
+  getQueueSendMode,
+  setConversationDetail,
+  setQueueSendMode,
+  subscribeChatDisplayPreferences
+} from "@/lib/chat-display-preferences"
+import { loadPreferences, savePreference } from "@/lib/preferences"
+import { applyUiFont, DEFAULT_UI_FONT, isUiFont, UI_FONT_OPTIONS, type UiFont } from "@/lib/ui-font"
+import { cn } from "@/lib/utils"
+import { setZoomLevel, ZOOM_LEVELS, zoomStore } from "@/lib/zoom"
+
 import { ACCENT_PRESETS, useAccentStore } from "../accent-store"
 import { PreviewVisibleRow } from "./preview-visible-row"
 import { SettingRow, SettingsCard } from "./shared"
@@ -155,13 +158,7 @@ function ThemeSegmented({
  * 工作工具优先可读性，所以不提供 Liquid Glass 折射，也不提供透明度滑杆；毛玻璃是固定的
  * 雾面材质（原生 vibrancy + CSS 近似），纯色是默认档。
  */
-function MaterialSegmented({
-  value,
-  onChange
-}: {
-  value: AppearanceMode
-  onChange: (mode: AppearanceMode) => void
-}) {
+function MaterialSegmented({ value, onChange }: { value: AppearanceMode; onChange: (mode: AppearanceMode) => void }) {
   const { t } = useTranslation()
   const options: Array<[AppearanceMode, string]> = [
     ["solid", t("settings.materialSolid")],
@@ -212,6 +209,16 @@ function LayoutLegend({ seg, label }: { seg: "navigation" | "chat" | "preview" |
 export function AppearanceSection() {
   const { t } = useTranslation()
   const layout = useWorkspaceLayout()
+  const [uiFont, setUiFont] = useState<UiFont>(DEFAULT_UI_FONT)
+  useEffect(() => {
+    let active = true
+    void loadPreferences().then((preferences) => {
+      if (active) setUiFont(preferences.uiFont)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
   // Each column answers to its own visibility toggle; there is no master four-columns switch.
   const [treeVisible] = useTreeVisiblePreference()
   const [previewVisible] = usePreviewVisiblePreference()
@@ -349,6 +356,33 @@ export function AppearanceSection() {
               {materialFailure ?? materialEffect?.detail ?? t("settings.materialUnavailable")}
             </p>
           </div>
+        </SettingRow>
+        <SettingRow compact title={t("settings.uiFont")} desc={t("settings.uiFontDesc")}>
+          <Select
+            value={uiFont}
+            onValueChange={(value) => {
+              if (value === null || !isUiFont(value)) return
+              setUiFont(value)
+              applyUiFont(value)
+              void savePreference("uiFont", value).catch((error: unknown) =>
+                toast.error(error instanceof Error ? error.message : String(error))
+              )
+            }}
+            items={UI_FONT_OPTIONS.map((option) => ({ label: t(option.labelKey), value: option.id }))}
+          >
+            <SelectTrigger className="w-[170px]" aria-label={t("settings.uiFont")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {UI_FONT_OPTIONS.map((option) => (
+                  <SelectItem key={option.id} value={option.id}>
+                    {t(option.labelKey)}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
         </SettingRow>
         <SettingRow compact title={t("zoom.label")} desc={t("settings.zoomDesc")}>
           <Select

@@ -77,7 +77,7 @@ pre,
 
 @theme inline {
   --font-heading: var(--font-sans);
-  --font-sans: "Inter Variable", sans-serif;
+  --font-sans: var(--app-font-family, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Inter Variable", sans-serif);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -221,6 +221,7 @@ pre,
   }
   html {
     @apply font-sans;
+    font-family: var(--app-font-family, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Inter Variable", sans-serif);
   }
   /* The window is opaque (no vibrancy), so the page paints the theme background itself.
      Keeping a real color also prevents a white flash in dark mode and black ghost frames. */
@@ -1102,6 +1103,15 @@ pre::-webkit-scrollbar-thumb {
 }
 .session-list-scroll > [data-slot="scroll-area-scrollbar"] {
   padding-inline: var(--app-scrollbar-edge-gap);
+}
+
+/* Sidebar text is chrome, not scaled document text: keep it one fixed step below the
+   conversation body so a high-DPI root no longer makes every row look oversized. */
+.main-sidebar-panel .text-sm,
+[data-sidebar-menu-row],
+[data-slot="sidebar"] [data-slot="navigation-session-item"] {
+  font-size: 13px;
+  line-height: 18px;
 }
 
 /* Pane keeps its track outside the viewport, with stable content clearance even when hidden. */

@@ -16,6 +16,7 @@ import { ModelMenu } from "@alwith/module-chat/conversation"
 import { useStore } from "zustand"
 
 import { selectedModelId } from "@/agent/native-models"
+import { isAntigravityModelSelection } from "@/features/antigravity/models"
 import { client } from "@/lib/client"
 import { displayModelLabel, type ProviderSnapshot } from "@/lib/providers"
 
@@ -91,6 +92,8 @@ type DraftModelEntry = {
 type SessionModelEntry = {
   surface: "session"
   session: Session
+  /** A Gemini pick is a hand-off to the Antigravity agent, not a Codex config write. */
+  onOpenAntigravity?: (model: string) => void
 }
 
 /**
@@ -168,6 +171,13 @@ export function ModelEntry(props: DraftModelEntry | SessionModelEntry) {
         sessionId={props.session.id}
         options={props.session.configOptions}
         disabled={modelGateOf(props.session) !== "ready"}
+        onModelChange={(value) => {
+          if (isAntigravityModelSelection(value)) {
+            props.onOpenAntigravity?.(value)
+            return
+          }
+          void client.setConfig(props.session.id, "model", value).catch(() => {})
+        }}
       />
     </div>
   )

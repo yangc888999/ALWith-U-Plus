@@ -86,6 +86,24 @@ test("preview toolbar zooms, downloads the original, opens its local path and ha
   await waitFor(() => expect(view.queryByRole("dialog")).toBeNull())
 })
 
+test("fit mode leaves sizing to CSS so scrollbars cannot re-trigger the measured fit", async () => {
+  const view = render(<ImageLightbox />)
+  mounted.push(view)
+  act(() => openImageLightbox("data:image/png;base64,aGVsbG8=", "Portrait"))
+  const dialog = view.getByRole("dialog")
+  const viewport = dialog.querySelector('[data-image-mode="fit"]')
+  expect(viewport).not.toBeNull()
+  expect(viewport?.className).toContain("overflow-hidden")
+  const image = dialog.querySelector("img") as HTMLImageElement
+  Object.defineProperties(image, { naturalWidth: { value: 600 }, naturalHeight: { value: 400 } })
+  fireEvent.load(image)
+  expect(image.style.width).toBe("")
+  fireEvent.click(within(dialog).getByRole("button", { name: "Zoom" }))
+  fireEvent.click(view.getByRole("menuitemradio", { name: "200%" }))
+  expect(dialog.querySelector('[data-image-mode="zoom"]')?.className).toContain("overflow-auto")
+  expect(image.style.width).toBe("1200px")
+})
+
 test("failed file actions report the error and keep the preview usable", async () => {
   vi.spyOn(files, "downloadChatFile").mockRejectedValue(new Error("Disk full"))
   const error = vi.spyOn(toast, "error").mockImplementation(() => "error")

@@ -8,6 +8,7 @@ import type { NavigationInstrument, NavigationSoundMode } from "@/features/chat/
 
 import { setProjectAppPreference } from "./project-app-preference"
 import { settingsStore, updateSettings } from "./settings-store"
+import { DEFAULT_UI_FONT, resolveUiFont, type UiFont } from "./ui-font"
 
 export type Preferences = {
   composerPredictions?: boolean
@@ -18,6 +19,8 @@ export type Preferences = {
   defaultStartSurface: "chat" | "work"
   language: string | null
   zoomLevel: number | null
+  /** Installed system family used by the application chrome. */
+  uiFont: UiFont
   /** Explicit model choices are independent for the main and floating chat slots. */
   modelSelections: { main: string | null; chat: string | null }
   /** Sounds the user-message navigation rail plays (ALwith Desktop's navigation melody). */
@@ -39,6 +42,7 @@ const preferenceKeys: Record<keyof Preferences, string> = {
   defaultStartSurface: "general.defaultStartSurface",
   language: "general.language",
   zoomLevel: "appearance.zoomLevel",
+  uiFont: "appearance.uiFont",
   modelSelections: "chat.modelSelections",
   navigationSoundMode: "chat.navigationSoundMode",
   navigationInstrument: "chat.navigationInstrument",
@@ -65,6 +69,7 @@ export function defaultPreferences(): Preferences {
     defaultStartSurface: "chat",
     language: null,
     zoomLevel: null,
+    uiFont: DEFAULT_UI_FONT,
     modelSelections: { main: null, chat: null },
     navigationSoundMode: "scale",
     navigationInstrument: "acoustic_grand_piano",
@@ -86,7 +91,8 @@ export async function loadPreferences(): Promise<Preferences> {
     navigationSoundMode,
     navigationInstrument,
     externalEditor,
-    sidebarPinned
+    sidebarPinned,
+    uiFont
   ] = await Promise.all([
     store.get<string>("lastProjectDirectory"),
     store.get<"chat" | "work">("defaultStartSurface"),
@@ -96,7 +102,8 @@ export async function loadPreferences(): Promise<Preferences> {
     store.get<NavigationSoundMode>("navigationSoundMode"),
     store.get<NavigationInstrument>("navigationInstrument"),
     store.get<string>("externalEditor"),
-    store.get<boolean>("sidebarPinned")
+    store.get<boolean>("sidebarPinned"),
+    store.get<string>("uiFont")
   ])
   let restoredDirectory = lastProjectDirectory ?? null
   if (restoredDirectory !== null) {
@@ -120,6 +127,7 @@ export async function loadPreferences(): Promise<Preferences> {
     defaultStartSurface: defaultStartSurface === "work" ? "work" : "chat",
     language: language ?? null,
     zoomLevel: zoomLevel ?? null,
+    uiFont: resolveUiFont(uiFont),
     modelSelections: modelSelections ?? { main: null, chat: null },
     navigationSoundMode: navigationSoundMode ?? "scale",
     navigationInstrument: navigationInstrument ?? "acoustic_grand_piano",

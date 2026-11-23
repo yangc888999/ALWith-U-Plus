@@ -1,5 +1,6 @@
 import { isFormElicitation } from "@alwith/api"
 import { exportDraft, type FormAction, importDraft, setComposerDraft } from "@alwith/module-chat/conversation"
+import { isQuickChatDirectory } from "@alwith/module-chat/session-list"
 import { hasAccount, type RateLimitSnapshot } from "@nyssance/codex-acp-v2/client"
 import { invoke, isTauri } from "@tauri-apps/api/core"
 import { getCurrentWindow } from "@tauri-apps/api/window"
@@ -17,14 +18,23 @@ import { commands, events } from "@/bindings"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { SidebarInset } from "@/components/ui/sidebar"
+import { AntigravityPage } from "@/features/antigravity/antigravity-page"
+import { ANTIGRAVITY_DEFAULT_MODEL_KEY, antigravityModelId } from "@/features/antigravity/models"
 import { WallpaperBackground } from "@/features/appearance/wallpaper/background"
+import { serveAutomationBridge } from "@/features/automation/automation-bridge"
+import {
+  executeAutomationRun,
+  serialAutomationExecutor,
+  startAutomationScheduler
+} from "@/features/automation/automation-scheduler"
+import { getTask, patchRunRecord, setTaskMonitorSession } from "@/features/automation/task-store"
+import type { OnRunTask } from "@/features/automation/types"
 import { ActionCard, ElicitationFormDialog } from "@/features/chat/action-card"
 import { ChatView } from "@/features/chat/chat-view"
 import { DRAFT_SESSION_ID, DraftChat } from "@/features/chat/draft-chat"
 import { newChatDirectory } from "@/features/chat/new-chat-directory"
-import { registerSessionJump } from "@/features/chat/session-jump"
-import { isQuickChatDirectory } from "@alwith/module-chat/session-list"
 import { ChatProjectMenu } from "@/features/chat/project-session-popover"
+import { registerSessionJump } from "@/features/chat/session-jump"
 import { useDriveArchive } from "@/features/drive/archive-runtime"
 import { DriveDeleteConfirmation, DrivePage, DriveStatus, useDriveConnection } from "@/features/drive/drive"
 import { useDrivePluginBridge } from "@/features/drive/plugin-bridge-hook"
@@ -41,24 +51,20 @@ import { LeadingNavigation } from "@/features/layout/components/leading-navigati
 import { MainSidebarLayout } from "@/features/layout/components/main-sidebar-layout"
 import { TrailingBoard } from "@/features/layout/components/trailing-board"
 import { CommandPalette } from "@/features/palette/command-palette"
+import { startFreeModelWatch } from "@/features/providers/free-model-watch"
 import { recentMainActivity } from "@/features/sessions/recent-main-activity"
 import { selectSession } from "@/features/sessions/select-session"
 import { SessionSidebar } from "@/features/sessions/session-sidebar"
 import { TitleBarLeadingActions } from "@/features/sessions/title-bar-leading"
-import { HotkeysDialog } from "@/features/settings/hotkeys-dialog"
 import { syncNeutralAccentWithTheme, useAccentDataAttribute } from "@/features/settings/accent-store"
-import { serveAutomationBridge } from "@/features/automation/automation-bridge"
-import {
-  executeAutomationRun,
-  serialAutomationExecutor,
-  startAutomationScheduler
-} from "@/features/automation/automation-scheduler"
-import { getTask, patchRunRecord, setTaskMonitorSession } from "@/features/automation/task-store"
-import type { OnRunTask } from "@/features/automation/types"
+import { HotkeysDialog } from "@/features/settings/hotkeys-dialog"
+import { startPriceRefresh } from "@/features/settings/price-refresh"
 import { useVoiceHandoff } from "@/features/voice/use-voice-handoff"
 import { WorkspaceHeaderContext } from "@/features/workspace/context"
-import { createChatDirectory, isTemporaryChatDir } from "@/lib/quick-chat"
 import { FileWorkspace } from "@/features/workspace/file-workspace"
+import { closeOnlineBiWindow } from "@/features/workspace/online-bi"
+import { usePreviewExtension } from "@/features/workspace/preview-extension"
+import { usePreviewVisiblePreference } from "@/features/workspace/preview-visible-preference"
 import {
   bindProjectDirectory,
   DRAFT_DIRECTORY_KEY,
@@ -67,18 +73,9 @@ import {
   shouldOpenFourColumns,
   useBoundProjectDirectory
 } from "@/features/workspace/project-directory"
-import { usePreviewVisiblePreference } from "@/features/workspace/preview-visible-preference"
-import { closeOnlineBiWindow } from "@/features/workspace/online-bi"
-import { usePreviewExtension } from "@/features/workspace/preview-extension"
-import { logBackgroundError, reportBackgroundError } from "@/lib/background-errors"
-import { notify } from "@/lib/notifications"
-import { automationSessionRows, automationTitleOf, rememberAutomationSessionId } from "@/lib/automation-sessions"
-import { playCompletionSound, soundForRunState } from "@/lib/completion-sound"
-import { bumpDockBadge, clearDockBadge } from "@/lib/dock-badge"
-import { settingsStore } from "@/lib/settings-store"
-import { startFreeModelWatch } from "@/features/providers/free-model-watch"
 import { startAppearanceMode, startAppearanceSync } from "@/lib/appearance-mode"
-import { startPriceRefresh } from "@/features/settings/price-refresh"
+import { automationSessionRows, automationTitleOf, rememberAutomationSessionId } from "@/lib/automation-sessions"
+import { logBackgroundError, reportBackgroundError } from "@/lib/background-errors"
 import { installChatShortcut } from "@/lib/chat-shortcut"
 import {
   openChatWindow,
@@ -88,17 +85,20 @@ import {
   syncChatWindowSurface
 } from "@/lib/chat-window"
 import { serveChatClient } from "@/lib/chat-window-client"
-import { describeError } from "@/lib/error-text"
-import { notifyConversation } from "@/lib/notify"
 import { useMainWindowSurface } from "@/lib/chat-window-state"
 import { client, markRead, useApp, useSession, watchRunStates } from "@/lib/client"
-import { watchForNotifications } from "@/lib/notifications"
-import { type Preferences, savePreference } from "@/lib/preferences"
+import { playCompletionSound, soundForRunState } from "@/lib/completion-sound"
+import { bumpDockBadge, clearDockBadge } from "@/lib/dock-badge"
+import { describeError } from "@/lib/error-text"
 import { ensureDefaultGroupRoles } from "@/lib/group-roles"
-import { groupByDirectory } from "@/lib/groups"
 import { groupSessionRows } from "@/lib/group-sessions"
+import { groupByDirectory } from "@/lib/groups"
+import { notify, watchForNotifications } from "@/lib/notifications"
+import { notifyConversation } from "@/lib/notify"
+import { type Preferences, savePreference } from "@/lib/preferences"
 import { ensureProjectMemory } from "@/lib/project-memory"
 import { applyProvidersWhenIdle } from "@/lib/providers"
+import { createChatDirectory, isTemporaryChatDir } from "@/lib/quick-chat"
 import {
   type CachedRateLimits,
   hasRateLimitWindows,
@@ -106,12 +106,13 @@ import {
   writeCachedRateLimits
 } from "@/lib/rate-limit-cache"
 import { onHubExit } from "@/lib/runtime"
-import { markStartupReady, startupSilent } from "@/lib/startup-window"
-import { useStartupSilent, useStartupStalled } from "@/lib/use-startup-silent"
 import { serveSettingsBridge, type SettingsNativeModels } from "@/lib/settings-bridge"
+import { settingsStore } from "@/lib/settings-store"
+import { markStartupReady, startupSilent } from "@/lib/startup-window"
 import { useProjectMemory } from "@/lib/use-project-memory"
 import { useProviders } from "@/lib/use-providers"
 import { useReadVisibleSession } from "@/lib/use-read-visible-session"
+import { useStartupSilent, useStartupStalled } from "@/lib/use-startup-silent"
 import { useSurfaceOperation } from "@/lib/use-surface-operation"
 import { useWindowFocus } from "@/lib/window-focus"
 import { openSettingsWindow } from "@/lib/window-manager"
@@ -139,7 +140,9 @@ const AutomationPage = lazy(() =>
   import("@/features/automation/automation-page").then((module) => ({ default: module.AutomationPage }))
 )
 const UsagePage = lazy(() => import("@/features/usage/usage-page").then((module) => ({ default: module.UsagePage })))
-const SkillsPage = lazy(() => import("@/features/plugins/skills-page").then((module) => ({ default: module.SkillsPage })))
+const SkillsPage = lazy(() =>
+  import("@/features/plugins/skills-page").then((module) => ({ default: module.SkillsPage }))
+)
 
 export function App({ initialPreferences }: { initialPreferences: Preferences }) {
   useAccentDataAttribute()
@@ -198,6 +201,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   const [lastDirectory, setLastDirectory] = useState<string | null>(() =>
     initialPreferences.defaultStartSurface === "chat" ? null : initialPreferences.lastProjectDirectory
   )
+  const [draftStartSurface, setDraftStartSurface] = useState<"chat" | "work">(initialPreferences.defaultStartSurface)
   const providerSnapshot = useProviders()
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [hotkeysOpen, setHotkeysOpen] = useState(false)
@@ -280,6 +284,10 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     void closeOnlineBiWindow().catch(() => {})
   }, [leading, closePreviewExtension])
   const session = useSession(selectedId)
+  // Gemini is a second ACP agent, not a provider inside Codex. A Gemini pick from the composer
+  // routes the whole surface to that agent; the Codex session stays mounted/off-screen and keeps
+  // its own history. One agent owns a turn at a time.
+  const [antigravityModel, setAntigravityModel] = useState<string | null>(null)
   const draftSessions = useApp((state) => state.draftSessions)
   const { busy, operation } = useSurfaceOperation(() =>
     toast.error(t("errors.handoffStalled"), { id: "surface-handoff-stalled" })
@@ -348,63 +356,57 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   useReadVisibleSession(selectedId, focused && view === "chat")
   useProjectMemory()
 
-  const select = useCallback(
-    (sessionRow: SessionSummary) => {
-      // A project opened from history must have its memory file too, not only the ones picked in
-      // the composer: the read-memory action would otherwise find nothing on older projects.
-      void ensureProjectMemory(sessionRow.cwd)
-      // One directory source for the whole surface. A 拉会 session is a project like any other;
-      // binding its cwd here is what makes the four columns, the file tree and the preview appear
-      // on the very first frame instead of waiting for a lookup that never ran.
-      bindProjectDirectory(
-        sessionRow.sessionId,
-        sessionRow.cwd,
-        groupByDirectory(sessionRow.cwd)?.id ?? null
-      )
-      const token = ++selectionRef.current
-      const isCurrent = () => token === selectionRef.current
-      // Codex refuses to resume an archived session; opening one restores it first, as the
-      // official client does. `selectSession` switches the view immediately and prepares the engine
-      // in the background, so no surface-operation lock is held here: holding one made the whole
-      // window inert while a preparation step stalled, which read as a dead click on the sidebar.
-      // The token replaces that lock's one-at-a-time guarantee with last-click-wins.
-      selectSession(
-        sessionRow,
-        {
-          connect: async () => {
-            await client.connect()
-            if (client.state.draftSessions[sessionRow.sessionId] !== "main") await client.discardDraft("main")
-          },
-          unarchive: (id) => client.unarchive(id),
-          release: async (id) => {
-            const transfer = await releaseChatWindow(id)
-            await client.transferDraft(id, "main")
-            return transfer
-          },
-          importDraft,
-          include: (sessionRow) => client.includeSession(sessionRow),
-          open: (id, cwd) => {
-            // Clicking a conversation is an explicit open: the replay breaker must not answer it
-            // with a cached refusal from an earlier attempt (the reader saw a dead click).
-            client.retryReplay("main")
-            return client.open(id, cwd)
-          },
-          show: (id) => {
-            setOpeningSessionId(id)
-            setSurfaceGeneration((value) => value + 1)
-            setView("chat")
-            setSelectedId(id)
-          },
-          onOpenError: (error: unknown) => toast.error(describeError(error)),
-          onSettled: () => {
-            if (isCurrent()) setOpeningSessionId(null)
-          }
+  const select = useCallback((sessionRow: SessionSummary) => {
+    setAntigravityModel(null)
+    // A project opened from history must have its memory file too, not only the ones picked in
+    // the composer: the read-memory action would otherwise find nothing on older projects.
+    void ensureProjectMemory(sessionRow.cwd)
+    // One directory source for the whole surface. A 拉会 session is a project like any other;
+    // binding its cwd here is what makes the four columns, the file tree and the preview appear
+    // on the very first frame instead of waiting for a lookup that never ran.
+    bindProjectDirectory(sessionRow.sessionId, sessionRow.cwd, groupByDirectory(sessionRow.cwd)?.id ?? null)
+    const token = ++selectionRef.current
+    const isCurrent = () => token === selectionRef.current
+    // Codex refuses to resume an archived session; opening one restores it first, as the
+    // official client does. `selectSession` switches the view immediately and prepares the engine
+    // in the background, so no surface-operation lock is held here: holding one made the whole
+    // window inert while a preparation step stalled, which read as a dead click on the sidebar.
+    // The token replaces that lock's one-at-a-time guarantee with last-click-wins.
+    selectSession(
+      sessionRow,
+      {
+        connect: async () => {
+          await client.connect()
+          if (client.state.draftSessions[sessionRow.sessionId] !== "main") await client.discardDraft("main")
         },
-        isCurrent
-      )
-    },
-    []
-  )
+        unarchive: (id) => client.unarchive(id),
+        release: async (id) => {
+          const transfer = await releaseChatWindow(id)
+          await client.transferDraft(id, "main")
+          return transfer
+        },
+        importDraft,
+        include: (sessionRow) => client.includeSession(sessionRow),
+        open: (id, cwd) => {
+          // Clicking a conversation is an explicit open: the replay breaker must not answer it
+          // with a cached refusal from an earlier attempt (the reader saw a dead click).
+          client.retryReplay("main")
+          return client.open(id, cwd)
+        },
+        show: (id) => {
+          setOpeningSessionId(id)
+          setSurfaceGeneration((value) => value + 1)
+          setView("chat")
+          setSelectedId(id)
+        },
+        onOpenError: (error: unknown) => toast.error(describeError(error)),
+        onSettled: () => {
+          if (isCurrent()) setOpeningSessionId(null)
+        }
+      },
+      isCurrent
+    )
+  }, [])
 
   // Expose this `select` to the rest of the app as the one entrance for opening a conversation
   // (toasts, command palette, deep links). It is stable (`[]` deps), so registering on mount is enough.
@@ -584,24 +586,31 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   const newChatInDirectory = useCallback(
     (cwd?: string | null, collectionId?: string, groupId: string | null = null) => {
       void operation
-        .run(async () => {
-          const directory = newChatDirectory(cwd === undefined ? (extensionSession.current?.cwd ?? lastDirectory) : cwd)
-          await client.discardDraft("main")
-          setDraftCollection(
-            collectionId === undefined ? null : { id: collectionId, generation: surfaceGeneration + 1 }
-          )
-          // A group draft still owns the meeting folder; binding it here keeps four columns and the
-          // group's files visible before the first message creates a session id.
-          chooseDraftFolder(directory, groupId)
-          importDraft(DRAFT_SESSION_ID, null)
-          setSurfaceGeneration((value) => value + 1)
-          setChatRevealRequest((value) => value + 1)
-          setView("chat")
-          setSelectedId(null)
-        }, { handoff: true })
+        .run(
+          async () => {
+            setAntigravityModel(null)
+            const directory = newChatDirectory(
+              cwd === undefined ? (extensionSession.current?.cwd ?? lastDirectory) : cwd
+            )
+            client.releaseDraftSlot("main")
+            setDraftCollection(
+              collectionId === undefined ? null : { id: collectionId, generation: surfaceGeneration + 1 }
+            )
+            setDraftStartSurface(isTemporaryChatDir(directory) ? initialPreferences.defaultStartSurface : "work")
+            // A group draft still owns the meeting folder; binding it here keeps four columns and the
+            // group's files visible before the first message creates a session id.
+            chooseDraftFolder(directory, groupId)
+            importDraft(DRAFT_SESSION_ID, null)
+            setSurfaceGeneration((value) => value + 1)
+            setChatRevealRequest((value) => value + 1)
+            setView("chat")
+            setSelectedId(null)
+          },
+          { handoff: true }
+        )
         .catch((error: unknown) => toast.error(describeError(error)))
     },
-    [chooseDraftFolder, lastDirectory, operation, surfaceGeneration]
+    [chooseDraftFolder, initialPreferences.defaultStartSurface, lastDirectory, operation, surfaceGeneration]
   )
 
   /** 新建会话: a temporary chat in its own folder under the quick-chat root, never inside a project. */
@@ -650,21 +659,25 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   const clearContextInPlace = useCallback(
     (sessionId: string, cwd: string) => {
       void operation
-        .run(async () => {
-          // Park the model and effort before the thread goes away; the first turn of the
-          // replacement re-applies them.
-          client.rememberCurrentForNextChat(sessionId)
-          await client.discardDraft("main")
-          await client.archive(sessionId)
-          // Clearing the context means the next visit starts on a fresh draft in the same project,
-          // not on the chat that was just archived. The project itself is remembered separately.
-          chooseDraftFolder(cwd)
-          importDraft(DRAFT_SESSION_ID, null)
-          setSurfaceGeneration((value) => value + 1)
-          setChatRevealRequest((value) => value + 1)
-          setView("chat")
-          setSelectedId(null)
-        }, { handoff: true })
+        .run(
+          async () => {
+            setAntigravityModel(null)
+            // Park the model and effort before the thread goes away; the first turn of the
+            // replacement re-applies them.
+            client.rememberCurrentForNextChat(sessionId)
+            await client.discardDraft("main")
+            await client.archive(sessionId)
+            // Clearing the context means the next visit starts on a fresh draft in the same project,
+            // not on the chat that was just archived. The project itself is remembered separately.
+            chooseDraftFolder(cwd)
+            importDraft(DRAFT_SESSION_ID, null)
+            setSurfaceGeneration((value) => value + 1)
+            setChatRevealRequest((value) => value + 1)
+            setView("chat")
+            setSelectedId(null)
+          },
+          { handoff: true }
+        )
         .catch((error: unknown) => toast.error(describeError(error)))
     },
     [chooseDraftFolder, operation]
@@ -684,34 +697,37 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       const stopSurface = await serveChatSurface(async (action) => {
         switch (action.type) {
           case "present":
-            return operation.run(async (signal) => {
-              const transfer = action.transfer
-              if (!transfer) throw new Error("Returning to main requires a chat transfer")
-              await client.connect()
-              // The watchdog may have handed the lock to a newer request while this handoff was
-              // wedged. Stop before rewriting draft/window state that belongs to the newer one.
-              if (signal.abandoned) return null
-              if (transfer.sessionId !== null) {
-                if (transfer.cwd === null) throw new Error("A chat session must have a working directory")
-                await client.transferDraft(transfer.sessionId, "main")
+            return operation.run(
+              async (signal) => {
+                const transfer = action.transfer
+                if (!transfer) throw new Error("Returning to main requires a chat transfer")
+                await client.connect()
+                // The watchdog may have handed the lock to a newer request while this handoff was
+                // wedged. Stop before rewriting draft/window state that belongs to the newer one.
                 if (signal.abandoned) return null
-                await client.open(transfer.sessionId, transfer.cwd)
-              } else {
-                await client.discardDraft("main")
-              }
-              if (signal.abandoned) return null
-              importDraft(transfer.sessionId ?? DRAFT_SESSION_ID, transfer.draft)
-              setLastDirectory(transfer.cwd)
-              setSelectedId(transfer.sessionId)
-              setSurfaceGeneration((value) => value + 1)
-              setChatRevealRequest((value) => value + 1)
-              setView("chat")
-              const win = getCurrentWindow()
-              await win.unminimize()
-              await win.show()
-              await win.setFocus()
-              return null
-            }, { handoff: true })
+                if (transfer.sessionId !== null) {
+                  if (transfer.cwd === null) throw new Error("A chat session must have a working directory")
+                  await client.transferDraft(transfer.sessionId, "main")
+                  if (signal.abandoned) return null
+                  await client.open(transfer.sessionId, transfer.cwd)
+                } else {
+                  await client.discardDraft("main")
+                }
+                if (signal.abandoned) return null
+                importDraft(transfer.sessionId ?? DRAFT_SESSION_ID, transfer.draft)
+                setLastDirectory(transfer.cwd)
+                setSelectedId(transfer.sessionId)
+                setSurfaceGeneration((value) => value + 1)
+                setChatRevealRequest((value) => value + 1)
+                setView("chat")
+                const win = getCurrentWindow()
+                await win.unminimize()
+                await win.show()
+                await win.setFocus()
+                return null
+              },
+              { handoff: true }
+            )
           case "markRead":
             await markRead(action.sessionId)
             return null
@@ -1036,10 +1052,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           if (state === "requires_action" && !needsAuthSeen) {
             needsAuthSeen = true
             patchRunRecord(request.runId, { needsAuth: true })
-            void notify(
-              t("automation.runNeedsAuthTitle"),
-              t("automation.runNeedsAuth", { name: request.taskName })
-            )
+            void notify(t("automation.runNeedsAuthTitle"), t("automation.runNeedsAuth", { name: request.taskName }))
           }
         }, 2000)
         try {
@@ -1050,11 +1063,9 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           const started = new Date()
           const pad2 = (value: number): string => String(value).padStart(2, "0")
           const runStamp = `${started.getFullYear()}-${pad2(started.getMonth() + 1)}-${pad2(started.getDate())} ${pad2(started.getHours())}:${pad2(started.getMinutes())}`
-          await client.prompt(
-            sessionId,
-            [{ type: "text", text: request.prompt }],
-            { display: [{ type: "text", text: `【${runStamp} 运行】\n${request.prompt}` }] }
-          )
+          await client.prompt(sessionId, [{ type: "text", text: request.prompt }], {
+            display: [{ type: "text", text: `【${runStamp} 运行】\n${request.prompt}` }]
+          })
           // The ACP stop reason ("end_turn") is meaningless to a reader. Push and record what the
           // agent actually wrote in this turn; an empty string means there was no readable answer.
           const answer = client.answerSince(sessionId, before)
@@ -1107,8 +1118,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
               ? result.summary.trim()
               : t("automation.larkEmptyResult")
             : (result.error ?? t("automation.toastRunFailed"))
-        const header =
-          result.status === "success" ? stamp : `${stamp} · ${t("automation.runStatusFailed")}`
+        const header = result.status === "success" ? stamp : `${stamp} · ${t("automation.runStatusFailed")}`
         // The message IS the result — no task/session ids, no "状态：完成" shell around an empty
         // body. Only a failed run gets an explicit failure marker.
         const text = [`【${request.taskName}】`, header, "", body].join("\n").slice(0, 4000)
@@ -1153,9 +1163,12 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     const attempt = async (round: number): Promise<void> => {
       await connect()
       if (cancelled || !startupSilent() || Date.now() >= deadline) return
-      window.setTimeout(() => {
-        if (!cancelled) void attempt(round + 1)
-      }, Math.min(400 * 2 ** Math.min(round, 2), 2000))
+      window.setTimeout(
+        () => {
+          if (!cancelled) void attempt(round + 1)
+        },
+        Math.min(400 * 2 ** Math.min(round, 2), 2000)
+      )
     }
     void attempt(0)
     const stopNotifications = watchForNotifications(client)
@@ -1255,6 +1268,20 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
         </Alert>
       </div>
     ) : null
+    if (antigravityModel !== null) {
+      const selectedGeminiModel = antigravityModelId(antigravityModel)
+      return (
+        <AntigravityPage
+          cwd={lastDirectory}
+          embedded
+          initialModel={selectedGeminiModel}
+          onSwitchToCodex={() => {
+            setAntigravityModel(null)
+            setSurfaceGeneration((value) => value + 1)
+          }}
+        />
+      )
+    }
     if (view === "story")
       return (
         <Suspense fallback={null}>
@@ -1264,22 +1291,25 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     // Keyed: the thread and the composer keep per-session state (draft, scroll memory) and start fresh per session.
     const moveToWindow = (): void => {
       void operation
-        .run(async () => {
-          await openChatWindow({
-            sessionId: selectedId,
-            cwd: session?.cwd ?? lastDirectory,
-            draft: await exportDraft(selectedId ?? DRAFT_SESSION_ID)
-          })
-          const replacement = recentMainActivity(client.state, selectedId)
-          setSelectedId(replacement?.sessionId ?? null)
-          importDraft(DRAFT_SESSION_ID, null)
-          setSurfaceGeneration((value) => value + 1)
-          // The handoff is accepted before replacing the source, even when restoring history fails.
-          if (replacement) {
-            setLastDirectory(replacement.cwd)
-            await client.open(replacement.sessionId, replacement.cwd)
-          }
-        }, { handoff: true })
+        .run(
+          async () => {
+            await openChatWindow({
+              sessionId: selectedId,
+              cwd: session?.cwd ?? lastDirectory,
+              draft: await exportDraft(selectedId ?? DRAFT_SESSION_ID)
+            })
+            const replacement = recentMainActivity(client.state, selectedId)
+            setSelectedId(replacement?.sessionId ?? null)
+            importDraft(DRAFT_SESSION_ID, null)
+            setSurfaceGeneration((value) => value + 1)
+            // The handoff is accepted before replacing the source, even when restoring history fails.
+            if (replacement) {
+              setLastDirectory(replacement.cwd)
+              await client.open(replacement.sessionId, replacement.cwd)
+            }
+          },
+          { handoff: true }
+        )
         .catch((error) => toast.error(describeError(error)))
     }
     const newProjectChat = newChat
@@ -1330,6 +1360,15 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           onNewChat={newProjectChat}
           onClearContext={(cwd) => clearContextInPlace(session.id, cwd)}
           onDeleted={deleted}
+          onOpenAntigravity={(value) => {
+            if (session.state !== "idle") {
+              toast.info(t("antigravity.busy"))
+              return
+            }
+            const picked = antigravityModelId(value)
+            if (picked !== null) localStorage.setItem(ANTIGRAVITY_DEFAULT_MODEL_KEY, picked)
+            setAntigravityModel(value)
+          }}
         />
       )
     return (
@@ -1340,7 +1379,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           owner="main"
           key={`draft-${surfaceGeneration}`}
           onNewChat={newProjectChat}
-          startSurface={initialPreferences.defaultStartSurface}
+          startSurface={draftStartSurface}
           cwd={lastDirectory}
           projectMenu={
             <ChatProjectMenu
@@ -1361,6 +1400,11 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           providerSnapshot={providerSnapshot}
           runOperation={operation.run}
           onOpenWindow={moveToWindow}
+          onOpenAntigravity={(value) => {
+            const picked = antigravityModelId(value)
+            if (picked !== null) localStorage.setItem(ANTIGRAVITY_DEFAULT_MODEL_KEY, picked)
+            setAntigravityModel(value)
+          }}
         />
       </>
     )
@@ -1397,30 +1441,32 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
             if (screen === "main") setView("chat")
             else openLeading()
           }}
-          sidebar={leading ? null : (
-            <SessionSidebar
-              screen={leading ? "leading" : "main"}
-              leadingPage={leadingPage}
-              selectedId={view === "chat" && mainVisible ? selectedId : null}
-              onSelect={select}
-              onNewChat={newChat}
-              onNewProject={newProject}
-              onSearch={() => setPaletteOpen(true)}
-              onNewProjectChat={newChatInDirectory}
-              onViewFiles={openMeetingFiles}
-              onOpenSettings={() => void openSettingsWindow()}
-              onEditProfile={() => void openSettingsWindow("account")}
-              onOpenPlugins={openPlugins}
-              onOpenSkills={openSkills}
-              onOpenExtensions={openExtensionSettings}
-              onOpenAutomation={openAutomation}
-              drivePanel={<div ref={setDriveSidebar} className="min-h-0 flex-1 overflow-auto" />}
-              onSwitchScreen={() => {
-                if (leading) setView("chat")
-                else openLeading()
-              }}
-            />
-          )}
+          sidebar={
+            leading ? null : (
+              <SessionSidebar
+                screen={leading ? "leading" : "main"}
+                leadingPage={leadingPage}
+                selectedId={view === "chat" && mainVisible ? selectedId : null}
+                onSelect={select}
+                onNewChat={newChat}
+                onNewProject={newProject}
+                onSearch={() => setPaletteOpen(true)}
+                onNewProjectChat={newChatInDirectory}
+                onViewFiles={openMeetingFiles}
+                onOpenSettings={() => void openSettingsWindow()}
+                onEditProfile={() => void openSettingsWindow("account")}
+                onOpenPlugins={openPlugins}
+                onOpenSkills={openSkills}
+                onOpenExtensions={openExtensionSettings}
+                onOpenAutomation={openAutomation}
+                drivePanel={<div ref={setDriveSidebar} className="min-h-0 flex-1 overflow-auto" />}
+                onSwitchScreen={() => {
+                  if (leading) setView("chat")
+                  else openLeading()
+                }}
+              />
+            )
+          }
           leading={
             <>
               <LeadingNavigation
@@ -1487,9 +1533,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           }
           trailing={<TrailingBoard />}
           toolbar={<div ref={setWorkspaceToolbar} hidden={leading} className="main-workspace-toolbar" />}
-          headerTrailing={
-            <div ref={setWorkspaceTrailing} hidden={leading} className="main-workspace-toolbar" />
-          }
+          headerTrailing={<div ref={setWorkspaceTrailing} hidden={leading} className="main-workspace-toolbar" />}
           leadingActions={
             <TitleBarLeadingActions
               onOpenWindow={() => void openChatWindow().catch((error) => toast.error(describeError(error)))}
@@ -1540,16 +1584,19 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                         onSelectSession={select}
                         currentProject={directory}
                         onOpenProject={(root) =>
-                          operation.run(async () => {
-                            await client.discardDraft("main")
-                            flushSync(() => {
-                              chooseDraftFolder(root.localPath)
-                              importDraft(DRAFT_SESSION_ID, null)
-                              setSurfaceGeneration((value) => value + 1)
-                              setSelectedId(null)
-                              setView("chat")
-                            })
-                          }, { handoff: true })
+                          operation.run(
+                            async () => {
+                              await client.discardDraft("main")
+                              flushSync(() => {
+                                chooseDraftFolder(root.localPath)
+                                importDraft(DRAFT_SESSION_ID, null)
+                                setSurfaceGeneration((value) => value + 1)
+                                setSelectedId(null)
+                                setView("chat")
+                              })
+                            },
+                            { handoff: true }
+                          )
                         }
                       />,
                       driveSidebar

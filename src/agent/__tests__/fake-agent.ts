@@ -38,10 +38,11 @@ export type FakeAgent = {
   configChanges: string[]
   /** Text of every `session/prompt` request, in order (what the agent actually received). */
   prompts: string[]
+  /** Text of every `_session/steering` request, in order. */
+  steers: string[]
   /** Configuration writes and prompts in the order the agent received them. */
   events: Array<
-    | { type: "config"; request: acp.SetSessionConfigOptionRequest }
-    | { type: "prompt"; sessionId: string; text: string }
+    { type: "config"; request: acp.SetSessionConfigOptionRequest } | { type: "prompt"; sessionId: string; text: string }
   >
   /** Names set through `_codex/session_rename`. */
   renamed: Map<string, string>
@@ -160,6 +161,7 @@ export function createFakeAgent(): FakeAgent {
   const listSessions: FakeAgent["listSessions"] = { current: null }
   const configChanges: string[] = []
   const prompts: string[] = []
+  const steers: string[] = []
   const events: FakeAgent["events"] = []
   const changingConfig = new Set<string>()
   const renamed = new Map<string, string>()
@@ -417,6 +419,34 @@ export function createFakeAgent(): FakeAgent {
   })
   // Receipt ids per session: the first prompt is "u" (the tests name it), later ones "u2", "u3"…
   const promptSequence = new Map<string, number>()
+  const steeringSequence = new Map<string, number>()
+  app.onRequest(
+    "_session/steering",
+    (value: unknown) => {
+      if (typeof value !== "object" || value === null || Array.isArray(value))
+        throw acp.RequestError.invalidParams(undefined, "Expected steering params")
+      const { sessionId, prompt } = value as { sessionId?: unknown; prompt?: unknown }
+      if (typeof sessionId !== "string" || !Array.isArray(prompt))
+        throw acp.RequestError.invalidParams(undefined, "Expected sessionId and prompt")
+      return { sessionId, prompt: prompt as acp.ContentBlock[] }
+    },
+    async ({ params, client }) => {
+      const text = params.prompt.map((block) => (block.type === "text" ? block.text : "")).join("")
+      steers.push(text)
+      if (!active.has(params.sessionId)) return { outcome: "startedNewTurn" as const }
+      const sequence = (steeringSequence.get(params.sessionId) ?? 0) + 1
+      steeringSequence.set(params.sessionId, sequence)
+      await client.notify("session/update", {
+        sessionId: params.sessionId,
+        update: {
+          sessionUpdate: "user_message",
+          messageId: `steer-${sequence}`,
+          content: params.prompt
+        }
+      })
+      return { outcome: "injected" as const }
+    }
+  )
   app.onRequest("session/prompt", async ({ params, client }) => {
     const id = params.sessionId
     const text = params.prompt.map((block) => (block.type === "text" ? block.text : "")).join("")
@@ -574,6 +604,7 @@ export function createFakeAgent(): FakeAgent {
     fullListRequests,
     configChanges,
     prompts,
+    steers,
     events,
     renamed,
     fileSearches,

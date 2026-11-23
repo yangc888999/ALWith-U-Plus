@@ -3,10 +3,9 @@
 import { attachConsole, error as logError } from "@tauri-apps/plugin-log"
 import { type ComponentType, StrictMode } from "react"
 import { createRoot } from "react-dom/client"
-
-import { installScrollActivity } from "@/lib/scroll-activity"
 import { toast } from "sonner"
 
+import { commands } from "@/bindings"
 import { AppDirectionProvider } from "@/components/alwith-ui/app-direction-provider"
 import { ErrorBoundary } from "@/components/error-boundary"
 import { ThemeProvider } from "@/components/theme-provider"
@@ -18,14 +17,15 @@ import { initPlatformAuth } from "@/features/auth/store"
 import { hydrateNavigationSound } from "@/features/chat/codex/navigation-sound-store"
 import { predictionPreference } from "@/features/chat/composer/prediction-preference"
 import { hydrateProfileOverrides } from "@/features/profile/profile-store"
+import { companyModelConfig } from "@/lib/company-model-config"
 import { describeError } from "@/lib/error-text"
 import { initI18n } from "@/lib/i18n"
-import { installToastErrorLocalization } from "@/lib/toast-error"
 import { startPreferenceSync } from "@/lib/preference-sync"
 import { loadPreferences, type Preferences } from "@/lib/preferences"
+import { installScrollActivity } from "@/lib/scroll-activity"
 import { bootstrapSettings } from "@/lib/settings-store"
-import { companyModelConfig } from "@/lib/company-model-config"
-import { commands } from "@/bindings"
+import { installToastErrorLocalization } from "@/lib/toast-error"
+import { applyUiFont } from "@/lib/ui-font"
 import { hydrateZoom } from "@/lib/zoom"
 import { startZoomViewport } from "@/lib/zoom-viewport"
 import "../index.css"
@@ -59,6 +59,7 @@ export function bootstrapAuxWindow(opts: {
       void logError(`[${opts.logTag}] ${message}`).catch((failure: unknown) => console.error(failure))
     })
     const preferences = await loadPreferences()
+    applyUiFont(preferences.uiFont)
     predictionPreference.setState({ enabled: preferences.composerPredictions ?? true })
     hydrateProfileOverrides({
       owner: preferences.profileOwner,

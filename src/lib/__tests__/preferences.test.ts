@@ -100,6 +100,14 @@ test.each([undefined, "chat", "work"] as const)("default start surface restores 
   expect((await loadPreferences()).defaultStartSurface).toBe(saved === "work" ? "work" : "chat")
 })
 
+test.each([undefined, "pingfang", "songti", "invalid-font"] as const)(
+  "interface font restores %p with PingFang as the default",
+  async (saved) => {
+    settingsFixture(saved === undefined ? {} : { "appearance.uiFont": saved })
+    expect((await loadPreferences()).uiFont).toBe(saved === "songti" ? "songti" : "pingfang")
+  }
+)
+
 test("input suggestions default to enabled and preserve an explicit saved choice", async () => {
   const values = savedProject(undefined)
   expect((await loadPreferences()).composerPredictions).toBe(true)

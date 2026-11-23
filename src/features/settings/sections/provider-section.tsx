@@ -130,6 +130,7 @@ import { useProviders } from "@/lib/use-providers"
 import { cn } from "@/lib/utils"
 
 import { CodexProviderSection } from "./codex-provider-section"
+import { AntigravitySettingsCard } from "@/features/antigravity/antigravity-settings-card"
 import { CompanyProviderCard, COMPANY_PROVIDER_TAB } from "./company-provider-card"
 import { ModelSection } from "./model-section"
 import { ProviderReliabilitySettings } from "./provider-reliability"
@@ -523,6 +524,7 @@ export function ProviderSection({ initialProviderId }: { initialProviderId?: str
   return (
     <div className="flex flex-col gap-6">
       <CodexProviderSection />
+      <AntigravitySettingsCard />
       <ModelSection
         onApplied={(model) => {
           if (model === null) return

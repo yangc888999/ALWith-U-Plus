@@ -1,8 +1,8 @@
 // Two chat-surface preferences, WorkBuddy style, persisted per install.
 //
 // - Queue send mode: what happens when the user sends a message while a turn is running.
-//   "immediate" (the default) keeps the built-in steering — the message is inserted into the
-//   running turn. "queued" holds the send until the running turn settles, so the current
+//   "immediate" (the default) uses the adapter's live-turn steering so the message is inserted
+//   into the running turn. "queued" holds the send until the running turn settles, so the current
 //   answer is never interrupted; the message then goes out on its own.
 // - Conversation detail: how tool activity renders while a turn runs. "compact" keeps finished
 //   tool groups collapsed; "full" spreads every group open via the timeline stylesheet.

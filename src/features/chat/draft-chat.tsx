@@ -30,6 +30,7 @@ import { useStartupSilent, useStartupStalled } from "@/lib/use-startup-silent"
 import { cn } from "@/lib/utils"
 
 import { ChatActionsMenu } from "./chat-actions-menu"
+import { isAntigravityModelSelection } from "@/features/antigravity/models"
 import { focusComposer, SelectionMenu } from "./selection-menu"
 import { ChatEdgeActions } from "./chat-edge-actions"
 import { ChatHeader } from "./chat-header"
@@ -85,7 +86,8 @@ export function DraftChat({
   onNewChat,
   onNewProject,
   startSurface = "work",
-  onOpenProject
+  onOpenProject,
+  onOpenAntigravity
 }: {
   owner: DraftOwner
   cwd: string | null
@@ -109,6 +111,8 @@ export function DraftChat({
   startSurface?: "chat" | "work"
   /** Opens the newest conversation in a recent project, or a fresh draft when it has none. */
   onOpenProject?: (cwd: string, sessionId?: string) => void
+  /** Routes a Gemini pick from the composer model menu to the Antigravity agent surface. */
+  onOpenAntigravity?: (model: string) => void
 }) {
   const { t, i18n } = useTranslation()
   const sessionRows = useApp((state) => state.sessionList)
@@ -425,6 +429,10 @@ export function DraftChat({
                     failure={error}
                     connected={connection === "ready"}
                     onChange={(value) => {
+                      if (isAntigravityModelSelection(value)) {
+                        if (value !== null) onOpenAntigravity?.(value)
+                        return
+                      }
                       // A conversation that already started keeps its stream: park the choice for the
                       // next turn instead of re-preparing a draft, which would swap the surface out
                       // from under a running first turn. `null` is the picker's "native default" and

@@ -2657,12 +2657,15 @@ fn test_config(saved: &Saved, id: &str) -> Result<TestConfig, String> {
 ///
 /// The app launches from the Finder and inherits no shell environment, so the speed test
 /// would otherwise bypass the proxy every other tool on this Mac uses.
-fn system_proxy() -> Option<String> {
+pub(crate) fn system_proxy() -> Option<String> {
     let out = std::process::Command::new("/usr/sbin/scutil").arg("--proxy").output().ok()?;
     if !out.status.success() {
         return None;
     }
-    let text = String::from_utf8_lossy(&out.stdout);
+    system_proxy_from_scutil(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn system_proxy_from_scutil(text: &str) -> Option<String> {
     let get = |key: &str| -> Option<String> {
         text.lines()
             .find(|line| line.trim_start().starts_with(key))
@@ -3067,6 +3070,29 @@ async fn discover_models(base_url: &str, api_key: &str) -> Result<Vec<CustomMode
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn macos_proxy_uses_the_enabled_https_endpoint() {
+        let output = r#"
+<dictionary> {
+  HTTPEnable : 1
+  HTTPPort : 7890
+  HTTPProxy : 127.0.0.1
+  HTTPSEnable : 1
+  HTTPSPort : 8443
+  HTTPSProxy : 10.0.0.8
+}
+"#;
+        assert_eq!(system_proxy_from_scutil(output).as_deref(), Some("http://10.0.0.8:8443"));
+    }
+
+    #[test]
+    fn macos_proxy_falls_back_to_http_and_ignores_disabled_proxy() {
+        let http_only = "<dictionary> {\n  HTTPEnable : 1\n  HTTPPort : 7890\n  HTTPProxy : 127.0.0.1\n  HTTPSEnable : 0\n}\n";
+        assert_eq!(system_proxy_from_scutil(http_only).as_deref(), Some("http://127.0.0.1:7890"));
+        let disabled = "<dictionary> {\n  HTTPEnable : 0\n  HTTPSEnable : 0\n}\n";
+        assert_eq!(system_proxy_from_scutil(disabled), None);
+    }
 
     /// TOML only treats `model_provider` as a top-level key while it precedes EVERY table header.
     /// A bare "the line exists / appears once" assertion cannot catch it landing inside a

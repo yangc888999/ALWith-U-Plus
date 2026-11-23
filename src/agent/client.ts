@@ -1,16 +1,13 @@
+import type * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { invoke, isTauri } from "@tauri-apps/api/core"
 import { info } from "@tauri-apps/plugin-log"
 import { toast } from "sonner"
 
-import { companyModelConfig } from "@/lib/company-model-config"
 import { isEnterpriseModel } from "@/features/auth/enterprise-providers"
+import { companyModelConfig } from "@/lib/company-model-config"
 import i18n from "@/lib/i18n"
 import { modelFastModeFor } from "@/lib/model-fast-mode"
-import {
-  canonicalModelSelection,
-  modelDisplayId,
-  modelVendorId
-} from "@/lib/model-identity"
+import { canonicalModelSelection, modelDisplayId, modelVendorId } from "@/lib/model-identity"
 
 /** The per-model overrides mirrored by the settings window (`alwith:native-model-overrides`). */
 function readNativeEffortOverrides(): Array<{
@@ -41,21 +38,28 @@ function readNativeEffortOverrides(): Array<{
 //
 // 2026-10-27 chat-layer extraction: the engine-neutral orchestration moved to `@alwith/api/client`,
 // the Codex extensions (history, skills, plugins, rate limits, file search, lineage) to the adapter.
-import { isBooleanOption, isGroupedSelect, isSelectOption, type RuntimeClient, type Session, type SessionRunState, textOf } from "@alwith/api"
+import {
+  isBooleanOption,
+  isGroupedSelect,
+  isSelectOption,
+  type RuntimeClient,
+  type Session,
+  type SessionRunState,
+  textOf
+} from "@alwith/api"
 import {
   type ClientOptions as BaseClientOptions,
+  type ListSessionsOptions,
   mergeMeta,
   type NewSessionOptions,
   type PendingAction,
   type PromptOptions,
+  type ReplayScope,
   type SessionOperation,
   type SessionRequestOptions,
-  type ListSessionsOptions,
-  type ReplayScope,
   type SessionSummary,
   type StateSetter
 } from "@alwith/api/client"
-import type * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import {
   CodexClient as CodexAcpClient,
   type CodexClientState,
@@ -63,39 +67,46 @@ import {
   type ForkOrigin
 } from "@nyssance/codex-acp-v2/client"
 
-import { getActivePreview } from "@/lib/active-preview"
-import { isThreadNotLoadedError } from "@/lib/agent-errors"
-import { getQueueSendMode } from "@/lib/chat-display-preferences"
-import { pendingPlanFor, setPendingPlan, type PendingPlan } from "@/lib/pending-plan"
 import {
-  GROUP_TURN_PREFIX,
-  groupTurnPrompt,
   type FinalSummarySpeaker,
+  GROUP_TURN_PREFIX,
   type GroupPromptFraming,
   type GroupRoundRecord,
   type GroupSpeechRecord,
-  type GroupTurn
+  type GroupTurn,
+  groupTurnPrompt
 } from "@/agent/group-turns"
-import { announceGroupSpeaker, clearGroupControl, groupControlFor, patchGroupDiscussion, setGroupPaused, subscribeGroupControl } from "@/lib/group-runtime"
-import { type SummaryMode } from "@/lib/group-preferences"
+import { getActivePreview } from "@/lib/active-preview"
+import { isThreadNotLoadedError } from "@/lib/agent-errors"
 import { rememberAutomationSessionRow, replaceAutomationSessionRows } from "@/lib/automation-sessions"
+import { getQueueSendMode } from "@/lib/chat-display-preferences"
+import { type SummaryMode } from "@/lib/group-preferences"
+import {
+  announceGroupSpeaker,
+  clearGroupControl,
+  groupControlFor,
+  patchGroupDiscussion,
+  setGroupPaused,
+  subscribeGroupControl
+} from "@/lib/group-runtime"
 import { groupSessionKind, rememberGroupSessionRow, replaceGroupSessionRows } from "@/lib/group-sessions"
-import { isModelRetired, retireModel, reviveModel } from "@/lib/retired-models"
+import { type PendingPlan, pendingPlanFor, setPendingPlan } from "@/lib/pending-plan"
 import { beginQueuedPrompt, cancelQueuedPrompt, endQueuedPrompt, QueueCancelledError } from "@/lib/queued-prompt"
+import { isModelRetired, retireModel, reviveModel } from "@/lib/retired-models"
 import { sandboxAllows, sandboxCapabilities, sandboxMode, sandboxSettings } from "@/lib/sandbox-preference"
 import {
   orchestrationAllowedFor,
   orchestrationFor,
-  setOrchestration,
-  type SessionOrchestration
+  type SessionOrchestration,
+  setOrchestration
 } from "@/lib/session-orchestration"
 
 import { forkTitle } from "./fork-title"
 import {
   hasUsableEffortCatalog,
   isNativeModel,
-  nativeModelCatalog,
   NATIVE_MODEL_GROUP,
+  nativeModelCatalog,
   selectedModelId
 } from "./native-models"
 
@@ -229,7 +240,6 @@ export function parkedRetryDelay(attempts: number): number {
  */
 const ROLE_SWITCH_IDLE_MS = 3_000
 
-
 /**
  * Extracts the refused id from the two shapes the layers use, or null for any other failure.
  *
@@ -242,9 +252,7 @@ function unsupportedModel(error: unknown): string | null {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : ""
   const quoted = /Unsupported model:\s*'([^']+)'/.exec(message)
   if (quoted?.[1] !== undefined) return quoted[1]
-  const listed = /is not one of them/.test(message)
-    ? /["“]([^"”]+)["”]\s*is not one of them/.exec(message)
-    : null
+  const listed = /is not one of them/.test(message) ? /["“]([^"”]+)["”]\s*is not one of them/.exec(message) : null
   if (listed?.[1] !== undefined) return listed[1]
   const bare = /Unsupported model:\s*(\S+)/.exec(message)
   return bare?.[1] ?? null
@@ -279,10 +287,7 @@ function replayRefusal(message: string): boolean {
  * The one human explanation for a replay/open refusal. Callers own the toast; this function only
  * classifies the engine text so the same failure cannot be shown once here and once at the surface.
  */
-export function explainReplayFailure(
-  message: string,
-  options: { internalError?: boolean } = {}
-): string | null {
+export function explainReplayFailure(message: string, options: { internalError?: boolean } = {}): string | null {
   const deletedProvider =
     /This chat uses model provider [`“"]([^`”"]+)[`”"], which is (?:no longer configured|not found)/.exec(message)
   if (deletedProvider !== null) {
@@ -290,9 +295,7 @@ export function explainReplayFailure(
     return i18n.t(provider === "alwith" ? "chat.routerRecovering" : "chat.providerDeleted", { provider })
   }
   const providerChanged =
-    /Cannot change this thread's model provider from [`“"]([^`”"]+)[`”"] to [`“"]([^`”"]+)[`”"]/i.exec(
-      message
-    )
+    /Cannot change this thread's model provider from [`“"]([^`”"]+)[`”"] to [`“"]([^`”"]+)[`”"]/i.exec(message)
   if (providerChanged !== null)
     return i18n.t("chat.providerLocked", { from: providerChanged[1], to: providerChanged[2] })
   const providerConflict = /This chat uses (.+?), but your current provider is (.+?)\./.exec(message)
@@ -409,9 +412,7 @@ export function withoutModelSwitchNotes(text: string): string {
       // The engine appends its own note after a model change, naming both models and explaining
       // that the persona only changes on the next session. Name the destination and the timing;
       // the old name is noise — the reader just made the switch and knows what it was.
-      const zh = line.match(
-        /(?:模型已从|已从)\s*(.+?)\s*更改为\s*(.+?)\s*(?:（[^）]*）|\([^)]*\))?\s*$/
-      )
+      const zh = line.match(/(?:模型已从|已从)\s*(.+?)\s*更改为\s*(.+?)\s*(?:（[^）]*）|\([^)]*\))?\s*$/)
       if (zh !== null) return `—— 模型切换到 ${zh[2]?.trim() ?? ""} 下次会话开始生效 ——`
       const en = line.match(/(?:model\s+)?switched from\s+(.+?)\s+to\s+(.+?)\s*(?:\([^)]*\))?\s*$/i)
       if (en !== null) return `—— switched to ${en[2]?.trim() ?? ""}; takes effect next session ——`
@@ -685,7 +686,6 @@ export class CodexClient extends CodexAcpClient<AppState> {
     return session === undefined ? null : this.selectedEffort(session.configOptions)
   }
 
-
   /**
    * The selected model's default effort: the user's per-model override first, then the catalog's
    * own default from the picker metadata.
@@ -779,12 +779,12 @@ export class CodexClient extends CodexAcpClient<AppState> {
     if (!this.holds(id)) return
     const desired = modelFastModeFor(model)
     const session = this.session(id)
-  const option = session.configOptions.find((entry) => entry.configId === "fast-mode")
-  // No fast-mode option in this session. That is ambiguous — the model may be non-GPT (never
-  // capable of acceleration), or a GPT model whose config options have not arrived yet, or a role
-  // that never exposes the switch. Wiping the saved preference here deletes a GPT model's enabled
-  // flag on a transient gap and it would never be re-applied. Leave the preference untouched.
-  if (option === undefined || !isBooleanOption(option)) return
+    const option = session.configOptions.find((entry) => entry.configId === "fast-mode")
+    // No fast-mode option in this session. That is ambiguous — the model may be non-GPT (never
+    // capable of acceleration), or a GPT model whose config options have not arrived yet, or a role
+    // that never exposes the switch. Wiping the saved preference here deletes a GPT model's enabled
+    // flag on a transient gap and it would never be re-applied. Leave the preference untouched.
+    if (option === undefined || !isBooleanOption(option)) return
     if (option.currentValue === desired) return
     try {
       await this.setConfig(id, "fast-mode", desired)
@@ -1045,8 +1045,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
 
     const current = this.selectedEffort(options)
     const supported = this.supportedEfforts(id)
-    const badEffort =
-      current !== null && supported !== null && supported.length > 0 && !supported.includes(current)
+    const badEffort = current !== null && supported !== null && supported.length > 0 && !supported.includes(current)
 
     // Gateway ids are resolved per request by the router, so only bare (native) ids can be judged
     // against the engine's own catalog. No catalog means we cannot tell — never guess here.
@@ -1075,7 +1074,9 @@ export class CodexClient extends CodexAcpClient<AppState> {
       const effort =
         preferred !== null && supported.includes(preferred)
           ? preferred
-          : (supported.includes("medium") ? "medium" : (supported[0] ?? null))
+          : supported.includes("medium")
+            ? "medium"
+            : (supported[0] ?? null)
       const configId = this.effortConfigId(options)
       if (effort !== null && configId !== null && effort !== current) {
         void info(`[config-repair] effort=${current} -> ${effort} id=${id}`)
@@ -1121,11 +1122,11 @@ export class CodexClient extends CodexAcpClient<AppState> {
     const model = selectedModel(session.configOptions)
     const desired = model !== null ? modelFastModeFor(model) : this.defaultFastModeOption?.() === true
     if (!desired) return
-  const option = session.configOptions.find((entry) => entry.configId === "fast-mode")
-  // No fast-mode option in this session. As in `applyModelFastMode`, that is ambiguous — a GPT
-  // model the user enabled may simply not have published its config options yet. Wiping the saved
-  // preference on that transient gap would delete a real enabled flag, so leave it untouched.
-  if (option === undefined || !isBooleanOption(option)) return
+    const option = session.configOptions.find((entry) => entry.configId === "fast-mode")
+    // No fast-mode option in this session. As in `applyModelFastMode`, that is ambiguous — a GPT
+    // model the user enabled may simply not have published its config options yet. Wiping the saved
+    // preference on that transient gap would delete a real enabled flag, so leave it untouched.
+    if (option === undefined || !isBooleanOption(option)) return
     if (option.currentValue === true) return
     try {
       await this.setConfig(id, "fast-mode", true)
@@ -1249,7 +1250,10 @@ export class CodexClient extends CodexAcpClient<AppState> {
           // If the saved provider/model is gone or differs from the current picker, retry without
           // the historical hint. This lets Codex replay through the currently configured model
           // instead of failing solely because the conversation was recorded elsewhere.
-          if (!currentModelFallbackAttempted && (providerMismatch || /This chat uses|no longer configured|not found/i.test(text))) {
+          if (
+            !currentModelFallbackAttempted &&
+            (providerMismatch || /This chat uses|no longer configured|not found/i.test(text))
+          ) {
             currentModelFallbackAttempted = true
             try {
               const current = this.holds(id) ? selectedModel(this.session(id).configOptions) : null
@@ -1570,7 +1574,9 @@ export class CodexClient extends CodexAcpClient<AppState> {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         const busy = this.turnBusyRejection(message)
-        void info(`[pending-model] setConfig rejected id=${id} requested=${requested} value=${value} busy=${busy} message=${message.slice(0, 240)}`)
+        void info(
+          `[pending-model] setConfig rejected id=${id} requested=${requested} value=${value} busy=${busy} message=${message.slice(0, 240)}`
+        )
         // A chat opened from before the shared provider stays on its vendor. It is reported like
         // every other failure -- once, through `describeError` -- so there is no second toast.
         const unsupported = unsupportedModel(error)
@@ -1818,8 +1824,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // A choice parked behind this turn must not outlive it. Left alone, the "下一轮" badge sits on
     // the composer waiting for a turn the user just ended, and the picker keeps showing the old
     // model — which is exactly what a stop followed by a model pick looked like.
-    if (this.pendingModelSwitches.has(id) && !this.pendingModelApplies.has(id))
-      void this.applyParkedModel(id, true)
+    if (this.pendingModelSwitches.has(id) && !this.pendingModelApplies.has(id)) void this.applyParkedModel(id, true)
   }
 
   /**
@@ -1853,7 +1858,9 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * send still routes that turn to the new model.
    */
   private parkModelSwitch(id: string, model: string): void {
-    void info(`[pending-model] park id=${id} model=${model} busy=${this.sessionBusy(id)} state=${this.state.sessions[id]?.state ?? "?"}`)
+    void info(
+      `[pending-model] park id=${id} model=${model} busy=${this.sessionBusy(id)} state=${this.state.sessions[id]?.state ?? "?"}`
+    )
     // A different target starts a fresh budget. Re-parking the same one — which is what every
     // refused retry does — keeps the count so the cap can actually be reached.
     if (this.pendingModelSwitches.get(id) !== model) {
@@ -1925,7 +1932,9 @@ export class CodexClient extends CodexAcpClient<AppState> {
   async applyPendingModelNow(id: string): Promise<void> {
     const pending = this.pendingModelSwitches.get(id)
     if (pending === undefined) return
-    void info(`[pending-model] applyNow id=${id} model=${pending} busy=${this.sessionBusy(id)} state=${this.state.sessions[id]?.state ?? "?"}`)
+    void info(
+      `[pending-model] applyNow id=${id} model=${pending} busy=${this.sessionBusy(id)} state=${this.state.sessions[id]?.state ?? "?"}`
+    )
     if (this.sessionBusy(id)) {
       await this.cancelTurn(id).catch(() => {})
       const deadline = Date.now() + 3_000
@@ -1964,7 +1973,11 @@ export class CodexClient extends CodexAcpClient<AppState> {
     const apply = Promise.resolve()
       .then(() => this.withTimeout(this.setConfig(id, "model", pending), 20_000, "setConfig(model)"))
       .then(
-        () => { void info(`[pending-model] apply landed id=${id} model=${pending} force=${force} stillParked=${this.pendingModelSwitches.has(id)}`) },
+        () => {
+          void info(
+            `[pending-model] apply landed id=${id} model=${pending} force=${force} stillParked=${this.pendingModelSwitches.has(id)}`
+          )
+        },
         (error: unknown) => {
           const message = error instanceof Error ? error.message : String(error)
           void info(`[pending-model] apply threw id=${id} model=${pending} error=${message.slice(0, 240)}`)
@@ -2015,7 +2028,9 @@ export class CodexClient extends CodexAcpClient<AppState> {
     const pending = this.pendingModelSwitches.get(id)
     if (pending === undefined) return null
     const busy = this.sessionBusy(id)
-    void info(`[pending-model] flush id=${id} model=${pending} busy=${busy} overdue=${this.parkedSwitchOverdue(id)} state=${this.state.sessions[id]?.state ?? "?"}`)
+    void info(
+      `[pending-model] flush id=${id} model=${pending} busy=${busy} overdue=${this.parkedSwitchOverdue(id)} state=${this.state.sessions[id]?.state ?? "?"}`
+    )
     // Returning null here used to dispatch the next prompt on the OLD model: a Runtime run row
     // left behind by a stopped turn keeps `busy` true for a full stale window. The user's
     // "本轮后切换" choice must win that race, so force the write instead of dropping it.
@@ -2057,8 +2072,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
         if (session === undefined) break
         // Same two clocks as a parked model switch: the ACP state alone can say idle a beat before
         // the Runtime does, and sending into that gap is what tore down the opening stream.
-        if (session.state === "idle" && !this.runtimeRunningFresh(id))
-          return await this.sendPrompt(id, prompt, options)
+        if (session.state === "idle" && !this.runtimeRunningFresh(id)) return await this.sendPrompt(id, prompt, options)
         await new Promise<void>((resolve) => setTimeout(resolve, 500))
       }
       if (entry.cancelled) throw new QueueCancelledError()
@@ -2086,7 +2100,11 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // queue instead of turning the supplement into a lost/failed send.
     if (getQueueSendMode() === "immediate") {
       const busy = this.holds(id) ? this.session(id) : undefined
-      if (busy !== undefined && busy.state !== "idle") return this.sendImmediate(id, prompt, options)
+      // A stale session state must not turn the next turn into a steer: when the Runtime has a
+      // settled run row, `sendPrompt` must run so context/tool changes can refresh the session.
+      const runtimeRow = this.state.runStates[id]
+      const stillRunning = runtimeRow === undefined || this.runtimeRunningFresh(id)
+      if (busy !== undefined && busy.state !== "idle" && stillRunning) return this.sendImmediate(id, prompt, options)
     }
     // Queued send mode: a message typed while a turn is running waits for that turn to settle
     // and goes out on its own, instead of steering into the running answer. Waiting here keeps
@@ -2119,12 +2137,38 @@ export class CodexClient extends CodexAcpClient<AppState> {
   /** Send into the running turn, or queue if the engine says this step is not steerable. */
   private async sendImmediate(id: string, prompt: acp.ContentBlock[], options?: PromptOptions): Promise<string> {
     try {
-      return await this.sendPrompt(id, prompt, options)
+      return await this.steerActiveTurn(id, prompt)
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // An adapter that predates the steering extension still accepts an ordinary prompt; it
+      // queues it until the running turn settles instead of dropping the message.
+      if (/method not found|unknown method|not supported|no active turn/i.test(message))
+        return this.sendPrompt(id, prompt, options)
       if (!turnNotSteerable(error)) throw error
       toast.info(i18n.t("chat.steerQueuedFallback"))
       return this.waitForIdleThenPrompt(id, prompt, options)
     }
+  }
+
+  /**
+   * Injects a supplement into the live turn through the adapter's steering extension.
+   *
+   * ACP's ordinary `session/prompt` is turn-scoped: while another turn is active the adapter
+   * reserves the next turn instead of steering, which made 插话 look like it waited for the whole
+   * answer. `_session/steering` is the explicit live-turn path (`turn/steer` underneath).
+   */
+  private async steerActiveTurn(id: string, prompt: acp.ContentBlock[]): Promise<string> {
+    const session = this.holds(id) ? this.session(id) : undefined
+    if (session === undefined || !session.attached) throw new Error("Open the session before sending")
+    if (prompt.length === 0) throw new Error("Enter a message")
+    const result = await this.live().request<{ outcome?: "injected" | "startedNewTurn" | "failed" }>(
+      "_session/steering",
+      { sessionId: id, prompt }
+    )
+    if (result?.outcome === "failed") throw new Error("turn_not_steerable")
+    // The adapter emits the user message when the steer lands; this receipt only releases the
+    // composer, so it deliberately does not invent a second timeline item.
+    return `steer:${crypto.randomUUID()}`
   }
 
   /**
@@ -2447,7 +2491,16 @@ export class CodexClient extends CodexAcpClient<AppState> {
           // Every round has closed: the user's own session model writes the capstone minutes
           // (the roster spoke as the roles' models). The finally block hands the session back to
           // that same selection, so the composer stays on the user's model.
-          const finalSummary = await this.runFinalSummary(id, selection, document, summaryMode, turns, summaryTemplate, framing, rounds)
+          const finalSummary = await this.runFinalSummary(
+            id,
+            selection,
+            document,
+            summaryMode,
+            turns,
+            summaryTemplate,
+            framing,
+            rounds
+          )
           return { outcome: "done", rounds: records, finalSummary }
         }
       }
@@ -2596,7 +2649,16 @@ export class CodexClient extends CodexAcpClient<AppState> {
         [
           {
             type: "text",
-            text: groupTurnPrompt(reference, totalRounds - 1, document, "finalSummary", template, framing, mode, speakers)
+            text: groupTurnPrompt(
+              reference,
+              totalRounds - 1,
+              document,
+              "finalSummary",
+              template,
+              framing,
+              mode,
+              speakers
+            )
           }
         ],
         { display: [{ type: "text", text: "〔最终总纪要〕" }] }
@@ -2653,10 +2715,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
           display: [
             {
               type: "text",
-              text:
-                kind === "summary"
-                  ? `〔${speakerLabel}〕总结`
-                  : `〔${speakerLabel}〕第 ${round + 1} 轮`
+              text: kind === "summary" ? `〔${speakerLabel}〕总结` : `〔${speakerLabel}〕第 ${round + 1} 轮`
             }
           ]
         }
@@ -2795,12 +2854,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * and effort are in place. A role that asks for acceleration on a model without that config is
    * rejected loudly — silently running slower than configured is exactly the "设了却没生效" case.
    */
-  private async applyRoleFastMode(
-    id: string,
-    label: string,
-    model: string,
-    desired: boolean
-  ): Promise<void> {
+  private async applyRoleFastMode(id: string, label: string, model: string, desired: boolean): Promise<void> {
     const session = this.holds(id) ? this.session(id) : undefined
     if (session === undefined) throw new Error("当前会话不存在")
     const option = session.configOptions.find((entry) => entry.configId === "fast-mode")
@@ -2915,12 +2969,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
       // A role may have turned acceleration on/off; hand the main conversation back with its own.
       const after = this.holds(id) ? this.session(id) : undefined
       const fast = after?.configOptions.find((entry) => entry.configId === "fast-mode")
-      if (
-        after !== undefined &&
-        fast !== undefined &&
-        isBooleanOption(fast) &&
-        fast.currentValue !== target.fastMode
-      )
+      if (after !== undefined && fast !== undefined && isBooleanOption(fast) && fast.currentValue !== target.fastMode)
         await this.setConfig(id, "fast-mode", target.fastMode)
     } finally {
       this.leaveRoleScope(id)
@@ -3242,7 +3291,6 @@ export class CodexClient extends CodexAcpClient<AppState> {
     return true
   }
 
-
   /** Flag sessions whose account-owned model is no longer served so their surface offers a new pick. */
   markAccountModelsUnavailable(ids: readonly string[]): void {
     this.setApp((state) => ({
@@ -3309,12 +3357,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     this.confirmModel(this.state.sessionWindows[id] ?? "main", resumed)
   }
 
-  prepareDraft(
-    owner: DraftOwner,
-    cwd: string,
-    model: string | null = null,
-    nativeDefault = false
-  ): Promise<string> {
+  prepareDraft(owner: DraftOwner, cwd: string, model: string | null = null, nativeDefault = false): Promise<string> {
     const version = ++this.slotVersions[owner]
     return this.changeDraft([owner], async () => {
       const existing = Object.keys(this.state.draftSessions).find((id) => this.state.draftSessions[id] === owner)
@@ -3404,6 +3447,30 @@ export class CodexClient extends CodexAcpClient<AppState> {
       for (const [id, current] of Object.entries(this.state.draftSessions))
         if (current === owner) await this.deleteEmptyDraft(id)
     })
+  }
+
+  /**
+   * Gives a slot back immediately, then deletes the unsent draft on the engine in the background.
+   *
+   * A new task used to wait for `session/delete` before the welcome surface could render, so a
+   * slow engine or filesystem made "new chat" feel unresponsive. Clearing the slot first lets the
+   * next draft prepare without reusing the old session; the empty remote thread is disposable.
+   */
+  releaseDraftSlot(owner: DraftOwner): string[] {
+    const ids = Object.entries(this.state.draftSessions)
+      .filter(([, current]) => current === owner)
+      .map(([id]) => id)
+    if (ids.length === 0) return ids
+    this.setApp((state) => {
+      const draftSessions = { ...state.draftSessions }
+      for (const id of ids) delete draftSessions[id]
+      return { draftSessions }
+    })
+    for (const id of ids)
+      void this.delete(id).catch((error: unknown) => {
+        void info(`[draft] background cleanup failed id=${id} error=${String(error)}`)
+      })
+    return ids
   }
 
   transferDraft(id: string, owner: DraftOwner): Promise<void> {
@@ -3651,7 +3718,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
           : model === null
             ? saved.effort
             : (this.defaultEffortForModel(target, model) ?? saved.effort)
-      const fast = saved.fastExplicit === true ? saved.fastMode : model === null ? saved.fastMode : modelFastModeFor(model)
+      const fast =
+        saved.fastExplicit === true ? saved.fastMode : model === null ? saved.fastMode : modelFastModeFor(model)
       return { effort, fast }
     }
     const fastOptionOf = (target: Session) => target.configOptions.find((entry) => entry.configId === "fast-mode")

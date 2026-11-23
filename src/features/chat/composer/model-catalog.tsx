@@ -20,7 +20,14 @@
 import type { ModelMenuGroup, ModelMenuOption, ModelMenuProps } from "@alwith/module-chat/conversation"
 
 import { NATIVE_MODEL_GROUP } from "@/agent/client"
+import { GoogleMark } from "@/components/icons/google-mark"
 import { ModelOptionIcon } from "@/components/model-options/model-option-icon"
+import {
+  ANTIGRAVITY_MODEL_GROUP,
+  ANTIGRAVITY_MODELS,
+  antigravityEnabled,
+  antigravityModelSelection
+} from "@/features/antigravity/models"
 import {
   cleanModelLabel,
   modelGroupLabel,
@@ -138,6 +145,17 @@ function unifiedNativeGroup(sessionNative: ModelGroup | undefined, result: Model
 
 /** 统一图标：直接取 `ModelOptionIcon` 的元素，保证紧凑菜单的分组标题标记与 ①②④ 一致。 */
 function rowIcon(groupId: string, apiId: string, groupTitle: string | undefined): Row["icon"] {
+  if (groupId === ANTIGRAVITY_MODEL_GROUP.id) {
+    return (
+      <span
+        aria-hidden="true"
+        className="model-picker-icon"
+        data-model-group-title={groupTitle === undefined ? undefined : groupTitle}
+      >
+        <GoogleMark className="size-4 text-[9px]" />
+      </span>
+    )
+  }
   return ModelOptionIcon({
     kind: modelIconKind(groupId, apiId),
     groupTitle: groupTitle ?? null,
@@ -170,7 +188,18 @@ export function presentModelCatalog(
       models: group.models.filter((model) => !model.api_id.startsWith("gateway:litellm:"))
     }))
   const native = unifiedNativeGroup(sessionNative, result)
-  const ordered = [...(native === null ? [] : [native]), ...gateway]
+  // Antigravity is an ACP agent, not an OpenAI-compatible gateway. It still belongs in the same
+  // composer menu as the Codex models: picking one is what routes the next turn to Gemini. The
+  // catalog is appended here rather than persisted as a provider so Codex's Router never sees it.
+  const antigravity: ModelGroup = {
+    id: ANTIGRAVITY_MODEL_GROUP.id,
+    name: ANTIGRAVITY_MODEL_GROUP.name,
+    models: ANTIGRAVITY_MODELS.map((model) => ({
+      api_id: antigravityModelSelection(model.id),
+      label: model.label
+    }))
+  }
+  const ordered = [...(native === null ? [] : [native]), ...gateway, ...(antigravityEnabled() ? [antigravity] : [])]
 
   return ordered.map((group) => {
     const groupName = modelGroupLabel(group.id, group.name)

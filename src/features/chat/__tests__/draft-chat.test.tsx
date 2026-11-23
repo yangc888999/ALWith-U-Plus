@@ -99,6 +99,7 @@ const windowPreferences: Preferences = {
   profileAvatar: null,
   profileOwner: null,
   zoomLevel: null,
+  uiFont: "pingfang",
   modelSelections: { main: null, chat: null },
   navigationSoundMode: "none",
   navigationInstrument: "acoustic_grand_piano",

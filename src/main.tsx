@@ -18,9 +18,9 @@ import { ZoomFeedback } from "@/features/appearance/zoom-feedback"
 import { AuthGate } from "@/features/auth/auth-gate"
 import { initPlatformAuth } from "@/features/auth/store"
 import { hydrateNavigationSound } from "@/features/chat/codex/navigation-sound-store"
+import { predictionPreference } from "@/features/chat/composer/prediction-preference"
 import { startModelOverloadAlerts } from "@/features/chat/model-overload-alert"
 import { startModelRetryingAlerts } from "@/features/chat/model-retrying-alert"
-import { predictionPreference } from "@/features/chat/composer/prediction-preference"
 import { requestDefaultScreenCapture, restoreComputer } from "@/features/computer/operations"
 import { reportExtensionError } from "@/features/extensions/runtime"
 import { startStartupImports } from "@/features/extensions/startup-import-control"
@@ -28,23 +28,24 @@ import { initializeMobile } from "@/features/mobile/bridge"
 import { hydrateProfileOverrides } from "@/features/profile/profile-store"
 import { useUpdaterStore } from "@/features/updater/store"
 import { installErrorTextFormatter } from "@/lib/error-text"
-import { installToastErrorLocalization } from "@/lib/toast-error"
-import { armStartupWindow } from "@/lib/startup-window"
-import { initI18n } from "@/lib/i18n"
-import { startPreferenceSync } from "@/lib/preference-sync"
 import { startGatewayRetrySync } from "@/lib/gateway-retry-settings"
+import { initI18n } from "@/lib/i18n"
 import { startOverload429MuteSync } from "@/lib/overload-429-settings"
-import { loadPreferences, defaultPreferences } from "@/lib/preferences"
+import { startPreferenceSync } from "@/lib/preference-sync"
+import { defaultPreferences, loadPreferences } from "@/lib/preferences"
 import { isQueueCancelled } from "@/lib/queued-prompt"
 import { bootstrapSettings } from "@/lib/settings-store"
+import { armStartupWindow } from "@/lib/startup-window"
+import { installToastErrorLocalization } from "@/lib/toast-error"
+import { applyUiFont } from "@/lib/ui-font"
 import { hydrateZoom } from "@/lib/zoom"
 import { startZoomViewport } from "@/lib/zoom-viewport"
 import "./index.css"
-import { installScrollActivity } from "@/lib/scroll-activity"
-import { watchWindowMovement } from "@/lib/window-moving"
-import { installWindowDrag } from "@/lib/window-drag"
 import { primeQuickChatRoot } from "@/lib/quick-chat"
+import { installScrollActivity } from "@/lib/scroll-activity"
+import { installWindowDrag } from "@/lib/window-drag"
 import { clampWindowToScreen } from "@/lib/window-fit"
+import { watchWindowMovement } from "@/lib/window-moving"
 // Install before anything can toast: early startup rejections were the last raw-English path.
 installToastErrorLocalization()
 // 引擎第一次 ready 之前的一切失败都不上屏（只进日志）。顺序很重要：必须在第一个 await 之前开启，
@@ -115,7 +116,13 @@ if (import.meta.env.DEV) {
     (event) => {
       probe(JSON.stringify({ ev: "contextmenu", ...describeTarget(event.target) }))
       setTimeout(() => {
-        probe(JSON.stringify({ ev: "contextmenu+50ms", ...describeTarget(event.target), box: describeMenu("[data-chat-context-menu]") }))
+        probe(
+          JSON.stringify({
+            ev: "contextmenu+50ms",
+            ...describeTarget(event.target),
+            box: describeMenu("[data-chat-context-menu]")
+          })
+        )
       }, 50)
     },
     true
@@ -184,6 +191,7 @@ async function bootstrap(): Promise<void> {
     return defaultPreferences()
   })
   const [, preferences] = await Promise.all([settingsReady, preferencesReady])
+  applyUiFont(preferences.uiFont)
   predictionPreference.setState({ enabled: preferences.composerPredictions ?? true })
   hydrateProfileOverrides({
     owner: preferences.profileOwner,

@@ -227,19 +227,31 @@ function ImagePreview({ image, index, count }: { image: PreviewImage; index: num
           </Button>
         </div>
       </header>
-      <div ref={viewport} className="min-h-0 w-full flex-1 overflow-auto">
-        <div className="grid min-h-full w-max min-w-full place-items-center p-6">
+      <div
+        ref={viewport}
+        data-image-mode={zoom === null ? "fit" : "zoom"}
+        className={zoom === null ? "min-h-0 w-full flex-1 overflow-hidden" : "min-h-0 w-full flex-1 overflow-auto"}
+      >
+        <div
+          className={
+            zoom === null
+              ? "flex min-h-full w-full items-center justify-center p-6"
+              : "grid min-h-full w-max min-w-full place-items-center p-6"
+          }
+        >
           {failed ? (
             <p role="alert">{t("chat.image.unavailable")}</p>
           ) : (
             <img
               src={image.src}
               alt={image.alt}
-              className="block max-w-none shadow-sm"
+              className={
+                zoom === null ? "block max-h-full max-w-full object-contain shadow-sm" : "block max-w-none shadow-sm"
+              }
               style={
-                natural.width && scale
+                zoom !== null && natural.width && scale
                   ? { width: natural.width * scale, height: natural.height * scale }
-                  : { maxWidth: "100%", maxHeight: "100%" }
+                  : undefined
               }
               onLoad={(event) =>
                 setNatural({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })
@@ -296,7 +308,7 @@ export function ImageLightbox() {
             moveImage(event.key === "ArrowLeft" ? -1 : 1)
           }
         }}
-        className="flex h-[min(50vh,40rem)] min-h-[16rem] w-[min(50vw,56rem)] min-w-[20rem] max-w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden rounded-xl bg-popover/95 p-0 shadow-2xl backdrop-blur-md sm:max-w-none data-open:zoom-in-95 data-closed:zoom-out-95"
+        className="flex h-[min(50vh,40rem)] min-h-[16rem] w-[min(50vw,56rem)] max-w-[calc(100vw-2rem)] min-w-[20rem] flex-col gap-0 overflow-hidden rounded-xl bg-popover/95 p-0 shadow-2xl backdrop-blur-md sm:max-w-none data-open:zoom-in-95 data-closed:zoom-out-95"
       >
         {image && (
           <ImagePreview

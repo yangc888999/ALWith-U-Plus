@@ -32,7 +32,10 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
     }
   })
 }))
-vi.mock("@/lib/preferences", () => ({ savePreference: save }))
+vi.mock("@/lib/preferences", () => ({
+  savePreference: save,
+  loadPreferences: async () => ({ uiFont: "pingfang" })
+}))
 
 await initI18n("en")
 beforeEach(async () => {

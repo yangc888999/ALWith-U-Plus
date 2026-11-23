@@ -56,6 +56,21 @@ test("filters LiteLLM identity after snapshot augmentation, not matching labels 
   expect(groups.find((group) => group.id === "finture-enterprise")?.models.map((model) => model.api_id)).toEqual(["gateway:finture-enterprise:internal"])
 })
 
+test("offers the Gemini group only while the Antigravity experiment is enabled", () => {
+  localStorage.setItem("alwith:antigravity:enabled", "false")
+  expect(presentModelCatalog([]).some((group) => group.id === "google-antigravity")).toBe(false)
+
+  localStorage.setItem("alwith:antigravity:enabled", "true")
+  const group = presentModelCatalog([]).find((entry) => entry.id === "google-antigravity")
+  expect(group?.name).toBe("Google Antigravity")
+  expect(group?.models.map((model) => model.api_id)).toEqual([
+    "antigravity:gemini-4-argon",
+    "antigravity:gemini-4-neon",
+    "antigravity:gemini-4-hydrogen",
+    "antigravity:gemini-3.8-flash"
+  ])
+})
+
 test.each([runtimeId, enterpriseId])("merges enterprise snapshot into existing %s group without changing its ID", (id) => {
   enterpriseSnapshot()
   expect(gatewayModelId(enterpriseId, "DeepSeek-Flash")).toBe(firstApiId)

@@ -5,18 +5,26 @@ import { afterEach, expect, test, vi } from "vitest"
 
 import { must } from "@/lib/__tests__/must"
 import { setActivePreview } from "@/lib/active-preview"
+import { automationSessionRows, replaceAutomationSessionRows } from "@/lib/automation-sessions"
 import { setQueueSendMode } from "@/lib/chat-display-preferences"
-import { pendingPlanFor, setPendingPlan } from "@/lib/pending-plan"
-import { cancelQueuedPrompt, QueueCancelledError, queuedPromptCount, queuedPromptText } from "@/lib/queued-prompt"
-import { modelFastModeFor, setModelFastMode } from "@/lib/model-fast-mode"
-import { setSandboxSettings } from "@/lib/sandbox-preference"
-import { orchestrationFor, setOrchestration } from "@/lib/session-orchestration"
 import { clearGroupControl, requestGroupStop, setGroupPaused } from "@/lib/group-runtime"
 import { groupSessionRows } from "@/lib/group-sessions"
-import { automationSessionRows, replaceAutomationSessionRows } from "@/lib/automation-sessions"
 import { removeGroup, setGroup } from "@/lib/groups"
+import { modelFastModeFor, setModelFastMode } from "@/lib/model-fast-mode"
+import { pendingPlanFor, setPendingPlan } from "@/lib/pending-plan"
+import { cancelQueuedPrompt, QueueCancelledError, queuedPromptCount, queuedPromptText } from "@/lib/queued-prompt"
+import { setSandboxSettings } from "@/lib/sandbox-preference"
+import { orchestrationFor, setOrchestration } from "@/lib/session-orchestration"
 
-import { type ClientOptions, CodexClient, type GatewayModel, modelVendor, parkedRetryDelay, turnNotSteerable, withoutModelSwitchNotes } from "../client"
+import {
+  type ClientOptions,
+  CodexClient,
+  type GatewayModel,
+  modelVendor,
+  parkedRetryDelay,
+  turnNotSteerable,
+  withoutModelSwitchNotes
+} from "../client"
 import { macProjectPaths, type ProjectPaths } from "../project-path"
 import { createFakeAgent } from "./fake-agent"
 import { FakeHubPort } from "./fake-runtime-client"
@@ -108,7 +116,10 @@ function reasoningCatalog(
   models: ReasoningModelFixture[],
   effortConfigId = "reasoning_effort"
 ): Session["configOptions"] {
-  const current = must(models.find((model) => model.id === currentModel), "missing current model")
+  const current = must(
+    models.find((model) => model.id === currentModel),
+    "missing current model"
+  )
   const groups = new Map<string, ReasoningModelFixture[]>()
   for (const model of models) groups.set(model.groupId, [...(groups.get(model.groupId) ?? []), model])
   return [
@@ -159,11 +170,17 @@ function configureReasoningModels(
   fake.configResponse.current = (request) => {
     if (request.configId === "model") {
       model = String(request.value)
-      const target = must(models.find((entry) => entry.id === model), "missing target model")
+      const target = must(
+        models.find((entry) => entry.id === model),
+        "missing target model"
+      )
       effort = target.efforts.includes(effort) ? effort : target.defaultEffort
       switchedTo.push({ model, effort })
     } else if (request.configId === effortConfigId) {
-      const target = must(models.find((entry) => entry.id === model), "missing effort model")
+      const target = must(
+        models.find((entry) => entry.id === model),
+        "missing effort model"
+      )
       const next = String(request.value)
       if (!target.efforts.includes(next))
         throw RequestError.invalidRequest({ effort: next }, `Unsupported reasoning effort ${next}`)
@@ -334,9 +351,7 @@ test("a model's saved Fast switch is applied to a brand-new draft", async () => 
     expect(client.session(id).configOptions.some((entry) => entry.configId === "model")).toBe(true)
     // The adapter turns an inherited Fast off first; the model switch then turns it back on.
     expect(writes).toEqual([false, true])
-    expect(
-      client.session(id).configOptions.find((entry) => entry.configId === "fast-mode")?.currentValue
-    ).toBe(true)
+    expect(client.session(id).configOptions.find((entry) => entry.configId === "fast-mode")?.currentValue).toBe(true)
   } finally {
     setModelFastMode("gpt-6.1-sol", false)
   }
@@ -402,7 +417,9 @@ test("a reopened session restores its last model, effort and Fast state", async 
   })
   localStorage.setItem(
     "alwith:session-models",
-    JSON.stringify({ h1: { model: "gpt-6.1-sol", effort: "high", fastMode: true, effortExplicit: true, fastExplicit: true } })
+    JSON.stringify({
+      h1: { model: "gpt-6.1-sol", effort: "high", fastMode: true, effortExplicit: true, fastExplicit: true }
+    })
   )
   try {
     const { client } = await make((fake) => {
@@ -445,7 +462,9 @@ test("a reopened session without an explicit pick follows the model row", async 
           {
             value: "gpt-6.1-sol",
             name: "GPT-6.1 Sol",
-            _meta: { alwith: { supportedReasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "medium" } }
+            _meta: {
+              alwith: { supportedReasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: "medium" }
+            }
           }
         ]
       }
@@ -500,7 +519,6 @@ test("a reopened session without an explicit pick follows the model row", async 
     vi.unstubAllGlobals()
   }
 })
-
 
 test("activity reply reads an unopened session without resume, selection, or transcript writes", async () => {
   const received: unknown[] = []
@@ -746,9 +764,13 @@ test("a newly forked attached chat remains selectable before Codex lists it", as
   const child = await client.fork(root, "/tmp/fork", "turn-1")
   await client.listSessions({ reset: true })
   expect(client.state.sessionList.some((sessionRow) => sessionRow.sessionId === child)).toBe(true)
-  expect((await client.listProjectSessions("/tmp/fork")).some((sessionRow) => sessionRow.sessionId === child)).toBe(true)
+  expect((await client.listProjectSessions("/tmp/fork")).some((sessionRow) => sessionRow.sessionId === child)).toBe(
+    true
+  )
   await client.delete(child)
-  expect((await client.listProjectSessions("/tmp/fork")).some((sessionRow) => sessionRow.sessionId === child)).toBe(false)
+  expect((await client.listProjectSessions("/tmp/fork")).some((sessionRow) => sessionRow.sessionId === child)).toBe(
+    false
+  )
 })
 
 test("stream bursts preserve every chunk across sessions with bounded UI notifications", async () => {
@@ -1206,7 +1228,13 @@ test("a pending refresh preserves a newly selected project chat", async () => {
     })
   const pending = client.listSessions({ reset: true })
   await until(() => answer !== undefined)
-  client.includeSession({ sessionId: "older", cwd: "/tmp/project", title: "Selected", updatedAt: null, archived: false })
+  client.includeSession({
+    sessionId: "older",
+    cwd: "/tmp/project",
+    title: "Selected",
+    updatedAt: null,
+    archived: false
+  })
   answer({ sessions: [{ sessionId: "older", cwd: "/tmp/project", title: "Stale" }] })
   await pending
   expect(client.state.sessionList.filter((sessionRow) => sessionRow.sessionId === "older")).toHaveLength(1)
@@ -1702,8 +1730,7 @@ test("a turn moves off a withdrawn default model before it reaches the backend",
   // so nothing errors locally; the upstream then reports capacity for a model that cannot run.
   const { client, fake } = await make()
   let model = "gpt-6.1-terra"
-  const catalog = (): Session["configOptions"] =>
-    bareCatalog(model, "medium", ["gpt-6.1-sol", "gpt-6.1-luna"])
+  const catalog = (): Session["configOptions"] => bareCatalog(model, "medium", ["gpt-6.1-sol", "gpt-6.1-luna"])
   fake.sessionOptions.current = catalog
   fake.configResponse.current = (request) => {
     if (request.configId === "model") model = String(request.value)
@@ -1711,9 +1738,7 @@ test("a turn moves off a withdrawn default model before it reaches the backend",
   }
   const id = await client.newSession("/tmp/withdrawn-default")
   await client.prompt(id, [{ type: "text", text: "继续" }])
-  expect(client.session(id).configOptions.find((entry) => entry.configId === "model")?.currentValue).toBe(
-    "gpt-6.1-sol"
-  )
+  expect(client.session(id).configOptions.find((entry) => entry.configId === "model")?.currentValue).toBe("gpt-6.1-sol")
 })
 
 test("Stop drops the message queued behind the turn instead of sending it next", async () => {
@@ -1893,7 +1918,12 @@ test("an enterprise (account-managed) model defaults to the 大模型-page reaso
   // "high" but the configured level is "low" — the conversation must open on the configured level,
   // not the gateway's "high" and not the global "medium" fallback.
   const models: ReasoningModelFixture[] = [
-    { id: "gateway:finture-enterprise:company", groupId: "finture-enterprise", efforts: ["low", "high", "max"], defaultEffort: "high" }
+    {
+      id: "gateway:finture-enterprise:company",
+      groupId: "finture-enterprise",
+      efforts: ["low", "high", "max"],
+      defaultEffort: "high"
+    }
   ]
   const { client } = await make((fake) => {
     configureReasoningModels(fake, models, "gateway:finture-enterprise:company", "high")
@@ -2271,6 +2301,18 @@ test("precreated drafts expose real models without entering thread indexes", asy
   expect(fake.deleted.has(first)).toBe(false)
 })
 
+test("a slot can start a new draft without waiting for the old empty draft deletion", async () => {
+  const { client, fake } = await make()
+  const first = await client.prepareDraft("main", "/tmp/fast-next-draft")
+  const released = client.releaseDraftSlot("main")
+  expect(released).toEqual([first])
+  expect(client.state.draftSessions[first]).toBeUndefined()
+  // The slot is immediately free to prepare its successor.
+  const next = await client.prepareDraft("main", "/tmp/fast-next-draft")
+  expect(next).not.toBe(first)
+  await until(() => fake.deleted.has(first))
+})
+
 test("draft replacement preserves the old session on failure and transfers ownership", async () => {
   const { client, fake } = await make()
   const first = await client.prepareDraft("main", "/tmp/a")
@@ -2516,7 +2558,9 @@ test.each(["archive", "delete", "rename"] as const)("a pending list cannot undo 
   expect(client.state.sessionList.map((sessionRow) => [sessionRow.sessionId, sessionRow.title])).toEqual(
     action === "rename" ? [["h1", "New title"]] : []
   )
-  expect(client.state.archivedSessions.map((sessionRow) => sessionRow.sessionId)).toEqual(action === "archive" ? ["h1"] : [])
+  expect(client.state.archivedSessions.map((sessionRow) => sessionRow.sessionId)).toEqual(
+    action === "archive" ? ["h1"] : []
+  )
 })
 
 test("a pending archived list cannot undo restore", async () => {
@@ -2946,9 +2990,9 @@ test("orchestration applies each role pair and restores the main conversation", 
     expect(
       client.session(id).items.some((item) => item.kind === "user" && textOf(item.content) === "build the report")
     ).toBe(true)
-    expect(client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as string | undefined).toBe(
-      "main-native"
-    )
+    expect(
+      client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as string | undefined
+    ).toBe("main-native")
     expect(client.effortOf(id)).toBe("max")
     expect(orchestrationFor(id)).toEqual({
       planner: { model: "planner-native", effort: "high" },
@@ -2958,7 +3002,8 @@ test("orchestration applies each role pair and restores the main conversation", 
     await client.executePlan(id)
     expect(fake.prompts.some((text) => text.includes("分工模式·执行"))).toBe(true)
     expect(pendingPlanFor(id)).toBeNull()
-    const model = client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as string | undefined
+    const model = client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as
+      string | undefined
     expect(model).toBe("main-native")
     expect(client.effortOf(id)).toBe("max")
     expect(orchestrationOrder(fake)).toEqual([
@@ -3143,9 +3188,9 @@ test("orchestration runs on a gateway session and restores its main model", asyn
     await client.prompt(id, [{ type: "text", text: "build the report" }])
     expect(fake.prompts.some((text) => text.includes("分工模式·规划"))).toBe(true)
     // The main selection is a gateway model: the split still runs and hands the session back.
-    expect(client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as string | undefined).toBe(
-      "gateway:opaque"
-    )
+    expect(
+      client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as string | undefined
+    ).toBe("gateway:opaque")
     expect(client.effortOf(id)).toBe("low")
   } finally {
     setOrchestration(id, null)
@@ -3165,9 +3210,7 @@ test("orchestration rejects an effort the target model does not support", async 
     worker: { model: "planner-native", effort: "medium" }
   })
   try {
-    await expect(client.prompt(id, [{ type: "text", text: "build the report" }])).rejects.toThrow(
-      "不支持 Effort"
-    )
+    await expect(client.prompt(id, [{ type: "text", text: "build the report" }])).rejects.toThrow("不支持 Effort")
     expect(fake.events).toEqual([])
   } finally {
     setOrchestration(id, null)
@@ -3198,9 +3241,9 @@ test("orchestration stops before prompting when the effort write fails", async (
     )
     expect(fake.prompts).toEqual([])
     expect(pendingPlanFor(id)).toBeNull()
-    expect(client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as string | undefined).toBe(
-      "main-native"
-    )
+    expect(
+      client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as string | undefined
+    ).toBe("main-native")
     expect(client.effortOf(id)).toBe("medium")
   } finally {
     setOrchestration(id, null)
@@ -3234,9 +3277,9 @@ test("a worker effort failure restores the main chat and keeps the plan", async 
     await expect(client.executePlan(id)).rejects.toThrow("Worker effort write rejected")
     expect(fake.prompts.some((text) => text.includes("分工模式·执行"))).toBe(false)
     expect(pendingPlanFor(id)).not.toBeNull()
-    expect(client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as string | undefined).toBe(
-      "main-native"
-    )
+    expect(
+      client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as string | undefined
+    ).toBe("main-native")
     expect(client.effortOf(id)).toBe("max")
   } finally {
     setOrchestration(id, null)
@@ -3268,13 +3311,11 @@ test("orchestration fails when the applied model or effort does not read back", 
     worker: { model: "planner-native", effort: "medium" }
   })
   try {
-    await expect(client.prompt(id, [{ type: "text", text: "build the report" }])).rejects.toThrow(
-      "角色配置回读不一致"
-    )
+    await expect(client.prompt(id, [{ type: "text", text: "build the report" }])).rejects.toThrow("角色配置回读不一致")
     expect(fake.prompts).toEqual([])
-    expect(client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as string | undefined).toBe(
-      "main-native"
-    )
+    expect(
+      client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as string | undefined
+    ).toBe("main-native")
     expect(client.effortOf(id)).toBe("medium")
   } finally {
     setOrchestration(id, null)
@@ -3555,7 +3596,8 @@ test("a prompt on a retired model falls back to a sibling and resends once", asy
   await client.prompt(id, [{ type: "text", text: "hello" }])
   expect(failed).toBe(true)
   // The thread moved off the retired id onto a sibling the catalog still offers.
-  const current = client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as string | undefined
+  const current = client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as
+    string | undefined
   expect(current).toBe("gpt-6.1-sol")
   // The same message was delivered on the retry, so the turn is not lost.
   expect(fake.prompts).toContain("hello")
@@ -3572,8 +3614,15 @@ test("several tombstones never leave the fallback with no candidate", async () =
   // Every live sibling has a tombstone. Filtering the whole set out at once used to leave the
   // fallback with zero candidates, so one refused model made every other model unusable.
   const ids = [
-    "gpt-6.1-sol", "picked", "main-picked", "chosen-model", "another-model",
-    "broken-model", "unavailable", "main-model", "chat-model"
+    "gpt-6.1-sol",
+    "picked",
+    "main-picked",
+    "chosen-model",
+    "another-model",
+    "broken-model",
+    "unavailable",
+    "main-model",
+    "chat-model"
   ]
   storage.set("alwith:retired-models", JSON.stringify(Object.fromEntries(ids.map((id) => [id, Date.now()]))))
   try {
@@ -3590,8 +3639,8 @@ test("several tombstones never leave the fallback with no candidate", async () =
     }
     await client.prompt(id, [{ type: "text", text: "hello" }])
     expect(failed).toBe(true)
-    const current = client.session(id).configOptions.find((option) => option.configId === "model")
-      ?.currentValue as string | undefined
+    const current = client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as
+      string | undefined
     expect(current).toBe("gpt-6.1-sol")
     expect(fake.prompts).toContain("hello")
   } finally {
@@ -3754,10 +3803,7 @@ test("a reopened chat stops replaying a model the provider already dropped", asy
     removeItem: (key: string) => storage.delete(key),
     clear: () => storage.clear()
   })
-  localStorage.setItem(
-    "alwith:session-models",
-    JSON.stringify({ h1: { model: "gpt-6.1-terra", effort: null } })
-  )
+  localStorage.setItem("alwith:session-models", JSON.stringify({ h1: { model: "gpt-6.1-terra", effort: null } }))
   const writes: string[] = []
   // `value` is `unknown` on the SDK request; the adapter narrows it per config id, so do the same.
   const refuse = (request: { configId: string; value: unknown }) => {
@@ -3852,10 +3898,11 @@ test("queued send mode holds the next message until the running turn settles", a
   // Nothing reached the agent: the queued message is still waiting for the turn to end.
   expect(fake.prompts).toEqual(["first"])
 
-  // Immediate mode is the built-in steering: the message goes out inside the running turn.
+  // Immediate mode uses the adapter's live steering channel.
   setQueueSendMode("immediate")
   await client.prompt(id, [{ type: "text", text: "third" }])
-  expect(fake.prompts).toEqual(["first", "third"])
+  expect(fake.prompts).toEqual(["first"])
+  expect(fake.steers).toEqual(["third"])
 })
 
 test("a queued message goes out on its own once the session falls idle", async () => {
@@ -3893,8 +3940,9 @@ test("immediate send mode inserts a supplement while the first turn is still run
     const first = client.prompt(id, [{ type: "text", text: "first" }]).catch(() => undefined)
     await vi.waitFor(() => expect(client.session(id).state).toBe("running"))
     const receipt = await client.prompt(id, [{ type: "text", text: "supplement" }])
-    expect(receipt).toBe("u2")
-    expect(fake.prompts).toEqual(["first", "supplement"])
+    expect(receipt).toMatch(/^steer:/)
+    expect(fake.prompts).toEqual(["first"])
+    expect(fake.steers).toEqual(["supplement"])
     expect(client.session(id).state).toBe("running")
     expect(client.session(id).items.some((item) => item.kind === "user" && textOf(item.content) === "supplement")).toBe(
       true
@@ -3915,11 +3963,11 @@ test("a non-steerable refusal is classified so the caller can queue the suppleme
 test("a non-steerable refusal hands the supplement to the queue instead of dropping it", async () => {
   const { client } = await make()
   const internals = client as unknown as {
-    sendPrompt: (id: string, prompt: unknown[], options?: unknown) => Promise<string>
+    steerActiveTurn: (id: string, prompt: unknown[]) => Promise<string>
     waitForIdleThenPrompt: (id: string, prompt: unknown[], options?: unknown) => Promise<string>
     sendImmediate: (id: string, prompt: unknown[], options?: unknown) => Promise<string>
   }
-  vi.spyOn(internals, "sendPrompt").mockRejectedValueOnce(new Error("turn_not_steerable"))
+  vi.spyOn(internals, "steerActiveTurn").mockRejectedValueOnce(new Error("turn_not_steerable"))
   const queued = vi.spyOn(internals, "waitForIdleThenPrompt").mockResolvedValue("queued-receipt")
   const prompt = [{ type: "text" as const, text: "supplement" }]
   await expect(internals.sendImmediate("session", prompt)).resolves.toBe("queued-receipt")
@@ -4007,8 +4055,7 @@ test("a group discussion runs the roster in order and the moderator closes", asy
   // model) writes nothing; the sequence is unchanged from a single closing turn.
   expect(modelWrites).toEqual(["architect", "critic", "architect", "critic", "architect", "main-native"])
   const model = client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as
-    | string
-    | undefined
+    string | undefined
   expect(model).toBe("main-native")
 })
 
@@ -4140,7 +4187,11 @@ test("scheduled codex exec runs are listed under 自动化运行, not under the 
     await client.listSessions({ reset: true })
     // One row per run would bury the project's real conversations in the sidebar.
     expect(client.state.sessionList.map((row) => row.sessionId)).toEqual(["typed-1"])
-    expect(automationSessionRows().map((row) => row.sessionId).toSorted()).toEqual(["run-1", "run-2"])
+    expect(
+      automationSessionRows()
+        .map((row) => row.sessionId)
+        .toSorted()
+    ).toEqual(["run-1", "run-2"])
   } finally {
     replaceAutomationSessionRows([])
     vi.unstubAllGlobals()
@@ -4353,10 +4404,7 @@ test("a roster speaker never becomes the conversation's own recorded model", asy
       "# 群说明",
       ""
     )
-    const stored = JSON.parse(storage.get("alwith:session-models") ?? "{}") as Record<
-      string,
-      { model?: string | null }
-    >
+    const stored = JSON.parse(storage.get("alwith:session-models") ?? "{}") as Record<string, { model?: string | null }>
     expect(stored[id]?.model).toBe("main-native")
   } finally {
     vi.unstubAllGlobals()

@@ -380,6 +380,15 @@ export const commands = {
   codexVersion: (): Promise<string> => __t3Invoke<string>("codex_version"),
   codexBundledModels: (): Promise<BundledModelEntry_Serialize[]> =>
     __t3Invoke<BundledModelEntry_Serialize[]>("codex_bundled_models"),
+  antigravityStart: (): Promise<null> => __t3Invoke<null>("antigravity_start"),
+  /**
+   *  Login state as the official ACP persisted it. This is deliberately a metadata check: the
+   *  refresh token never enters U⁺ and no Keychain prompt is shown.
+   */
+  antigravityStatus: (): Promise<AntigravityStatus_Serialize> =>
+    __t3Invoke<AntigravityStatus_Serialize>("antigravity_status"),
+  antigravitySend: (args: { message: string }): Promise<null> => __t3Invoke<null>("antigravity_send", args),
+  antigravityStop: (): Promise<null> => __t3Invoke<null>("antigravity_stop"),
   /**
    *  Pushes the UI's mute switch into the bridge. `forward_chatgpt` reads the shared atomic on
    *  every upstream request, so a change applies immediately without restarting the engine. The
@@ -925,6 +934,10 @@ export type CommandErrors = {
   restartRuntimeEngine: string
   codexVersion: string
   codexBundledModels: string
+  antigravityStart: string
+  antigravityStatus: never
+  antigravitySend: string
+  antigravityStop: string
   setOverloadMute: never
   setOverload429Mute: never
   skillsList: string
@@ -1213,6 +1226,39 @@ export type Activity_Serialize = {
 }
 
 export type ActualSize = null
+
+/**
+ *  What 设置 → 大模型 may show without ever touching the Google token.
+ *
+ *  The official binary stores its OAuth credential in the login keychain under service `gemini`
+ *  and account `antigravity-acp`. U⁺ only asks whether that item exists (no `-w`, so no secret is
+ *  read) and reads the non-secret `auth.type` from the official settings file.
+ */
+export type AntigravityStatus = AntigravityStatus_Serialize | AntigravityStatus_Deserialize
+
+/**
+ *  What 设置 → 大模型 may show without ever touching the Google token.
+ *
+ *  The official binary stores its OAuth credential in the login keychain under service `gemini`
+ *  and account `antigravity-acp`. U⁺ only asks whether that item exists (no `-w`, so no secret is
+ *  read) and reads the non-secret `auth.type` from the official settings file.
+ */
+export type AntigravityStatus_Deserialize = {
+  signedIn: boolean
+  authType?: string | null
+}
+
+/**
+ *  What 设置 → 大模型 may show without ever touching the Google token.
+ *
+ *  The official binary stores its OAuth credential in the login keychain under service `gemini`
+ *  and account `antigravity-acp`. U⁺ only asks whether that item exists (no `-w`, so no secret is
+ *  read) and reads the non-secret `auth.type` from the official settings file.
+ */
+export type AntigravityStatus_Serialize = {
+  signedIn: boolean
+  authType: string | null
+}
 
 export type AppInfo = AppInfo_Serialize | AppInfo_Deserialize
 
