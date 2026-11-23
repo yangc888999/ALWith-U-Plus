@@ -356,6 +356,10 @@ fn setting_validity(key: &str, value: &Value) -> Option<bool> {
         | "chat.navigationInstrument"
         | "voice.deviceId"
         | "voice.hotwords" => value.is_string(),
+        "appearance.uiFont" => matches!(
+            value.as_str(),
+            Some("pingfang" | "system" | "hiragino" | "songti" | "kaiti" | "yahei" | "simsun")
+        ),
         // Local profile override: a plain name, and a square data URL small enough to keep
         // every settings snapshot cheap (the picker writes ~30 KB at 256px).
         "profile.nickname" => value.as_str().is_some_and(|s| s.chars().count() <= 64),

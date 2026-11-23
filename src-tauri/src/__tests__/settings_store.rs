@@ -80,6 +80,24 @@ fn workspace_column_visibility_is_a_persisted_boolean() {
 }
 
 #[test]
+fn interface_font_is_a_registered_persisted_choice() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = SettingsStore::load(dir.path().into()).unwrap();
+    store
+        .update(changes(json!({"appearance.uiFont": "hiragino"})), None)
+        .unwrap();
+    assert_eq!(store.values["appearance.uiFont"], "hiragino");
+    let (known, private) = partition_settings(store.values.clone());
+    assert_eq!(known["appearance.uiFont"], "hiragino");
+    assert!(!private.contains_key("appearance.uiFont"));
+    assert!(store
+        .update(changes(json!({"appearance.uiFont": "comic-sans"})), None)
+        .is_err());
+    let restarted = SettingsStore::load(dir.path().into()).unwrap();
+    assert_eq!(restarted.values["appearance.uiFont"], "hiragino");
+}
+
+#[test]
 fn appearance_column_switches_are_registered_and_projected() {
     // The Appearance pane writes these two keys. When they were missing from the registry the
     // client rejected the write ("这个设置项未被识别") and, because partition_settings dropped
