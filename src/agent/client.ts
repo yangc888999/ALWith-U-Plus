@@ -251,6 +251,21 @@ function unsupportedModel(error: unknown): string | null {
 }
 
 /**
+ * The engine refuses a supplement while the active turn cannot accept steering (a permission
+ * dialog, a compaction pass, the final response, …). The adapter surfaces this as either the
+ * structured `activeTurnNotSteerable` error or its `turn_not_steerable` wording.
+ */
+export function turnNotSteerable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : ""
+  if (/turn[_ ]not[_ ]steerable|activeTurnNotSteerable|not steerable/i.test(message)) return true
+  try {
+    return /activeTurnNotSteerable|turn_not_steerable/i.test(JSON.stringify(error))
+  } catch {
+    return false
+  }
+}
+
+/**
  * True only for the wording the Responses API uses when it refuses a replayed history.
  *
  * A bare `invalid_request` is not a signal: every gateway words its 400s that way, so treating it
@@ -2066,6 +2081,13 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // A new turn means the stop no longer describes this chat: the next model pick has a live turn
     // to wait for again, so it parks the ordinary way.
     this.stoppedSessions.delete(id)
+    // Immediate mode is the product's "插话": a message sent while a turn is running is dispatched
+    // into that turn by the engine. If the active step cannot accept steering, fall back to the
+    // queue instead of turning the supplement into a lost/failed send.
+    if (getQueueSendMode() === "immediate") {
+      const busy = this.holds(id) ? this.session(id) : undefined
+      if (busy !== undefined && busy.state !== "idle") return this.sendImmediate(id, prompt, options)
+    }
     // Queued send mode: a message typed while a turn is running waits for that turn to settle
     // and goes out on its own, instead of steering into the running answer. Waiting here keeps
     // the composer's own echo/sending state, and consecutive sends naturally line up because
@@ -2092,6 +2114,17 @@ export class CodexClient extends CodexAcpClient<AppState> {
       ...options,
       display: options?.display ?? prompt
     })
+  }
+
+  /** Send into the running turn, or queue if the engine says this step is not steerable. */
+  private async sendImmediate(id: string, prompt: acp.ContentBlock[], options?: PromptOptions): Promise<string> {
+    try {
+      return await this.sendPrompt(id, prompt, options)
+    } catch (error) {
+      if (!turnNotSteerable(error)) throw error
+      toast.info(i18n.t("chat.steerQueuedFallback"))
+      return this.waitForIdleThenPrompt(id, prompt, options)
+    }
   }
 
   /**

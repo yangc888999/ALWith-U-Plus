@@ -38,3 +38,13 @@ test("several waiting messages collapse into one chip with a count", () => {
   })
   expect(view.getByRole("button", { name: /2 queued/ })).toBeDefined()
 })
+
+test("compact mode keeps the count and cancel action without repeating the message", () => {
+  const view = render(<QueuedPromptChip session={session} compact />)
+  act(() => {
+    beginQueuedPrompt("chip-session", "a long supplement that must not widen the strip")
+  })
+  const chip = view.getByRole("button", { name: /Queued/ })
+  expect(chip.textContent).not.toContain("a long supplement")
+  expect(chip.title).toContain("a long supplement")
+})

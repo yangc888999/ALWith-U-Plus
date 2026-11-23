@@ -577,8 +577,8 @@ export function AppearanceSection() {
               if (value === "queued" || value === "immediate") setQueueSendMode(value)
             }}
             items={[
-              { label: t("settings.queueSendQueued"), value: "queued" },
-              { label: t("settings.queueSendImmediate"), value: "immediate" }
+              { label: t("settings.queueSendImmediate"), value: "immediate" },
+              { label: t("settings.queueSendQueued"), value: "queued" }
             ]}
           >
             <SelectTrigger className="w-[170px]" aria-label={t("settings.queueSendMode")}>
@@ -586,8 +586,8 @@ export function AppearanceSection() {
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                <SelectItem value="queued">{t("settings.queueSendQueued")}</SelectItem>
                 <SelectItem value="immediate">{t("settings.queueSendImmediate")}</SelectItem>
+                <SelectItem value="queued">{t("settings.queueSendQueued")}</SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>

@@ -16,7 +16,7 @@ import { groupSessionRows } from "@/lib/group-sessions"
 import { automationSessionRows, replaceAutomationSessionRows } from "@/lib/automation-sessions"
 import { removeGroup, setGroup } from "@/lib/groups"
 
-import { type ClientOptions, CodexClient, type GatewayModel, modelVendor, parkedRetryDelay, withoutModelSwitchNotes } from "../client"
+import { type ClientOptions, CodexClient, type GatewayModel, modelVendor, parkedRetryDelay, turnNotSteerable, withoutModelSwitchNotes } from "../client"
 import { macProjectPaths, type ProjectPaths } from "../project-path"
 import { createFakeAgent } from "./fake-agent"
 import { FakeHubPort } from "./fake-runtime-client"
@@ -3882,6 +3882,48 @@ test("a queued message goes out on its own once the session falls idle", async (
   await expect(pending).resolves.toBe("released")
   expect(send).toHaveBeenCalledTimes(1)
   setQueueSendMode("immediate")
+})
+
+test("immediate send mode inserts a supplement while the first turn is still running", async () => {
+  const { client, fake } = await make()
+  const id = await client.newSession("/tmp/immediate-steer")
+  fake.promptHoldIdle.current = (text) => text === "first"
+  setQueueSendMode("immediate")
+  try {
+    const first = client.prompt(id, [{ type: "text", text: "first" }]).catch(() => undefined)
+    await vi.waitFor(() => expect(client.session(id).state).toBe("running"))
+    const receipt = await client.prompt(id, [{ type: "text", text: "supplement" }])
+    expect(receipt).toBe("u2")
+    expect(fake.prompts).toEqual(["first", "supplement"])
+    expect(client.session(id).state).toBe("running")
+    expect(client.session(id).items.some((item) => item.kind === "user" && textOf(item.content) === "supplement")).toBe(
+      true
+    )
+    await client.cancel(id)
+    await first
+  } finally {
+    setQueueSendMode("immediate")
+  }
+})
+
+test("a non-steerable refusal is classified so the caller can queue the supplement", () => {
+  expect(turnNotSteerable(new Error("turn_not_steerable"))).toBe(true)
+  expect(turnNotSteerable({ error: { activeTurnNotSteerable: {} } })).toBe(true)
+  expect(turnNotSteerable(new Error("server overloaded"))).toBe(false)
+})
+
+test("a non-steerable refusal hands the supplement to the queue instead of dropping it", async () => {
+  const { client } = await make()
+  const internals = client as unknown as {
+    sendPrompt: (id: string, prompt: unknown[], options?: unknown) => Promise<string>
+    waitForIdleThenPrompt: (id: string, prompt: unknown[], options?: unknown) => Promise<string>
+    sendImmediate: (id: string, prompt: unknown[], options?: unknown) => Promise<string>
+  }
+  vi.spyOn(internals, "sendPrompt").mockRejectedValueOnce(new Error("turn_not_steerable"))
+  const queued = vi.spyOn(internals, "waitForIdleThenPrompt").mockResolvedValue("queued-receipt")
+  const prompt = [{ type: "text" as const, text: "supplement" }]
+  await expect(internals.sendImmediate("session", prompt)).resolves.toBe("queued-receipt")
+  expect(queued).toHaveBeenCalledWith("session", prompt, undefined)
 })
 
 test("cancelling a queued message rejects without sending and clears the chip", async () => {

@@ -18,7 +18,7 @@ import {
  * without this chip the composer looked stuck for the whole running turn. Clicking it cancels
  * every message waiting on this session; the composer then restores the text into the input.
  */
-export function QueuedPromptChip({ session }: { session: Session }): ReactNode {
+export function QueuedPromptChip({ session, compact = false }: { session: Session; compact?: boolean }): ReactNode {
   const { t } = useTranslation()
   const count = useSyncExternalStore(
     subscribeQueuedPrompts,
@@ -45,7 +45,7 @@ export function QueuedPromptChip({ session }: { session: Session }): ReactNode {
       <span className="shrink-0 font-medium">
         {count > 1 ? t("chat.queuePendingCount", { count }) : t("chat.queuePending")}
       </span>
-      {text !== null && <span className="max-w-40 truncate opacity-70">{text}</span>}
+      {!compact && text !== null && <span className="max-w-40 truncate opacity-70">{text}</span>}
       <span className="shrink-0 underline underline-offset-2">{t("chat.queueCancel")}</span>
     </button>
   )

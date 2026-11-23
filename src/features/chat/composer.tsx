@@ -377,28 +377,25 @@ export function ChatComposer({
         disabled={props.disabled === true || handoffBusy}
         inputHeader={
           props.inputHeader ?? (
-            // Chat merges the model-call notice into the chip row; a project keeps the two-row
-            // arrangement it has always had, because its row also carries 分工 and the file chips.
-            <div
-              className={
-                project === null
-                  ? "flex w-full min-w-0 items-center justify-between gap-2"
-                  : "flex w-full min-w-0 flex-col gap-1"
-              }
-            >
-              {project === null ? null : <TurnProgressBar session={props.session} />}
-              <div className={project === null ? "contents" : "flex w-full min-w-0 items-center justify-between gap-2"}>
-                {/* A quoted document's name is a reference, not the subject: it never takes more
-                    than a third of the row, and the rest goes to the model controls. */}
-                <div className="flex max-w-[33%] min-w-0 shrink-0 items-center gap-2 overflow-hidden">
-                  <ActivePreviewChip />
-                  <QueuedPromptChip session={props.session} />
+            // Two stable rows inside the composer card: the running turn gets the first row, the
+            // document reference and project controls get the second. Keeping them apart means a
+            // long progress line, a queued message and 分工 cannot all compete for one strip.
+            <div className="flex w-full min-w-0 flex-col gap-1">
+              <div className="flex w-full min-w-0 items-center justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <TurnProgressBar session={props.session} />
                 </div>
-                {project === null && (
-                  <div className="min-w-0 flex-1">
-                    <TurnProgressBar session={props.session} />
-                  </div>
-                )}
+                <div className="flex shrink-0 items-center gap-1">
+                  <QueuedPromptChip session={props.session} compact />
+                </div>
+              </div>
+              <div className="flex w-full min-w-0 items-center justify-between gap-2">
+                {/* A quoted document's name is a reference, not the subject. The second row holds
+                    no progress text, so the chip can take almost half of the composer before the
+                    filename starts truncating. */}
+                <div className="flex max-w-[48%] min-w-0 shrink-0 items-center gap-2 overflow-hidden">
+                  <ActivePreviewChip />
+                </div>
                 {/* 分工 belongs to a project conversation with a working plan → execute flow. A
                     chat is a throwaway conversation, and a group discussion is driven by its own
                     roster; `orchestrationAllowedFor` is the same test the client's runtime gate

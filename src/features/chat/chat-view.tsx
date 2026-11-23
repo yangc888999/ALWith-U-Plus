@@ -47,6 +47,7 @@ import { ChatSearch } from "./dialogs/chat-search"
 import { FilePreviewModal } from "./dialogs/file-preview-modal"
 import { ImageLightbox } from "./dialogs/image-lightbox"
 import { ChatDirectoryContext, ChatOpenSessionContext } from "./file-actions"
+import { SendModeSwitch } from "./send-mode-switch"
 import { appendQuote, SelectionMenu } from "./selection-menu"
 import { useOrchestrationProviderWarning } from "./use-orchestration-provider-warning"
 
@@ -291,6 +292,7 @@ function Conversation({
           turnCount={turnCount}
         >
           <div className="ms-1 flex shrink-0 items-center gap-1">
+            <SendModeSwitch />
             <CollectionPicker sessionId={session.id} favorite />
             <ChatActionsMenu
               surface={headerTarget === undefined ? "main" : "floating"}
