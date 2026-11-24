@@ -388,6 +388,28 @@ export const commands = {
   antigravityStatus: (): Promise<AntigravityStatus_Serialize> =>
     __t3Invoke<AntigravityStatus_Serialize>("antigravity_status"),
   antigravitySend: (args: { message: string }): Promise<null> => __t3Invoke<null>("antigravity_send", args),
+  /**
+   *  Start a native Agent turn whose text, tool and permission events stream on `antigravity:event`
+   *  tagged with `turnKey`. Only Gemini sessions call this; the Responses gateway path is untouched.
+   */
+  antigravityAgentTurn: (args: {
+    turnKey: string
+    model: string
+    effort: string | null
+    prompt: Value[]
+    cwd: string
+    sessionKey: string
+  }): Promise<string> => __t3Invoke<string>("antigravity_agent_turn", args),
+  /**
+   *  Answer a permission request that arrived as a `permission_request` event with the same turnKey.
+   */
+  antigravityPermissionAnswer: (args: { requestId: string; optionId: string | null }): Promise<null> =>
+    __t3Invoke<null>("antigravity_permission_answer", args),
+  /**
+   *  Cancel a native Agent turn.
+   */
+  antigravityAgentCancel: (args: { requestId: string }): Promise<null> =>
+    __t3Invoke<null>("antigravity_agent_cancel", args),
   antigravityStop: (): Promise<null> => __t3Invoke<null>("antigravity_stop"),
   /**
    *  Pushes the UI's mute switch into the bridge. `forward_chatgpt` reads the shared atomic on
@@ -937,6 +959,9 @@ export type CommandErrors = {
   antigravityStart: string
   antigravityStatus: never
   antigravitySend: string
+  antigravityAgentTurn: string
+  antigravityPermissionAnswer: string
+  antigravityAgentCancel: string
   antigravityStop: string
   setOverloadMute: never
   setOverload429Mute: never

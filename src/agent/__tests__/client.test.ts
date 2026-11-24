@@ -3,6 +3,7 @@ import { type BooleanOption, isSelectOption, type SelectOption, type Session, te
 import { toast } from "sonner"
 import { afterEach, expect, test, vi } from "vitest"
 
+import { antigravityModelSelection, setAntigravityModelPreference } from "@/features/antigravity/models"
 import { must } from "@/lib/__tests__/must"
 import { setActivePreview } from "@/lib/active-preview"
 import { automationSessionRows, replaceAutomationSessionRows } from "@/lib/automation-sessions"
@@ -1384,6 +1385,21 @@ test("a new draft uses each slot's current choice without creating a probe sessi
   expect(fake.deleted.size).toBe(0)
 })
 
+test("a new draft appears in the sidebar and project list before its first message, and survives a list rescan", async () => {
+  const { client, fake } = await make()
+  // The engine has not written the fresh thread into its index yet; only the create call knows it.
+  fake.listSessions.current = () => ({ sessions: [] })
+  const draft = await client.prepareDraft("main", "/tmp/brand-new")
+  expect(client.state.sessionList.some((row) => row.sessionId === draft)).toBe(true)
+  expect((await client.listProjectSessions("/tmp/brand-new")).some((row) => row.sessionId === draft)).toBe(true)
+  // A debounced full rescan that omits the draft must not sweep the just-created row away.
+  await client.listSessions({ reset: true })
+  expect(client.state.sessionList.some((row) => row.sessionId === draft)).toBe(true)
+  // Discarding the draft removes the row through the normal delete path.
+  await client.discardDraft("main")
+  await until(() => !client.state.sessionList.some((row) => row.sessionId === draft))
+})
+
 test("an existing conversation keeps its own model instead of the slot's", async () => {
   const { client, fake } = await make()
   // The first open binds h1 to its own (native) model and records it per conversation.
@@ -1988,6 +2004,40 @@ test("switching models in a running chat lands on the new model's configured eff
   }
 })
 
+test("Gemini effort defaults apply per model without changing GPT or gateway defaults", async () => {
+  const argon = antigravityModelSelection("gemini-4-argon")
+  const neon = antigravityModelSelection("gemini-4-neon")
+  const gateway = "gateway:openrouter:qa-model"
+  const models: ReasoningModelFixture[] = [
+    { id: "gpt-6.1-sol", groupId: "chatgpt", efforts: ["low", "medium", "high", "max"], defaultEffort: "max" },
+    { id: argon, groupId: "google-antigravity", efforts: ["low", "medium", "high"], defaultEffort: "high" },
+    { id: neon, groupId: "google-antigravity", efforts: ["low", "medium", "high"], defaultEffort: "high" },
+    { id: gateway, groupId: "openrouter", efforts: ["low", "medium", "high"], defaultEffort: "high" }
+  ]
+  const settings = new Map<string, string>()
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => settings.get(key) ?? null,
+    setItem: (key: string, value: string) => settings.set(key, value),
+    removeItem: (key: string) => settings.delete(key)
+  })
+  try {
+    setAntigravityModelPreference("gemini-4-argon", { effort: "low" })
+    setAntigravityModelPreference("gemini-4-neon", { effort: "medium" })
+    const { client } = await make((fake) => {
+      configureReasoningModels(fake, models, "gpt-6.1-sol", "max")
+    })
+    const id = await client.newSession("/tmp/gemini-effort-switch")
+    const route = [[argon, "low"], [neon, "medium"], [gateway, "high"], ["gpt-6.1-sol", "max"]] as const
+    for (const [model, effort] of route) {
+      await client.setConfig(id, "model", model)
+      await until(() => client.effortOf(id) === effort)
+      expect(client.session(id).id).toBe(id)
+    }
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
 test("a new conversation starts on the model's own default effort, not the agent global default", async () => {
   // The agent opens the thread on "low" (its global config); the model's catalog says "max".
   // Without the catalog fallback the picker sat on Low even though every model defaulted to Max.
@@ -2280,7 +2330,7 @@ test("Stop answers the session's pending permission with cancelled before sessio
   expect(JSON.stringify(reply)).toContain("cancelled")
 })
 
-test("precreated drafts expose real models without entering thread indexes", async () => {
+test("precreated drafts expose real models and appear as one row before the engine indexes them", async () => {
   const { client, fake } = await make()
   const [first, duplicate] = await Promise.all([
     client.prepareDraft("main", "/tmp/draft"),
@@ -2292,8 +2342,9 @@ test("precreated drafts expose real models without entering thread indexes", asy
   expect(client.state.draftSessions[first]).toBe("main")
   fake.listSessions.current = () => ({ sessions: [{ sessionId: first, cwd: "/tmp/draft" }] })
   await client.listSessions({ reset: true })
-  expect(client.state.sessionList).toEqual([])
-  expect(await client.listProjectSessions("/tmp/draft")).toEqual([])
+  // The draft is already visible from creation, and a rescan never duplicates it.
+  expect(client.state.sessionList.filter((row) => row.sessionId === first)).toHaveLength(1)
+  expect((await client.listProjectSessions("/tmp/draft")).filter((row) => row.sessionId === first)).toHaveLength(1)
   await client.prompt(first, [{ type: "text", text: "hello" }])
   expect(client.state.draftSessions[first]).toBeUndefined()
   expect(client.state.sessionList.some((sessionRow) => sessionRow.sessionId === first)).toBe(true)
@@ -2340,7 +2391,8 @@ test("changing an empty draft's model creates it on that model without resuming 
   expect(fake.deleted.has(first)).toBe(true)
   expect(client.state.draftSessions[replacement]).toBe("main")
   expect(await client.prepareDraft("main", "/tmp/model-draft", "deepseek-flash")).toBe(replacement)
-  expect(client.state.sessionList).toEqual([])
+  // Only the replacement remains listed; the discarded first draft leaves no row behind.
+  expect(client.state.sessionList.map((row) => row.sessionId)).toEqual([replacement])
   await client.prompt(replacement, [{ type: "text", text: "hello" }])
   expect(client.session(replacement).items.some((item) => item.kind === "user")).toBe(true)
 })

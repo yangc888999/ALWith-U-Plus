@@ -21,12 +21,54 @@ vi.mock("@/lib/providers", async (importOriginal) => ({
 }))
 const { presentModelCatalog } = await import("../model-catalog")
 const { gatewayModelId } = await import("@/lib/providers")
+const { setAntigravityModelPreference } = await import("@/features/antigravity/models")
+
+test("hiding a Gemini row changes only the Google group", () => {
+  const platform = vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel")
+  const preferenceKey = "alwith:antigravity:model-preferences"
+  try {
+    const input = [
+      { id: "chatgpt", name: "ChatGPT", models: [{ api_id: "gpt-6.1-terra", label: "Terra" }] },
+      { id: "openrouter", name: "OpenRouter", models: [{ api_id: "gateway:openrouter:qa-model", label: "QA" }] },
+      { id: "custom-qa", name: "Custom", models: [{ api_id: "gateway:custom-qa:qa-model", label: "Custom" }] }
+    ]
+    const groupId = "google-antigravity"
+    const before = presentModelCatalog(input)
+    setAntigravityModelPreference("gemini-4-neon", { enabled: false })
+    const after = presentModelCatalog(input)
+    expect(after.filter((group) => group.id !== groupId)).toEqual(before.filter((group) => group.id !== groupId))
+    expect(after.find((group) => group.id === groupId)?.models.map((model) => model.api_id)).toEqual(
+      before.find((group) => group.id === groupId)?.models.map((model) => model.api_id).filter((id) => !id.endsWith(":gemini-4-neon"))
+    )
+  } finally {
+    localStorage.removeItem(preferenceKey)
+    platform.mockRestore()
+  }
+})
 
 const enterpriseId = "custom_alwith_enterprise_8e1b3c7a"
 // Independent fixture for the adapter's custom-hex(public ID) session group identity.
 const runtimeId = "custom-637573746f6d5f616c776974685f656e74657270726973655f3865316233633761"
 const firstApiId = `gateway:${runtimeId}:DeepSeek-Flash`
 const secondApiId = `gateway:${runtimeId}:DeepSeek-Pro`
+
+test("Antigravity appears once on macOS and can be hidden without changing native models", () => {
+  const platform = vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel")
+  const group = { id: "google-antigravity", name: "Google Antigravity", models: [
+    { api_id: "gateway:google-antigravity:gemini-4-neon", label: "Gemini 4 Neon" }
+  ] }
+  try {
+    localStorage.removeItem("alwith:antigravity:enabled")
+    const enabled = presentModelCatalog([group, group]).filter((entry) => entry.id === group.id)
+    expect(enabled).toHaveLength(1)
+    expect(enabled[0]?.models.map(({ api_id }) => api_id)).toContain(group.models[0]?.api_id)
+    localStorage.setItem("alwith:antigravity:enabled", "false")
+    expect(presentModelCatalog([group])).toEqual(presentModelCatalog([]))
+  } finally {
+    platform.mockRestore()
+    localStorage.removeItem("alwith:antigravity:enabled")
+  }
+})
 
 function enterpriseSnapshot() {
   state.snapshot = {}
@@ -57,18 +99,24 @@ test("filters LiteLLM identity after snapshot augmentation, not matching labels 
 })
 
 test("offers the Gemini group only while the Antigravity experiment is enabled", () => {
-  localStorage.setItem("alwith:antigravity:enabled", "false")
-  expect(presentModelCatalog([]).some((group) => group.id === "google-antigravity")).toBe(false)
+  const platform = vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel")
+  try {
+    localStorage.setItem("alwith:antigravity:enabled", "false")
+    expect(presentModelCatalog([]).some((group) => group.id === "google-antigravity")).toBe(false)
 
-  localStorage.setItem("alwith:antigravity:enabled", "true")
-  const group = presentModelCatalog([]).find((entry) => entry.id === "google-antigravity")
-  expect(group?.name).toBe("Google Antigravity")
-  expect(group?.models.map((model) => model.api_id)).toEqual([
-    "antigravity:gemini-4-argon",
-    "antigravity:gemini-4-neon",
-    "antigravity:gemini-4-hydrogen",
-    "antigravity:gemini-3.8-flash"
-  ])
+    localStorage.setItem("alwith:antigravity:enabled", "true")
+    const group = presentModelCatalog([]).find((entry) => entry.id === "google-antigravity")
+    expect(group?.name).toBe("Google Antigravity")
+    expect(group?.models.map((model) => model.api_id)).toEqual([
+      "gateway:google-antigravity:gemini-4-argon",
+      "gateway:google-antigravity:gemini-4-neon",
+      "gateway:google-antigravity:gemini-4-hydrogen",
+      "gateway:google-antigravity:gemini-3.8-flash"
+    ])
+  } finally {
+    platform.mockRestore()
+    localStorage.removeItem("alwith:antigravity:enabled")
+  }
 })
 
 test.each([runtimeId, enterpriseId])("merges enterprise snapshot into existing %s group without changing its ID", (id) => {

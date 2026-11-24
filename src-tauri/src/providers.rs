@@ -2300,6 +2300,13 @@ fn merged_catalog(app_data: &std::path::Path) -> Option<Value> {
     if entries.is_empty() {
         return None;
     }
+    if cfg!(target_os = "macos") {
+        for model in crate::antigravity::catalog_models() {
+            let mut entry = complete_catalog_entry(Some(&model));
+            retarget_identity(&mut entry);
+            entries.push(entry);
+        }
+    }
     Some(json!({ "models": entries }))
 }
 

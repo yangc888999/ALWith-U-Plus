@@ -699,7 +699,8 @@ test("the composer stays visible while initial providers and the native draft ar
     expect(view.container.querySelector(".chat-project-picker .lucide-loader-circle")).toBeNull()
     expect(view.getByRole("button", { name: "Send" }).hasAttribute("disabled")).toBe(false)
     expect(Object.keys(real.state.sessions)).toHaveLength(1)
-    expect(real.state.sessionList).toHaveLength(0)
+    // The unsent draft is visible in the sidebar immediately, not deferred to the first message.
+    expect(real.state.sessionList).toHaveLength(1)
   } finally {
     release?.()
     await act(() => Promise.try(() => view.unmount()))
@@ -812,7 +813,7 @@ test("new chat prepares once under StrictMode and exposes the real model before 
     expect(fake.modelHints.size).toBe(1)
     expect(real.session(must<string>(selected, "selected draft")).cwd).toBe("/Users/mac/Documents/ALwith")
     expect(real.session(must<string>(selected, "selected draft")).items).toEqual([])
-    expect(real.state.sessionList).toEqual([])
+    expect(real.state.sessionList.map((row) => row.sessionId)).toEqual([selected])
     await act(() => Promise.try(() => fireEvent.click(view.getByTestId("model-trigger"))))
     expect(view.getByRole("menuitemradio", { name: "GPT-6.1 Sol" })).toBeTruthy()
   } finally {
@@ -1639,7 +1640,7 @@ test.each(["gateway", "native"] as const)(
       // adapter treats exactly like upstream's null hint: the draft starts on the engine's own model.
       expect(fake.modelHints.get(id)).toBe(choice === "native" ? "" : "gateway:deepseek:deepseek-flash")
       expect((view.getByRole("textbox") as HTMLTextAreaElement).value).toBe("keep this draft")
-      expect(real.state.sessionList).toEqual([])
+      expect(real.state.sessionList.map((row) => row.sessionId)).toEqual([id])
     } finally {
       await act(() => Promise.try(() => view.unmount()))
       failure.mockRestore()
@@ -1709,7 +1710,7 @@ test.each([false, true])(
       expect(env.fake.deleted.has(previous)).toBe(true)
       expect((view.getByRole("textbox") as HTMLTextAreaElement).value).toBe("keep my input after logout")
       expect(view.queryByText(/selected ALwith account model is unavailable/i)).toBeNull()
-      expect(env.real.state.sessionList).toEqual([])
+      expect(env.real.state.sessionList.map((row) => row.sessionId)).toEqual([replacement])
     } finally {
       await act(() => Promise.try(() => view.unmount()))
       env.restore()

@@ -3,6 +3,8 @@ import { invoke, isTauri } from "@tauri-apps/api/core"
 import { info } from "@tauri-apps/plugin-log"
 import { toast } from "sonner"
 
+import { antigravityAgent, type AgentPermission } from "@/agent/antigravity-agent"
+import { antigravityDefaultThinking, antigravityModel } from "@/features/antigravity/models"
 import { isEnterpriseModel } from "@/features/auth/enterprise-providers"
 import { companyModelConfig } from "@/lib/company-model-config"
 import i18n from "@/lib/i18n"
@@ -39,6 +41,8 @@ function readNativeEffortOverrides(): Array<{
 // 2026-10-27 chat-layer extraction: the engine-neutral orchestration moved to `@alwith/api/client`,
 // the Codex extensions (history, skills, plugins, rate limits, file search, lineage) to the adapter.
 import {
+  addPrompt,
+  applyUpdate,
   isBooleanOption,
   isGroupedSelect,
   isSelectOption,
@@ -708,6 +712,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
 
   /** The default effort one specific model publishes, whether or not the chat is on it yet. */
   private defaultEffortForModel(session: Session, model: string): string | null {
+    const gemini = antigravityModel(model)
+    if (gemini !== undefined) return antigravityDefaultThinking(gemini.id)
     // Per-model override wins (settings -> model row -> default effort).
     const overridden = readNativeEffortOverrides().find((entry) => entry.api_id === model && entry.enabled !== false)
     const fromOverride = overridden?.defaultReasoningLevel
@@ -915,6 +921,59 @@ export class CodexClient extends CodexAcpClient<AppState> {
     super.includeSession(summary)
   }
 
+  /**
+   * Connect the native Gemini Agent channel. The host supplies the permission UI; everything else
+   * (tool cards, streaming text) is applied to the same sessions through the canonical reducer.
+   */
+  configureAntigravityAgent(onPermission: (permission: AgentPermission) => void): void {
+    antigravityAgent.configure(
+      (sessionId, change) => {
+        const session = this.holds(sessionId) ? this.session(sessionId) : undefined
+        if (session === undefined) return
+        this.publishSession(change(session))
+      },
+      onPermission
+    )
+  }
+
+  /** Run one native Gemini Agent turn; the bridge streams text/tool events into the session. */
+  private async agentPrompt(
+    id: string,
+    prompt: acp.ContentBlock[],
+    options?: PromptOptions
+  ): Promise<string> {
+    const session = this.holds(id) ? this.session(id) : undefined
+    if (session === undefined) throw new Error("Open the session before sending")
+    const gemini = antigravityModel(selectedModel(session.configOptions))
+    if (gemini === undefined) throw new Error("Not a Gemini Agent session")
+    const receipt = `agent-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    // Echo the user's own bubble through the canonical reducer before the turn starts.
+    this.publishSession(addPrompt(session, options?.display ?? prompt, receipt))
+    return antigravityAgent.run({
+      sessionId: id,
+      turnKey: receipt,
+      receipt,
+      cwd: session.cwd,
+      model: gemini.id,
+      effort: antigravityDefaultThinking(gemini.id),
+      prompt: prompt as Array<{ type: string; [key: string]: unknown }>,
+      apply: (current, update) => applyUpdate(current, update as never)
+    })
+  }
+
+  /**
+   * A freshly created draft is a real native session but the base client hides every id in
+   * `state.drafts` from `sessionList`, so "new chat" only showed up in the sidebar after the first
+   * message materialized it (or after a debounced full `session/list` rescan). Keep a draft row
+   * visible from creation: `createNativeSession` inserts it with `listSession`, and this guard
+   * stops a concurrent `readSessionList` from sweeping the just-inserted row before the engine
+   * reports it. The row is removed by the normal `delete()`/`unlistSession` path when a draft is
+   * discarded, and `onDraftMaterialized` takes over once it becomes a real chat.
+   */
+  protected override keepUnlisted(item: SessionSummary): boolean {
+    return super.keepUnlisted(item) || this.state.draftSessions[item.sessionId] !== undefined
+  }
+
   protected override listSession(summary: SessionSummary): void {
     if (this.divertSessionRow(summary)) return
     super.listSession(summary)
@@ -985,6 +1044,16 @@ export class CodexClient extends CodexAcpClient<AppState> {
       this.setApp((state) => ({
         draftSessions: { ...state.draftSessions, [id]: owner }
       }))
+      // Show the new chat in the sidebar and project list immediately. The base client omits
+      // drafts from `sessionList` until the first message; inserting here removes that wait.
+      // `keepUnlisted` protects the row until the engine's own `session/list` reports it.
+      this.listSession({
+        sessionId: id,
+        cwd: this.projectPath(directory),
+        title: null,
+        updatedAt: new Date().toISOString(),
+        archived: false
+      })
     }
     this.noteModel(this.session(id))
     // The default effort lands before the caller confirms the selection, so it is persisted with
@@ -2179,6 +2248,16 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * next model the catalog still offers (same group first), and resend the same message once.
    */
   private async sendPrompt(id: string, prompt: acp.ContentBlock[], options?: PromptOptions): Promise<string> {
+    // Native Agent path: only a Gemini model on the desktop takes it. Every other model — and
+    // every non-Tauri surface — continues down the exact gateway path below, untouched.
+    const agentSession = this.holds(id) ? this.session(id) : undefined
+    if (
+      isTauri() &&
+      agentSession !== undefined &&
+      agentSession.attached &&
+      antigravityModel(selectedModel(agentSession.configOptions)) !== undefined
+    )
+      return this.agentPrompt(id, prompt, options)
     // A model parked during the previous turn lands before this one is dispatched, so the turn
     // goes to the gateway the user last picked instead of the one the agent still remembers.
     // Nothing pending must not even cost a microtask: the local user echo is published

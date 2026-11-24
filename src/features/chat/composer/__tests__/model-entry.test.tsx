@@ -7,9 +7,11 @@
  * mapping reaches the right leaf.
  */
 import { createSession } from "@alwith/api"
-import { render } from "@testing-library/react"
+import { fireEvent, render } from "@testing-library/react"
 import { expect, test, vi } from "vitest"
 
+import { antigravityModelSelection } from "@/features/antigravity/models"
+import { client } from "@/lib/client"
 import { initI18n } from "@/lib/i18n"
 
 import { ModelEntry, modelEntryKind, modelGateOf } from "../model-entry"
@@ -22,7 +24,12 @@ vi.mock("../recovery-model-select", () => ({
 }))
 // The package menu needs a conversation host; this file tests the slot U renders around it.
 vi.mock("@alwith/module-chat/conversation", () => ({
-  ModelMenu: () => <div data-testid="model-menu" />
+  ModelMenu: ({ onModelChange }: { onModelChange: (model: string) => void }) => (
+    <div data-testid="model-menu">
+      <button onClick={() => onModelChange(antigravityModelSelection("gemini-4-neon"))}>Gemini</button>
+      <button onClick={() => onModelChange("gpt-6.2-sol")}>GPT</button>
+    </div>
+  )
 }))
 
 await initI18n("en")
@@ -113,5 +120,23 @@ test("the session menu slot carries the full model name as a hover title", () =>
     expect(slot?.getAttribute("title")).toBe("GPT 6.2 Sol (Long Catalogue Name)")
   } finally {
     view.unmount()
+  }
+})
+
+test("Gemini and GPT picks use the same model setter and conversation id", () => {
+  const model = { ...modelOption, currentValue: "gpt-6.2-sol", options: [] }
+  const session = sessionWith([model], { attached: true })
+  const setConfig = vi.spyOn(client, "setConfig").mockResolvedValue()
+  const view = render(<ModelEntry surface="session" session={session} />)
+  try {
+    fireEvent.click(view.getByText("Gemini"))
+    fireEvent.click(view.getByText("GPT"))
+    expect(setConfig.mock.calls).toEqual([
+      [session.id, "model", "gateway:google-antigravity:gemini-4-neon"],
+      [session.id, "model", "gpt-6.2-sol"]
+    ])
+  } finally {
+    view.unmount()
+    setConfig.mockRestore()
   }
 })

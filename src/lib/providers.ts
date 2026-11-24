@@ -27,6 +27,7 @@ import { MimoLogo } from "@/components/icons/mimo-logo"
 import { OpenAILogo } from "@/components/icons/openai-logo"
 import { OpenRouterLogo } from "@/components/icons/openrouter-logo"
 import { QwenLogo } from "@/components/icons/qwen-logo"
+import { antigravityModel, antigravityModelSelection } from "@/features/antigravity/models"
 import {
   ENTERPRISE_PROVIDER_PREFIX,
   enterpriseCatalog,
@@ -310,6 +311,8 @@ export function resolveSessionModel(
   snapshot: ProviderSnapshot,
   purpose: "session" | "draft" = "session"
 ): string | null {
+  const gemini = antigravityModel(model)
+  if (gemini !== undefined) return antigravityModelSelection(gemini.id)
   const groups = providerGroups(snapshot)
   const models = groups.flatMap((group) =>
     group.models.map((entry) => gatewayModelId(group.id, entry.id))
@@ -676,6 +679,8 @@ export function nativeModelOverrides(): CustomModel[] | null {
  * Returns null when the user never named this model, so a caller can keep its own compact alias.
  */
 export function displayModelLabel(apiId: string, fallback?: string | null): string | null {
+  const gemini = antigravityModel(apiId)
+  if (gemini !== undefined) return gemini.label
   const fallbackLabel = fallback ?? null
   const identity = parseModelIdentity(apiId)
   if (identity.kind === "gateway" && identity.gatewayId !== null) {

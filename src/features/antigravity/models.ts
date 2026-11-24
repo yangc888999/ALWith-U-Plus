@@ -1,35 +1,77 @@
-/**
- * Gemini models exposed by the official Antigravity ACP binary.
- *
- * These rows are intentionally kept out of the Codex provider/Router snapshot: the binary is a
- * second ACP agent, not an OpenAI-compatible gateway. The composer catalog appends this group so
- * the model is chosen from the same dropdown as Codex models, and a pick routes the surface to the
- * Antigravity agent instead of writing a Codex config option.
- */
+import { modelSelectionId, parseModelIdentity } from "@/lib/model-identity"
+import { isMac } from "@/lib/platform"
+
+import catalog from "./catalog.json"
+
 export const ANTIGRAVITY_MODEL_GROUP = {
-  id: "google-antigravity",
-  name: "Google Antigravity"
+  id: catalog.id,
+  name: catalog.name
 } as const
 
-export const ANTIGRAVITY_MODELS = [
-  { id: "gemini-4-argon", label: "Gemini 4 Argon" },
-  { id: "gemini-4-neon", label: "Gemini 4 Neon" },
-  { id: "gemini-4-hydrogen", label: "Gemini 4 Hydrogen" },
-  { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash" }
-] as const
-
-export const ANTIGRAVITY_MODEL_PREFIX = "antigravity:"
+export const ANTIGRAVITY_MODELS = catalog.models
+export const ANTIGRAVITY_EFFORTS = catalog.efforts
 export const ANTIGRAVITY_ENABLED_KEY = "alwith:antigravity:enabled"
-export const ANTIGRAVITY_DEFAULT_MODEL_KEY = "alwith:antigravity:default-model"
-export const ANTIGRAVITY_DEFAULT_THINKING_KEY = "alwith:antigravity:default-thinking"
-export const ANTIGRAVITY_TIER_KEY = "alwith:antigravity:tier"
+const DEFAULT_MODEL_KEY = "alwith:antigravity:default-model"
+const LEGACY_THINKING_KEY = "alwith:antigravity:default-thinking"
+const MODEL_PREFERENCES_KEY = "alwith:antigravity:model-preferences"
+
+type ModelPreference = { enabled: boolean; effort: string | null }
+
+function storedModelPreferences(): Record<string, unknown> {
+  const raw = localStorage.getItem(MODEL_PREFERENCES_KEY)
+  if (raw === null) return {}
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    return {}
+  }
+  return {}
+}
+
+function validEffort(value: unknown): value is string {
+  return typeof value === "string" && ANTIGRAVITY_EFFORTS.includes(value)
+}
+
+export function antigravityModelRows(): Array<(typeof ANTIGRAVITY_MODELS)[number] & ModelPreference> {
+  let preferences: Record<string, unknown> = {}
+  let inherited: string | null = null
+  try {
+    preferences = storedModelPreferences()
+    const legacy = localStorage.getItem(LEGACY_THINKING_KEY)
+    if (validEffort(legacy)) inherited = legacy
+  } catch {
+    preferences = {}
+  }
+  return ANTIGRAVITY_MODELS.map((model) => {
+    const raw = preferences[model.id]
+    const saved = raw !== null && typeof raw === "object" ? (raw as Partial<ModelPreference>) : null
+    return {
+      ...model,
+      enabled: saved?.enabled !== false,
+      effort: saved?.effort === null || validEffort(saved?.effort) ? saved.effort : inherited
+    }
+  })
+}
+
+export function setAntigravityModelPreference(modelId: string, change: Partial<ModelPreference>): void {
+  const row = antigravityModelRows().find((model) => model.id === modelId)
+  if (row === undefined || (change.effort != null && !validEffort(change.effort))) {
+    throw new Error("Invalid Antigravity model preference")
+  }
+  const preference: ModelPreference = { enabled: row.enabled, effort: row.effort, ...change }
+  localStorage.setItem(MODEL_PREFERENCES_KEY, JSON.stringify({ ...storedModelPreferences(), [modelId]: preference }))
+}
 
 export function antigravityModelSelection(modelId: string): string {
-  return `${ANTIGRAVITY_MODEL_PREFIX}${modelId}`
+  return modelSelectionId(catalog.id, modelId)
 }
 
 /** The settings toggle is the only switch: off removes the whole group from the composer. */
 export function antigravityEnabled(): boolean {
+  if (!isMac()) return false
   try {
     return localStorage.getItem(ANTIGRAVITY_ENABLED_KEY) !== "false"
   } catch {
@@ -37,37 +79,30 @@ export function antigravityEnabled(): boolean {
   }
 }
 
-export function isAntigravityModelSelection(value: string | null | undefined): boolean {
-  return typeof value === "string" && value.startsWith(ANTIGRAVITY_MODEL_PREFIX)
-}
-
-export function antigravityModelId(value: string | null | undefined): string | null {
-  if (typeof value !== "string" || !value.startsWith(ANTIGRAVITY_MODEL_PREFIX)) return null
-  const id = value.slice(ANTIGRAVITY_MODEL_PREFIX.length)
-  return ANTIGRAVITY_MODELS.some((model) => model.id === id) ? id : null
-}
-
-export function antigravityModelLabel(modelId: string | null): string {
-  return ANTIGRAVITY_MODELS.find((model) => model.id === modelId)?.label ?? "Gemini 4 Argon"
+export function antigravityModel(value: string | null) {
+  if (value === null) return undefined
+  const identity = parseModelIdentity(value)
+  if (identity.kind !== "gateway" || identity.gatewayId !== catalog.id) return undefined
+  return ANTIGRAVITY_MODELS.find((model) => model.id === identity.modelId)
 }
 
 /** The saved default, normalized to a model the official binary actually offers. */
 export function antigravityDefaultModel(): string {
   try {
-    const saved = localStorage.getItem(ANTIGRAVITY_DEFAULT_MODEL_KEY)
+    const saved = localStorage.getItem(DEFAULT_MODEL_KEY)
     return typeof saved === "string" && ANTIGRAVITY_MODELS.some((model) => model.id === saved)
       ? saved
-      : ANTIGRAVITY_MODELS[0].id
+      : ANTIGRAVITY_MODELS[0]!.id
   } catch {
-    return ANTIGRAVITY_MODELS[0].id
+    return ANTIGRAVITY_MODELS[0]!.id
   }
 }
 
-export function antigravityDefaultThinking(): string {
-  try {
-    const saved = localStorage.getItem(ANTIGRAVITY_DEFAULT_THINKING_KEY)
-    return saved === "low" || saved === "medium" || saved === "high" ? saved : "high"
-  } catch {
-    return "high"
-  }
+export function setAntigravityDefaultModel(modelId: string): void {
+  if (!ANTIGRAVITY_MODELS.some((model) => model.id === modelId)) throw new Error("Invalid Antigravity model")
+  localStorage.setItem(DEFAULT_MODEL_KEY, modelId)
+}
+
+export function antigravityDefaultThinking(modelId: string): string {
+  return antigravityModelRows().find((model) => model.id === modelId)?.effort ?? catalog.defaultEffort
 }

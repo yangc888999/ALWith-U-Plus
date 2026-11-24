@@ -45,6 +45,7 @@ import { useChatHost, useTimelineSlots } from "./chat-host"
 import { ChatComposer } from "./composer"
 import { ChatSearch } from "./dialogs/chat-search"
 import { FilePreviewModal } from "./dialogs/file-preview-modal"
+import { AntigravityPermissionDialog } from "./dialogs/antigravity-permission"
 import { ImageLightbox } from "./dialogs/image-lightbox"
 import { ChatDirectoryContext, ChatOpenSessionContext } from "./file-actions"
 import { SendModeSwitch } from "./send-mode-switch"
@@ -64,8 +65,6 @@ type ChatViewProps = {
   /** Opens a fresh thread in the given project so the agent stops carrying old context. */
   onClearContext?: (cwd: string) => void
   onDeleted: (sessionId: string) => void
-  /** Opens Gemini on the Antigravity agent after a composer model pick. */
-  onOpenAntigravity?: (model: string) => void
 }
 
 // Issue #3: message-level lazy loading. Historical sessions can hold thousands of items and the
@@ -137,7 +136,6 @@ function Conversation({
   onNewChat,
   onNewProject,
   onDeleted,
-  onOpenAntigravity,
   rootRef
 }: ChatViewProps & { rootRef: RefObject<HTMLDivElement | null> }) {
   const { t } = useTranslation()
@@ -354,19 +352,14 @@ function Conversation({
           <ChatComposer
             session={session}
             voiceResume={voiceResume}
-            modelSelector={
-              <ModelEntry
-                surface="session"
-                session={session}
-                onOpenAntigravity={onOpenAntigravity}
-              />
-            }
+            modelSelector={<ModelEntry surface="session" session={session} />}
           />
         </div>
       }
     >
       <FilePreviewModal />
       <ImageLightbox />
+      <AntigravityPermissionDialog />
     </ConversationView>
   )
 }

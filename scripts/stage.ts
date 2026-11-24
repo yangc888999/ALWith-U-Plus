@@ -197,6 +197,16 @@ const bootstrapBuild = await Bun.build({
 if (!bootstrapBuild.success) throw new AggregateError(bootstrapBuild.logs, "Codex bootstrap bundling failed")
 await Bun.write(join(adapterDirectory, "codex-bootstrap.mjs"), bootstrapBuild.outputs[0])
 
+if (triple.endsWith("apple-darwin")) {
+  const antigravityBridge = await Bun.build({
+    entrypoints: [join(root, "scripts/antigravity-bridge.ts")],
+    target: "bun",
+    minify: true
+  })
+  if (!antigravityBridge.success) throw new AggregateError(antigravityBridge.logs, "Antigravity bridge bundling failed")
+  await Bun.write(join(root, "src-tauri/resources/antigravity/bridge.js"), antigravityBridge.outputs[0])
+}
+
 // A small std-only proxy avoids bundling another copy of the Bun runtime.
 const launcherDestination = join(binaries, `alwith-codex-launcher-${triple}${target.exe}`)
 await $`rustc --edition=2024 --crate-name alwith_codex_launcher --target ${triple} -C opt-level=s -C strip=symbols ${join(root, "src-tauri/src/codex_launcher.rs")} -o ${launcherDestination}`

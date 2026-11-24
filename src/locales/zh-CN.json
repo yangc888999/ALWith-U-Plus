@@ -594,7 +594,7 @@
     "exited": "Antigravity ACP 已退出。",
     "official": "官方 Antigravity ACP",
     "settingsTitle": "Google Antigravity",
-    "settingsDesc": "使用 Google AI Pro 订阅的第二个 Agent 后端，通过官方 ACP 本地运行。",
+    "settingsDesc": "连接 Google 后，可在普通聊天和项目的模型菜单中选择 Gemini。切换模型不会另开对话。",
     "settingsEnable": "启用 Gemini 集成",
     "settingsEnableDesc": "在对话模型选择器中显示 Gemini 分组；关闭后不影响 Codex。",
     "settingsOn": "已启用",
@@ -606,11 +606,13 @@
     "settingsSignedOut": "未登录",
     "settingsChecking": "正在检查登录状态…",
     "busy": "当前回合还在运行。先停止它，再切换到 Gemini。",
-    "settingsModel": "默认模型",
-    "settingsModelDesc": "新建 Gemini 会话时优先选择。",
-    "settingsThinking": "默认思考档位",
-    "settingsThinkingDesc": "Gemini 的 reasoning effort。",
-    "settingsNote": "本机实验包内置 Google 官方 Antigravity ACP 运行时，首次使用自动释放到 Application Support；登录由 Google 官方完成，U⁺ 不读取或保存令牌。"
+    "preferredModel": "在 Gemini 分组中置顶",
+    "modelsHint": "默认 Effort 在选中该模型时应用，仍可在当前对话里调整。置顶只影响菜单排序，不改变对话的模型。",
+    "usagePrompt": "点击刷新查看 Google 账号的套餐额度。",
+    "usageUnavailable": "Google 暂未返回可显示的额度数据。",
+    "usageError": "暂时无法读取 Google 额度，请稍后刷新。",
+    "usageRemainingUnits": "剩余 {{amount}} 单位",
+    "settingsNote": "登录由 Google 官方处理。选用 Gemini 发送消息时，当前对话的文本和内嵌图片会发给 Google；此集成不执行项目工具。"
   },
   "composer": {
     "mode": "权限",

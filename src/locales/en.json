@@ -594,7 +594,7 @@
     "exited": "Antigravity ACP exited.",
     "official": "Official Antigravity ACP",
     "settingsTitle": "Google Antigravity",
-    "settingsDesc": "A second agent backend using a Google AI Pro subscription through the official local ACP runtime.",
+    "settingsDesc": "Connect Google to select Gemini from the regular chat or project model menu without opening a separate conversation.",
     "settingsEnable": "Enable Gemini integration",
     "settingsEnableDesc": "Show the Gemini group in the conversation model picker; Codex is unaffected when off.",
     "settingsOn": "Enabled",
@@ -606,11 +606,13 @@
     "settingsSignedOut": "Not signed in",
     "settingsChecking": "Checking sign-in…",
     "busy": "The current turn is still running. Stop it before switching to Gemini.",
-    "settingsModel": "Default model",
-    "settingsModelDesc": "Preferred when a Gemini session starts.",
-    "settingsThinking": "Default thinking level",
-    "settingsThinkingDesc": "Gemini reasoning effort.",
-    "settingsNote": "This local build carries Google's official Antigravity ACP runtime and releases it to Application Support on first use; Google owns the sign-in and U⁺ never reads or stores tokens."
+    "preferredModel": "Pin first in the Gemini group",
+    "modelsHint": "Each default Effort applies when you select that model and can be changed in the conversation. Pinning only changes menu order.",
+    "usagePrompt": "Refresh to read your Google account's plan limits.",
+    "usageUnavailable": "Google has not returned quota figures to display.",
+    "usageError": "Could not read Google quota. Try refreshing again later.",
+    "usageRemainingUnits": "{{amount}} units remaining",
+    "settingsNote": "Google handles sign-in. Sending with Gemini shares the current conversation's text and inline images with Google. This integration does not run project tools."
   },
   "composer": {
     "mode": "Permissions",

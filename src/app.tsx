@@ -18,8 +18,6 @@ import { commands, events } from "@/bindings"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { SidebarInset } from "@/components/ui/sidebar"
-import { AntigravityPage } from "@/features/antigravity/antigravity-page"
-import { ANTIGRAVITY_DEFAULT_MODEL_KEY, antigravityModelId } from "@/features/antigravity/models"
 import { WallpaperBackground } from "@/features/appearance/wallpaper/background"
 import { serveAutomationBridge } from "@/features/automation/automation-bridge"
 import {
@@ -284,10 +282,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     void closeOnlineBiWindow().catch(() => {})
   }, [leading, closePreviewExtension])
   const session = useSession(selectedId)
-  // Gemini is a second ACP agent, not a provider inside Codex. A Gemini pick from the composer
-  // routes the whole surface to that agent; the Codex session stays mounted/off-screen and keeps
-  // its own history. One agent owns a turn at a time.
-  const [antigravityModel, setAntigravityModel] = useState<string | null>(null)
   const draftSessions = useApp((state) => state.draftSessions)
   const { busy, operation } = useSurfaceOperation(() =>
     toast.error(t("errors.handoffStalled"), { id: "surface-handoff-stalled" })
@@ -357,7 +351,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   useProjectMemory()
 
   const select = useCallback((sessionRow: SessionSummary) => {
-    setAntigravityModel(null)
     // A project opened from history must have its memory file too, not only the ones picked in
     // the composer: the read-memory action would otherwise find nothing on older projects.
     void ensureProjectMemory(sessionRow.cwd)
@@ -588,7 +581,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       void operation
         .run(
           async () => {
-            setAntigravityModel(null)
             const directory = newChatDirectory(
               cwd === undefined ? (extensionSession.current?.cwd ?? lastDirectory) : cwd
             )
@@ -661,7 +653,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       void operation
         .run(
           async () => {
-            setAntigravityModel(null)
             // Park the model and effort before the thread goes away; the first turn of the
             // replacement re-applies them.
             client.rememberCurrentForNextChat(sessionId)
@@ -1268,20 +1259,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
         </Alert>
       </div>
     ) : null
-    if (antigravityModel !== null) {
-      const selectedGeminiModel = antigravityModelId(antigravityModel)
-      return (
-        <AntigravityPage
-          cwd={lastDirectory}
-          embedded
-          initialModel={selectedGeminiModel}
-          onSwitchToCodex={() => {
-            setAntigravityModel(null)
-            setSurfaceGeneration((value) => value + 1)
-          }}
-        />
-      )
-    }
     if (view === "story")
       return (
         <Suspense fallback={null}>
@@ -1360,15 +1337,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           onNewChat={newProjectChat}
           onClearContext={(cwd) => clearContextInPlace(session.id, cwd)}
           onDeleted={deleted}
-          onOpenAntigravity={(value) => {
-            if (session.state !== "idle") {
-              toast.info(t("antigravity.busy"))
-              return
-            }
-            const picked = antigravityModelId(value)
-            if (picked !== null) localStorage.setItem(ANTIGRAVITY_DEFAULT_MODEL_KEY, picked)
-            setAntigravityModel(value)
-          }}
         />
       )
     return (
@@ -1400,11 +1368,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           providerSnapshot={providerSnapshot}
           runOperation={operation.run}
           onOpenWindow={moveToWindow}
-          onOpenAntigravity={(value) => {
-            const picked = antigravityModelId(value)
-            if (picked !== null) localStorage.setItem(ANTIGRAVITY_DEFAULT_MODEL_KEY, picked)
-            setAntigravityModel(value)
-          }}
         />
       </>
     )

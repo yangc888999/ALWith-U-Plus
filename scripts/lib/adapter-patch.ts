@@ -1,9 +1,34 @@
+import antigravity from "../../src/features/antigravity/catalog.json"
+
 /** Stage-time fixes for the pinned adapter bundle; fail closed if its implementation changes. */
 export function patchAdapter(source: string): string {
   const replace = (before: string, after: string) => {
     if (source.split(before).length !== 2) throw new Error("Adapter patch anchor changed or duplicated")
     source = source.replace(before, after)
   }
+  const providerRouting = "    this.providerCatalog = new ProviderRouting(Object.fromEntries(Object.entries(this.config).filter((entry) => entry[1] !== undefined)), this.modelProvider);"
+  replace(
+    providerRouting,
+    `${providerRouting}
+    if (process.env.ALWITH_U_ANTIGRAVITY_ROUTE === "1" && process.env.ALWITH_U_ROUTER_BASE) {
+      const catalog = ${JSON.stringify(antigravity)};
+      this.providerCatalog.set({
+        providerId: "openai", apiType: "openai", baseUrl: process.env.ALWITH_U_ROUTER_BASE,
+        _meta: {
+          codex: { id: catalog.id, name: catalog.name, runtimeId: "alwith", mode: "catalog", bearerToken: process.env.ALWITH_U_ROUTER_TOKEN },
+          alwith: { models: catalog.models }
+        }
+      });
+      const entries = this.providerCatalog.gateway(catalog.id).catalogEntries;
+      for (const model of catalog.models) {
+        entries.set(model.id, {
+          displayName: model.label, description: catalog.name,
+          efforts: catalog.efforts.map((effort) => ({ reasoningEffort: effort, description: effort })),
+          defaultEffort: catalog.defaultEffort, inputModalities: ["text", "image"]
+        });
+      }
+    }`
+  )
   // A remote marketplace catalog (openai-curated-remote) is ~13.7k plugins and ~37 MB of JSON in a
   // single ACP frame. That frame cannot cross codex → adapter → Runtime → IPC without stalling or
   // dropping the connection, which surfaced as "the engine exits as soon as the OpenAI marketplace
