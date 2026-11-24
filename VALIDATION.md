@@ -34,3 +34,9 @@ Not yet verified: real file edits, approvals and elicitations through the deskto
 UI (covered by the fake-agent tests at the protocol level only), Windows and Linux
 staging (the platform packages are not installed here), the release bundle and
 code signing, and the auto-updater (not wired yet).
+
+## Model routing regression checks
+
+After `bun run stage`, run `ALWITH_LIVE_FOCUS=models-local bun scripts/live.ts` to exercise the packaged runtime, adapter and Codex over both stdio and WebSocket. A temporary Codex home and a loopback Responses server isolate the test. It checks the model field received for each turn while switching between two gateways selling the same model and back to native models in the same thread. It also sends concurrently from two sessions on different gateways and checks each request separately.
+
+`ALWITH_LIVE_FOCUS=models bun scripts/live.ts` uses the configured live account/router instead. It sends short prompts to two advertised GPT models per transport, checks their replies, and removes the temporary conversations. This check can consume model quota.

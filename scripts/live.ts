@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Live check against a real Codex login: two read-only conversations run
 // concurrently and stay isolated; attach and a fresh agent both replay the original history.
-import { mkdtemp, realpath, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -22,8 +22,10 @@ import {
 } from "@alwith/module-chat/async-question-card"
 
 import { CodexClient } from "../src/agent/client"
+import { nativeGroupModels, selectedModelId } from "../src/agent/native-models"
 import { codexTurnId, codexTurnStartedAt } from "@nyssance/codex-acp-v2/client"
 import { computerRuntimeEnv } from "../src/features/computer/runtime-config"
+import { startModelProbe } from "./lib/live-model-router"
 import { staged, stagedCodexEngine, startRuntime } from "./lib/runtime"
 
 function isNotice(item: Session["items"][number]): boolean {
@@ -91,17 +93,84 @@ async function verifyHistory(client: CodexClient, directory: string, replies: Ma
   }
 }
 
-async function check(transport: "stdio" | "ws") {
+async function verifyModelSwitch(
+  client: CodexClient,
+  directory: string,
+  port: ProcessRuntimeClient | WebSocketRuntimeClient,
+  probe?: ReturnType<typeof startModelProbe>
+): Promise<void> {
+  const id = await client.newSession(directory)
+  try {
+    const options = client.session(id).configOptions
+    const current = selectedModelId(options)
+    const models = nativeGroupModels(options)?.models.map((entry) => entry.id).filter((id) => /^gpt-/i.test(id)) ?? []
+    const first = current !== null && models.includes(current) ? current : models[0]
+    const second = models.find((model) => model !== first)
+    if (!first || !second) throw new Error(`Model switch needs two advertised GPT models; found ${models.length}`)
+    const turns = [[first, first], [second, second]] as [string, string][]
+    if (probe) {
+      const gatewayTurns: [string, string][] = []
+      for (const gateway of ["probe-a", "probe-b"]) {
+        await port.acpRequest("codex", "providers/set", {
+          providerId: "openai", apiType: "openai", baseUrl: probe.url,
+          _meta: { codex: { id: gateway, name: gateway, mode: "catalog", runtimeId: "alwith" }, alwith: { models: [{ id: first, label: first }] } }
+        })
+        gatewayTurns.push([`gateway:${gateway}:${first}`, `${gateway}/${first}`])
+      }
+      turns.unshift(...gatewayTurns)
+    }
+    const verifyTurn = async (sessionId: string, target: string, upstream: string) => {
+      const marker = `ROUTE_${crypto.randomUUID().slice(0, 8)}`
+      await client.setConfig(sessionId, "model", target)
+      if (selectedModelId(client.session(sessionId).configOptions) !== target) throw new Error(`Switch did not land: ${target}`)
+      const receipt = await client.prompt(sessionId, [{ type: "text", text: `Reply with exactly ${marker} and nothing else.` }])
+      await until(() => {
+        const session = client.session(sessionId)
+        if (session.state !== "idle" || !Object.hasOwn(session.turnEndedAt, receipt)) return false
+        if (session.error !== null) throw new Error(`Turn on ${target} failed: ${JSON.stringify(session.error)}`)
+        if (!assistantText(session).includes(marker)) throw new Error(`Turn on ${target} did not return its marker`)
+        return true
+      }, 90_000, `reply on ${target}`)
+      probe?.assertModel(marker, upstream)
+      console.log(`model switch: received the turn marker on selected model ${target}`)
+    }
+    for (const [target, upstream] of turns) await verifyTurn(id, target, upstream)
+    if (probe) {
+      const sibling = await client.newSession(directory)
+      try {
+        await Promise.all([
+          verifyTurn(id, `gateway:probe-a:${first}`, `probe-a/${first}`),
+          verifyTurn(sibling, `gateway:probe-b:${first}`, `probe-b/${first}`)
+        ])
+        console.log("model isolation: concurrent sessions reached their own gateways")
+      } finally {
+        await client.delete(sibling)
+      }
+    }
+  } finally {
+    await client.delete(id)
+  }
+}
+
+async function check(transport: "stdio" | "ws", probe?: ReturnType<typeof startModelProbe>) {
   const directory = await realpath(await mkdtemp(join(tmpdir(), `alwith-u-live-${transport}-`)))
   await writeFile(join(directory, "README.md"), "# live check\n")
   console.log(`project: ${directory}`)
 
-  const runtime = transport === "ws" ? await startRuntime(join(directory, "journal")) : null
+  const engine = stagedCodexEngine()
+  if (probe) {
+    const home = join(directory, "home")
+    const codexHome = join(home, ".codex")
+    await mkdir(codexHome, { recursive: true })
+    Object.assign(engine.env, { HOME: home, CODEX_HOME: codexHome, ALWITH_U_ROUTER_BASE: probe.url,
+      ALWITH_U_ROUTER_TOKEN: "local-probe", OPENAI_BASE_URL: probe.url, OPENAI_API_KEY: "local-probe", ALWITH_U_MODEL_CATALOG: "" })
+  }
+  const runtime = transport === "ws" ? await startRuntime(join(directory, "journal"), engine) : null
   const port = runtime
     ? new WebSocketRuntimeClient(runtime.url, runtime.token)
     : new ProcessRuntimeClient({
         binary: staged("alwith-runtime"),
-        engines: { codex: stagedCodexEngine() },
+        engines: { codex: engine },
         journalRoot: join(directory, "journal"),
         env: { ALWITH_RUNTIME_ATTENTION: join(directory, "attention") }
       })
@@ -114,16 +183,22 @@ async function check(transport: "stdio" | "ws") {
   try {
     await client.connect()
     console.log(`agent: ${client.state.agent?.info.name} ${client.state.agent?.info.version}`)
+    if (process.env.ALWITH_LIVE_FOCUS === "models" || probe) {
+      await verifyModelSwitch(client, directory, port, probe)
+      return
+    }
 
     const draft = await client.prepareDraft("main", directory)
     if (!client.session(draft).configOptions.some((option) => option.category === "model"))
       throw new Error("Precreated draft has no model selector")
     if (!client.session(draft).commands.some((command) => command.name === "status"))
       throw new Error("Precreated draft has no status command")
-    if ((await client.listProjectSessions(directory)).some((sessionRow) => sessionRow.sessionId === draft))
-      throw new Error("Precreated draft leaked into the project index")
+    if ((await client.listProjectSessions(directory)).filter((sessionRow) => sessionRow.sessionId === draft).length !== 1)
+      throw new Error("Precreated draft must appear exactly once in its project")
     await client.discardDraft("main")
     if (client.state.sessions[draft]) throw new Error("Discarded draft is still attached")
+    if ((await client.listProjectSessions(directory)).some((sessionRow) => sessionRow.sessionId === draft))
+      throw new Error("Discarded draft is still in the project index")
     console.log("draft: real model options before sending; empty session cleaned up")
 
     const [a, b] = await Promise.all([client.prepareDraft("main", directory), client.prepareDraft("chat", directory)])
@@ -378,6 +453,7 @@ async function check(transport: "stdio" | "ws") {
     port.close()
     runtime?.stop()
     await exited
+    if (probe) await rm(directory, { recursive: true, force: true })
   }
 }
 
@@ -479,4 +555,9 @@ async function verifyAsyncUserInput(client: CodexClient, directory: string): Pro
   }
 }
 
-for (const transport of ["stdio", "ws"] as const) await check(transport)
+const probe = process.env.ALWITH_LIVE_FOCUS === "models-local" ? startModelProbe() : undefined
+try {
+  for (const transport of ["stdio", "ws"] as const) await check(transport, probe)
+} finally {
+  await probe?.close()
+}

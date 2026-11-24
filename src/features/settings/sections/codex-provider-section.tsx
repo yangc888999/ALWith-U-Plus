@@ -26,18 +26,50 @@ import {
 } from "@/lib/settings-bridge"
 
 import { SettingGroup, SettingLabel } from "./shared"
-import { UsageLimitRow } from "./usage-limit-row"
 import { UsageResetBlock } from "./usage-reset-card"
 
-function CodexUsageLimit({ label, window }: { label: string; window: RateLimitWindow }) {
+/** Desktop's `UsageLimitRow`: label, a long bar, "n% remaining", then the reset time under it. */
+function UsageLimitRow({ label, window }: { label?: string; window?: RateLimitWindow }) {
+  const { t } = useTranslation()
+  const percent = window ? 100 - Math.round(Math.min(100, Math.max(0, window.usedPercent))) : 0
+  const resets =
+    window && window.resetsAt !== null
+      ? t("usage.resetsAt", { time: format(new Date(window.resetsAt * 1000), "yyyy/MM/dd HH:mm") })
+      : null
   return (
-    <UsageLimitRow
-      label={label}
-      limit={{
-        remainingPercent: 100 - Math.round(Math.min(100, Math.max(0, window.usedPercent))),
-        resetsAt: window.resetsAt === null ? null : window.resetsAt * 1000
-      }}
-    />
+    <div className="space-y-1.5" aria-busy={!window}>
+      <div className="grid min-h-5 grid-cols-[3.5rem_minmax(0,1fr)_5rem] items-center gap-3">
+        {window ? (
+          <span className="text-sm">{label}</span>
+        ) : (
+          <Skeleton className="h-4 w-10 motion-reduce:animate-none" />
+        )}
+        {window ? (
+          <div
+            className="h-2 overflow-hidden rounded-full bg-muted"
+            role="progressbar"
+            aria-label={label}
+            aria-valuenow={percent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div className="h-full rounded-full bg-[var(--settings-accent)]" style={{ width: `${percent}%` }} />
+          </div>
+        ) : (
+          <Skeleton className="h-2 rounded-full motion-reduce:animate-none" />
+        )}
+        {window ? (
+          <span className="text-end text-xs text-muted-foreground tabular-nums">
+            {t("usage.remaining", { percent })}
+          </span>
+        ) : (
+          <Skeleton className="h-4 w-14 justify-self-end motion-reduce:animate-none" />
+        )}
+      </div>
+      <div className="flex min-h-4 items-center justify-end text-xs text-muted-foreground">
+        {window ? resets : <Skeleton className="h-3 w-32 motion-reduce:animate-none" />}
+      </div>
+    </div>
   )
 }
 
@@ -119,10 +151,10 @@ export function CodexAccountSummary({
           ) : (
             <>
               {limits.primary !== null && (
-                <CodexUsageLimit label={limitWindowLabel(limits.primary, t)} window={limits.primary} />
+                <UsageLimitRow label={limitWindowLabel(limits.primary, t)} window={limits.primary} />
               )}
               {limits.secondary !== null && (
-                <CodexUsageLimit label={limitWindowLabel(limits.secondary, t)} window={limits.secondary} />
+                <UsageLimitRow label={limitWindowLabel(limits.secondary, t)} window={limits.secondary} />
               )}
               {limits.primary === null && limits.secondary === null && (
                 <span className="text-sm text-muted-foreground">{t("usage.unavailable")}</span>

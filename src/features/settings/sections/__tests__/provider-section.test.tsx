@@ -406,7 +406,7 @@ test("syncing models offers them one at a time; + adds a model to the list and -
         reasoningLevels: ["low", "medium", "high", "max"],
         defaultReasoningLevel: "medium"
       },
-      { label: "Gemini 3.8 Flash", api_id: "gemini-3.8-flash" }
+      { label: "GLM 4.7", api_id: "glm-4.7" }
     ])
   )
   const view = render(
@@ -431,9 +431,9 @@ test("syncing models offers them one at a time; + adds a model to the list and -
   expect(view.getByRole("status").textContent).toBe("Found 2 models on the endpoint.")
   // Discovered models group by family, collapsed; open both to reach their rows.
   await act(() => Promise.try(() => fireEvent.click(view.getByText("Claude"))))
-  await act(() => Promise.try(() => fireEvent.click(view.getByText("Gemini"))))
+  await act(() => Promise.try(() => fireEvent.click(view.getByText("Zhipu"))))
   expect(view.getByText("Claude Opus 5.5")).toBeTruthy()
-  expect(view.getByText("Gemini 3.8 Flash")).toBeTruthy()
+  expect(view.getByText("GLM 4.7")).toBeTruthy()
   expect(view.getAllByRole("button", { name: "Add to model list" })).toHaveLength(2)
   expect(view.queryByRole("button", { name: "Remove from model list" })).toBeNull()
 

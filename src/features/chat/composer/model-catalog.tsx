@@ -20,15 +20,7 @@
 import type { ModelMenuGroup, ModelMenuOption, ModelMenuProps } from "@alwith/module-chat/conversation"
 
 import { NATIVE_MODEL_GROUP } from "@/agent/client"
-import { GoogleMark } from "@/components/icons/google-mark"
 import { ModelOptionIcon } from "@/components/model-options/model-option-icon"
-import {
-  ANTIGRAVITY_MODEL_GROUP,
-  antigravityDefaultModel,
-  antigravityEnabled,
-  antigravityModelRows,
-  antigravityModelSelection
-} from "@/features/antigravity/models"
 import {
   cleanModelLabel,
   modelGroupLabel,
@@ -146,17 +138,6 @@ function unifiedNativeGroup(sessionNative: ModelGroup | undefined, result: Model
 
 /** 统一图标：直接取 `ModelOptionIcon` 的元素，保证紧凑菜单的分组标题标记与 ①②④ 一致。 */
 function rowIcon(groupId: string, apiId: string, groupTitle: string | undefined): Row["icon"] {
-  if (groupId === ANTIGRAVITY_MODEL_GROUP.id) {
-    return (
-      <span
-        aria-hidden="true"
-        className="model-picker-icon"
-        data-model-group-title={groupTitle === undefined ? undefined : groupTitle}
-      >
-        <GoogleMark className="size-4 text-[9px]" />
-      </span>
-    )
-  }
   return ModelOptionIcon({
     kind: modelIconKind(groupId, apiId),
     groupTitle: groupTitle ?? null,
@@ -183,30 +164,13 @@ export function presentModelCatalog(
     groups.filter((group) => group.id !== NATIVE_MODEL_GROUP.id),
     snapshot
   )
-    .filter((group) => group.id !== "litellm" && group.id !== ANTIGRAVITY_MODEL_GROUP.id)
+    .filter((group) => group.id !== "litellm")
     .map((group) => ({
       ...group,
       models: group.models.filter((model) => !model.api_id.startsWith("gateway:litellm:"))
     }))
   const native = unifiedNativeGroup(sessionNative, result)
-  const preferredGemini = antigravityDefaultModel()
-  const liveGemini = groups.find((group) => group.id === ANTIGRAVITY_MODEL_GROUP.id)
-  const antigravity: ModelGroup = {
-    id: ANTIGRAVITY_MODEL_GROUP.id,
-    name: ANTIGRAVITY_MODEL_GROUP.name,
-    models: antigravityModelRows()
-      .filter((model) => model.enabled)
-      .sort((left, right) => Number(right.id === preferredGemini) - Number(left.id === preferredGemini))
-      .map((model) => {
-        const api_id = antigravityModelSelection(model.id)
-        return liveGemini?.models.find((entry) => entry.api_id === api_id) ?? { api_id, label: model.label }
-      })
-  }
-  const ordered = [
-    ...(native === null ? [] : [native]),
-    ...gateway,
-    ...(antigravityEnabled() && antigravity.models.length > 0 ? [antigravity] : [])
-  ]
+  const ordered = [...(native === null ? [] : [native]), ...gateway]
 
   return ordered.map((group) => {
     const groupName = modelGroupLabel(group.id, group.name)

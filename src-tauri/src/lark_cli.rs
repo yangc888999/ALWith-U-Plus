@@ -274,6 +274,26 @@ pub fn send_args(target: &LarkTarget, text: &str, identity: &str) -> Vec<String>
     .collect()
 }
 
+/// `--page-all` still honours the CLI's default `--page-limit` of 10 pages × 20 rows, which stopped
+/// the picker at 200 groups even though the list said it had more. Ask for the largest page size and
+/// page limit so a user in hundreds of groups can still find every one of them.
+fn chat_list_args() -> Vec<String> {
+    [
+        "im",
+        "+chat-list",
+        "--format",
+        "json",
+        "--page-all",
+        "--page-limit",
+        "1000",
+        "--page-size",
+        "100"
+    ]
+    .iter()
+    .map(|value| (*value).to_string())
+    .collect()
+}
+
 #[tauri3_specta::command]
 pub async fn lark_cli_status() -> Result<LarkCliStatus, String> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -327,19 +347,7 @@ pub async fn lark_cli_targets(kind: String, query: String) -> Result<Vec<LarkTar
             .map(|value| (*value).to_string())
             .collect()
         } else {
-            // `--page-all` pulls every group the CLI can see; the previous `--page-limit 3`
-            // silently capped the picker at three chats. With page-all there is no truncation,
-            // so an empty result genuinely means "no groups" rather than "only the first page".
-            [
-                "im",
-                "+chat-list",
-                "--format",
-                "json",
-                "--page-all"
-            ]
-            .iter()
-            .map(|value| (*value).to_string())
-            .collect()
+            chat_list_args()
         };
         let value = run_cli(&args)?;
         Ok(if kind == "user" { parse_users(&value) } else { parse_chats(&value) })
@@ -877,6 +885,15 @@ mod tests {
         assert_eq!(rows[0].name, "产品 & 运营");
         assert_eq!(rows[0].kind, "chat");
         assert_eq!(rows[1].name, "oc_2");
+    }
+
+    #[test]
+    fn chat_list_asks_for_every_page_instead_of_stopping_at_two_hundred() {
+        let args = chat_list_args();
+        let flag = |name: &str| args.iter().position(|arg| arg == name).map(|index| args[index + 1].as_str());
+        assert!(args.contains(&"--page-all".to_string()));
+        assert_eq!(flag("--page-limit"), Some("1000"));
+        assert_eq!(flag("--page-size"), Some("100"));
     }
 
     #[test]

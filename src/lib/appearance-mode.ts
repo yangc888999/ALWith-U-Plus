@@ -173,11 +173,6 @@ export function startAppearanceMode(): () => void {
   return () => undefined
 }
 
-/** 给「跟着系统深浅色切换」留的钩子：材质不需要重挂，但 CSS 底色 alpha 要靠 data 属性重算。 */
-export function currentAppearanceMode(): AppearanceMode {
-  return mode
-}
-
 export function appearanceModeSnapshot(): AppearanceMode {
   return mode
 }

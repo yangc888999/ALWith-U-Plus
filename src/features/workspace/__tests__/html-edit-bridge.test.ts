@@ -1,11 +1,8 @@
 /**
  * QA regression: execute the *shipped* iframe bridge (`HTML_EDIT_BRIDGE_SOURCE`) in a live frame.
  *
- * html-edit-commands.ts is a jsdom reference implementation that no source file imports — its own
- * suite therefore proves nothing about the code that actually runs inside the preview iframe.
  * These tests inject the real script into an iframe realm and drive it over the real message
- * protocol, so a divergence between the two parallel implementations (or a syntax error in the
- * embedded script) fails here instead of on the user's machine.
+ * protocol, so a syntax error or protocol regression fails here instead of on the user's machine.
  *
  * The bridge is injected as a real <script> element (jsdom executes those). jsdom gives the frame a
  * cross-realm `window.parent` proxy, so both directions of the protocol are wired through that exact
@@ -16,8 +13,12 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
 import { HTML_EDIT_BRIDGE_ID, HTML_EDIT_BRIDGE_SOURCE, htmlEditBridgeScript } from "../html-edit-bridge"
-import { computeHtmlFormatState, runHtmlCommand, serializeHtmlDocument } from "../html-edit-commands"
-import { HTML_EDIT_FRAME_SOURCE, HTML_EDIT_HOST_SOURCE, type FormatState } from "../wysiwyg-types"
+import {
+  EMPTY_FORMAT_STATE,
+  HTML_EDIT_FRAME_SOURCE,
+  HTML_EDIT_HOST_SOURCE,
+  type FormatState
+} from "../wysiwyg-types"
 
 const NONCE = "qa-bridge-nonce"
 
@@ -299,7 +300,7 @@ test("Cmd+S inside the frame flushes immediately", () => {
   expect(bridge.last("dirty")?.html ?? "").toContain("<u>hello</u>")
 })
 
-test("the shipped serializer strips every injected artifact and matches the reference byte-for-byte", () => {
+test("the shipped serializer strips every injected artifact", () => {
   const source =
     '<!DOCTYPE html><html><head><title>T</title>' +
     '<script src="/token/__alwith-menu.js"></script>' +
@@ -335,8 +336,6 @@ test("the shipped serializer strips every injected artifact and matches the refe
   expect(shipped).toContain("<title>T</title>")
   expect(shipped).toContain("quoted")
   expect(shipped).toContain('src="a.png"')
-  // Parallel-implementation parity: the jsdom reference must produce identical output.
-  expect(shipped).toBe(serializeHtmlDocument(bridge.doc))
 })
 
 test("a pristine document round-trips through the shipped serializer without editing artifacts", () => {
@@ -353,7 +352,7 @@ test("a pristine document round-trips through the shipped serializer without edi
   expect(html).not.toContain("__alwith")
 })
 
-test("the shipped command set and format-state keys match the reference implementation", () => {
+test("the shipped command set reports format state for every command", () => {
   const bridge = mountBridge(`<!DOCTYPE html><html><body><p>text</p>${TABLE}</body></html>`)
   bridge.send("set-mode", { editing: true })
   bridge.caret("td")
@@ -361,13 +360,11 @@ test("the shipped command set and format-state keys match the reference implemen
   bridge.send("set-mode", { editing: true })
   const shippedState = bridge.last("state")?.state
   expect(shippedState).toBeDefined()
-  const referenceState = computeHtmlFormatState(bridge.doc, true, null)
-  expect(Object.keys(shippedState as object).sort()).toEqual(Object.keys(referenceState).sort())
-  expect(shippedState).toEqual(referenceState)
+  expect(Object.keys(shippedState as object).sort()).toEqual(Object.keys(EMPTY_FORMAT_STATE).sort())
   expect(shippedState?.inTable).toBe(true)
 
-  // Every command the reference handles must also be handled by the shipped switch: each one must
-  // report state back (an unknown command would fall through without a report).
+  // Every command must be handled by the shipped switch: each one reports state back, while an
+  // unknown command would fall through without a report.
   const commands = [
     "bold",
     "italic",
@@ -389,6 +386,5 @@ test("the shipped command set and format-state keys match the reference implemen
     const before = bridge.count("state")
     bridge.send("command", { command })
     expect(bridge.count("state")).toBe(before + 1)
-    expect(runHtmlCommand(bridge.doc, command, null)).toHaveProperty("changed")
   }
 })

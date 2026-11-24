@@ -10,9 +10,7 @@ import { client } from "@/lib/client"
 import { describeError } from "@/lib/error-text"
 import { groupRoleFor, type GroupRole } from "@/lib/group-roles"
 import {
-  armGroupDiscussion,
   clearGroupControl,
-  clearGroupDiscussion,
   groupDiscussed,
   markGroupDiscussed,
   patchGroupDiscussion,
@@ -265,10 +263,4 @@ export function useGroupDiscussion(session: Session): void {
       void runDiscussion(sessionId, live, current)
     })
   }, [sessionId, groupId])
-}
-
-/** Clears the status card when the user starts a new topic, and arms the roster for it. */
-export function resetGroupDiscussion(sessionId: string): void {
-  clearGroupDiscussion(sessionId)
-  armGroupDiscussion(sessionId)
 }

@@ -1,34 +1,9 @@
-import antigravity from "../../src/features/antigravity/catalog.json"
-
 /** Stage-time fixes for the pinned adapter bundle; fail closed if its implementation changes. */
 export function patchAdapter(source: string): string {
   const replace = (before: string, after: string) => {
     if (source.split(before).length !== 2) throw new Error("Adapter patch anchor changed or duplicated")
     source = source.replace(before, after)
   }
-  const providerRouting = "    this.providerCatalog = new ProviderRouting(Object.fromEntries(Object.entries(this.config).filter((entry) => entry[1] !== undefined)), this.modelProvider);"
-  replace(
-    providerRouting,
-    `${providerRouting}
-    if (process.env.ALWITH_U_ANTIGRAVITY_ROUTE === "1" && process.env.ALWITH_U_ROUTER_BASE) {
-      const catalog = ${JSON.stringify(antigravity)};
-      this.providerCatalog.set({
-        providerId: "openai", apiType: "openai", baseUrl: process.env.ALWITH_U_ROUTER_BASE,
-        _meta: {
-          codex: { id: catalog.id, name: catalog.name, runtimeId: "alwith", mode: "catalog", bearerToken: process.env.ALWITH_U_ROUTER_TOKEN },
-          alwith: { models: catalog.models }
-        }
-      });
-      const entries = this.providerCatalog.gateway(catalog.id).catalogEntries;
-      for (const model of catalog.models) {
-        entries.set(model.id, {
-          displayName: model.label, description: catalog.name,
-          efforts: catalog.efforts.map((effort) => ({ reasoningEffort: effort, description: effort })),
-          defaultEffort: catalog.defaultEffort, inputModalities: ["text", "image"]
-        });
-      }
-    }`
-  )
   // A remote marketplace catalog (openai-curated-remote) is ~13.7k plugins and ~37 MB of JSON in a
   // single ACP frame. That frame cannot cross codex → adapter → Runtime → IPC without stalling or
   // dropping the connection, which surfaced as "the engine exits as soon as the OpenAI marketplace
@@ -83,6 +58,14 @@ export function patchAdapter(source: string): string {
     }`
   )
   replace(
+    '        sessionState.titleGen.onTurnCompleted(promptText);',
+    `        const catalog = promptClient.providerCatalog;
+        if (modelId.model.startsWith("gateway:") || catalog.gatewayIdFor(modelId.model) !== null || catalog.gatewayForRoutedSlug(modelId.model) !== null || catalog.hasGateway(sessionState.authProvider))
+          sessionState.titleGen.markExistingTitle();
+        else
+          sessionState.titleGen.onTurnCompleted(promptText);`
+  )
+  replace(
     '!this.providerCatalog?.hasGateway?.(provider)',
     '!this.codexAcpClient.providerCatalog.hasGateway(provider) && !this.codexAcpClient.providerCatalog.hasRuntime(provider)'
   )
@@ -91,8 +74,45 @@ export function patchAdapter(source: string): string {
     'model_providers: { ...existing, [gateway.runtimeId ?? gateway.id]: entry, [gateway.id]: this.routesThroughPeer(gateway) ? { name: gateway.name, base_url: gateway.baseUrl, wire_api: entry.wire_api } : entry }'
   )
   replace(
+    '      const gatewayId = this.providerCatalog.gatewayIdFor(selection) ?? this.providerCatalog.gatewayForModelSlug(model);',
+    `      const catalog = this.providerCatalog;
+      const gatewayId = catalog.gatewayIdFor(selection) ?? catalog.gatewayForRoutedSlug(model);
+      if (gatewayId === null && (!catalog.active || catalog.mode === "catalog")) {
+        if (selection.startsWith("gateway:")) throw RequestError.invalidParams(undefined, "Selected gateway model is unavailable");
+        if (!request.sessionId) return { model, gatewayId: null, modelProvider: this.getModelProvider() };
+        const { thread } = await this.codexClient.threadRead({ threadId: request.sessionId });
+        const provider = thread.modelProvider;
+        if (provider && provider !== "alwith" && provider !== catalog.nativeModelProvider())
+          throw RequestError.invalidRequest(undefined, 'This chat is pinned to the "' + provider + '" provider; start a new chat to switch vendors');
+        return { model, gatewayId: null, modelProvider: provider ?? this.getModelProvider() };
+      }`
+  )
+  replace(
+    '      if (this.providerCatalog.hasRuntime(thread.modelProvider)) {\n        return {\n          gatewayId: thread.modelProvider,',
+    '      if (!this.providerCatalog.hasGateway(thread.modelProvider) && (thread.modelProvider === "alwith" || thread.modelProvider === this.providerCatalog.nativeModelProvider() || this.providerCatalog.hasRuntime(thread.modelProvider))) {\n        return {\n          gatewayId: this.providerCatalog.gatewayForRoutedSlug(thread.model),'
+  )
+  replace(
+    `      const recovered =
+        this.providerCatalog.gatewayForModelSlug(thread.model) ??
+        this.providerCatalog.gatewayForRoutedSlug(thread.model);`,
+    `      if (thread.modelProvider) return { gatewayId: null, modelProvider: thread.modelProvider };
+      const recovered = this.providerCatalog.gatewayForRoutedSlug(thread.model);
+      if (recovered === null && this.providerCatalog.gatewayForModelSlug(thread.model) !== null)
+        throw RequestError.invalidRequest(undefined, "Cannot determine the original provider for this chat");`
+  )
+  replace(
+    '          gatewayId: recovered,\n          modelProvider: recovered',
+    '          gatewayId: recovered,\n          model: thread.model,\n          modelProvider: this.providerCatalog.runtimeIdForGateway(recovered) ?? recovered'
+  )
+  replace(
     '      if (this.providerCatalog.hasGateway(thread.modelProvider)) {\n        return {\n          gatewayId: thread.modelProvider,',
     '      if (this.providerCatalog.hasGateway(thread.modelProvider)) {\n        return {\n          model: this.providerCatalog.upstreamModel(this.providerCatalog.selectionId(thread.model, this.providerCatalog.gatewayForRoutedSlug(thread.model) === thread.modelProvider ? this.providerCatalog.runtimeIdForGateway(thread.modelProvider) : thread.modelProvider)),\n          gatewayId: thread.modelProvider,'
+  )
+  replace(
+    '      const resume = (selection) => client.resumeSession({',
+    `      const matchesSelection = (metadata, selection, provider, routing) => metadata.modelProvider === provider && typeof metadata.currentModelId === "string" &&
+        routing.upstreamModel(ModelId.fromString(metadata.currentModelId).model) === routing.upstreamModel(selection);
+      const resume = (selection) => client.resumeSession({`
   )
   replace(
     '      state.appServerStartupArgs = [...base, "-c", `model_provider=${JSON.stringify(provider)}`];',
@@ -147,14 +167,14 @@ export function patchAdapter(source: string): string {
     const current = session.authProvider ?? gatewayOf(ModelId.fromString(session.currentModelId).model);`,
     `    // Keep logical identity separate from Codex's shared runtime provider. A different
     // gateway still needs resume overrides (including its thread config) on the same thread.
-    const gatewayOf = (id) =>
-      catalog.gatewayIdFor(id) ??
-      catalog.gatewayForModelSlug(typeof id === "string" && id.startsWith("gateway:") ? safeUpstreamModel(id) : id) ??
-      catalog.gatewayForRoutedSlug(typeof id === "string" ? id : "");
+    const gatewayOf = (id) => catalog.gatewayIdFor(id) ?? catalog.gatewayForRoutedSlug(safeUpstreamModel(id));
     const runtimeOf = (gatewayId) => gatewayId === null ? null : (catalog.runtimeIdForGateway(gatewayId) ?? gatewayId);
     const targetGateway = gatewayOf(model);
-    const currentGateway = gatewayOf(ModelId.fromString(session.currentModelId).model);
-    const target = runtimeOf(targetGateway);
+    if (targetGateway === null && model.startsWith("gateway:")) throw RequestError.invalidParams(undefined, "Selected gateway model is unavailable");
+    const currentModel = ModelId.fromString(session.currentModelId).model;
+    const currentGateway = gatewayOf(currentModel);
+    const nativeRuntime = session.authProvider === "alwith" ? "alwith" : catalog.nativeModelProvider();
+    const target = runtimeOf(targetGateway) ?? nativeRuntime;
     // The recorded provider remains authoritative for legacy vendor-pinned threads.
     const current = session.authProvider ?? runtimeOf(currentGateway);`
   )
@@ -165,10 +185,21 @@ export function patchAdapter(source: string): string {
     // model name. Only matching non-null gateways genuinely need no work.
     if (!force && target === current && target !== null)
       return;`,
-    `    // Only the same logical gateway on the expected runtime is a no-op. In particular,
-    // native alwith -> enterprise and shared-runtime gateway switches must apply target config.
-    if (!force && targetGateway !== null && targetGateway === currentGateway && target === current)
+    `    const sameRoute = targetGateway === currentGateway && target === current && (currentGateway !== null || !currentModel.startsWith("gateway:"));
+    if (!force && sameRoute && currentModel === model)
       return;`
+  )
+  replace(
+    '      throw RequestError.invalidRequest(undefined, "Wait for the current turn before changing its provider");\n    }\n    const reservation =',
+    '      throw RequestError.invalidRequest(undefined, "Wait for the current turn before changing its provider");\n    }\n    if (!force && sameRoute) return;\n    const reservation ='
+  )
+  replace(
+    `        if (target !== null && metadata.modelProvider !== target) {
+          for (let attempt = 0; attempt < 3 && metadata.modelProvider !== target; attempt++) {
+            await Promise.allSettled([...this.activePrompts.values()].map((prompt) => (prompt?.completion instanceof Promise ? prompt.completion.catch(() => {}) : Promise.resolve())));`,
+    `        const matchesRoute = (result) => matchesSelection(result, model, target, catalog);
+        if (!matchesRoute(metadata)) {
+          for (let attempt = 0; attempt < 3 && !matchesRoute(metadata); attempt++) {`
   )
   replace(
     `          throw RequestError.invalidRequest(undefined, "Session closed during provider selection");
@@ -176,9 +207,15 @@ export function patchAdapter(source: string): string {
         const authProvider = metadata.modelProvider ?? null;`,
     `          throw RequestError.invalidRequest(undefined, "Session closed during provider selection");
         }
-        if (target !== null && metadata.modelProvider !== target)
+        if (!matchesRoute(metadata))
           throw new Error("Session provider did not match the selected runtime after resume retries");
         const authProvider = metadata.modelProvider ?? null;`
+  )
+  replace(
+    '            await resume(ModelId.fromString(session.currentModelId).model);',
+    `            const restored = await resume(currentModel);
+            if (!matchesSelection(restored, currentModel, session.authProvider ?? rollbackRouting.runtimeIdFor(currentModel) ?? rollbackRouting.nativeModelProvider(), rollbackRouting))
+              throw new Error("Rollback did not restore the previous session route");`
   )
   // Codex's built-in tool registry only knows the current shell tool names. A tool call
   // replayed from an older rollout (or echoed by a model) named `exec` reaches the engine as

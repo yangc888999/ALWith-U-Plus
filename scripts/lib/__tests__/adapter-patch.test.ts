@@ -59,13 +59,15 @@ function rebindFixture(currentModel = "gateway:custom-enterprise:DS4.1", authPro
     cwd: "/workspace", additionalDirectories: ["/extra"], mcpServers: [{ name: "tools" }],
     instructions: { text: "keep instructions" }, account: { id: "previous" }, authConfigured: false
   }
-  const calls = { resumes: [] as any[], configs: [] as string[], unsubscribes: [] as any[],
+  const calls = { resumes: [] as any[], configs: [] as (string | null)[], unsubscribes: [] as any[],
     releases: 0, reservations: 0, authReads: [] as any[], restarts: 0, closed: 0 }
   const client: any = {
     providerCatalog: routing, sessionRoute, resumeSession,
+    getModelProvider: () => null,
+    codexClient: { threadRead: async () => ({ thread: { model: routing.upstreamModel(currentModel), modelProvider: authProvider } }) },
     resolveSessionInstructions: async (_request: any, previous: any) => previous,
     refreshSkills: async () => {},
-    createSessionConfig: async (_cwd: string, _directories: string[], _servers: any[], gatewayId: string) => {
+    createSessionConfig: async (_cwd: string, _directories: string[], _servers: any[], gatewayId: string | null) => {
       calls.configs.push(gatewayId)
       return { config: client.providerCatalog.threadConfig(gatewayId), skippedMcpServers: [] }
     },
@@ -245,6 +247,46 @@ test("native alwith to enterprise applies enterprise overrides to the same sessi
   expect(fixture.calls.restarts).toBe(0)
 })
 
+test("an idle native thread switches even before its first turn without resuming or closing it", async () => {
+  for (const provider of ["alwith", "openai"]) {
+    const fixture = rebindFixture("native-first", provider)
+    fixture.respond = () => { throw new Error("thread not materialized") }
+    await fixture.switch("native-first")
+    await fixture.switch("DS4.1")
+    expect(fixture.calls.unsubscribes).toHaveLength(0)
+    expect(fixture.calls.closed).toBe(0)
+    fixture.agent.activePrompts.set(fixture.session.sessionId, {})
+    await expect(fixture.switch("native-second")).rejects.toThrow("Wait for the current turn")
+  }
+})
+
+test("explicit native and qualified picks sharing a slug resolve to distinct routes", async () => {
+  const fixture = rebindFixture()
+  const route = (model: string, sessionId?: string) => fixture.client.sessionRoute({ sessionId, _meta: { alwith: { model } } })
+  expect(await route("DS4.1")).toEqual({ gatewayId: null, model: "DS4.1", modelProvider: null })
+  expect(await route("DS4.1", "same-thread")).toEqual({ gatewayId: null, model: "DS4.1", modelProvider: "alwith" })
+  expect(await route("gateway:other-enterprise:DS4.1")).toEqual({ gatewayId: "other-enterprise", model: "other-enterprise/DS4.1", modelProvider: "alwith" })
+  await expect(route("gateway:removed:DS4.1")).rejects.toThrow("unavailable")
+  await fixture.switch("DS4.1")
+  expect(fixture.calls.configs).toEqual([null])
+  expect(fixture.calls.resumes[0]).toMatchObject({ threadId: "same-thread", model: "DS4.1", modelProvider: "alwith", config: {} })
+  const pinned = rebindFixture(undefined, "custom-enterprise")
+  await expect(pinned.switch("DS4.1")).rejects.toThrow("pinned")
+  expect(pinned.calls.unsubscribes).toHaveLength(0)
+})
+
+test("reopening a shared thread restores only its recorded logical route", async () => {
+  for (const [model, gatewayId] of [["gateway:other-enterprise:DS4.1", "other-enterprise"], ["DS4.1", null]] as const) {
+    const fixture = rebindFixture(model)
+    expect(await fixture.client.sessionRoute({ sessionId: "same-thread" })).toMatchObject({ gatewayId, modelProvider: "alwith" })
+  }
+})
+
+test("a removed recorded provider is never replaced by a different seller of the same model", async () => {
+  const fixture = rebindFixture("DS4.1", "removed-service")
+  expect(await fixture.client.sessionRoute({ sessionId: "same-thread" })).toEqual({ gatewayId: null, modelProvider: "removed-service" })
+})
+
 test("resume failure restores the previous selection and routing without publishing auth", async () => {
   const fixture = rebindFixture()
   const previousRouting = catalog()
@@ -300,7 +342,8 @@ test("legacy provider pinning still rejects vendor changes unless forced", async
 test("persistent mismatched or missing provider metadata exhausts bounded retries and rolls back without false success", async () => {
   for (const modelProvider of ["wrong-provider", undefined]) {
     const fixture = rebindFixture()
-    fixture.respond = (params) => ({ thread: { id: params.threadId }, model: params.model, modelProvider })
+    fixture.respond = (params) => ({ thread: { id: params.threadId }, model: params.model,
+      modelProvider: params.model === "custom-enterprise/DS4.1" ? "alwith" : modelProvider })
     await expect(fixture.switch("gateway:other-enterprise:DS4.1")).rejects.toThrow("did not match the selected runtime after resume retries")
     expect(fixture.calls.resumes.map((params) => params.model)).toEqual([
       ...Array(4).fill("other-enterprise/DS4.1"), "custom-enterprise/DS4.1"
@@ -324,6 +367,29 @@ test("a provider that settles within the retry bound publishes auth only after m
   expect(fixture.calls.resumes).toHaveLength(3)
   expect(fixture.calls.authReads).toEqual(["alwith"])
   expect(fixture.calls.releases).toBe(1)
+})
+
+test("a shared runtime acknowledging the old logical model cannot confirm a switch", async () => {
+  const fixture = rebindFixture()
+  fixture.respond = (params) => ({ thread: { id: params.threadId }, model: "custom-enterprise/DS4.1", modelProvider: "alwith" })
+  fixture.agent.activePrompts.set("unrelated-thread", { completion: new Promise(() => {}) })
+  await expect(fixture.switch("gateway:other-enterprise:DS4.1")).rejects.toThrow("did not match")
+  expect(fixture.calls.resumes.map((call) => call.model)).toEqual([
+    ...Array(4).fill("other-enterprise/DS4.1"), "custom-enterprise/DS4.1"
+  ])
+  expect(fixture.calls.authReads).toEqual([])
+  expect(fixture.calls.closed).toBe(0)
+})
+
+test("an unconfirmed rollback closes the session rather than accepting a prompt on an unknown route", async () => {
+  const fixture = rebindFixture()
+  fixture.respond = (params, attempt) => {
+    if (attempt === 1) throw new Error("target rejected")
+    return { thread: { id: params.threadId }, model: "other-enterprise/DS4.1", modelProvider: "alwith" }
+  }
+  await expect(fixture.switch("gateway:other-enterprise:DS4.1")).rejects.toThrow("rollback failed")
+  expect(fixture.calls.closed).toBe(1)
+  expect(fixture.calls.authReads).toEqual([])
 })
 
 test("registered restart hook resumes legacy enterprise using a process-only alias and qualified model", async () => {

@@ -27,7 +27,6 @@ import { MimoLogo } from "@/components/icons/mimo-logo"
 import { OpenAILogo } from "@/components/icons/openai-logo"
 import { OpenRouterLogo } from "@/components/icons/openrouter-logo"
 import { QwenLogo } from "@/components/icons/qwen-logo"
-import { antigravityModel, antigravityModelSelection } from "@/features/antigravity/models"
 import {
   ENTERPRISE_PROVIDER_PREFIX,
   enterpriseCatalog,
@@ -40,12 +39,7 @@ import { defaultModelChoice } from "./default-model"
 // The GPT catalog rules live in `model-config.ts`; the four exports below are kept for their old
 // call sites and delegate to it, so no surface can drift back to its own copy of the rule.
 import { catalogStatusOf, type NativeCatalog, resolveModelConfig } from "./model-config"
-import {
-  isGatewayModelIdentity,
-  modelDisplayId,
-  modelSelectionId,
-  parseModelIdentity
-} from "./model-identity"
+import { modelDisplayId, modelSelectionId, parseModelIdentity } from "./model-identity"
 import catalog from "./provider-catalog.json"
 
 export type { CustomModel } from "@/bindings"
@@ -239,7 +233,7 @@ export function providerGroups(
     ...snapshot.customProviders.map((provider) => ({
       id: provider.id,
       name: provider.name,
-      models: provider.models.map((model) => ({
+      models: provider.models.filter((model) => model.enabled !== false).map((model) => ({
         id: model.api_id,
         label: model.label,
         ...(model.description == null ? {} : { description: model.description })
@@ -250,7 +244,7 @@ export function providerGroups(
     ...(snapshot.managedProviders ?? []).map((provider) => ({
       id: provider.id,
       name: companyModelLabel(provider.name),
-      models: provider.models.map((model) => ({
+      models: provider.models.filter((model) => model.enabled !== false).map((model) => ({
         id: model.api_id,
         label: model.label,
         ...(model.description == null ? {} : { description: model.description })
@@ -292,16 +286,18 @@ export function isAccountModel(model: string | null | undefined): boolean {
  */
 function normalizeModelId(id: string): string {
   const bare = modelDisplayId(id)
-  return bare.toLowerCase().replace(/[-_.\s]/g, "").replace(/\d{4,}$/, "")
+  return bare.toLowerCase().replace(/[-_.\s](?:\d{4}-\d{2}-\d{2}|\d{8}|\d{4})$/, "").replace(/[-_.\s]/g, "")
 }
 
 function rebindRenamedModel(stored: string, models: readonly string[]): string | null {
-  if (!isGatewayModelIdentity(stored)) return null
+  const gateway = parseModelIdentity(stored).gatewayId
+  if (gateway === null) return null
   const target = normalizeModelId(stored)
   if (target === "") return null
   const hits = models.filter((candidate) => {
+    if (parseModelIdentity(candidate).gatewayId !== gateway) return false
     const other = normalizeModelId(candidate)
-    return other !== "" && (other === target || other.startsWith(target) || target.startsWith(other))
+    return other === target
   })
   return hits.length === 1 ? hits[0] ?? null : null
 }
@@ -311,8 +307,6 @@ export function resolveSessionModel(
   snapshot: ProviderSnapshot,
   purpose: "session" | "draft" = "session"
 ): string | null {
-  const gemini = antigravityModel(model)
-  if (gemini !== undefined) return antigravityModelSelection(gemini.id)
   const groups = providerGroups(snapshot)
   const models = groups.flatMap((group) =>
     group.models.map((entry) => gatewayModelId(group.id, entry.id))
@@ -322,7 +316,7 @@ export function resolveSessionModel(
     const apiId = identity.modelId
     const migrated = (snapshot.managedProviders ?? [])
       .filter((provider) => provider.id.startsWith(ENTERPRISE_PROVIDER_PREFIX))
-      .flatMap((provider) => provider.models.map((entry) => gatewayModelId(provider.id, entry.api_id)))
+      .flatMap((provider) => provider.models.filter((entry) => entry.enabled !== false).map((entry) => gatewayModelId(provider.id, entry.api_id)))
       .find((candidate) => parseModelIdentity(candidate).modelId === apiId)
     if (migrated) return migrated
   }
@@ -374,14 +368,15 @@ export function resolveSessionModel(
   // 目录里的第一个；并把替换记进日志，便于排查「会话记 A、实际跑 B」。
   // 之所以不改成「保留记录 + 亮恢复卡」：企业模型失效往往伴随登录态变化，用户此刻只想继续
   // 干活；恢复卡会在下一次真正被引擎拒绝时由 `accountModelRecovery` 亮起，两条路并不冲突。
-  if (isAccountModel(identity?.selectionId ?? model) && purpose === "session") {
-    const replacement = defaultModelFallback(snapshot) ?? models[0] ?? null
+  const builtInFallback = models.find((entry) => entry === gatewayModelId(DEFAULT_PROVIDER_ID, DEFAULT_MODEL_ID)) ?? models[0] ?? null
+  if (identity?.kind === "gateway" && purpose === "session") {
+    const replacement = defaultModelFallback(snapshot) ?? (isAccountModel(model) ? models[0] ?? null : builtInFallback)
     if (replacement !== null && replacement !== identity?.selectionId) {
-      console.info(`[models] account model unavailable, substituted ${model} -> ${replacement}`)
+      console.info(`[models] gateway model unavailable, substituted ${model} -> ${replacement}`)
     }
     return replacement
   }
-  return models.find((entry) => entry === gatewayModelId(DEFAULT_PROVIDER_ID, DEFAULT_MODEL_ID)) ?? models[0] ?? null
+  return builtInFallback
 }
 
 /**
@@ -394,11 +389,13 @@ export function resolveSessionModel(
 export function defaultModelFallback(snapshot: ProviderSnapshot): string | null {
   const model = defaultModelChoice()?.model ?? null
   if (model === null) return null
-  if (!isGatewayModelIdentity(model)) return model
+  const identity = parseModelIdentity(model)
+  if (identity.kind === "invalid") return null
+  if (identity.kind === "native") return identity.selectionId
   const models = providerGroups(snapshot).flatMap((group) =>
     group.models.map((entry) => gatewayModelId(group.id, entry.id))
   )
-  return models.includes(model) ? model : null
+  return models.includes(identity.selectionId) ? identity.selectionId : null
 }
 
 export function providerRegion(provider: Provider, regionId: string | null | undefined): ProviderRegion | null {
@@ -679,8 +676,6 @@ export function nativeModelOverrides(): CustomModel[] | null {
  * Returns null when the user never named this model, so a caller can keep its own compact alias.
  */
 export function displayModelLabel(apiId: string, fallback?: string | null): string | null {
-  const gemini = antigravityModel(apiId)
-  if (gemini !== undefined) return gemini.label
   const fallbackLabel = fallback ?? null
   const identity = parseModelIdentity(apiId)
   if (identity.kind === "gateway" && identity.gatewayId !== null) {

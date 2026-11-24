@@ -7,8 +7,9 @@
 // 曾导致"切换到原生模型仍打网关"和"老会话模型被改成原生"两类故障。
 import { readFileSync } from "fs";
 import { expect, test } from "bun:test";
+import { patchAdapter } from "../lib/adapter-patch";
 
-const src = readFileSync(new URL("../../node_modules/@nyssance/codex-acp-v2/dist/index.js", import.meta.url), "utf8");
+const src = patchAdapter(readFileSync(new URL("../../node_modules/@nyssance/codex-acp-v2/dist/index.js", import.meta.url), "utf8"));
 
 // 从真实 bundle 中抽取 ProviderRouting 类与 gatewayModelId，用桩替换外部依赖后实例化
 const classStart = src.indexOf("class ProviderRouting {");
@@ -76,16 +77,17 @@ test("网关模型（裸 slug）也能找回网关", () => {
   expect(routing.gatewayForModelSlug("gpt-6.1-terra")).toBeNull();
 });
 
-test("rebind 目标判定：原生↔网关互切 correctly detected", () => {
+test("an explicit bare selection stays native even when a dedicated gateway sells the same slug", async () => {
   const routing = makeRouting();
   registerGateway(routing);
-  const gatewayOf = (id: string) =>
-    routing.gatewayIdFor(id) ?? routing.gatewayForModelSlug(id.startsWith("gateway:") ? routing.upstreamModel(id) : id);
-  // 从网关模型切到原生：target=null, current=ds-gw → 触发 rebind
-  expect(gatewayOf("gpt-6.1-terra")).toBeNull();
-  expect(gatewayOf("gateway:ds-gw:deepseek-flash")).toBe("ds-gw");
-  // 从原生切到网关（裸 slug 也要能识别）
-  expect(gatewayOf("deepseek-flash")).toBe("ds-gw");
+  const start = src.indexOf("  async sessionRoute(request) {");
+  const end = src.indexOf("  getCollaborationMode(", start);
+  expect(start).toBeGreaterThan(0);
+  expect(end).toBeGreaterThan(start);
+  const { sessionRoute } = new Function("isRecord3", "appendFileSync", "RequestError", `return ({${src.slice(start, end)}})`)(isRecord3, () => {}, RequestError);
+  const route = (model: string) => sessionRoute.call({ providerCatalog: routing, getModelProvider: () => null }, { _meta: { alwith: { model } } });
+  expect(await route("gateway:ds-gw:deepseek-flash")).toEqual({ gatewayId: "ds-gw", model: "deepseek-flash", modelProvider: "ds-gw" });
+  expect(await route("deepseek-flash")).toEqual({ gatewayId: null, model: "deepseek-flash", modelProvider: null });
 });
 
 test("upstreamModel 解命名空间", () => {

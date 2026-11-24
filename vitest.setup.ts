@@ -24,12 +24,7 @@ expect.extend(matchers)
 
 if (typeof document !== "undefined") {
   // Resizable-panel widths persist to localStorage; a drag in one case must not leak into the next.
-  beforeEach(() => {
-    window.localStorage.clear()
-    // Antigravity is an opt-out experiment. Existing model-menu tests describe the Codex catalog,
-    // so keep the second agent out of them unless a test opts in explicitly.
-    window.localStorage.setItem("alwith:antigravity:enabled", "false")
-  })
+  beforeEach(() => window.localStorage.clear())
   const { ChatWorkerStub } = await import("@/features/chat/codex/__tests__/chat-worker-stub")
   // jsdom has no matchMedia or Web Animations; components only need the API surface.
   if (typeof window.matchMedia !== "function") {

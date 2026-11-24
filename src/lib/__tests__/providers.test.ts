@@ -168,6 +168,36 @@ test("a routed gateway model is converted back to the persisted session selectio
   expect(resolveSessionModel(`deepseek/${model}`, snapshot)).toBe(gatewayModelId("deepseek", model))
 })
 
+test("renamed models rebind only within the original gateway; a removed gateway respects the configured default", async () => {
+  const { setDefaultModelChoice } = await import("../default-model")
+  const snapshot: ProviderSnapshot = {
+    revision: 1, appliedRevision: 1, status: "applied", error: null, providers: {}, builtInModels: {}, managedProviders: [],
+    customProviders: ["one", "two"].map((id) => ({ id, name: id, baseUrl: `https://${id}.example.test/v1`,
+      models: [{ api_id: "shared-1102", label: "Shared" }] }))
+  }
+  setDefaultModelChoice({ model: "gpt-native", effort: null })
+  try {
+    expect(resolveSessionModel(gatewayModelId("two", "shared-1017"), snapshot)).toBe(gatewayModelId("two", "shared-1102"))
+    expect(resolveSessionModel(gatewayModelId("two", "shared-pro"), snapshot)).toBe("gpt-native")
+    expect(resolveSessionModel(gatewayModelId("removed", "shared-1017"), snapshot)).toBe("gpt-native")
+  } finally {
+    setDefaultModelChoice(null)
+  }
+})
+
+test("disabled custom and managed rows cannot be offered or restored as a former default", () => {
+  const provider = {
+    id: "custom_audit", name: "Audit", baseUrl: "https://example.test/v1",
+    models: [{ api_id: "retired", label: "Retired", enabled: false }, { api_id: "live", label: "Live" }]
+  }
+  const snapshot: ProviderSnapshot = {
+    revision: 1, appliedRevision: 1, status: "applied", error: null, providers: {}, builtInModels: {},
+    customProviders: [provider], managedProviders: [{ ...provider, id: "enterprise-audit" }]
+  }
+  expect(providerGroups(snapshot).map((group) => group.models.map((row) => row.id))).toEqual([["live"], ["live"]])
+  expect(resolveSessionModel(gatewayModelId(provider.id, "retired"), snapshot)).toBe(gatewayModelId(provider.id, "live"))
+})
+
 test("custom model selections use adapter-compatible IDs without colliding with other saved providers", () => {
   expect(gatewayModelId("custom_a", "deepseek-flash")).toBe("gateway:custom-637573746f6d5f61:deepseek-flash")
   expect(gatewayModelId("custom_a-b", "model")).not.toBe(gatewayModelId("custom_a_b", "model"))
@@ -285,8 +315,8 @@ test("discovered models fill empty metadata without overwriting existing edits",
         defaultReasoningLevel: "max"
       },
       {
-        label: "Gemini 3.8 Flash",
-        api_id: "gemini-3.8-flash",
+        label: "GLM 4.7",
+        api_id: "glm-4.7",
         contextWindow: 1_000_000,
         reasoningLevels: ["low", "medium", "high"],
         defaultReasoningLevel: "medium"
@@ -306,8 +336,8 @@ test("discovered models fill empty metadata without overwriting existing edits",
       },
       { label: "Local model", api_id: "local-model" },
       {
-        label: "Gemini 3.8 Flash",
-        api_id: "gemini-3.8-flash",
+        label: "GLM 4.7",
+        api_id: "glm-4.7",
         contextWindow: 1_000_000,
         reasoningLevels: ["low", "medium", "high"],
         defaultReasoningLevel: "medium"

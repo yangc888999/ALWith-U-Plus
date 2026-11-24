@@ -55,10 +55,6 @@ function current(): ChatLayoutPreferences {
   return value
 }
 
-export function getChatLayout(): ChatLayoutPreferences {
-  return current()
-}
-
 export function subscribeChatLayout(listener: () => void): () => void {
   listeners.add(listener)
   return () => listeners.delete(listener)

@@ -10,7 +10,6 @@ import { createSession } from "@alwith/api"
 import { fireEvent, render } from "@testing-library/react"
 import { expect, test, vi } from "vitest"
 
-import { antigravityModelSelection } from "@/features/antigravity/models"
 import { client } from "@/lib/client"
 import { initI18n } from "@/lib/i18n"
 
@@ -26,7 +25,7 @@ vi.mock("../recovery-model-select", () => ({
 vi.mock("@alwith/module-chat/conversation", () => ({
   ModelMenu: ({ onModelChange }: { onModelChange: (model: string) => void }) => (
     <div data-testid="model-menu">
-      <button onClick={() => onModelChange(antigravityModelSelection("gemini-4-neon"))}>Gemini</button>
+      <button onClick={() => onModelChange("gateway:deepseek:deepseek-flash")}>DeepSeek</button>
       <button onClick={() => onModelChange("gpt-6.2-sol")}>GPT</button>
     </div>
   )
@@ -123,16 +122,16 @@ test("the session menu slot carries the full model name as a hover title", () =>
   }
 })
 
-test("Gemini and GPT picks use the same model setter and conversation id", () => {
+test("Gateway and native picks use the same model setter and conversation id", () => {
   const model = { ...modelOption, currentValue: "gpt-6.2-sol", options: [] }
   const session = sessionWith([model], { attached: true })
   const setConfig = vi.spyOn(client, "setConfig").mockResolvedValue()
   const view = render(<ModelEntry surface="session" session={session} />)
   try {
-    fireEvent.click(view.getByText("Gemini"))
+    fireEvent.click(view.getByText("DeepSeek"))
     fireEvent.click(view.getByText("GPT"))
     expect(setConfig.mock.calls).toEqual([
-      [session.id, "model", "gateway:google-antigravity:gemini-4-neon"],
+      [session.id, "model", "gateway:deepseek:deepseek-flash"],
       [session.id, "model", "gpt-6.2-sol"]
     ])
   } finally {

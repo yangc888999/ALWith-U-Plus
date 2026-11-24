@@ -45,7 +45,6 @@ import { useChatHost, useTimelineSlots } from "./chat-host"
 import { ChatComposer } from "./composer"
 import { ChatSearch } from "./dialogs/chat-search"
 import { FilePreviewModal } from "./dialogs/file-preview-modal"
-import { AntigravityPermissionDialog } from "./dialogs/antigravity-permission"
 import { ImageLightbox } from "./dialogs/image-lightbox"
 import { ChatDirectoryContext, ChatOpenSessionContext } from "./file-actions"
 import { SendModeSwitch } from "./send-mode-switch"
@@ -359,7 +358,6 @@ function Conversation({
     >
       <FilePreviewModal />
       <ImageLightbox />
-      <AntigravityPermissionDialog />
     </ConversationView>
   )
 }

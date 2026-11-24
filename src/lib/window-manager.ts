@@ -20,21 +20,6 @@ export type SettingsSection =
   | "drive"
   | "automation"
   | "about"
-export const SETTINGS_SECTIONS: SettingsSection[] = [
-  "account",
-  "general",
-  "provider",
-  "appearance",
-  "editor",
-  "drive",
-  "voice",
-  "trackpad",
-  "computer",
-  "mobile",
-  "extensions",
-  "automation",
-  "about"
-]
 /** Default window width is sized around the usage overview's 3×3 stat grid: 240px sidebar +
  *  48px page padding + three ~180px columns + two 16px gutters, plus slack. Every settings
  *  section shares this reference width; the grid never grows past three columns on a wider

@@ -39,7 +39,6 @@ import {
   SelectValue
 } from "@/components/alwith-ui/select"
 import { ProviderMark } from "@/components/provider-mark"
-import { GoogleMark } from "@/components/icons/google-mark"
 import { MimoLogo } from "@/components/icons/mimo-logo"
 import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
@@ -128,13 +127,9 @@ import { resolveModelConfig } from "@/lib/model-config"
 import { LEGACY_ENTERPRISE_PROVIDER_ID } from "@/features/auth/enterprise-providers"
 import { orchestratedSessionsUsing, providerCloseBlocker } from "@/lib/provider-usage"
 import { useProviders } from "@/lib/use-providers"
-import { isMac } from "@/lib/platform"
 import { cn } from "@/lib/utils"
 
 import { CodexProviderSection } from "./codex-provider-section"
-import { AntigravityAccountSection, useAntigravityAccount } from "@/features/antigravity/antigravity-account"
-import { AntigravityModelSettings } from "@/features/antigravity/antigravity-model-settings"
-import { ANTIGRAVITY_MODEL_GROUP } from "@/features/antigravity/models"
 import { CompanyProviderCard, COMPANY_PROVIDER_TAB } from "./company-provider-card"
 import { ModelSection } from "./model-section"
 import { ProviderReliabilitySettings } from "./provider-reliability"
@@ -298,9 +293,6 @@ export function unverifiedNativeModels(
 
 export function ProviderSection({ initialProviderId }: { initialProviderId?: string } = {}) {
   const { t } = useTranslation()
-  const antigravitySupported = isMac()
-  const antigravityAccount = useAntigravityAccount(antigravitySupported)
-  const antigravityConfigured = antigravityAccount.status === "signedIn"
   const snapshot = useProviders()
   const cachedFreeModels = useSyncExternalStore(subscribeFreeModels, getCachedFreeModels, getCachedFreeModels)
   // 免费模型的能力画像：只在目录真的换了对象时重算，否则每次渲染都会给出新 Map，把整张表
@@ -511,7 +503,6 @@ export function ProviderSection({ initialProviderId }: { initialProviderId?: str
 
   useEffect(() => {
     if (!snapshot || activeId === "new" || activeId === COMPANY_PROVIDER_TAB) return
-    if (antigravitySupported && activeId === ANTIGRAVITY_MODEL_GROUP.id) return
     if (activeBuiltIn || activeCustom || activeManaged) return
     // The remembered provider no longer exists (a removed custom one): fall back to the provider
     // the default model points at, and only then to the first built-in.
@@ -522,17 +513,16 @@ export function ProviderSection({ initialProviderId }: { initialProviderId?: str
         snapshot.customProviders.some((provider) => provider.id === fromDefault) ||
         managedProviders.some((provider) => provider.id === fromDefault))
     setActiveId(resolvable && fromDefault !== null ? fromDefault : (PROVIDERS[0]?.id ?? ""))
-  }, [snapshot, activeId, activeBuiltIn, activeCustom, activeManaged, managedProviders, antigravitySupported, setActiveId])
+  }, [snapshot, activeId, activeBuiltIn, activeCustom, activeManaged, managedProviders, setActiveId])
 
   const configuredCount = snapshot
     ? PROVIDERS.filter((provider) => provider.native === true || keys[provider.id] !== undefined).length +
-      snapshot.customProviders.length + Number(antigravityConfigured)
+      snapshot.customProviders.length
     : 0
 
   return (
     <div className="flex flex-col gap-6">
       <CodexProviderSection />
-      {antigravitySupported && <AntigravityAccountSection account={antigravityAccount} />}
       <ModelSection
         onApplied={(model) => {
           if (model === null) return
@@ -578,7 +568,6 @@ export function ProviderSection({ initialProviderId }: { initialProviderId?: str
               keys={keys}
               customProviders={snapshot.customProviders}
               managedProviders={managedProviders}
-              antigravityConfigured={antigravitySupported ? antigravityConfigured : undefined}
               onSelect={setActiveId}
               onAdd={() => setActiveId("new")}
             />
@@ -635,11 +624,6 @@ export function ProviderSection({ initialProviderId }: { initialProviderId?: str
                 />
               </div>
             ))}
-            {antigravitySupported && (
-              <div hidden={activeId !== ANTIGRAVITY_MODEL_GROUP.id} className="pb-3">
-                <AntigravityModelSettings />
-              </div>
-            )}
             {snapshot.customProviders.map((provider) => (
               <div key={provider.id} hidden={activeId !== provider.id} className="pb-3">
                 <CustomProviderEditor
@@ -705,7 +689,6 @@ export function ProviderTabs({
   keys,
   customProviders,
   managedProviders,
-  antigravityConfigured,
   onSelect,
   onAdd
 }: {
@@ -713,7 +696,6 @@ export function ProviderTabs({
   keys: Record<string, ProviderKey>
   customProviders: CustomProvider[]
   managedProviders: CustomProvider[]
-  antigravityConfigured?: boolean
   onSelect: (id: string) => void
   onAdd: () => void
 }) {
@@ -761,16 +743,6 @@ export function ProviderTabs({
             />
           )
         })}
-        {antigravityConfigured !== undefined && (
-          <ProviderTab
-            id={ANTIGRAVITY_MODEL_GROUP.id}
-            name={ANTIGRAVITY_MODEL_GROUP.name}
-            active={activeId === ANTIGRAVITY_MODEL_GROUP.id}
-            configured={antigravityConfigured}
-            icon={<GoogleMark className="size-5 shrink-0" />}
-            onClick={() => onSelect(ANTIGRAVITY_MODEL_GROUP.id)}
-          />
-        )}
         {customProviders.map((provider) => {
           return (
             <ProviderTab
@@ -987,7 +959,6 @@ function modelFamily(apiId: string): string {
     id.includes("fable")
   )
     return "Claude"
-  if (id.includes("gemini")) return "Gemini"
   if (id.startsWith("gpt") || id.startsWith("o3") || id.startsWith("o4")) return "GPT"
   if (id.includes("deepseek")) return "DeepSeek"
   if (id.includes("qwen")) return "Qwen"

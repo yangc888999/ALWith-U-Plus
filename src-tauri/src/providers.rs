@@ -588,7 +588,7 @@ fn inferred_reasoning_levels(api_id: &str, label: &str) -> Option<(&'static [&'s
         // `max` as the default. K2.x configures thinking through its own object and the older
         // moonshot models take neither, so offering them a ladder only produces 400s.
         hint.contains("k3").then_some((&["low", "high", "max"][..], "max"))
-    } else if hint.contains("glm") || hint.contains("gemini") {
+    } else if hint.contains("glm") {
         Some((&["low", "medium", "high"], "medium"))
     } else {
         None
@@ -2317,13 +2317,6 @@ fn merged_catalog(app_data: &std::path::Path) -> Option<Value> {
     if entries.is_empty() {
         return None;
     }
-    if cfg!(target_os = "macos") {
-        for model in crate::antigravity::catalog_models() {
-            let mut entry = complete_catalog_entry(Some(&model));
-            retarget_identity(&mut entry);
-            entries.push(entry);
-        }
-    }
     Some(json!({ "models": entries }))
 }
 
@@ -2690,7 +2683,7 @@ fn test_config(saved: &Saved, id: &str) -> Result<TestConfig, String> {
 ///
 /// The app launches from the Finder and inherits no shell environment, so the speed test
 /// would otherwise bypass the proxy every other tool on this Mac uses.
-pub(crate) fn system_proxy() -> Option<String> {
+fn system_proxy() -> Option<String> {
     let out = std::process::Command::new("/usr/sbin/scutil").arg("--proxy").output().ok()?;
     if !out.status.success() {
         return None;
@@ -4102,8 +4095,8 @@ mod tests {
                     "context_length": "1000000"
                 },
                 {
-                    "id": "gemini-3.8-flash",
-                    "name": "Gemini 3.8 Flash",
+                    "id": "glm-4.7",
+                    "name": "GLM 4.7",
                     "top_provider": { "context_length": 1048576 },
                     "supported_parameters": ["reasoning", "tools"]
                 },
@@ -4125,9 +4118,9 @@ mod tests {
         assert_eq!(claude.reasoning_levels.as_ref().unwrap(), &["low", "medium", "high", "max"]);
         assert_eq!(claude.default_reasoning_level.as_deref(), Some("medium"));
 
-        let gemini = &models[1];
-        assert_eq!(gemini.context_window, Some(1_048_576));
-        assert_eq!(gemini.reasoning_levels.as_ref().unwrap(), &["low", "medium", "high"]);
+        let glm = &models[1];
+        assert_eq!(glm.context_window, Some(1_048_576));
+        assert_eq!(glm.reasoning_levels.as_ref().unwrap(), &["low", "medium", "high"]);
 
         assert_eq!(models[2].label, "Plain Model");
         assert!(models[2].reasoning_levels.is_none());

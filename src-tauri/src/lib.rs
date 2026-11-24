@@ -2,7 +2,6 @@ mod browser_bridge;
 #[cfg(test)]
 mod codex_launcher;
 mod power;
-mod antigravity;
 
 #[cfg(all(test, target_os = "macos"))]
 #[path = "__tests__/dropped_file_url.rs"]
@@ -137,7 +136,6 @@ pub fn run() {
         .manage(legacy_extensions::files::LegacyFiles::default())
         .manage(legacy_extensions::importer::LegacyImports::default())
         .manage(runtime::RuntimeState::default())
-        .manage(antigravity::AntigravityBridge::default())
         .manage(power::PreventSleep::default())
         .manage(extension_inbox::InboxState::default());
 
@@ -483,13 +481,6 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 runtime::restart_runtime_engine,
                 runtime::codex_version,
                 runtime::codex_bundled_models,
-                antigravity::antigravity_start,
-                antigravity::antigravity_status,
-                antigravity::antigravity_send,
-                antigravity::antigravity_agent_turn,
-                antigravity::antigravity_permission_answer,
-                antigravity::antigravity_agent_cancel,
-                antigravity::antigravity_stop,
                 overload_commands::set_overload_mute,
                 overload_commands::set_overload_429_mute,
                 skills::skills_list,

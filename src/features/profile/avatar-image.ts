@@ -18,10 +18,6 @@ export class AvatarImageError extends Error {
   }
 }
 
-export function isAvatarErrorCode(value: unknown): value is AvatarErrorCode {
-  return typeof value === "string" && (AVATAR_ERROR_CODES as readonly string[]).includes(value)
-}
-
 async function decode(file: File): Promise<HTMLImageElement> {
   const url = URL.createObjectURL(file)
   try {

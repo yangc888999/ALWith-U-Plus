@@ -1,4 +1,7 @@
+import { toast } from "sonner"
+
 import { client } from "@/lib/client"
+import { describeError } from "@/lib/error-text"
 import { getProviderSnapshot } from "@/lib/providers"
 
 import { DraftModelSelect } from "./draft-model-select"
@@ -41,16 +44,16 @@ export function RecoveryModelSelect({
           void (async () => {
             if (recovering) {
               // Rebuilds the session's options around this model and re-attaches it.
-              await client.resumeAccountModel(sessionId, model).catch(() => undefined)
+              await client.resumeAccountModel(sessionId, model)
               return
             }
             // An ordinary chat that simply has no model option: write the choice, and attach the
             // session if its replay never landed.
-            await client.setConfig(sessionId, "model", model).catch(() => undefined)
             if (!client.state.sessions[sessionId]?.attached) {
-              await client.open(sessionId, cwd).catch(() => undefined)
+              await client.open(sessionId, cwd)
             }
-          })()
+            await client.setConfig(sessionId, "model", model)
+          })().catch((error: unknown) => toast.error(describeError(error)))
         }}
       />
     </div>

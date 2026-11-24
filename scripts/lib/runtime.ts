@@ -25,7 +25,7 @@ export type RunningRuntime = { url: string; token: string; process: ChildProcess
 export function stagedCodexEngine(): {
   command: string
   args: string[]
-  env: { CODEX_PATH: string; ALWITH_U_CODEX_PATH: string; CODEX_ACP_MODEL_CATALOGS: string }
+  env: Record<string, string>
 } {
   const adapter = resolve(root, "src-tauri/resources/adapter/codex-bootstrap.mjs")
   if (!existsSync(adapter)) throw new Error("No staged ACP adapter; run `bun run stage`")
@@ -39,15 +39,19 @@ export function stagedCodexEngine(): {
     env: {
       CODEX_PATH: staged("alwith-codex-launcher"),
       ALWITH_U_CODEX_PATH: staged("codex"),
-      CODEX_ACP_MODEL_CATALOGS: catalogs.join(delimiter)
+      CODEX_ACP_MODEL_CATALOGS: catalogs.join(delimiter),
+      ...Object.fromEntries(["ALWITH_U_ROUTER_BASE", "ALWITH_U_ROUTER_TOKEN", "ALWITH_U_MODEL_CATALOG"].flatMap((key) => {
+        const value = process.env[key]
+        return value ? [[key, value]] : []
+      }))
     }
   }
 }
 
 /** Starts alwith-runtime (ws mode) with the staged Codex sidecars as its only engine and waits for `ready`. */
-export async function startRuntime(journalRoot: string): Promise<RunningRuntime> {
+export async function startRuntime(journalRoot: string, engine = stagedCodexEngine()): Promise<RunningRuntime> {
   const token = crypto.randomUUID()
-  const engines = { codex: stagedCodexEngine() }
+  const engines = { codex: engine }
   const child = spawn(staged("alwith-runtime"), ["--listen", "ws://"], {
     stdio: ["ignore", "pipe", "inherit"],
     env: {

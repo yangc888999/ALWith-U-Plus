@@ -13,10 +13,12 @@
  */
 import type { Session } from "@alwith/api"
 import { ModelMenu } from "@alwith/module-chat/conversation"
+import { toast } from "sonner"
 import { useStore } from "zustand"
 
 import { selectedModelId } from "@/agent/native-models"
 import { client } from "@/lib/client"
+import { describeError } from "@/lib/error-text"
 import { displayModelLabel, type ProviderSnapshot } from "@/lib/providers"
 
 import { DraftModelSelect } from "./draft-model-select"
@@ -169,7 +171,7 @@ export function ModelEntry(props: DraftModelEntry | SessionModelEntry) {
         options={props.session.configOptions}
         disabled={modelGateOf(props.session) !== "ready"}
         onModelChange={(value) => {
-          void client.setConfig(props.session.id, "model", value).catch(() => {})
+          void client.setConfig(props.session.id, "model", value).catch((error: unknown) => toast.error(describeError(error)))
         }}
       />
     </div>

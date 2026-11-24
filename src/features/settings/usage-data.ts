@@ -85,7 +85,6 @@ export function metricValue(row: { tokens: number; requests: number; cost?: numb
   return row.cost ?? 0
 }
 
-export const RANGES: Range[] = ["1d", "3d", "7d", "30d", "90d", "1y", "6m", "12m", "custom"]
 /** `custom` carries its own dates, so the day count only matters for the fixed windows. */
 export const RANGE_DAYS: Record<Range, number> = {
   "1d": 1,

@@ -5,7 +5,7 @@
 // (same origin as the settings webview) so the user's edits survive relaunches.
 //
 // The table is grouped by vendor and each entry carries its own currency: DeepSeek / Kimi /
-// Qwen / 智谱 publish prices in CNY, while OpenAI / Anthropic / Google / xAI publish in USD.
+// Qwen / 智谱 publish prices in CNY, while OpenAI / Anthropic / xAI publish in USD.
 // A single global exchange rate converts the USD entries so the headline figure is always RMB.
 //
 // Vendors with time-of-day pricing (DeepSeek) get an optional off-peak tier plus the peak
@@ -138,7 +138,6 @@ export function guessVendor(model: string): string {
   const name = displayModelName(model).toLowerCase()
   if (name.includes("claude")) return "Claude"
   if (name.includes("gpt") || name.startsWith("o3") || name.startsWith("o4")) return "OpenAI"
-  if (name.includes("gemini")) return "Google"
   if (name.includes("deepseek")) return "DeepSeek"
   if (name.includes("kimi") || name.includes("moonshot")) return "Kimi"
   if (name.includes("qwen")) return "千问 Qwen"
@@ -173,9 +172,7 @@ const VENDOR_ALIASES: Record<string, string> = {
   mimo: "小米 MiMo",
   小米: "小米 MiMo",
   deepseek: "DeepSeek",
-  openai: "OpenAI",
-  google: "Google",
-  gemini: "Google"
+  openai: "OpenAI"
 }
 
 export function canonicalVendor(vendor: string): string {

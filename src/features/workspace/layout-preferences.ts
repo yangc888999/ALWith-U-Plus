@@ -51,9 +51,6 @@ export const LAYOUT_SHARE_MAX: Record<LayoutShare, number> = {
 // Kept for the pixel bounds that keep the docked sidebar and tree usable on any display once
 // the share is resolved against the live window width.
 export const NAVIGATION_PX_MIN = 180
-export const NAVIGATION_PX_MAX = 460
-export const TREE_PX_MIN = 150
-export const TREE_PX_MAX = 1200
 // The split-view library refuses to show two columns unless chat keeps at least this much
 // room; below it the panes count as "no longer fitting" and chat gets pushed onto its own
 // screen, which the user reads as the layout being torn apart.

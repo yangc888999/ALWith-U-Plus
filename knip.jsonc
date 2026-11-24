@@ -15,11 +15,11 @@
   "ignoreDependencies": [
     // Rust-only transport consumed by src-tauri/Cargo.toml.
     "@alwith/native-kit",
+    "@alwith/module-gamepad",
+    "@alwith/enterprise-client",
     // Bundled into the app by scripts/stage.ts from the pinned package versions
     "@openai/codex",
     "@alwith/module-mobile",
-    // only imported by the unused registry component ui/message-scroller
-    "@shadcn/react",
     // invoked as `bun ts7-lint` by the fabfile.py check gate
     "@nyssance/ts7-lint"
   ],

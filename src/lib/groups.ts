@@ -137,10 +137,6 @@ export function groups(): GroupConfig[] {
   return readAll()
 }
 
-export function groupFor(id: string): GroupConfig | null {
-  return readAll().find((group) => group.id === id) ?? null
-}
-
 /**
  * The group a conversation belongs to, matched by its project directory.
  *

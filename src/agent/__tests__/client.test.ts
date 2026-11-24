@@ -3,7 +3,6 @@ import { type BooleanOption, isSelectOption, type SelectOption, type Session, te
 import { toast } from "sonner"
 import { afterEach, expect, test, vi } from "vitest"
 
-import { antigravityModelSelection, setAntigravityModelPreference } from "@/features/antigravity/models"
 import { must } from "@/lib/__tests__/must"
 import { setActivePreview } from "@/lib/active-preview"
 import { automationSessionRows, replaceAutomationSessionRows } from "@/lib/automation-sessions"
@@ -425,6 +424,7 @@ test("a reopened session restores its last model, effort and Fast state", async 
   try {
     const { client } = await make((fake) => {
       fake.sessionOptions.current = () => [model, effort, fast]
+      fake.configDelay.current = () => new Promise((resolve) => setTimeout(resolve, 20))
       fake.configResponse.current = (request) => {
         if (request.configId === "reasoning_effort") effort.currentValue = request.value as string
         if (request.configId === "fast-mode") fast.currentValue = request.value as boolean
@@ -432,7 +432,8 @@ test("a reopened session restores its last model, effort and Fast state", async 
       }
     })
     await client.open("h1", "/tmp/one")
-    await vi.waitFor(() => expect(fast.currentValue).toBe(true))
+    await client.prompt("h1", [{ type: "text", text: "send with saved settings" }])
+    expect(fast.currentValue).toBe(true)
     expect(effort.currentValue).toBe("high")
     // The restored pair is written back, so the next launch reuses the same record.
     await vi.waitFor(() => {
@@ -2004,40 +2005,6 @@ test("switching models in a running chat lands on the new model's configured eff
   }
 })
 
-test("Gemini effort defaults apply per model without changing GPT or gateway defaults", async () => {
-  const argon = antigravityModelSelection("gemini-4-argon")
-  const neon = antigravityModelSelection("gemini-4-neon")
-  const gateway = "gateway:openrouter:qa-model"
-  const models: ReasoningModelFixture[] = [
-    { id: "gpt-6.1-sol", groupId: "chatgpt", efforts: ["low", "medium", "high", "max"], defaultEffort: "max" },
-    { id: argon, groupId: "google-antigravity", efforts: ["low", "medium", "high"], defaultEffort: "high" },
-    { id: neon, groupId: "google-antigravity", efforts: ["low", "medium", "high"], defaultEffort: "high" },
-    { id: gateway, groupId: "openrouter", efforts: ["low", "medium", "high"], defaultEffort: "high" }
-  ]
-  const settings = new Map<string, string>()
-  vi.stubGlobal("localStorage", {
-    getItem: (key: string) => settings.get(key) ?? null,
-    setItem: (key: string, value: string) => settings.set(key, value),
-    removeItem: (key: string) => settings.delete(key)
-  })
-  try {
-    setAntigravityModelPreference("gemini-4-argon", { effort: "low" })
-    setAntigravityModelPreference("gemini-4-neon", { effort: "medium" })
-    const { client } = await make((fake) => {
-      configureReasoningModels(fake, models, "gpt-6.1-sol", "max")
-    })
-    const id = await client.newSession("/tmp/gemini-effort-switch")
-    const route = [[argon, "low"], [neon, "medium"], [gateway, "high"], ["gpt-6.1-sol", "max"]] as const
-    for (const [model, effort] of route) {
-      await client.setConfig(id, "model", model)
-      await until(() => client.effortOf(id) === effort)
-      expect(client.session(id).id).toBe(id)
-    }
-  } finally {
-    vi.unstubAllGlobals()
-  }
-})
-
 test("a new conversation starts on the model's own default effort, not the agent global default", async () => {
   // The agent opens the thread on "low" (its global config); the model's catalog says "max".
   // Without the catalog fallback the picker sat on Low even though every model defaulted to Max.
@@ -2193,6 +2160,158 @@ test("a newer explicit pick supersedes a parked switch", async () => {
   await until(() => currentModel() === "qwen-max")
   expect(currentModel()).toBe("qwen-max")
   expect(client.pendingModelFor(id)).toBeNull()
+})
+
+const switchModels: ReasoningModelFixture[] = ["first", "second", "third"].map((id) => ({
+  id, groupId: "chatgpt", efforts: ["low", "high"], defaultEffort: id === "second" ? "high" : "low"
+}))
+
+test("sending immediately after a pick waits for its model and effort, not just the model ACK", async () => {
+  const { client, fake } = await make((agent) => configureReasoningModels(agent, switchModels, "first", "low"))
+  const id = await client.newSession("/tmp/model-send-order")
+  fake.events.length = 0
+  await Promise.all([client.setConfig(id, "model", "second"), client.prompt(id, [{ type: "text", text: "next" }])])
+  expect(orchestrationOrder(fake)).toEqual(["config:model=second", "config:reasoning_effort=high", "prompt:worker"])
+})
+
+test("a successful explicit pick cancels an older parked model even if the session still looks busy", async () => {
+  const { client, fake } = await make((agent) => configureReasoningModels(agent, switchModels, "first", "low"))
+  const id = await client.newSession("/tmp/model-supersede-accepted")
+  const configured = must(fake.configResponse.current, "missing handler")
+  let busy = true
+  fake.configResponse.current = (request) => {
+    if (busy && request.value === "second") throw RequestError.invalidRequest({}, "Wait for the current turn to finish")
+    return configured(request)
+  }
+  await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "running" })
+  await client.setConfig(id, "model", "second")
+  expect(client.pendingModelFor(id)).toBe("second")
+  await client.setConfig(id, "model", "third")
+  busy = false
+  await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "idle" })
+  await client.prompt(id, [{ type: "text", text: "next" }])
+  expect(client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue).toBe("third")
+})
+
+test("an explicit effort selected immediately after a model wins over that model's default before sending", async () => {
+  const { client, fake } = await make((agent) => configureReasoningModels(agent, switchModels, "first", "low"))
+  const id = await client.newSession("/tmp/model-manual-effort")
+  fake.events.length = 0
+  await Promise.all([
+    client.setConfig(id, "model", "second"), client.setConfig(id, "effort", "low"),
+    client.prompt(id, [{ type: "text", text: "with manual effort" }])
+  ])
+  expect(orchestrationOrder(fake)).toEqual(["config:model=second", "config:reasoning_effort=high", "config:reasoning_effort=low", "prompt:worker"])
+})
+
+test("a still-refused parked model never dispatches the next prompt on the old route", async () => {
+  const { client, fake } = await make((agent) => configureReasoningModels(agent, switchModels, "first", "low"))
+  const id = await client.newSession("/tmp/model-parked-refused")
+  const configured = must(fake.configResponse.current, "missing handler")
+  fake.configResponse.current = (request) => {
+    if (request.value === "second") throw RequestError.invalidRequest({}, "Wait for the current turn to finish")
+    return configured(request)
+  }
+  try {
+    await client.setConfig(id, "model", "second")
+    await expect(client.prompt(id, [{ type: "text", text: "private" }])).rejects.toThrow()
+    expect(fake.prompts).not.toContain("private")
+  } finally {
+    fake.configResponse.current = configured
+    await client.setConfig(id, "model", "second")
+  }
+})
+
+test("a switch acknowledged with the previous model rejects both the pick and the waiting message", async () => {
+  const { client, fake } = await make((agent) => configureReasoningModels(agent, switchModels, "first", "low"))
+  const id = await client.newSession("/tmp/model-ack-mismatch")
+  fake.configResponse.current = () => ({ configOptions: reasoningCatalog("first", "low", switchModels) })
+  const results = await Promise.allSettled([
+    client.setConfig(id, "model", "second"), client.prompt(id, [{ type: "text", text: "private" }])
+  ])
+  expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"])
+  expect(fake.prompts).not.toContain("private")
+})
+
+test("a failed model write does not discard the next pick already queued for this session", async () => {
+  const { client, fake } = await make((agent) => configureReasoningModels(agent, switchModels, "first", "low"))
+  const id = await client.newSession("/tmp/model-retry")
+  const configured = must(fake.configResponse.current, "missing handler")
+  fake.configResponse.current = (request) => {
+    if (request.value === "second") throw RequestError.invalidRequest({}, "Switch refused")
+    return configured(request)
+  }
+  const results = await Promise.allSettled([
+    client.setConfig(id, "model", "second"),
+    client.setConfig(id, "model", "third"),
+    client.prompt(id, [{ type: "text", text: "after retry" }])
+  ])
+  expect(results.map((result) => result.status)).toEqual(["rejected", "fulfilled", "fulfilled"])
+  expect(client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue).toBe("third")
+  expect(fake.prompts).toEqual(["after retry"])
+})
+
+test("a supplement waiting for a rejected switch does not steer or later send on the old model", async () => {
+  const { client, fake } = await make((agent) => configureReasoningModels(agent, switchModels, "first", "low"))
+  const id = await client.newSession("/tmp/model-steer-race")
+  fake.configResponse.current = () => { throw RequestError.invalidRequest({}, "Switch refused") }
+  await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "running" })
+  const result = Promise.allSettled([
+    client.setConfig(id, "model", "second"),
+    client.prompt(id, [{ type: "text", text: "only for the new model" }])
+  ])
+  await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "idle" })
+  expect((await result).map((entry) => entry.status)).toEqual(["rejected", "rejected"])
+  expect(fake.steers).toEqual([])
+  expect(fake.prompts).toEqual([])
+})
+
+test("a refusal naming the bare upstream model retries a sibling on the same gateway", async () => {
+  const ids = ["native-first", "gateway:service:upstream", "gateway:service:sibling"]
+  const models = ids.map((id) => ({ id, groupId: id.startsWith("gateway:") ? "service" : "chatgpt", efforts: ["low"], defaultEffort: "low" }))
+  const { client, fake } = await make((agent) => configureReasoningModels(agent, models, ids[1]!, "low"))
+  const id = await client.newSession("/tmp/model-retry-scope")
+  fake.promptError.current = () => {
+    fake.promptError.current = null
+    return RequestError.invalidRequest({}, "Unsupported model: 'upstream'")
+  }
+  await client.prompt(id, [{ type: "text", text: "retry" }])
+  expect(client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue).toBe(ids[2])
+})
+
+test("a gateway with no sibling never resends the user's prompt to a different provider", async () => {
+  const selected = "gateway:restricted:only"
+  const models = [
+    { id: "native-first", groupId: "chatgpt", efforts: ["low"], defaultEffort: "low" },
+    { id: selected, groupId: "restricted", efforts: ["low"], defaultEffort: "low" }
+  ]
+  const { client, fake } = await make((agent) => configureReasoningModels(agent, models, selected, "low"))
+  const id = await client.newSession("/tmp/model-no-cross-retry")
+  fake.promptError.current = () => {
+    fake.promptError.current = null
+    return RequestError.invalidRequest({}, "Unsupported model: 'only'")
+  }
+  await expect(client.prompt(id, [{ type: "text", text: "stay on this provider" }])).rejects.toThrow("Unsupported model")
+  expect(fake.prompts).toEqual(["stay on this provider"])
+  expect(client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue).toBe(selected)
+})
+
+test("a late refusal cannot retire the same slug on the newly selected gateway or replay the old prompt", async () => {
+  const before = "gateway:before:shared"
+  const after = "gateway:after:shared"
+  const models = [before, after, "gateway:after:sibling"].map((id) => ({
+    id, groupId: id.split(":")[1]!, efforts: ["low"], defaultEffort: "low"
+  }))
+  const { client } = await make((agent) => configureReasoningModels(agent, models, before, "low"))
+  const id = await client.newSession("/tmp/model-late-refusal")
+  const refusal = Promise.withResolvers<string>()
+  const dispatch = vi.spyOn(client as unknown as { promptWithTimeout: () => Promise<string> }, "promptWithTimeout").mockReturnValueOnce(refusal.promise)
+  const result = client.prompt(id, [{ type: "text", text: "original" }])
+  await client.setConfig(id, "model", after)
+  refusal.reject(RequestError.invalidRequest({}, "Unsupported model: 'shared'"))
+  await expect(result).rejects.toThrow("Unsupported model")
+  expect(dispatch).toHaveBeenCalledTimes(1)
+  expect(client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue).toBe(after)
 })
 
 test("a new conversation starts on the model row's default effort", async () => {

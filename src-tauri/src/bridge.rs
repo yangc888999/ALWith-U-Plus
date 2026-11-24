@@ -764,7 +764,7 @@ fn chat_response_shell(id: &str, status: &str) -> Value {
 /// Converts a complete (non-streaming) Chat Completions answer into the Responses object Codex
 /// consumes. `finish_reason` decides the terminal status so a length-capped turn is not reported
 /// as a completed one.
-pub(crate) fn chat_to_responses(value: &Value) -> Value {
+fn chat_to_responses(value: &Value) -> Value {
     let id = value.get("id").and_then(Value::as_str).unwrap_or("chatcmpl");
     let choice = value
         .get("choices")
@@ -797,7 +797,7 @@ static CHAT_ITEM_SEQ: AtomicU32 = AtomicU32::new(0);
 /// only deltas leaves the engine waiting for items it never sees, so every item is opened and closed
 /// here. Chunk boundaries are arbitrary: a frame split across two reads is buffered until its
 /// terminating blank line arrives.
-pub(crate) struct ChatResponsesStream {
+struct ChatResponsesStream {
     id: String,
     buffer: Vec<u8>,
     sequence: u64,
@@ -813,7 +813,7 @@ pub(crate) struct ChatResponsesStream {
 }
 
 impl ChatResponsesStream {
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         Self {
             id: format!("resp_{}", CHAT_ITEM_SEQ.fetch_add(1, Ordering::Relaxed)),
             buffer: Vec::new(),
@@ -980,7 +980,7 @@ impl ChatResponsesStream {
     }
 
     /// Feeds raw upstream bytes; returns the Responses SSE bytes ready to write downstream.
-    pub(crate) fn translate(&mut self, bytes: &[u8]) -> Vec<u8> {
+    fn translate(&mut self, bytes: &[u8]) -> Vec<u8> {
         self.buffer.extend_from_slice(bytes);
         let mut out = Vec::new();
         while let Some(end) = self.buffer.windows(2).position(|pair| pair == b"\n\n") {
@@ -1083,9 +1083,6 @@ fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
             return respond(request, 400, "application/json", body.to_string().as_bytes());
         }
     };
-    if gateway == crate::antigravity::gateway_id() {
-        return crate::antigravity::respond_to_turn(APP_HANDLE.get(), request, upstream_model, &parsed);
-    }
     let Some(route) = router_routes().read().ok().and_then(|map| map.get(gateway).cloned()) else {
         let (status, body) = missing_gateway_response(gateway, &requested);
         return respond(request, status, "application/json", body.as_bytes());

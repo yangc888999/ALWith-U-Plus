@@ -30,7 +30,6 @@ export interface GroupRole {
 }
 
 const STORAGE_KEY = "alwith:group-roles"
-const listeners = new Set<() => void>()
 
 function readPersona(value: unknown): RolePersona | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null
@@ -139,7 +138,6 @@ function writeAll(next: GroupRole[]): void {
   // caller's objects would hand them values the stored list would never produce.
   cached = parse(raw)
   cachedRaw = raw
-  for (const listener of listeners) listener()
 }
 
 /**
@@ -335,11 +333,6 @@ export function removeGroupRole(id: string): GroupRole[] {
   const next = readAll().filter((role) => role.id !== id)
   writeAll(next)
   return next
-}
-
-export function subscribeGroupRoles(listener: () => void): () => void {
-  listeners.add(listener)
-  return () => listeners.delete(listener)
 }
 
 /** A stable id for a new role; the name may change afterwards. */

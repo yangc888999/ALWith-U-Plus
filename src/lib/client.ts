@@ -2,12 +2,12 @@ import type { Session } from "@alwith/api"
 // The app-wide CodexClient instance and the React bindings to its store.
 import { isTauri } from "@tauri-apps/api/core"
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow"
+import { info } from "@tauri-apps/plugin-log"
 import { useStore } from "zustand"
 
 import type { AppState } from "@/agent/client"
 import { macProjectPaths } from "@/agent/project-path"
 import { commands } from "@/bindings"
-import { antigravityModel, antigravityModelSelection } from "@/features/antigravity/models"
 import { computerRuntimeEnv } from "@/features/computer/runtime-config"
 import { computerContextRevision, hostSessionContext, prepareComputerTools } from "@/features/computer/session-context"
 import { RemoteChatClient } from "@/lib/chat-window-client"
@@ -20,12 +20,11 @@ export const client =
   isTauri() && getCurrentWebviewWindow().label === "chat"
     ? new RemoteChatClient()
     : new DesktopCodexClient(runtimeClient, {
+        logInfo: (message) => { void info(message).catch(() => {}) },
         agentId: CODEX_AGENT_ID,
         launch: { engine: "codex", env: computerRuntimeEnv },
         projectPaths: isMac() ? macProjectPaths : undefined,
         resolveModel: async (model, purpose) => {
-          const gemini = antigravityModel(model)
-          if (gemini !== undefined) return antigravityModelSelection(gemini.id)
           // Read the last applied catalog from the cache (fast path), warmed by useProviders and
           // loadProviders, instead of a write round-trip (providersApply) on every session. A
           // pending catalog means a saved change has not reached the adapter yet: apply it now (if
@@ -51,14 +50,6 @@ export const client =
           await commands.computerStopSession({ sessionId })
         }
       })
-
-// Gemini's native Agent turns surface permission requests through this event; the chat surface
-// renders the approval dialog and answers via `antigravityAgent.answer`. Other models never emit it.
-if (isTauri() && !(client instanceof RemoteChatClient)) {
-  client.configureAntigravityAgent((permission) => {
-    window.dispatchEvent(new CustomEvent("antigravity:permission", { detail: permission }))
-  })
-}
 
 /** Mirrors the Runtime's run states into the client store for the lifetime of the app. */
 export async function watchRunStates(): Promise<() => void> {
