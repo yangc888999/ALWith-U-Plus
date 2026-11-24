@@ -8,7 +8,7 @@ import { antigravityDefaultThinking, antigravityModel } from "@/features/antigra
 import { isEnterpriseModel } from "@/features/auth/enterprise-providers"
 import { companyModelConfig } from "@/lib/company-model-config"
 import i18n from "@/lib/i18n"
-import { modelFastModeFor } from "@/lib/model-fast-mode"
+import { modelFastModeChoiceFor } from "@/lib/model-fast-mode"
 import { canonicalModelSelection, modelDisplayId, modelVendorId } from "@/lib/model-identity"
 
 /** The per-model overrides mirrored by the settings window (`alwith:native-model-overrides`). */
@@ -783,7 +783,11 @@ export class CodexClient extends CodexAcpClient<AppState> {
   private async applyModelFastMode(id: string, model: string): Promise<void> {
     if (this.inRoleScope(id)) return
     if (!this.holds(id)) return
-    const desired = modelFastModeFor(model)
+    // Only an explicit choice moves the switch. Reading the two-state flag here made "never
+    // configured" indistinguishable from "configured off" and actively wrote `false` on a model
+    // the user never touched — the engine's own default is the right value in that case.
+    const desired = modelFastModeChoiceFor(model)
+    if (desired === null) return
     const session = this.session(id)
     const option = session.configOptions.find((entry) => entry.configId === "fast-mode")
     // No fast-mode option in this session. That is ambiguous — the model may be non-GPT (never
@@ -1189,14 +1193,18 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // explicit pick that differs from the configured default. Only fall back to the legacy
     // default flag when the engine did not report a model.
     const model = selectedModel(session.configOptions)
-    const desired = model !== null ? modelFastModeFor(model) : this.defaultFastModeOption?.() === true
-    if (!desired) return
+    // Read the three-state choice, not the two-state flag: a new chat for a model the user
+    // deliberately switched OFF must be created at normal speed, otherwise the engine keeps
+    // whatever the previous session left behind and "off" silently behaves like "on".
+    const choice = model !== null ? modelFastModeChoiceFor(model) : null
+    const desired = model !== null ? choice === true : this.defaultFastModeOption?.() === true
+    if (!desired && choice !== false) return
     const option = session.configOptions.find((entry) => entry.configId === "fast-mode")
     // No fast-mode option in this session. As in `applyModelFastMode`, that is ambiguous — a GPT
     // model the user enabled may simply not have published its config options yet. Wiping the saved
     // preference on that transient gap would delete a real enabled flag, so leave it untouched.
     if (option === undefined || !isBooleanOption(option)) return
-    if (option.currentValue === true) return
+    if (option.currentValue === desired) return
     try {
       await this.setConfig(id, "fast-mode", true)
     } catch {
@@ -1743,7 +1751,10 @@ export class CodexClient extends CodexAcpClient<AppState> {
       if (configId === "fast-mode" && typeof value === "boolean")
         this.saveSessionModel(id, {
           fastMode: value,
-          fastExplicit: model !== null && value !== modelFastModeFor(model)
+          // Compare against the three-state choice: writing `false` on a model the user never
+          // configured IS a deviation and has to be replayed, whereas writing the same explicit
+          // value again is not.
+          fastExplicit: model !== null && value !== modelFastModeChoiceFor(model)
         })
       else if (typeof value === "string" && configId === this.effortConfigId(session.configOptions))
         this.saveSessionModel(id, {
@@ -3718,7 +3729,9 @@ export class CodexClient extends CodexAcpClient<AppState> {
     const effort = this.selectedEffort(session.configOptions)
     const fastMode = fastOption !== undefined && isBooleanOption(fastOption) ? fastOption.currentValue === true : false
     const tableEffort = this.defaultEffortForModel(session, model)
-    const tableFast = modelFastModeFor(model)
+    // Three-state: "never configured" is not the same baseline as "configured off", so a switch
+    // the user explicitly turned off still counts as a deviation worth replaying.
+    const tableFast = modelFastModeChoiceFor(model)
     if (!this.inRoleScope(session.id))
       this.saveSessionModel(session.id, {
         model,
@@ -3798,7 +3811,14 @@ export class CodexClient extends CodexAcpClient<AppState> {
             ? saved.effort
             : (this.defaultEffortForModel(target, model) ?? saved.effort)
       const fast =
-        saved.fastExplicit === true ? saved.fastMode : model === null ? saved.fastMode : modelFastModeFor(model)
+        saved.fastExplicit === true
+          ? saved.fastMode
+          : model === null
+            ? saved.fastMode
+            : // Three states: an explicit "off" for this model must be replayed as `false`, while a
+              // model the user never configured keeps the switch untouched (undefined) so the
+              // engine's own default applies.
+              (modelFastModeChoiceFor(model) ?? undefined)
       return { effort, fast }
     }
     const fastOptionOf = (target: Session) => target.configOptions.find((entry) => entry.configId === "fast-mode")

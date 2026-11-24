@@ -401,10 +401,17 @@ export const commands = {
     sessionKey: string
   }): Promise<string> => __t3Invoke<string>("antigravity_agent_turn", args),
   /**
-   *  Answer a permission request that arrived as a `permission_request` event with the same turnKey.
+   *  Answer one permission request raised by a running Agent turn.
+   *
+   *  `request_id` is the turn (used to prove the turn is still alive); `permission_id` identifies the
+   *  individual request, because a single turn asks once per tool call and answering one must not
+   *  resolve the others.
    */
-  antigravityPermissionAnswer: (args: { requestId: string; optionId: string | null }): Promise<null> =>
-    __t3Invoke<null>("antigravity_permission_answer", args),
+  antigravityPermissionAnswer: (args: {
+    requestId: string
+    permissionId: string
+    optionId: string | null
+  }): Promise<null> => __t3Invoke<null>("antigravity_permission_answer", args),
   /**
    *  Cancel a native Agent turn.
    */

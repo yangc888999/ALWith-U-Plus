@@ -6,31 +6,42 @@ import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "@/components/ui/dialog"
 
 /**
- * Approval surface for the native Gemini Agent. Antigravity's ACP permission requests arrive on a
- * DOM event from the client and are answered through the bridge; denying is always available and
- * no option is auto-approved.
+ * Approval surface for the native Gemini Agent.
+ *
+ * ACP asks for permission once per tool call, so several requests can queue up while the user is
+ * deciding. They are kept in a queue: replacing the single visible request with the newest one left
+ * the earlier requests unanswered forever, which stalled the whole turn (the agent waits on the
+ * ACP request until it is answered).
  */
 export function AntigravityPermissionDialog(): React.JSX.Element {
   const { t } = useTranslation()
-  const [permission, setPermission] = useState<AgentPermission | null>(null)
+  const [queue, setQueue] = useState<AgentPermission[]>([])
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     const listener = (event: Event) => {
-      setPermission((event as CustomEvent<AgentPermission>).detail)
+      const permission = (event as CustomEvent<AgentPermission>).detail
+      setQueue((current) =>
+        current.some((entry) => entry.permissionId === permission.permissionId) ? current : [...current, permission]
+      )
       setBusy(false)
     }
     window.addEventListener("antigravity:permission", listener)
     return () => window.removeEventListener("antigravity:permission", listener)
   }, [])
 
+  const permission = queue[0] ?? null
+
   const answer = async (optionId: string | null) => {
     if (permission === null) return
     setBusy(true)
     try {
-      await antigravityAgent.answer(permission.requestId, optionId)
-      setPermission(null)
+      await antigravityAgent.answer(permission.requestId, permission.permissionId, optionId)
+      setQueue((current) => current.slice(1))
     } catch {
+      // A failed answer must not strand the request: drop it so the next one can be shown.
+      setQueue((current) => current.slice(1))
+    } finally {
       setBusy(false)
     }
   }

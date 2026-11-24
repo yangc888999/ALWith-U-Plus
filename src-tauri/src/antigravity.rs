@@ -173,6 +173,7 @@ fn dispatch_event(pending: &Pending, value: Value) {
 
 fn send_turn(
     app: &AppHandle,
+    request_id: Option<&str>,
     model: &str,
     effort: Option<&str>,
     prompt: Vec<Value>,
@@ -183,7 +184,7 @@ fn send_turn(
     let mut guard = state.process.lock().map_err(|error| error.to_string())?;
     start_bridge(app, &mut guard)?;
     let process = guard.as_mut().expect("Antigravity bridge started");
-    let id = uuid::Uuid::new_v4().to_string();
+    let id = request_id.map(str::to_owned).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let mut message = json!({"type":"turn", "requestId":id, "model":model, "effort":effort, "prompt":prompt});
     if let Some(cwd) = cwd {
         message["cwd"] = Value::String(cwd.to_string());
@@ -451,23 +452,36 @@ pub fn antigravity_agent_turn(
     if cwd.trim().is_empty() {
         return Err("Agent turn requires a project directory".into());
     }
-    let id = send_turn(
+    // The turn must be registered BEFORE the bridge is told to start: the reader thread drops any
+    // event whose requestId has no registered turn key, and a fast bridge could answer in between.
+    let id = uuid::Uuid::new_v4().to_string();
+    state.agent_turns.lock().unwrap().insert(id.clone(), turn_key);
+    let sent = send_turn(
         &app,
+        Some(&id),
         &model,
         effort.as_deref(),
         prompt,
         Some(&cwd),
         Some(&session_key),
-    )?;
-    state.agent_turns.lock().unwrap().insert(id.clone(), turn_key);
+    );
+    if sent.is_err() {
+        state.agent_turns.lock().unwrap().remove(&id);
+    }
+    sent?;
     Ok(id)
 }
 
-/// Answer a permission request that arrived as a `permission_request` event with the same turnKey.
+/// Answer one permission request raised by a running Agent turn.
+///
+/// `request_id` is the turn (used to prove the turn is still alive); `permission_id` identifies the
+/// individual request, because a single turn asks once per tool call and answering one must not
+/// resolve the others.
 #[tauri3_specta::command]
 pub fn antigravity_permission_answer(
     state: State<'_, AntigravityBridge>,
     request_id: String,
+    permission_id: String,
     option_id: Option<String>,
 ) -> Result<(), String> {
     let known = state.agent_turns.lock().unwrap().contains_key(&request_id);
@@ -479,6 +493,7 @@ pub fn antigravity_permission_answer(
     process.send(&json!({
         "type": "permission_answer",
         "requestId": request_id,
+        "permissionId": permission_id,
         "optionId": option_id
     }))
 }

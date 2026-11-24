@@ -19,8 +19,11 @@ const EVENT = "antigravity:event"
 
 export type AgentPermission = {
   requestId: string
+  /** Identifies this one request: a turn can raise several, and each must be answered separately. */
+  permissionId: string
   turnKey: string
   title: string
+  name: string
   kind: string
   options: Array<{ optionId: string; name: string; kind?: string }>
 }
@@ -43,6 +46,7 @@ type AgentEvent = {
   type?: string
   turnKey?: string
   requestId?: string
+  permissionId?: string
   text?: string
   stopReason?: string
   message?: string
@@ -50,20 +54,39 @@ type AgentEvent = {
   options?: Array<{ optionId: string; name: string; kind?: string }>
 }
 
-/** Maps ACP v1 `tool_call` fields onto the ACP v2 `SessionUpdate` shape `applyUpdate` expects. */
-export function toolUpdate(update: Record<string, unknown>, status: "in_progress" | "completed") {
+/**
+ * Maps ACP v1 `tool_call` fields onto the ACP v2 `SessionUpdate` shape `applyUpdate` expects.
+ *
+ * The status comes from the agent, not from the event name: ACP emits `tool_call` to announce a
+ * tool and then any number of `tool_call_update` events (in_progress, completed, failed) while it
+ * runs. Deriving the status from the event name froze every card at its first tick.
+ */
+export function toolUpdate(update: Record<string, unknown>, fallback: string) {
   const tool = (update.toolCall ?? {}) as Record<string, unknown>
   // The canonical reducer creates/updates tool items on `tool_call_update`; `tool_call` alone is
   // a no-op for item building. Emit the update form so tool cards actually appear.
+  // The card renders `name` as the tool label and `title` as its description. The bridge puts
+  // Antigravity's name/title in both fields, so forward both — sending only `title` left `name`
+  // null and every card fell back to the generic "Tool" label.
+  const label = tool.name ?? tool.title ?? "Tool"
   return {
     sessionUpdate: "tool_call_update",
     toolCallId: String(tool.toolCallId ?? tool.id ?? "agent-tool"),
     kind: tool.kind ?? "other",
-    title: tool.title ?? "Tool",
-    status,
+    name: String(label),
+    title: String(tool.title ?? label),
+    status: typeof tool.status === "string" ? tool.status : fallback,
     content: [],
+    locations: [],
+    rawInput: tool.rawInput ?? undefined,
+    rawOutput: tool.rawOutput ?? undefined,
     _meta: null
   }
+}
+
+/** Thinking streams stay out of the transcript; the assistant bubble carries the answer. */
+export function thoughtUpdate(text: string, messageId: string) {
+  return { sessionUpdate: "agent_thought_chunk", messageId, content: { type: "text", text } }
 }
 
 /** Streamed text chunks share one messageId so they render as a single assistant bubble. */
@@ -98,8 +121,10 @@ class AntigravityAgent {
       const tool = event.toolCall ?? {}
       this.onPermission?.({
         requestId: event.requestId,
+        permissionId: event.permissionId ?? event.requestId,
         turnKey: event.turnKey,
-        title: String(tool.title ?? "Tool"),
+        title: String(tool.title ?? tool.name ?? "Tool"),
+        name: String(tool.name ?? tool.title ?? "Tool"),
         kind: String(tool.kind ?? "other"),
         options: Array.isArray(event.options) ? event.options : []
       })
@@ -115,7 +140,7 @@ class AntigravityAgent {
       if (event.type === "delta" && typeof event.text === "string") {
         update = textUpdate(event.text, turn.messageId)
       } else if (event.type === "tool_call" || event.type === "tool_call_update") {
-        update = toolUpdate(event, event.type === "tool_call" ? "in_progress" : "completed")
+        update = toolUpdate(event, event.type === "tool_call" ? "pending" : "in_progress")
       }
       if (update !== null) apply(turn.sessionId, (session) => turn.apply(session, update!))
     }
@@ -172,8 +197,12 @@ class AntigravityAgent {
     return settled
   }
 
-  async answer(requestId: string, optionId: string | null): Promise<void> {
-    await commands.antigravityPermissionAnswer({ requestId, optionId })
+  /**
+ * `requestId` is the live turn (the host uses it to prove the turn still exists) and
+ * `permissionId` picks the individual request — one turn asks once per tool call.
+ */
+async answer(requestId: string, permissionId: string, optionId: string | null): Promise<void> {
+    await commands.antigravityPermissionAnswer({ requestId, permissionId, optionId })
   }
 
   async cancel(requestId: string): Promise<void> {

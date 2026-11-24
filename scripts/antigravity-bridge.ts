@@ -27,7 +27,7 @@ type Message =
       sessionKey?: string
     }
   | { type: "cancel"; requestId: string }
-  | { type: "permission_answer"; requestId: string; optionId: string | null }
+  | { type: "permission_answer"; requestId: string; permissionId: string; optionId: string | null }
 
 type PermissionWaiter = { resolve: (optionId: string | null) => void }
 
@@ -38,8 +38,18 @@ const turns = new Map<string, Turn>()
 const sessions = new Map<string, Turn>()
 /** Stable caller key -> ACP session id, so an Agent conversation survives across turns. */
 const sessionKeys = new Map<string, string>()
-/** requestId -> pending permission decision. */
+/**
+ * permissionId -> pending permission decision.
+ *
+ * ACP asks for permission once per tool call, so one turn raises this request many times, and a
+ * single turn-scoped waiter cannot represent that: answering the first request used to delete the
+ * channel, so every later tool call was auto-cancelled and the agent stopped producing any text.
+ * Each request now gets its own id, and the turn keeps a set of the ids it still owes an answer
+ * for so a finished turn can release them all.
+ */
 const permissions = new Map<string, PermissionWaiter>()
+/** turn requestId -> permissionIds still waiting for a user decision. */
+const turnPermissions = new Map<string, Set<string>>()
 let child: ReturnType<typeof spawn> | null = null
 let starting: Promise<Agent> | null = null
 const regionError = "User location is not supported for the API use."
@@ -90,26 +100,35 @@ function startAgent(): Promise<Agent> {
     .onRequest(acp.methods.client.session.requestPermission, ({ params }) => {
       const turn = sessions.get(params.sessionId)
       // Legacy text-only turns have no Agent surface and no user to ask: keep cancelling them.
-      // Only Agent turns carry a requestId that the host registered a permission waiter for.
+      // Only Agent turns register a permission channel the host can answer.
       if (turn === undefined || turn.abort.signal.aborted) {
         return Promise.resolve({ outcome: { outcome: "cancelled" } })
       }
-      const requestId = turn.requestId
-      if (!permissions.has(requestId)) {
+      const turnId = turn.requestId
+      if (!turnPermissions.has(turnId)) {
         return Promise.resolve({ outcome: { outcome: "cancelled" } })
       }
-      const waiter = permissions.get(requestId)!
+      // One id per request: a turn can ask again for the next tool call.
+      const permissionId = `${turnId}:${String(params.toolCall.toolCallId ?? crypto.randomUUID())}:${permissions.size}`
+      turnPermissions.get(turnId)!.add(permissionId)
       return new Promise<{ outcome: acp.RequestPermissionOutcome }>((resolve) => {
-        waiter.resolve = (optionId) =>
-          resolve({ outcome: optionId === null ? { outcome: "cancelled" } : { outcome: "selected", optionId } })
-        const tool = params.toolCall as Record<string, unknown>
+        permissions.set(permissionId, {
+          resolve: (optionId) => {
+            permissions.delete(permissionId)
+            turnPermissions.get(turnId)?.delete(permissionId)
+            resolve({ outcome: optionId === null ? { outcome: "cancelled" } : { outcome: "selected", optionId } })
+          }
+        })
+        const tool = params.toolCall as unknown as Record<string, unknown>
         send({
           type: "permission_request",
-          requestId,
+          requestId: turnId,
+          permissionId,
           toolCall: {
             toolCallId: tool.toolCallId ?? null,
             kind: tool.kind ?? "other",
-            title: tool.title ?? null,
+            name: tool.name ?? tool.title ?? null,
+            title: tool.title ?? tool.name ?? null,
             status: tool.status ?? "pending"
           },
           options: (params.options ?? []).map((option) => ({
@@ -141,8 +160,17 @@ function startAgent(): Promise<Agent> {
           toolCall: {
             toolCallId: tool.toolCallId ?? tool.id ?? null,
             kind: tool.kind ?? "other",
+            // Forward name and title separately: the chat card renders `name` as its label and
+            // `title` as the description. Collapsing them into one field showed every tool as
+            // the generic "Tool" label.
+            name: tool.name ?? tool.title ?? null,
             title: tool.title ?? tool.name ?? null,
-            status: tool.status ?? "pending"
+            // Forward the agent's real status. Hard-coding it ("tool_call" => in_progress,
+            // every update => completed) marked a tool finished on its first progress tick and
+            // hid genuine failures, so the card looked frozen while work was still running.
+            status: tool.status ?? (update.sessionUpdate === "tool_call" ? "pending" : "in_progress"),
+            rawInput: tool.rawInput ?? null,
+            rawOutput: tool.rawOutput ?? null
           }
         })
         return
@@ -227,7 +255,7 @@ async function runTurn(message: Extract<Message, { type: "turn" }>): Promise<voi
   const turn: Turn = { requestId, abort: new AbortController(), hasText: false, openingText: "" }
   turns.set(requestId, turn)
   // Register the permission channel before any prompt: the ACP agent may ask while the turn runs.
-  if (isAgent) permissions.set(requestId, { resolve: () => {} })
+  if (isAgent) turnPermissions.set(requestId, new Set())
   const { signal } = turn.abort
   let directory: string | undefined
   let sessionId: string | undefined
@@ -290,10 +318,12 @@ async function runTurn(message: Extract<Message, { type: "turn" }>): Promise<voi
     if (!signal.aborted) reportError(error, requestId)
   } finally {
     turns.delete(requestId)
-    const waiter = permissions.get(requestId)
-    if (waiter !== undefined) {
-      permissions.delete(requestId)
-      waiter.resolve(null)
+    // Release every permission this turn is still waiting on, so the ACP child never blocks on a
+    // dialog nobody will answer.
+    const owed = turnPermissions.get(requestId)
+    if (owed !== undefined) {
+      turnPermissions.delete(requestId)
+      for (const permissionId of owed) permissions.get(permissionId)?.resolve(null)
     }
     if (sessionId !== undefined) {
       sessions.delete(sessionId)
@@ -365,11 +395,8 @@ lines.on("line", (line) => {
     if (message.type === "turn") void runTurn(message)
     else if (message.type === "cancel") turns.get(message.requestId)?.abort.abort()
     else if (message.type === "permission_answer") {
-      const waiter = permissions.get(message.requestId)
-      if (waiter !== undefined) {
-        permissions.delete(message.requestId)
-        waiter.resolve(message.optionId)
-      }
+      // Answered by permissionId: two dialogs from one turn must not resolve each other.
+      permissions.get(message.permissionId)?.resolve(message.optionId)
     } else if (
       message.type === "initialize" ||
       message.type === "login" ||

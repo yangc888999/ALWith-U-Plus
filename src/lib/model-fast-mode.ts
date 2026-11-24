@@ -3,6 +3,15 @@
  *
  * The model list owns one switch per GPT model; selecting that model in a conversation applies
  * the same value. Kept beside the other chat preferences so both windows see one source of truth.
+ *
+ * Three states are distinct and must stay that way:
+ *   * key present, `true`  — explicitly on  → the turn sends `service_tier=priority`
+ *   * key present, `false` — explicitly off → the turn must send the normal-speed value rather
+ *                            than omitting the field (omitting it is not the same request)
+ *   * key absent           — never specified → leave the engine's own default alone
+ *
+ * Dropping the key on "off" collapsed the last two into one, so "I turned acceleration off" and
+ * "I never touched it" produced identical requests and the explicit choice was silently lost.
  */
 const STORAGE_KEY = "alwith:model-fast-mode"
 const listeners = new Set<() => void>()
@@ -18,7 +27,8 @@ function read(): Record<string, boolean> {
     } else {
       const entries: Record<string, boolean> = {}
       for (const [model, enabled] of Object.entries(parsed)) {
-        if (enabled === true) entries[model] = true
+        // Both explicit values are meaningful; only non-booleans are noise.
+        if (enabled === true || enabled === false) entries[model] = enabled
       }
       cache = entries
     }
@@ -50,14 +60,25 @@ export function modelFastModeFor(model: string | null | undefined): boolean {
   return model !== null && model !== undefined && read()[model] === true
 }
 
+/**
+ * The stored choice, or `null` when the user never touched this model's switch.
+ *
+ * Callers that must send a different request for "off" than for "unspecified" read this instead of
+ * `modelFastModeFor`, whose `false` conflates the two.
+ */
+export function modelFastModeChoiceFor(model: string | null | undefined): boolean | null {
+  if (model === null || model === undefined) return null
+  const value = read()[model]
+  return value === true || value === false ? value : null
+}
+
 export function setModelFastMode(model: string, enabled: boolean): void {
   if (model.trim() === "") return
   const current = read()
-  if ((current[model] === true) === enabled) return
-  const next = { ...current }
-  if (enabled) next[model] = true
-  else delete next[model]
-  write(next)
+  if (current[model] === enabled) return
+  // Keep the key for BOTH explicit values: an explicit "off" is a decision the sender has to
+  // honour, not an absence of one.
+  write({ ...current, [model]: enabled })
 }
 
 export function subscribeModelFastMode(listener: () => void): () => void {

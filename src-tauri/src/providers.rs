@@ -1736,6 +1736,15 @@ struct EngineModel {
     context_window: Option<u64>,
     speed_tiers: Vec<String>,
     service_tiers: Value,
+    /// `multi_agent_reasoning_effort` as published by the engine.
+    ///
+    /// The engine's own model definition uses this pair to run a model's sub-agents at a different
+    /// effort than the main turn (`gpt-6.2-sol` = `xhigh` + `v2`). Dropping it here made the merged
+    /// catalog — the file the engine actually reads — fall back to `max`, so Ultra silently sent a
+    /// different effort than the model was designed for.
+    multi_agent_effort: Option<String>,
+    /// `multi_agent_version` as published by the engine (`v2` enables the orchestrated path).
+    multi_agent_version: Option<String>,
 }
 
 /// 引擎目录缓存的位置。`merged_catalog` 是同步函数，不能去跑子进程，只能读这份快照。
@@ -1781,6 +1790,14 @@ fn engine_model_from(model: &Value) -> Option<EngineModel> {
             .map(|tiers| tiers.iter().filter_map(Value::as_str).map(str::to_string).collect())
             .unwrap_or_default(),
         service_tiers: model.get("service_tiers").cloned().unwrap_or(Value::Null),
+        multi_agent_effort: model
+            .get("multi_agent_reasoning_effort")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        multi_agent_version: model
+            .get("multi_agent_version")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     })
 }
 
@@ -2340,6 +2357,15 @@ fn apply_engine_metadata(entry: &mut Value, engine: &[EngineModel]) {
     }
     if !model.service_tiers.is_null() {
         object.insert("service_tiers".into(), model.service_tiers.clone());
+    }
+    // Sub-agent orchestration is part of the model definition, not a global rule: only models whose
+    // own engine entry declares it get it, and the values are copied verbatim (`xhigh`, `v2`).
+    // Never synthesise these from an Effort name — `ultra` is a UI choice, not an outbound value.
+    if let Some(effort) = &model.multi_agent_effort {
+        object.insert("multi_agent_reasoning_effort".into(), json!(effort));
+    }
+    if let Some(version) = &model.multi_agent_version {
+        object.insert("multi_agent_version".into(), json!(version));
     }
     if object.get("context_window").is_none() {
         if let Some(window) = model.context_window {
@@ -4355,6 +4381,8 @@ mod tests {
             context_window: Some(272_000),
             speed_tiers: vec!["fast".into()],
             service_tiers: json!([{ "id": "priority", "name": "Fast" }]),
+            multi_agent_effort: None,
+            multi_agent_version: None,
         }];
         let mut entry = json!({
             "slug": "gpt-6.2-astra",
@@ -4364,6 +4392,10 @@ mod tests {
         apply_engine_metadata(&mut entry, &engine);
         assert_eq!(entry["supported_reasoning_levels"].as_array().unwrap().len(), 6);
         assert_eq!(entry["additional_speed_tiers"], json!(["fast"]));
+        // A model whose engine entry does not publish the sub-agent pair gets no invented value:
+        // `ultra` in the ladder is a UI choice and must never be turned into an outbound effort.
+        assert!(entry.get("multi_agent_reasoning_effort").is_none());
+        assert!(entry.get("multi_agent_version").is_none());
         assert_eq!(entry["default_reasoning_level"], "medium", "only a missing default is filled in");
         assert_eq!(entry["context_window"], 272_000);
 
@@ -4383,6 +4415,10 @@ mod tests {
             context_window: Some(500_000),
             speed_tiers: vec!["fast".into()],
             service_tiers: Value::Null,
+            // The engine publishes the sub-agent pair for this model; the merged catalog is what
+            // the engine reads, so it has to carry them through.
+            multi_agent_effort: Some("xhigh".into()),
+            multi_agent_version: Some("v2".into()),
         }];
         let mut entries = vec![json!({ "slug": "gpt-6.1-sol", "display_name": "6.1 Sol" })];
         let mut seen: BTreeSet<String> = BTreeSet::from(["gpt-6.1-sol".to_string()]);
@@ -4392,6 +4428,9 @@ mod tests {
         assert_eq!(entries[1]["display_name"], "6.2 Sol");
         assert_eq!(entries[1]["additional_speed_tiers"], json!(["fast"]));
         assert_eq!(entries[1]["context_window"], 500_000);
+        // Regression: dropping these made Ultra silently fall back to `max` on the native route.
+        assert_eq!(entries[1]["multi_agent_reasoning_effort"], "xhigh");
+        assert_eq!(entries[1]["multi_agent_version"], "v2");
 
         // 再跑一次不能出现第二条 —— `seen` 是跨源去重的同一张表。
         append_engine_models(&mut entries, &engine, &mut seen);
@@ -4781,5 +4820,55 @@ mod merged_catalog_tests {
     fn a_machine_with_no_catalogs_asks_for_none() {
         let root = tempfile::tempdir().unwrap();
         assert!(merged_catalog_path(root.path()).is_none());
+    }
+
+    /// End-to-end through `merged_catalog_path`: the engine's sub-agent pair must survive the merge.
+    ///
+    /// Regression for the native 6.2 Sol route: the engine publishes
+    /// `multi_agent_reasoning_effort=xhigh` + `multi_agent_version=v2`, but the merge only copied
+    /// the effort ladder and speed tiers, so the file the engine actually reads had `null` for both
+    /// and Ultra silently resolved to `max` instead of the model's own orchestration settings.
+    #[test]
+    fn the_engine_sub_agent_pair_survives_into_the_merged_catalog() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::create_dir_all(root.join("model-catalogs/alwith")).unwrap();
+        std::fs::write(
+            root.join("model-catalogs/alwith/models.json"),
+            json!({"models":[{"slug":"gpt-6.2-sol","display_name":"6.2 Sol"}]}).to_string(),
+        )
+        .unwrap();
+        // Snapshot written by `codex debug models --bundled`.
+        std::fs::write(
+            engine_catalog_path(root),
+            json!({"models":[{
+                "slug":"gpt-6.2-sol",
+                "display_name":"GPT-6.2-Sol",
+                "supported_reasoning_levels":[{"effort":"low"},{"effort":"max"},{"effort":"ultra"}],
+                "multi_agent_reasoning_effort":"xhigh",
+                "multi_agent_version":"v2"
+            }]})
+            .to_string(),
+        )
+        .unwrap();
+
+        let path = merged_catalog_path(root).expect("the catalog is written");
+        let merged: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let sol = merged["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["slug"] == "gpt-6.2-sol")
+            .expect("6.2 Sol stays in the catalog");
+        assert_eq!(sol["multi_agent_reasoning_effort"], "xhigh");
+        assert_eq!(sol["multi_agent_version"], "v2");
+        // The UI ladder is untouched: `ultra` is offered, it just is not sent as an effort value.
+        let efforts: Vec<&str> = sol["supported_reasoning_levels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|level| level["effort"].as_str())
+            .collect();
+        assert!(efforts.contains(&"ultra"));
     }
 }
