@@ -50,7 +50,6 @@ export const DEFAULT_TASK_DRAFT: TaskDraft = {
   fastMode: false,
   larkNotify: false,
   larkTargets: [],
-  larkEmptyResultNoticeToSelf: false,
   larkIdentity: "bot",
   repeat: "daily",
   intervalMinutes: 60,
@@ -113,7 +112,6 @@ function draftFromTask(task: ScheduledTask | null): TaskDraft {
     fastMode: task.fastMode,
     larkNotify: task.larkNotify,
     larkTargets: task.larkTargets,
-    larkEmptyResultNoticeToSelf: task.larkEmptyResultNoticeToSelf === true,
     larkIdentity: task.larkIdentity,
     repeat: task.repeat,
     intervalMinutes: task.intervalMinutes,
@@ -560,28 +558,6 @@ export function NewTaskDialog({
                   disabled={cliAvailable === false && !form.larkNotify}
                   onCheckedChange={(checked) => patch({ larkNotify: checked })}
                   aria-label={t("automation.fieldLark")}
-                />
-              </div>
-              <div
-                className={cn(
-                  "mt-3 flex items-center justify-between gap-3 rounded-md border border-border/50 bg-background/60 px-3 py-2",
-                  !form.larkNotify && "opacity-55"
-                )}
-              >
-                <div className="min-w-0">
-                  <label htmlFor="automation-lark-empty-notice" className="text-xs font-medium text-foreground">
-                    {t("automation.larkEmptyNotice")}
-                  </label>
-                  <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
-                    {t("automation.larkEmptyNoticeHint")}
-                  </p>
-                </div>
-                <Switch
-                  id="automation-lark-empty-notice"
-                  checked={form.larkEmptyResultNoticeToSelf === true}
-                  disabled={!form.larkNotify}
-                  onCheckedChange={(checked) => patch({ larkEmptyResultNoticeToSelf: checked })}
-                  aria-label={t("automation.larkEmptyNotice")}
                 />
               </div>
               {/* 没装 CLI：这条链路根本走不通。给一句实话 + 一个直接跳到组件安装页的入口，

@@ -10,8 +10,8 @@ import { emitTo, listen } from "@tauri-apps/api/event"
 
 import type { AutomationRunRequest, AutomationRunResult, OnRunTask } from "./types"
 
-export const AUTOMATION_RUN_REQUEST = "automation:run-request"
-export const AUTOMATION_RUN_RESULT = "automation:run-result"
+const AUTOMATION_RUN_REQUEST = "automation:run-request"
+const AUTOMATION_RUN_RESULT = "automation:run-result"
 
 /** 设置窗口：请求主窗口执行一次任务（定时器到期或「立即运行」）。 */
 export function requestAutomationRun(request: AutomationRunRequest): void {

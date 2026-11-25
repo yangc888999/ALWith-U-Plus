@@ -23,6 +23,7 @@ export interface DefaultModelChoice {
 const STORAGE_KEY = "alwith:default-model"
 const listeners = new Set<() => void>()
 let cache: DefaultModelChoice | null = null
+let memoryOnly = false
 
 function readChoice(value: unknown): DefaultModelChoice | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null
@@ -38,11 +39,17 @@ function readChoice(value: unknown): DefaultModelChoice | null {
   }
 }
 
-function read(): DefaultModelChoice | null {
-  if (cache !== null) return cache
+function read(refresh = false): DefaultModelChoice | null {
+  if (memoryOnly || (!refresh && cache !== null)) return cache
+  let raw: string | null
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    cache = raw === null ? null : readChoice(JSON.parse(raw) as unknown)
+    raw = localStorage.getItem(STORAGE_KEY)
+  } catch {
+    return cache
+  }
+  try {
+    const next = raw === null ? null : readChoice(JSON.parse(raw) as unknown)
+    if (!sameChoice(cache, next)) cache = next
   } catch {
     // A corrupt store must not block the app; the built-in default simply applies.
     cache = null
@@ -61,20 +68,22 @@ function sameChoice(left: DefaultModelChoice | null, right: DefaultModelChoice |
 
 function write(next: DefaultModelChoice | null): void {
   // Storing the same choice again must not notify: surfaces re-save identical values often.
-  if (sameChoice(cache, next)) return
+  if (sameChoice(read(true), next)) return
   cache = next
   try {
     if (next === null) localStorage.removeItem(STORAGE_KEY)
     else localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+    memoryOnly = false
   } catch {
     // Storage can be unavailable; the in-memory value still works for this launch.
+    memoryOnly = true
   }
   for (const listener of listeners) listener()
 }
 
 /** The configured default, or null when the built-in default applies. */
 export function defaultModelChoice(): DefaultModelChoice | null {
-  return read()
+  return read(true)
 }
 
 /** Sets or clears the default. Clearing restores the built-in default. */

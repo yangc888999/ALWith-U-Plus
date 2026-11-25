@@ -445,6 +445,15 @@ test("account-level capacity keeps its account-level wording in English", async 
   expect(describeError(new Error("Quota exceeded. Check your plan and billing details."))).toContain("account-level")
 })
 
+test("the bridge response-body failure describes an interrupted turn, not a timeout or a quota", async () => {
+  await chinese()
+  const wrapped = "stream disconnected before completion: bridge_stream_timeout: 上游读取失败：request or response body error"
+  const message = describeError(new Error(wrapped))
+  expect(message).toContain("模型回复没有接收完整")
+  expect(message).not.toMatch(/超时|限额|request or response body error/)
+  expect(describeError(new Error("other component: request or response body error"))).not.toBe(message)
+})
+
 test("a stale provider revision says what to do instead of naming another window", async () => {
   await chinese()
 

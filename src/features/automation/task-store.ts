@@ -211,7 +211,6 @@ function coerceTask(raw: unknown): ScheduledTask | null {
     fastMode: value.fastMode === true,
     larkNotify: value.larkNotify === true,
     larkTargets: coerceTargets(value.larkTargets),
-    larkEmptyResultNoticeToSelf: value.larkEmptyResultNoticeToSelf === true,
     // 旧快照（没有 monitorSessionId 字段）里的任务默认存的是 user，而普通 CLI 登录不含
     // im:message.send_as_user，按本人身份推送必然失败。把这一代旧任务一次性拨回开箱可用的
     // 飞书 CLI 助手；新版保存的任务都带该字段，用户之后主动选 user 会被原样保留。
@@ -486,7 +485,6 @@ export function createTask(draft: TaskDraft): ScheduledTask {
   const now = Date.now()
   const task: ScheduledTask = {
     ...draft,
-    larkEmptyResultNoticeToSelf: draft.larkEmptyResultNoticeToSelf === true,
     id: newId(),
     nextRunAt: null,
     monitorSessionId: null,

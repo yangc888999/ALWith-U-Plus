@@ -231,7 +231,9 @@ export function RunRecords() {
                               />
                               <span className="min-w-0 flex-1 break-words text-foreground">
                                 {delivery.targetName}
-                                {delivery.error !== null ? ` · ${delivery.error}` : ""}
+                                {delivery.error !== null && <> · {delivery.error === "model_error"
+                                  ? t("automation.deliveryModelError")
+                                  : delivery.error === "no_content" ? t("automation.runNoContent") : delivery.error}</>}
                               </span>
                               <span className="shrink-0 text-muted-foreground">
                                 {t(

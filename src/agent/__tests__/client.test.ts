@@ -28,6 +28,7 @@ import {
 import { macProjectPaths, type ProjectPaths } from "../project-path"
 import { createFakeAgent } from "./fake-agent"
 import { FakeHubPort } from "./fake-runtime-client"
+import { ModelSelectionError } from "../model-selection-error"
 
 // The client reports model hand-offs through `sonner`. Mocking it keeps those calls assertable
 // without a DOM toast host, and keeps the suite from depending on sonner's own side effects.
@@ -1903,6 +1904,7 @@ test("a Runtime row that keeps ticking never holds a parked switch past the stal
   const id = await client.newSession("/tmp/park-heartbeat")
   const currentModel = (): string | undefined =>
     client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue as string | undefined
+  const since = Date.now() - 5 * 60_000
   const runRow = (): Parameters<typeof client.applyRunStates>[0][number] => ({
     sessionId: id,
     state: "running",
@@ -1910,7 +1912,7 @@ test("a Runtime row that keeps ticking never holds a parked switch past the stal
     owner: "stdio",
     cwd: "/tmp/park-heartbeat",
     title: "Parked",
-    since: Date.now() - 5 * 60_000,
+    since,
     // The Runtime refreshes this stamp on every republish: it is a heartbeat, not evidence of work.
     lastActivityAt: Date.now(),
     version: 1,
@@ -2271,6 +2273,40 @@ const switchModels: ReasoningModelFixture[] = ["first", "second", "third"].map((
   defaultEffort: id === "second" ? "high" : "low"
 }))
 
+test("automation replaces a reused monitor's DeepSeek selection before dispatch without changing the chat default", async () => {
+  const models = ["deepseek-flash", "gpt-6.1-terra"].map((id) => ({ ...switchModels[0]!, id }))
+  const { client, fake } = await make((agent) => configureReasoningModels(agent, models, "deepseek-flash", "low"))
+  const id = await client.newSession("/tmp/scheduled", { draft: false })
+  const confirmed = vi.fn()
+  const off = client.onConfirmedModel(confirmed)
+  const expected = await client.prepareAutomationModel(id, "gpt-6.1-terra", false)
+  const receipt = await client.promptAndWait(id, [{ type: "text", text: "scheduled" }], {}, expected)
+  expect(client.session(id).turnEndedAt[receipt]).toBeDefined()
+  expect(orchestrationOrder(fake)).toEqual(["config:model=gpt-6.1-terra", "prompt:worker"])
+  expect(confirmed).not.toHaveBeenCalled()
+  off()
+})
+
+test("automation never sends on a sibling, a changed model or an active turn", async () => {
+  const { client, fake } = await make((agent) => configureReasoningModels(agent, switchModels, "first", "low"))
+  const id = await client.newSession("/tmp/scheduled-guard", { draft: false })
+  await expect(client.prepareAutomationModel(id, "gateway:other:first", false)).rejects.toThrow()
+  const model = await client.prepareAutomationModel(id, "first", false)
+  await client.setConfig(id, "model", "second")
+  await expect(client.promptAndWait(id, [{ type: "text", text: "do not run" }], {}, model)).rejects.toThrow()
+  await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "running" })
+  await expect(client.prepareAutomationModel(id, "first", false)).rejects.toThrow()
+  expect(fake.prompts).toEqual([])
+})
+
+test("automation detects an acknowledged model switch that did not actually change models", async () => {
+  const { client, fake } = await make((agent) => configureReasoningModels(agent, switchModels, "first", "low"))
+  const id = await client.newSession("/tmp/scheduled-unchanged", { draft: false })
+  fake.configResponse.current = () => ({ configOptions: reasoningCatalog("first", "low", switchModels) })
+  await expect(client.prepareAutomationModel(id, "second", false)).rejects.toBeInstanceOf(ModelSelectionError)
+  expect(fake.prompts).toEqual([])
+})
+
 test("sending immediately after a pick waits for its model and effort, not just the model ACK", async () => {
   const { client, fake } = await make((agent) => configureReasoningModels(agent, switchModels, "first", "low"))
   const id = await client.newSession("/tmp/model-send-order")
@@ -2292,6 +2328,8 @@ test("a successful explicit pick cancels an older parked model even if the sessi
   await client.setConfig(id, "model", "second")
   expect(client.pendingModelFor(id)).toBe("second")
   await client.setConfig(id, "model", "third")
+  expect(client.pendingModelFor(id)).toBe("third")
+  expect(fake.events.filter((event) => event.type === "config" && event.request.configId === "model")).toEqual([])
   busy = false
   await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "idle" })
   await client.prompt(id, [{ type: "text", text: "next" }])
@@ -2375,7 +2413,8 @@ test("a supplement waiting for a rejected switch does not steer or later send on
     client.prompt(id, [{ type: "text", text: "only for the new model" }])
   ])
   await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "idle" })
-  expect((await result).map((entry) => entry.status)).toEqual(["rejected", "rejected"])
+  expect((await result).map((entry) => entry.status)).toEqual(["fulfilled", "rejected"])
+  expect(client.pendingModelFor(id)).toBeNull()
   expect(fake.steers).toEqual([])
   expect(fake.prompts).toEqual([])
 })
@@ -3121,14 +3160,15 @@ test("a pending receipt does not hold admission and cannot write into a reopened
   )
   await until(() => respond !== undefined)
   await client.setConfig(id, "model", "chosen-model")
-  expect(client.session(id).configOptions[0]?.currentValue).toBe("chosen-model")
+  expect(client.pendingModelFor(id)).toBe("chosen-model")
+  expect(client.session(id).configOptions[0]?.currentValue).not.toBe("chosen-model")
   await client.cancel(id)
   await client.close(id)
   await client.open(id, "/tmp/receipt-lifetime")
-  const reopened = client.session(id)
   respond({ messageId: "late-receipt" })
   expect(await outcome).toMatchObject({ name: "AgentGoneError" })
-  expect(client.session(id)).toBe(reopened)
+  await vi.waitFor(() => expect(client.session(id).configOptions[0]?.currentValue).toBe("chosen-model"))
+  expect(client.session(id).turnEndedAt).not.toHaveProperty("late-receipt")
   request.mockRestore()
 })
 
@@ -3241,6 +3281,33 @@ test("a prompt carries the previewed document to the agent but keeps the user bu
   } finally {
     setActivePreview(null)
   }
+})
+
+test("compaction reaches the adapter verbatim even with a preview and orchestration", async () => {
+  const { client, fake } = await make()
+  const root = "/tmp/compact-project"
+  const id = await client.newSession(root)
+  setActivePreview({ path: `${root}/report.html`, title: "report.html", root })
+  setOrchestration(id, { planner: { model: "planner", effort: "medium" }, worker: { model: "worker", effort: "low" } })
+  try {
+    await client.prompt(id, [{ type: "text", text: "/compact" }])
+    expect(fake.prompts).toEqual(["/compact"])
+    expect(fake.steers).toEqual([])
+  } finally {
+    setActivePreview(null)
+    setOrchestration(id, null)
+  }
+})
+
+test("compaction during an active turn cannot become a steer or a queued user prompt", async () => {
+  const { client, fake } = await make()
+  const id = await client.newSession("/tmp/compact-busy")
+  fake.promptHoldIdle.current = () => true
+  await client.prompt(id, [{ type: "text", text: "working" }])
+  await until(() => client.session(id).state === "running")
+  await expect(client.prompt(id, [{ type: "text", text: "/compact" }])).rejects.toThrow()
+  expect(fake.prompts).toEqual(["working"])
+  expect(fake.steers).toEqual([])
 })
 
 test("a prompt in another project never carries the previewed document", async () => {
@@ -4748,7 +4815,6 @@ test("a role's hand-back prefers the reader's newest pick over the pair captured
   try {
     const internals = client as unknown as {
       sessionModels: Map<string, { model: string | null; effort: string | null }>
-      pendingModelSwitches: Map<string, string>
       userWantedSelection: (
         id: string,
         fallback: { model: string; effort: string | null; fastMode: boolean }
@@ -4766,7 +4832,7 @@ test("a role's hand-back prefers the reader's newest pick over the pair captured
       fastMode: false
     })
     // 读者在角色发言期间改的（引擎当时拒绝写入，选择被 park）比记录更新。
-    internals.pendingModelSwitches.set(id, "parked-pick")
+    client.store.setState({ pendingModels: { [id]: "parked-pick" } })
     // 被 park 的选择没有自己的 level：不能把上一个模型那一档带过去。
     expect(internals.userWantedSelection(id, captured)).toEqual({
       model: "parked-pick",

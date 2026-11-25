@@ -5,6 +5,7 @@ import { describeError } from "@/lib/error-text"
 import { getProviderSnapshot } from "@/lib/providers"
 
 import { DraftModelSelect } from "./draft-model-select"
+import { selectSessionModel } from "./select-session-model"
 
 /**
  * The model picker for a chat whose own config options no longer carry a model option.
@@ -52,7 +53,7 @@ export function RecoveryModelSelect({
             if (!client.state.sessions[sessionId]?.attached) {
               await client.open(sessionId, cwd)
             }
-            await client.setConfig(sessionId, "model", model)
+            await selectSessionModel(sessionId, model)
           })().catch((error: unknown) => toast.error(describeError(error)))
         }}
       />

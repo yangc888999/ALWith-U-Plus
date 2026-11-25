@@ -46,6 +46,17 @@ test("does not revive malformed stored choices", async () => {
   expect(store.defaultModelChoice()).toBeNull()
 })
 
+test("a scheduled read observes a setting changed or cleared in a different window", async () => {
+  const store = await import("../default-model")
+  store.setDefaultModelChoice({ model: "old", effort: null })
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ model: "gpt-6.1-terra", effort: "high" }))
+  const next = store.defaultModelChoice()
+  expect(next).toEqual({ model: "gpt-6.1-terra", effort: "high" })
+  expect(store.defaultModelChoice()).toBe(next)
+  localStorage.removeItem(STORAGE_KEY)
+  expect(store.defaultModelChoice()).toBeNull()
+})
+
 test("rejects an invalid configuration instead of storing it", async () => {
   const store = await import("../default-model")
   expect(() => store.setDefaultModelChoice({ model: 7 as unknown as string, effort: null })).toThrow(

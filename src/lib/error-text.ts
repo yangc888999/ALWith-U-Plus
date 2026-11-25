@@ -474,6 +474,10 @@ const RULES: Rule[] = [
     key: "error.streamClosed"
   },
   {
+    match: /bridge_stream_timeout:\s*上游读取失败[：:]\s*request or response body error\s*$/i,
+    key: "error.streamBodyInterrupted"
+  },
+  {
     match: /bridge_stream_timeout:\s*上游读取失败[：:]\s*(.+)/,
     key: "error.streamReadFailed",
     values: (match) => ({ reason: match[1] })

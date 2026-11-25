@@ -183,7 +183,7 @@ describe("任务 CRUD 与启停", () => {
     const created = store.createTask(draft())
     expect(created.larkNotify).toBe(false)
     expect(created.larkTargets).toEqual([])
-    expect(created.larkEmptyResultNoticeToSelf).toBe(false)
+    expect(created).not.toHaveProperty("larkEmptyResultNoticeToSelf")
 
     // A task written by an older build has no `larkNotify` at all; it must not inherit delivery
     // from the mere existence of the feature.
@@ -193,6 +193,7 @@ describe("任务 CRUD 与启停", () => {
         tasks: [
           {
             id: "legacy",
+            larkEmptyResultNoticeToSelf: true,
             name: "老任务",
             prompt: "hi",
             cwd: "",
@@ -214,9 +215,9 @@ describe("任务 CRUD 与启停", () => {
     const restored = await reloaded()
     expect(restored.getTask("legacy")).toMatchObject({
       larkNotify: false,
-      larkTargets: [],
-      larkEmptyResultNoticeToSelf: false
+      larkTargets: []
     })
+    expect(restored.getTask("legacy")).not.toHaveProperty("larkEmptyResultNoticeToSelf")
   })
 
   test("no-content runs and per-target delivery receipts survive a reload", async () => {

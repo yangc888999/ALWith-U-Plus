@@ -328,6 +328,7 @@ export class RemoteChatClient extends CodexClient {
       draftSessions: {},
       sessionWindows: {},
       accountModelRecovery: {},
+      pendingModels: {},
       configPending: {},
       drafts: {},
       sessionList: [],
@@ -367,8 +368,10 @@ export class RemoteChatClient extends CodexClient {
   override listSessions(...args: Parameters<CodexClient["listSessions"]>): Promise<void> {
     return this.request("listSessions", args)
   }
-  override prepareDraft(...args: Parameters<CodexClient["prepareDraft"]>): Promise<string> {
-    return this.request("prepareDraft", args)
+  override async prepareDraft(...[owner, cwd, model, nativeDefault, onListed]: Parameters<CodexClient["prepareDraft"]>): Promise<string> {
+    const id = await this.request("prepareDraft", [owner, cwd, model ?? null, nativeDefault ?? false])
+    onListed?.(id)
+    return id
   }
   override resumeAccountModel(...args: Parameters<CodexClient["resumeAccountModel"]>): Promise<void> {
     return this.request("resumeAccountModel", args)

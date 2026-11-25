@@ -51,9 +51,6 @@ export interface TaskDraft {
   /** 运行结束后把结果推送到飞书。 */
   larkNotify: boolean
   larkTargets: LarkTarget[]
-  /** When the finished turn has no deliverable report, notify only the signed-in user.
-   *  Defaults to off; the group is never sent an empty-body notice. */
-  larkEmptyResultNoticeToSelf?: boolean
   /** `bot` = 机器人身份（默认，开箱可用）；`user` = 本人身份（需额外授权 scope）。 */
   larkIdentity: string
   repeat: RepeatRule
@@ -125,13 +122,12 @@ export interface AutomationRunRequest {
   prompt: string
   cwd: string
   fullAccess: boolean
-  /** 空串 = 用会话默认模型，主窗口不做 setConfig(model)。 */
+  /** Empty selects the current default at the start of every run. */
   model: string
   effort: string
   fastMode: boolean
   larkNotify: boolean
   larkTargets: LarkTarget[]
-  larkEmptyResultNoticeToSelf?: boolean
   larkIdentity: string
   /** 复用的监控会话；省略 / null 表示主窗口需要新建一条并回写任务（兼容旧版请求）。 */
   monitorSessionId?: string | null
@@ -145,6 +141,7 @@ export interface AutomationRunResult {
   runId: string
   taskId: string
   status: "success" | "no_content" | "failed"
+  failureKind?: "model"
   summary: string
   sessionId: string | null
   error: string | null
@@ -157,6 +154,3 @@ export type OnRunTask = (request: AutomationRunRequest) => Promise<AutomationRun
 
 /** 列表页筛选条件。 */
 export type TaskFilter = "all" | "enabled" | "paused"
-
-/** 弹窗提交回调。 */
-export type OnSubmitTask = (draft: TaskDraft) => void

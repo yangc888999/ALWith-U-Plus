@@ -43,6 +43,7 @@ import {
   isBooleanOption,
   isGroupedSelect,
   isSelectOption,
+  isText,
   type RuntimeClient,
   type Session,
   type SessionRunState,
@@ -102,6 +103,7 @@ import {
   setOrchestration
 } from "@/lib/session-orchestration"
 
+import { ModelSelectionError } from "./model-selection-error"
 import { forkTitle } from "./fork-title"
 import {
   hasUsableEffortCatalog,
@@ -158,6 +160,7 @@ export type DraftOwner = "main" | "chat"
 export type AppState = CodexClientState & {
   /** Account revocation is independent of transient turn errors and mirrored to auxiliary windows. */
   accountModelRecovery: Record<string, boolean>
+  pendingModels: Record<string, string>
   /** Window ownership survives switching the visible conversation; never persisted. */
   sessionWindows: Record<string, DraftOwner>
   /** Only drafts created by this connection are eligible for automatic cleanup. */
@@ -392,7 +395,7 @@ function plannerInstruction(): acp.ContentBlock {
  *   * `gateway:<runtime>:<model>` → `<model>`（model 里的 %XX 解码，`{max}` 这类 effort 后缀保留）
  *   * 句子本身改写成一行可读说明，末尾括号里的「新会话才会使用…」不再重复。
  */
-export function readableModelId(value: string): string {
+function readableModelId(value: string): string {
   const trimmed = value.trim()
   const decoded = modelDisplayId(trimmed)
   // `{max}` / `{high}` 是 effort 标记，保留它（读者靠它区分同名的两档）。
@@ -500,7 +503,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
   private readonly orchestrationPhase = new Map<string, "planner" | "worker">()
   private readonly orchestrationPhaseListeners = new Set<() => void>()
   /** Which slot asked for a configuration write, so a confirmed model lands in that slot's memory. */
-  private readonly configOwners = new Map<string, DraftOwner>()
+  private readonly configOwners = new Map<string, DraftOwner | "automation">()
   /** Which slot is opening a session, so its replay resolves that slot's model once the replay has started. */
   private readonly openingOwners = new Map<string, DraftOwner>()
   /**
@@ -528,7 +531,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     super(
       openPort,
       { info: { name: "alwith-u", version: "0.1.0" }, ...base },
-      { sessionWindows: {}, draftSessions: {}, accountModelRecovery: {} }
+      { sessionWindows: {}, draftSessions: {}, accountModelRecovery: {}, pendingModels: {} }
     )
     this.resolveModelOption = resolveModel
     this.defaultEffortOption = defaultEffort
@@ -818,7 +821,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * Everything else here treats both as best-effort (`applyEffortForModel`, `applyModelFastMode`),
    * so a task does too: a scheduled job must not die because a preference stopped applying.
    */
-  async applyRunOverrides(id: string, effort: string, fastMode: boolean): Promise<void> {
+  async applyRunOverrides(id: string, effort: string, fastMode: boolean | undefined): Promise<void> {
     if (!this.holds(id)) return
     // The config options describing the *new* model arrive with the same response that carried the
     // switch; one turn of the event loop lets that patch reach the store. Reading the ladder before
@@ -841,7 +844,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     }
     const option = this.session(id).configOptions.find((entry) => entry.configId === "fast-mode")
     // A non-GPT model has no such option: the task simply runs at normal speed.
-    if (option === undefined || !isBooleanOption(option) || option.currentValue === fastMode) return
+    if (fastMode === undefined || option === undefined || !isBooleanOption(option) || option.currentValue === fastMode) return
     try {
       await this.setConfig(id, "fast-mode", fastMode)
     } catch (error) {
@@ -992,7 +995,12 @@ export class CodexClient extends CodexAcpClient<AppState> {
     return id
   }
 
-  private async createNativeSession(cwd: string, model: string | null, owner: DraftOwner | null): Promise<string> {
+  private async createNativeSession(
+    cwd: string,
+    model: string | null,
+    owner: DraftOwner | null,
+    onListed?: (id: string) => void
+  ): Promise<string> {
     // No project chosen: the session must live in the quick-chat folder. An empty cwd made codex
     // fall back to process.cwd() (inside the app bundle), so the conversation was filed under a
     // bogus "project" and looked lost in the sidebar.
@@ -1016,6 +1024,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
       // Show the new chat in the sidebar and project list immediately. The base client omits
       // drafts from `sessionList` until the first message; inserting here removes that wait.
       // `keepUnlisted` protects the row until the engine's own `session/list` reports it.
+      onListed?.(id)
       this.listSession({
         sessionId: id,
         cwd: this.projectPath(directory),
@@ -1339,7 +1348,14 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // Only after the replay has fully landed: re-applying a saved model from inside a config
     // callback would enqueue a second write while the first transaction is still pending, which
     // deadlocks the draft/replacement hand-off.
-    if (this.holds(id)) this.restoreSessionModel(this.session(id), saved)
+    if (this.holds(id)) {
+      const pending = this.state.pendingModels[id]
+      if (pending === undefined) this.restoreSessionModel(this.session(id), saved)
+      else {
+        this.parkModelSwitch(id, pending)
+        void this.applyParkedModel(id)
+      }
+    }
   }
 
   /**
@@ -1394,17 +1410,13 @@ export class CodexClient extends CodexAcpClient<AppState> {
     )
   }
 
-  /** Model picked while a turn was still running, applied as soon as that turn settles. */
-  private readonly pendingModelSwitches = new Map<string, string>()
   /** The confirmed model at the moment a switch was parked, used to cancel a change of mind. */
   private readonly pendingModelPrevious = new Map<string, string | null>()
   private readonly modelWrites = new Map<string, Promise<void>>()
   private readonly pendingModelWatchers = new Map<string, () => void>()
   /** In-flight applications of a parked switch, so the next prompt can await them. */
   private readonly pendingModelApplies = new Map<string, Promise<boolean>>()
-  private readonly pendingModelListeners = new Set<() => void>()
-  /** When each parked choice was requested, so a wedged liveness clock cannot hold it forever. */
-  private readonly parkedAt = new Map<string, number>()
+  private readonly stoppingSessions = new Set<string>()
   /** Consecutive refusals per conversation, and when the next attempt is allowed (see the cap above). */
   private readonly parkedAttempts = new Map<string, number>()
   private readonly parkedRetryAt = new Map<string, number>()
@@ -1479,8 +1491,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // upstream `retry-after` sleep, during which the session clock does not move. Reading only
     // that clock declares a live turn idle, and the parked-switch watcher then lands a `setConfig`
     // plus `cancel` in the middle of its stream — "stream disconnected before completion".
-    if (session !== undefined && session.state !== "idle")
-      return this.sessionClockFresh(id, session.clock) || this.runtimeRunningFresh(id)
+    if (session !== undefined && session.state !== "idle") return !this.stalledTurn(id)
     return this.runtimeRunningFresh(id)
   }
 
@@ -1509,8 +1520,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     if (this.promptInFlight.has(id)) return false
     const session = this.state.sessions[id]
     if (session === undefined || session.state === "idle") return false
-    if (this.runtimeRunningFresh(id)) return false
-    return !this.sessionClockFresh(id, session.clock)
+    return !this.sessionClockFresh(id, session.clock) && !this.runtimeRunningFresh(id)
   }
 
   /** True while the Runtime reports a turn that is genuinely still alive (see `sessionBusy`). */
@@ -1579,7 +1589,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
       return this.enqueueModelWrite(
         id,
         async () => {
-          if (this.pendingModelSwitches.has(id)) throw new Error(i18n.t("chat.pendingModelBusy"))
+          if (this.state.pendingModels[id] !== undefined) throw new Error(i18n.t("chat.pendingModelBusy"))
           await this.writeConfig(id, configId, value, owner)
         },
         false
@@ -1591,9 +1601,10 @@ export class CodexClient extends CodexAcpClient<AppState> {
       modelValues(session.configOptions).some(
         (entry) => canonicalModelSelection(entry) === canonicalModelSelection(value)
       )
-    const parked = this.pendingModelSwitches.get(id)
+    const parked = this.state.pendingModels[id]
     const previous = this.pendingModelPrevious.get(id)
     if (
+      !this.modelWrites.has(id) &&
       parked !== undefined &&
       previous !== undefined &&
       previous !== null &&
@@ -1606,7 +1617,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     return this.enqueueModelWrite(
       id,
       () => {
-        const prior = this.pendingModelSwitches.get(id)
+        const prior = this.state.pendingModels[id]
         if (prior !== undefined) this.clearParkedModel(id, prior)
         return this.writeConfig(id, configId, value, owner)
       },
@@ -1673,7 +1684,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
         // Choosing the model the conversation is already on cancels a parked switch instead of
         // parking the current model as another "next turn" change. Otherwise the chip can keep
         // naming a model the reader already backed away from.
-        const parked = this.pendingModelSwitches.get(id)
+        const parked = this.state.pendingModels[id]
         const previous = this.pendingModelPrevious.get(id)
         if (
           parked !== undefined &&
@@ -1686,6 +1697,11 @@ export class CodexClient extends CodexAcpClient<AppState> {
           this.clearParkedModel(id, parked)
           return
         }
+      }
+      if (!retry && !this.stoppedSessions.has(id) && this.sessionBusy(id)) {
+        const current = live && selectedModel(live.configOptions)
+        if (!current || canonicalModelSelection(current) !== canonicalModelSelection(value)) this.parkModelSwitch(id, value)
+        return
       }
       // Every gateway now shares one Codex provider, so a model from another vendor is just a
       // different model string — no rebind, no engine restart. Only chats written before the
@@ -1726,35 +1742,6 @@ export class CodexClient extends CodexAcpClient<AppState> {
           // now": end the turn and write the choice instead of parking it behind a turn that is
           // already over.
           if (await this.switchRightAfterStop(id, configId, value, requested)) return
-          // Crossing to another vendor cannot be parked: a live turn froze its model when it
-          // started, so the write lands on the thread while the turn keeps running on the old one —
-          // and when it restarts, it inherits the frozen model. That is how picking a ChatGPT model
-          // during a gateway turn that was still retrying left every request on the gateway: the
-          // reader switched vendors and kept getting the old vendor's 429 (2026-11-19). End the
-          // turn and land the choice now; a same-vendor pick stays parked as before.
-          if (this.crossesVendor(id, value)) {
-            if (await this.switchRightAfterStop(id, configId, value, requested, true)) return
-          }
-          // A turn that died with an error never delivers its final update. Parking every pick
-          // behind that ghost is what made "one model failed" read as "no model works in this
-          // chat": the badge stayed, the picker stayed put, and every prompt waited on a turn
-          // that had already ended. When both clocks have been quiet for a full stale window,
-          // end it and land the choice now.
-          if (this.stalledTurn(id)) {
-            const parked = this.pendingModelSwitches.get(id)
-            if (parked !== undefined) this.clearParkedModel(id, parked)
-            await this.cancelTurn(id).catch(() => {})
-            try {
-              await this.landModelSwitch(id, configId, value, requested)
-              this.stoppedSessions.delete(id)
-              this.logInfo?.(`[pending-model] ghost-turn switch landed id=${id} model=${value}`)
-              return
-            } catch (error) {
-              this.logInfo?.(
-                `[pending-model] ghost-turn switch failed id=${id} model=${value} error=${String(error).slice(0, 200)}`
-              )
-            }
-          }
           this.parkModelSwitch(id, value)
           return
         }
@@ -1814,7 +1801,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     await super.setConfig(id, configId, value)
     const actual = this.holds(id) ? selectedModel(this.session(id).configOptions) : null
     if (actual === null || canonicalModelSelection(actual) !== canonicalModelSelection(value))
-      throw new Error(i18n.t("chat.modelSwitchNotApplied", { model: value }))
+      throw new ModelSelectionError(i18n.t("chat.modelSwitchNotApplied", { model: value }))
     this.logInfo?.(`[pending-model] setConfig ok id=${id} model=${value} requested=${requested}`)
     // The provider serves it after all (re-added, or the tombstone aged out): stop avoiding it.
     reviveModel(value)
@@ -1826,37 +1813,6 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // the level the previous model happened to run on.
     await this.applyEffortForModel(id, value)
     await this.applyModelFastMode(id, value)
-  }
-
-  /**
-   * A model picked after Stop is a "switch now", not a "switch after this turn".
-   *
-   * The agent refuses a provider rebind while a turn is unwinding (`Wait for the current turn…`),
-   * and a native model always takes that path: its gateway resolves to null while the thread's
-   * provider is the shared router, so `rebindSessionProvider` reaches the busy check. Every gateway
-   * model resolves to the same runtime id as the thread, so gateway -> gateway returns before that
-   * check — which is why, after a stop, GPT -> GPT looked dead while another vendor's model went
-   * straight through.
-   *
-   * The decision is state, not elapsed time: `stoppedSessions` says the last thing that happened in
-   * this chat was a stop, and any new turn clears that entry in `prompt`. So a pick is forced
-   * whenever there is nothing left to wait for, and parked whenever a real turn is running.
-   */
-  /**
-   * The model this chat is on right now.
-   *
-   * The engine's own value comes first: it is the model whose provider is actually being spent
-   * when the next request leaves, which is what a cross-vendor decision is about. The recorded
-   * pick is only the reader's last choice — while 分工 or 拉会 runs, the engine deliberately sits
-   * on a role's model and the record still holds the reader's, so reading the record first made
-   * every same-vendor comparison wrong exactly when it mattered.
-   */
-  private currentModelOf(id: string): string {
-    if (this.holds(id)) {
-      const live = this.session(id).configOptions.find((option) => option.configId === "model")?.currentValue
-      if (typeof live === "string" && live !== "") return live
-    }
-    return this.sessionModels.get(id)?.model ?? ""
   }
 
   /**
@@ -1874,7 +1830,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // A pick made while a role was speaking is parked, not recorded: the engine refused the write,
     // so it never reached `saveSessionModel`. It is still the reader's newest intent, and only a
     // reader can park a pick here — roles write straight to the engine.
-    const pending = this.pendingModelSwitches.get(id)
+    const pending = this.state.pendingModels[id]
     const model = pending ?? recorded?.model
     if (model === undefined || model === null || model === "") return fallback
     // A park carries no level of its own, and a level recorded under this very model is the
@@ -1887,35 +1843,16 @@ export class CodexClient extends CodexAcpClient<AppState> {
     }
   }
 
-  /**
-   * Whether a pick moves to a different vendor.
-   *
-   * Same-vendor picks are only a model-string change: every gateway shares one Codex provider,
-   * so the write can wait behind a running turn. A different vendor is a different quota pool and,
-   * for a native model, a different provider binding — parking that pick means the live turn keeps
-   * spending the old vendor's budget and the reader sees the old vendor's 429 after switching.
-   */
-  private crossesVendor(id: string, value: string): boolean {
-    const current = this.currentModelOf(id)
-    if (current === "") return false
-    return modelVendor(current) !== modelVendor(value)
-  }
-
   private async switchRightAfterStop(
     id: string,
     configId: string,
     value: string,
-    requested: string,
-    force = false
+    requested: string
   ): Promise<boolean> {
-    // The gate is state, not time: nothing has been sent since the stop, so there is no turn left
-    // to wait for — however long ago that stop was. `force` is the caller saying the wait itself is
-    // the problem (a vendor-line switch on a live turn); it still ends the turn, just without a
-    // preceding stop to justify it.
-    if (!force && !this.stoppedSessions.has(id)) return false
+    if (!this.stoppedSessions.has(id)) return false
     // This pick supersedes anything parked earlier: cancelling below would otherwise apply the old
     // choice first and the two writes would race for the model string.
-    const parked = this.pendingModelSwitches.get(id)
+    const parked = this.state.pendingModels[id]
     if (parked !== undefined && parked !== value) this.clearParkedModel(id, parked)
     // End the turn even if its last token is still arriving: the user stopped it.
     await this.cancelTurn(id).catch(() => {})
@@ -1948,7 +1885,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // A choice parked behind this turn must not outlive it. Left alone, the "下一轮" badge sits on
     // the composer waiting for a turn the user just ended, and the picker keeps showing the old
     // model — which is exactly what a stop followed by a model pick looked like.
-    if (this.pendingModelSwitches.has(id) && !this.pendingModelApplies.has(id)) void this.applyParkedModel(id, true)
+    if (this.state.pendingModels[id] !== undefined && !this.pendingModelApplies.has(id)) void this.applyParkedModel(id, true)
   }
 
   /**
@@ -1965,12 +1902,17 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // The last gesture was Stop: a model pick made after reopening lands immediately instead of
     // parking behind a turn that no longer exists. The next prompt clears this marker.
     this.stoppedSessions.add(id)
-    const pending = this.pendingModelSwitches.get(id)
-    if (pending !== undefined) this.clearParkedModel(id, pending)
+    this.stoppingSessions.add(id)
     // A disconnect must not prevent the close attempt: the Runtime still owns the process and is
     // the only authority that can stop the task tree.
-    await Promise.try(() => this.live().notify("session/cancel", { sessionId: id })).catch(() => {})
-    await this.stopSession(id)
+    try {
+      await Promise.try(() => this.live().notify("session/cancel", { sessionId: id })).catch(() => {})
+      await this.stopSession(id)
+      this.pendingModelWatchers.get(id)?.()
+      this.pendingModelWatchers.delete(id)
+    } finally {
+      this.stoppingSessions.delete(id)
+    }
   }
 
   /**
@@ -1987,14 +1929,12 @@ export class CodexClient extends CodexAcpClient<AppState> {
     )
     // A different target starts a fresh budget. Re-parking the same one — which is what every
     // refused retry does — keeps the count so the cap can actually be reached.
-    if (this.pendingModelSwitches.get(id) !== model) {
+    if (this.state.pendingModels[id] !== model) {
       this.parkedAttempts.delete(id)
       this.parkedRetryAt.delete(id)
-      this.parkedAt.set(id, Date.now())
       this.pendingModelPrevious.set(id, this.holds(id) ? selectedModel(this.session(id).configOptions) : null)
+      this.setApp({ pendingModels: { ...this.state.pendingModels, [id]: model } })
     }
-    this.pendingModelSwitches.set(id, model)
-    this.emitPendingModel()
     if (this.pendingModelWatchers.has(id)) return
     let stop = (): void => {}
     stop = this.store.subscribe(() => {
@@ -2005,7 +1945,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // never comes ("本轮后切换" stuck on screen while the next turn still runs the old model).
     // The timer is the safety net; both it and the subscription die with the parked entry.
     const retry = setInterval(() => {
-      if (this.pendingModelSwitches.get(id) === undefined) return
+      if (this.state.pendingModels[id] === undefined) return
       void this.applyParkedModel(id)
     }, PENDING_MODEL_RETRY_MS)
     this.pendingModelWatchers.set(id, () => {
@@ -2016,98 +1956,44 @@ export class CodexClient extends CodexAcpClient<AppState> {
 
   /** Drops a parked choice once the write it stood for has landed (or moved to a substitute). */
   private clearParkedModel(id: string, requested: string): void {
-    if (this.pendingModelSwitches.get(id) !== requested) return
-    this.pendingModelSwitches.delete(id)
+    if (this.state.pendingModels[id] !== requested) return
     this.pendingModelPrevious.delete(id)
-    this.parkedAt.delete(id)
     this.parkedAttempts.delete(id)
     this.parkedRetryAt.delete(id)
     const stop = this.pendingModelWatchers.get(id)
     this.pendingModelWatchers.delete(id)
     stop?.()
-    this.emitPendingModel()
-  }
-
-  /**
-   * A parked choice this conversation has read idle long enough to apply, whatever the Runtime says.
-   *
-   * The Runtime's run row is the only clock that can get stuck — a turn that died with the engine
-   * leaves its "running" entry behind. Waiting on it forever is what kept "本轮后切换" on screen.
-   * A session that reports idle is not mid-turn, so after a full stale window the write is safe.
-   */
-  private parkedSwitchOverdue(id: string): boolean {
-    const at = this.parkedAt.get(id)
-    if (at === undefined || Date.now() - at < STALE_RUN_STATE_MS) return false
-    const session = this.state.sessions[id]
-    if (session === undefined) return false
-    if (session.state === "idle") return true
-    // A ghost turn never sends the idle update, but both of its clocks have stopped: waiting for
-    // `idle` here kept "本轮后切换" on screen forever after an errored turn. Both must be stale —
-    // `stalledTurn` also refuses while the prompt is still in flight, so a live silent turn is
-    // never mistaken for a ghost.
-    return this.stalledTurn(id)
-  }
-
-  /**
-   * Applies the parked choice immediately, ending the running turn first.
-   *
-   * The agent refuses a provider change mid-turn, so "switch now" means "stop this answer and
-   * switch": that is exactly the choice the user makes when the current turn keeps running and the
-   * picker keeps saying 本轮后切换.
-   */
-  async applyPendingModelNow(id: string): Promise<void> {
-    const pending = this.pendingModelSwitches.get(id)
-    if (pending === undefined) return
-    this.logInfo?.(
-      `[pending-model] applyNow id=${id} model=${pending} busy=${this.sessionBusy(id)} state=${this.state.sessions[id]?.state ?? "?"}`
-    )
-    if (this.sessionBusy(id)) {
-      await this.cancelTurn(id).catch(() => {})
-      const deadline = Date.now() + 3_000
-      while (Date.now() < deadline && this.state.sessions[id]?.state !== "idle")
-        await new Promise<void>((resolve) => setTimeout(resolve, 100))
-    }
-    try {
-      await this.withTimeout(this.waitForModelSwitch(id), 20_000, "setConfig(model)")
-    } catch (error) {
-      this.logInfo?.(`[pending-model] applyNow failed id=${id} error=${String(error)}`)
-      if (this.pendingModelSwitches.has(id)) toast.error(i18n.t("chat.pendingModelBusy"))
-      return
-    }
-    if (this.pendingModelSwitches.get(id) !== undefined) {
-      this.logInfo?.(`[pending-model] applyNow still parked id=${id} model=${pending}`)
-      toast.error(i18n.t("chat.pendingModelBusy"))
-    } else {
-      this.logInfo?.(`[pending-model] applyNow landed id=${id} model=${pending}`)
-    }
+    const pendingModels = { ...this.state.pendingModels }
+    delete pendingModels[id]
+    this.setApp({ pendingModels })
   }
 
   /** Applies the parked choice now, or joins the application already in flight. */
   private applyParkedModel(id: string, force = false): Promise<boolean> {
     const applying = this.pendingModelApplies.get(id)
     if (applying !== undefined) return applying
-    const pending = this.pendingModelSwitches.get(id)
+    const pending = this.state.pendingModels[id]
     if (pending === undefined) return Promise.resolve(true)
-    if (this.modelWrites.has(id)) return Promise.resolve(false)
+    const ready = () => !this.stoppingSessions.has(id) && this.state.sessions[id]?.attached && !this.sessionBusy(id)
+    if (!ready() || this.modelWrites.has(id)) return Promise.resolve(false)
     // Inside a backoff window there is nothing to do: the interval still fires, but a choice the
     // agent just refused is not retried on the same two-second beat.
     const retryAt = this.parkedRetryAt.get(id)
     if (!force && retryAt !== undefined && Date.now() < retryAt) return Promise.resolve(false)
-    if (!force && this.sessionBusy(id) && !this.parkedSwitchOverdue(id)) return Promise.resolve(false)
     // Deferred by one microtask on purpose: `setConfig` publishes a store patch synchronously,
     // and the watcher — which runs inside that patch — must already see this entry, or it would
     // start a second write for the same choice and recurse until the stack overflows.
     const write = this.enqueueModelWrite(id, async () => {
-      if (this.pendingModelSwitches.get(id) === pending)
+      if (this.state.pendingModels[id] === pending && ready())
         await this.writeConfig(id, "model", pending, this.state.sessionWindows[id] ?? "main", true)
     })
     const apply = this.withTimeout(write, 20_000, "setConfig(model)")
       .then(
         () => {
           this.logInfo?.(
-            `[pending-model] apply landed id=${id} model=${pending} force=${force} stillParked=${this.pendingModelSwitches.has(id)}`
+            `[pending-model] apply landed id=${id} model=${pending} force=${force} stillParked=${this.state.pendingModels[id] !== undefined}`
           )
-          return this.pendingModelSwitches.get(id) !== pending
+          return this.state.pendingModels[id] !== pending
         },
         (error: unknown) => {
           const message = error instanceof Error ? error.message : String(error)
@@ -2156,7 +2042,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
   }
 
   private hasModelWrite(id: string): boolean {
-    return this.modelWrites.has(id) || this.pendingModelApplies.has(id) || this.pendingModelSwitches.has(id)
+    return this.modelWrites.has(id) || this.pendingModelApplies.has(id) || this.state.pendingModels[id] !== undefined
   }
 
   private async waitForModelSwitch(id: string): Promise<void> {
@@ -2167,7 +2053,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
         continue
       }
       const applying = this.pendingModelApplies.get(id)
-      const pending = this.pendingModelSwitches.get(id)
+      const pending = this.state.pendingModels[id]
       if (applying === undefined && pending === undefined) return
       if (!(await (applying ?? this.applyParkedModel(id, true)))) throw new Error(i18n.t("chat.pendingModelBusy"))
     }
@@ -2175,16 +2061,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
 
   /** The model a conversation switches to once its current turn settles, for status surfaces. */
   pendingModelFor(id: string): string | null {
-    return this.pendingModelSwitches.get(id) ?? null
-  }
-
-  onPendingModelChange(listener: () => void): () => void {
-    this.pendingModelListeners.add(listener)
-    return () => this.pendingModelListeners.delete(listener)
-  }
-
-  private emitPendingModel(): void {
-    for (const listener of this.pendingModelListeners) listener()
+    return this.state.pendingModels[id] ?? null
   }
 
   /**
@@ -2210,7 +2087,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
         if (session === undefined) break
         // Same two clocks as a parked model switch: the ACP state alone can say idle a beat before
         // the Runtime does, and sending into that gap is what tore down the opening stream.
-        if (session.state === "idle" && !this.runtimeRunningFresh(id)) return await this.sendPrompt(id, prompt, options)
+        if (session.state === "idle" && !this.runtimeRunningFresh(id) && !this.promptInFlight.has(id))
+          return await this.sendPrompt(id, prompt, options)
         await new Promise<void>((resolve) => setTimeout(resolve, 500))
       }
       if (entry.cancelled) throw new QueueCancelledError()
@@ -2230,12 +2108,18 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * non-text prompts so file/voice-only sends are untouched.
    */
   override prompt(id: string, prompt: acp.ContentBlock[], options?: PromptOptions): Promise<string> {
+    if (prompt.length === 1 && isText(prompt[0]) && prompt[0].text.trim() === "/compact") {
+      if (this.sessionBusy(id) || this.hasModelWrite(id) || this.inRoleScope(id))
+        return Promise.reject(new Error(i18n.t("error.sessionBusy")))
+      return this.promptWithTimeout(id, prompt, options)
+    }
     // A new turn means the stop no longer describes this chat: the next model pick has a live turn
     // to wait for again, so it parks the ordinary way.
     this.stoppedSessions.delete(id)
     // Immediate mode is the product's "插话": a message sent while a turn is running is dispatched
     // into that turn by the engine. If the active step cannot accept steering, fall back to the
     // queue instead of turning the supplement into a lost/failed send.
+    if (this.hasModelWrite(id) && this.sessionBusy(id)) return this.waitForIdleThenPrompt(id, prompt, options)
     if (getQueueSendMode() === "immediate") {
       const busy = this.holds(id) ? this.session(id) : undefined
       // A stale session state must not turn the next turn into a steer: when the Runtime has a
@@ -2549,9 +2433,58 @@ export class CodexClient extends CodexAcpClient<AppState> {
     return id
   }
 
+  async prepareAutomationModel(id: string, choice: string | null, freshMonitor: boolean): Promise<string> {
+    this.requireAutomationIdle(id)
+    const monitor = this.session(id)
+    let desired = choice
+    if (desired === null && freshMonitor) desired = selectedModel(monitor.configOptions)
+    else if (desired === null) {
+      const draft = await super.newSession(monitor.cwd, { draft: true })
+      try {
+        desired = selectedModel(this.session(draft).configOptions)
+      } finally {
+        await super.discardDraft(draft)
+      }
+    }
+    if (!desired) throw new ModelSelectionError(i18n.t("error.modelUnavailableGeneric"))
+    const advertised = modelValues(this.session(id).configOptions).find((entry) => sameModelIdentity(entry, desired))
+    if (!advertised) throw new ModelSelectionError(i18n.t("error.modelUnavailable", { model: desired }))
+    const target = canonicalModelSelection(advertised)
+    this.requireAutomationIdle(id)
+    await this.enqueueModelWrite(id, async () => {
+      if (selectedModel(this.session(id).configOptions) === target) {
+        await this.applyEffortForModel(id, target)
+        await this.applyModelFastMode(id, target)
+        return
+      }
+      const key = `${id}:model`
+      this.configOwners.set(key, "automation")
+      try {
+        await this.landModelSwitch(id, "model", advertised, target)
+      } catch (cause) {
+        if (unsupportedModel(cause, target) !== null) throw new ModelSelectionError(i18n.t("error.modelUnavailable", { model: target }), { cause })
+        throw cause
+      } finally {
+        this.configOwners.delete(key)
+      }
+    })
+    return target
+  }
+
+  private requireAutomationIdle(id: string): void {
+    if (this.hasModelWrite(id) || this.sessionBusy(id) || this.inRoleScope(id)) throw new Error(i18n.t("error.sessionBusy"))
+  }
+
   /** Sends a prompt and resolves once that turn has actually settled, not when it is accepted. */
-  async promptAndWait(id: string, prompt: acp.ContentBlock[], options?: PromptOptions): Promise<string> {
-    const receipt = await this.promptWithTimeout(id, prompt, options)
+  async promptAndWait(id: string, prompt: acp.ContentBlock[], options: PromptOptions, expectedModel: string): Promise<string> {
+    this.requireAutomationIdle(id)
+    if (selectedModel(this.session(id).configOptions) !== expectedModel)
+      throw new ModelSelectionError(i18n.t("chat.modelSwitchNotApplied", { model: expectedModel }))
+    this.stoppedSessions.delete(id)
+    const receipt = await this.promptWithTimeout(id, prompt, options).catch((cause: unknown) => {
+      if (unsupportedModel(cause, expectedModel) !== null) throw new ModelSelectionError(i18n.t("error.modelUnavailable", { model: expectedModel }), { cause })
+      throw cause
+    })
     await this.waitForTurn(id, receipt)
     return receipt
   }
@@ -3149,11 +3082,11 @@ export class CodexClient extends CodexAcpClient<AppState> {
       outcome = { ok: false, error }
     }
 
-    let restoreFailure: unknown = null
+    let restoreFailure: Error | null = null
     try {
       await this.restoreMainSelection(id, selection)
     } catch (error) {
-      restoreFailure = error
+      restoreFailure = error instanceof Error ? error : new Error(String(error), { cause: error })
     }
 
     const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error))
@@ -3351,24 +3284,6 @@ export class CodexClient extends CodexAcpClient<AppState> {
     return ""
   }
 
-  /**
-   * The agent's actual answer from the turn that began at item index `since`.
-   * Scheduled pushes and run records must carry what the agent wrote, not the ACP stop reason
-   * (`end_turn`) or a session id. Empty assistant items (tool-only turns) are skipped so a
-   * trailing tool call cannot turn the result into an empty string.
-   */
-  answerSince(id: string, since: number): string {
-    const items = this.state.sessions[id]?.items ?? []
-    for (let index = items.length - 1; index >= Math.max(0, since); index -= 1) {
-      const item = items[index]
-      if (item.kind === "assistant") {
-        const text = textOf(item.content)
-        if (text.trim() !== "") return text
-      }
-    }
-    return ""
-  }
-
   /** The session's current `mode` value, when the engine exposes one. */
   private sessionMode(id: string): string | null {
     const session = this.holds(id) ? this.session(id) : undefined
@@ -3392,7 +3307,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     this.noteModel(this.session(id))
     const owner = this.configOwners.get(`${id}:${configId}`) ?? "main"
     this.configOwners.delete(`${id}:${configId}`)
-    if (response.configOptions.some((option) => option.configId === configId && option.category === "model"))
+    if (owner !== "automation" && response.configOptions.some((option) => option.configId === configId && option.category === "model"))
       this.confirmModel(owner, this.session(id))
     // Persist an explicit effort change for this conversation. The agent normally calls this
     // `reasoning_effort`, while a few adapters use `effort`; `noteModel` persists either form,
@@ -3516,7 +3431,13 @@ export class CodexClient extends CodexAcpClient<AppState> {
     this.confirmModel(this.state.sessionWindows[id] ?? "main", resumed)
   }
 
-  prepareDraft(owner: DraftOwner, cwd: string, model: string | null = null, nativeDefault = false): Promise<string> {
+  prepareDraft(
+    owner: DraftOwner,
+    cwd: string,
+    model: string | null = null,
+    nativeDefault = false,
+    onListed?: (id: string) => void
+  ): Promise<string> {
     const version = ++this.slotVersions[owner]
     return this.changeDraft([owner], async () => {
       const existing = Object.keys(this.state.draftSessions).find((id) => this.state.draftSessions[id] === owner)
@@ -3554,20 +3475,21 @@ export class CodexClient extends CodexAcpClient<AppState> {
             if (!/session not found/i.test(error instanceof Error ? error.message : String(error))) throw error
             await this.deleteEmptyDraft(existing).catch(() => {})
             this.replayFailures.delete(`${owner}:${existing}`)
-            const fresh = await this.createNativeSession(cwd, resolved, owner)
+            const fresh = await this.createNativeSession(cwd, resolved, owner, onListed)
             this.activateSlot(owner, fresh, version)
             if (model !== null || nativeDefault || (inherited !== null && inherited !== resolved))
               this.confirmModel(owner, this.session(fresh))
             return fresh
           }
         }
+        onListed?.(existing)
         if (model !== null) this.confirmModel(owner, this.session(existing))
         return existing
       }
       // Inherit the confirmed model, including a change already requested by this surface. A
       // failed change must not silently create a draft on the old model. Prepare the replacement
       // before retiring the previous draft: failures preserve the user's input.
-      const id = await this.createNativeSession(cwd, resolved, owner)
+      const id = await this.createNativeSession(cwd, resolved, owner, onListed)
       try {
         // An unsent model change starts directly on the target provider. Resuming
         // the default-model thread creates a misleading model-change warning.
@@ -3871,7 +3793,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
       !saved ||
       this.restoring.has(session.id) ||
       this.modelWrites.has(session.id) ||
-      this.pendingModelSwitches.has(session.id)
+      this.state.pendingModels[session.id] !== undefined
     )
       return
     // A chat that never left the model row's own defaults is not pinned to the values it opened
@@ -3915,7 +3837,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
         const latest = this.holds(session.id) ? this.session(session.id) : session
         if (resolved !== null && resolved !== selectedModel(latest.configOptions)) {
           await this.writeConfig(session.id, "model", resolved, owner)
-          if (this.pendingModelSwitches.has(session.id)) return
+          if (this.state.pendingModels[session.id] !== undefined) return
         }
         // 切模型会重置 effort 阶梯与 fast-mode 开关；让出一次事件循环，等切后 config options 落到
         // store 再读取，避免按旧模型的档位判断（与 applyEffortForModel 的守卫一致）。

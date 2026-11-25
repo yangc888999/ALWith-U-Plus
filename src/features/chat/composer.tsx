@@ -32,7 +32,6 @@ import { withoutWaitingForTurn } from "./composer/detach-submit"
 import { chatModelMenu } from "./composer/model-catalog"
 import { nativeAttachmentPolicy, NativeFileDrop } from "./composer/native-file-drop"
 import { OrchestrationControl } from "./composer/orchestration-control"
-import { PendingModelChip } from "./composer/pending-model-chip"
 import { predictionPreference } from "./composer/prediction-preference"
 import { QueuedPromptChip } from "./composer/queued-prompt-chip"
 import { TurnProgressBar } from "./turn-progress"
@@ -401,7 +400,6 @@ export function ChatComposer({
                     roster; `orchestrationAllowedFor` is the same test the client's runtime gate
                     applies, so the control can never appear where the runtime would ignore it. */}
                 <div className="flex shrink-0 items-center gap-1">
-                  <PendingModelChip session={props.session} />
                   {orchestrationAllowedFor(props.session.cwd) ? <OrchestrationControl session={props.session} /> : null}
                 </div>
               </div>

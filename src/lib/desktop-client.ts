@@ -13,7 +13,7 @@ const SETTLE_DEADLINE_MS = 4_000
 
 /** Main owns native filesystem access; floating clients forward this method to it. */
 export class DesktopCodexClient extends CodexClient {
-  private settling: Promise<boolean> | null = null
+  private pendingConnection: Promise<void> | null = null
   /** When the current connection became ready, and how many died right after becoming ready. */
   private readyAt = 0
   private shortLived = 0
@@ -44,8 +44,16 @@ export class DesktopCodexClient extends CodexClient {
    * phantom), rebuild the Runtime instead of adopting it. The whole attempt is bounded; a timeout
    * surfaces as a real error rather than an inert button.
    */
-  override async connect(): Promise<void> {
+  override connect(): Promise<void> {
+    if (this.pendingConnection !== null) return this.pendingConnection
     if (this.state.connection === "ready") return super.connect()
+    this.pendingConnection = this.connectDesktop().finally(() => {
+      this.pendingConnection = null
+    })
+    return this.pendingConnection
+  }
+
+  private async connectDesktop(): Promise<void> {
     const phantom = (await this.settleAgentGone()) || this.shortLived >= 2
     if (phantom) {
       void info("[connect] Runtime still lists codex after its exit; rebuilding the Runtime")
@@ -87,20 +95,15 @@ export class DesktopCodexClient extends CodexClient {
   }
 
   /** Resolves to true when the Runtime still lists `codex` after the settle window. */
-  private settleAgentGone(): Promise<boolean> {
-    this.settling ??= (async () => {
-      const port = await runtimeClient()
-      const until = Date.now() + SETTLE_DEADLINE_MS
-      for (;;) {
-        const agents = await port.agents().catch(() => [])
-        if (!agents.some((agent) => agent.agentId === CODEX_AGENT_ID)) return false
-        if (Date.now() >= until) return true
-        await new Promise((resolve) => setTimeout(resolve, 150))
-      }
-    })().finally(() => {
-      this.settling = null
-    })
-    return this.settling
+  private async settleAgentGone(): Promise<boolean> {
+    const port = await runtimeClient()
+    const until = Date.now() + SETTLE_DEADLINE_MS
+    for (;;) {
+      const agents = await port.agents().catch(() => [])
+      if (!agents.some((agent) => agent.agentId === CODEX_AGENT_ID)) return false
+      if (Date.now() >= until) return true
+      await new Promise((resolve) => setTimeout(resolve, 150))
+    }
   }
 
   override async fuzzyFileSearch(params: FuzzyFileSearchParams): Promise<FuzzyFileSearchResponse> {

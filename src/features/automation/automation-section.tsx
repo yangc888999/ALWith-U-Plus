@@ -159,7 +159,6 @@ export function AutomationSection() {
       fastMode: task.fastMode,
       larkNotify: task.larkNotify,
       larkTargets: task.larkTargets,
-      larkEmptyResultNoticeToSelf: task.larkEmptyResultNoticeToSelf === true,
       larkIdentity: task.larkIdentity,
       monitorSessionId: task.monitorSessionId
     }

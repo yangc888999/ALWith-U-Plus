@@ -7,7 +7,8 @@
  * mapping reaches the right leaf.
  */
 import { createSession } from "@alwith/api"
-import { fireEvent, render } from "@testing-library/react"
+import { act, fireEvent, render, waitFor } from "@testing-library/react"
+import { toast } from "sonner"
 import { expect, test, vi } from "vitest"
 
 import { client } from "@/lib/client"
@@ -137,5 +138,35 @@ test("Gateway and native picks use the same model setter and conversation id", (
   } finally {
     view.unmount()
     setConfig.mockRestore()
+  }
+})
+
+test("the picker confirms an accepted choice while the running session keeps its confirmed model", async () => {
+  const option = { ...modelOption, currentValue: "gpt-6.2-sol", options: [] }
+  const session = sessionWith([option], { attached: true, state: "running" })
+  const success = vi.spyOn(toast, "success")
+  const failure = vi.spyOn(toast, "error")
+  const write = vi.spyOn(client, "setConfig").mockImplementation(async (id, _config, value) => {
+    client.store.setState({ pendingModels: { [id]: String(value) } })
+  })
+  const view = render(<ModelEntry surface="session" session={session} />)
+  try {
+    fireEvent.click(view.getByText("DeepSeek"))
+    await waitFor(() => expect(success).toHaveBeenCalledWith("Model switched", expect.anything()))
+    expect(view.container.querySelector("[title]")?.getAttribute("title")).toMatch(/deepseek/i)
+    expect(option.currentValue).toBe("gpt-6.2-sol")
+    expect(view.queryByRole("status")).toBeNull()
+    act(() => client.store.setState({ pendingModels: { other: "deepseek-flash" } }))
+    expect(view.container.querySelector("[title]")?.getAttribute("title")).toMatch(/sol/i)
+    write.mockRejectedValueOnce(new Error("Refused"))
+    fireEvent.click(view.getByText("DeepSeek"))
+    await waitFor(() => expect(failure).toHaveBeenCalled())
+    expect(success).toHaveBeenCalledTimes(1)
+  } finally {
+    view.unmount()
+    write.mockRestore()
+    success.mockRestore()
+    failure.mockRestore()
+    client.store.setState({ pendingModels: {} })
   }
 })

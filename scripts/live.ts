@@ -25,6 +25,8 @@ import { CodexClient } from "../src/agent/client"
 import { nativeGroupModels, selectedModelId } from "../src/agent/native-models"
 import { codexTurnId, codexTurnStartedAt } from "@nyssance/codex-acp-v2/client"
 import { computerRuntimeEnv } from "../src/features/computer/runtime-config"
+import { completedRun } from "../src/features/automation/run-outcome"
+import { setActivePreview } from "../src/lib/active-preview"
 import { startModelProbe } from "./lib/live-model-router"
 import { staged, stagedCodexEngine, startRuntime } from "./lib/runtime"
 
@@ -147,6 +149,27 @@ async function verifyModelSwitch(
     for (const [target, upstream] of turns) await verifyTurn(id, target, upstream)
     if (probe) {
       await verifyTurn(id, first, first, false)
+      const before = `ROUTE_${crypto.randomUUID().slice(0, 8)}`
+      const after = `ROUTE_${crypto.randomUUID().slice(0, 8)}`
+      const release = probe.hold(before)
+      const send = (marker: string) => client.prompt(id, [{ type: "text", text: `Reply with exactly ${marker} and nothing else.` }])
+      const current = send(before)
+      const target = `gateway:probe-b:${first}`
+      try {
+        await until(() => probe.received(before), 30_000, "held model request")
+        await client.setConfig(id, "model", target)
+        if (client.pendingModelFor(id) !== target || selectedModelId(client.session(id).configOptions) !== first)
+          throw new Error("Mid-turn choice changed the active route or was not accepted")
+      } finally {
+        release()
+      }
+      const receipt = await current
+      await until(() => Object.hasOwn(client.session(id).turnEndedAt, receipt) && assistantText(client.session(id)).includes(before), 30_000, "original answer completes")
+      await send(after)
+      await until(() => client.session(id).state === "idle" && assistantText(client.session(id)).includes(after), 30_000, "first answer after switch")
+      probe.assertModel(before, first)
+      probe.assertModel(after, `probe-b/${first}`)
+      console.log("mid-turn switch: original answer finished; next request used the selected gateway")
       const sibling = await client.newSession(directory)
       try {
         await Promise.all([
@@ -194,6 +217,54 @@ async function check(transport: "stdio" | "ws", probe?: ReturnType<typeof startM
   try {
     await client.connect()
     console.log(`agent: ${client.state.agent?.info.name} ${client.state.agent?.info.version}`)
+    if (probe && process.env.ALWITH_LIVE_FOCUS === "automation-local") {
+      const id = await client.newSession(directory, { draft: false })
+      try {
+        const initial = await client.prepareAutomationModel(id, null, true)
+        const other = nativeGroupModels(client.session(id).configOptions)?.models.find((entry) => entry.id !== initial && entry.id.startsWith("gpt-"))
+        if (!other) throw new Error("Expected a second advertised model")
+        for (const [setting, expected] of [[other.id, other.id], [null, initial]] as const) {
+          const model = await client.prepareAutomationModel(id, setting, false)
+          const marker = `ROUTE_${crypto.randomUUID().slice(0, 8)}`
+          const receipt = await client.promptAndWait(id, [{ type: "text", text: `Reply with exactly ${marker} and nothing else.` }], {}, model)
+          const result = completedRun(client.session(id), receipt)
+          if (result.status !== "success" || result.summary.trim() !== marker) throw new Error(`Unexpected scheduled result: ${JSON.stringify(result)}`)
+          probe.assertModel(marker, expected)
+        }
+        const marker = `ROUTE_${crypto.randomUUID().slice(0, 8)}`
+        probe.fail(marker, "model_not_found", "The 'deepseek-flash' model is not supported when using Codex with a ChatGPT account.")
+        const receipt = await client.promptAndWait(id, [{ type: "text", text: `Reply with exactly ${marker} and nothing else.` }], {}, initial)
+        const failed = completedRun(client.session(id), receipt)
+        if (failed.status !== "failed" || failed.failureKind !== "model" || failed.summary) throw new Error(`Model refusal reached reporting: ${JSON.stringify(failed)}`)
+        console.log("scheduled monitor: refused model classified as a local failure, no report body")
+      } finally {
+        await client.delete(id)
+      }
+      return
+    }
+    if (probe && process.env.ALWITH_LIVE_FOCUS === "compact-local") {
+      const id = await client.newSession(directory)
+      try {
+        async function turn(marker: string): Promise<void> {
+          const receipt = await client.prompt(id, [{ type: "text", text: `Reply with exactly ${marker} and nothing else.` }])
+          await until(() => Object.hasOwn(client.session(id).turnEndedAt, receipt) && assistantText(client.session(id)).includes(marker), 30_000, marker)
+        }
+        await turn("ROUTE_abc123")
+        setActivePreview({ root: directory, path: join(directory, "README.md"), title: "README.md" })
+        const compact = await client.prompt(id, [{ type: "text", text: "/compact" }])
+        await until(() => {
+          const session = client.session(id)
+          if (session.error) throw new Error(JSON.stringify(session.error))
+          return Object.hasOwn(session.turnEndedAt, compact) && session.items.some((item) => item.kind === "compaction" && item.status === "completed")
+        }, 30_000, "completed compaction event")
+        await turn("ROUTE_def456")
+        console.log("context: compact completed with a preview open and the same thread answered again")
+      } finally {
+        setActivePreview(null)
+        await client.delete(id)
+      }
+      return
+    }
     if (process.env.ALWITH_LIVE_FOCUS === "models" || probe) {
       await verifyModelSwitch(client, directory, port, probe)
       return
@@ -566,7 +637,7 @@ async function verifyAsyncUserInput(client: CodexClient, directory: string): Pro
   }
 }
 
-const probe = process.env.ALWITH_LIVE_FOCUS === "models-local" ? startModelProbe() : undefined
+const probe = ["models-local", "compact-local", "automation-local"].includes(process.env.ALWITH_LIVE_FOCUS ?? "") ? startModelProbe() : undefined
 try {
   for (const transport of ["stdio", "ws"] as const) await check(transport, probe)
 } finally {

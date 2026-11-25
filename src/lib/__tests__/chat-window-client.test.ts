@@ -66,6 +66,35 @@ function eventBus(): ChatEvents {
   }
 }
 
+test("a floating model pick is visible in both windows without changing the running turn", async () => {
+  const fake = createFakeAgent()
+  const owner = new CodexClient(() => Promise.resolve(new FakeHubPort(() => fake.app)), {
+    agentId: "codex", launch: { engine: "codex" }
+  })
+  const transport = eventBus()
+  const stop = await serveChatClient(owner, transport)
+  const remote = new RemoteChatClient(transport)
+  try {
+    await remote.connect()
+    const id = await remote.newSession("/tmp/floating-model-pick")
+    await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "running" })
+    await remote.setConfig(id, "model", "chosen-model")
+    await vi.waitFor(() => expect(remote.pendingModelFor(id)).toBe("chosen-model"))
+    expect(owner.pendingModelFor(id)).toBe("chosen-model")
+    expect(remote.session(id).configOptions[0]?.currentValue).toBe("gpt-6.1-sol")
+    expect(fake.cancels).toEqual([])
+    await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "idle" })
+    await vi.waitFor(() => {
+      expect(remote.pendingModelFor(id)).toBeNull()
+      expect(remote.session(id).configOptions[0]?.currentValue).toBe("chosen-model")
+    })
+  } finally {
+    remote.disconnect()
+    stop()
+    owner.disconnect()
+  }
+})
+
 test("floating pagination forwards the session id and receives older messages from its owner", async () => {
   const fake = createFakeAgent()
   const requests: Array<Record<string, unknown>> = []

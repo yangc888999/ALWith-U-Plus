@@ -182,7 +182,6 @@ export function startAutomationScheduler(execute: AutomationExecutor, canRun: ()
           fastMode: task.fastMode,
           larkNotify: task.larkNotify,
           larkTargets: task.larkTargets,
-          larkEmptyResultNoticeToSelf: task.larkEmptyResultNoticeToSelf === true,
           larkIdentity: task.larkIdentity,
           monitorSessionId: task.monitorSessionId,
           taskFiredAt: now

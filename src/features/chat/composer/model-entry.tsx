@@ -13,17 +13,16 @@
  */
 import type { Session } from "@alwith/api"
 import { ModelMenu } from "@alwith/module-chat/conversation"
-import { toast } from "sonner"
 import { useStore } from "zustand"
 
 import { selectedModelId } from "@/agent/native-models"
 import { client } from "@/lib/client"
-import { describeError } from "@/lib/error-text"
 import { displayModelLabel, type ProviderSnapshot } from "@/lib/providers"
 
 import { DraftModelSelect } from "./draft-model-select"
 import { chatModelMenu } from "./model-catalog"
 import { RecoveryModelSelect } from "./recovery-model-select"
+import { selectSessionModel } from "./select-session-model"
 
 /** Which control the entry renders; `none` keeps the slot empty on purpose. */
 export type ModelEntryKind = "menu" | "recovery" | "draft" | "none"
@@ -109,6 +108,11 @@ export function ModelEntry(props: DraftModelEntry | SessionModelEntry) {
   const recovering = useStore(client.store, (state) =>
     sessionId === null ? false : (state.accountModelRecovery?.[sessionId] ?? false)
   )
+  const pending = useStore(client.store, (state) => sessionId === null ? null : (state.pendingModels?.[sessionId] ?? null))
+  const options = props.session?.configOptions ?? []
+  const pickerOptions = pending === null ? options : options
+    .filter((option) => option.category !== "thought_level" && option.configId !== "fast-mode")
+    .map((option) => option.category === "model" && option.type === "select" ? { ...option, currentValue: pending } : option)
 
   if (props.surface === "draft") {
     const kind = modelEntryKind(props.session, "draft", { failure: props.failure, preparing: props.preparing })
@@ -122,7 +126,7 @@ export function ModelEntry(props: DraftModelEntry | SessionModelEntry) {
         <ModelMenu
           {...chatModelMenu}
           sessionId={props.session.id}
-          options={props.session.configOptions}
+          options={pickerOptions}
           disabled={gate !== "ready"}
           onModelChange={props.onChange}
         />
@@ -140,7 +144,7 @@ export function ModelEntry(props: DraftModelEntry | SessionModelEntry) {
       <RecoveryModelSelect
         sessionId={props.session.id}
         cwd={props.session.cwd}
-        currentModel={selectedModelId(props.session.configOptions ?? [])}
+        currentModel={pending ?? selectedModelId(options)}
         recovering={recovering}
       />
     )
@@ -149,7 +153,7 @@ export function ModelEntry(props: DraftModelEntry | SessionModelEntry) {
   // whole name has to remain readable somewhere: a native hover title on the slot. The id comes
   // from the session's own options; the display name prefers the reader's rename, then the
   // catalogue's label, then the raw id — the same order the turn-progress row uses.
-  const modelId = selectedModelId(props.session.configOptions ?? [])
+  const modelId = pending ?? selectedModelId(options)
   const option = props.session.configOptions.find((entry) => entry.category === "model" && entry.type === "select")
   const choices: unknown[] =
     option !== undefined && option.type === "select" && Array.isArray(option.options) ? option.options : []
@@ -168,11 +172,9 @@ export function ModelEntry(props: DraftModelEntry | SessionModelEntry) {
       <ModelMenu
         {...chatModelMenu}
         sessionId={props.session.id}
-        options={props.session.configOptions}
+        options={pickerOptions}
         disabled={modelGateOf(props.session) !== "ready"}
-        onModelChange={(value) => {
-          void client.setConfig(props.session.id, "model", value).catch((error: unknown) => toast.error(describeError(error)))
-        }}
+        onModelChange={(value) => void selectSessionModel(props.session.id, value)}
       />
     </div>
   )
