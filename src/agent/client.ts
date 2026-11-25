@@ -257,7 +257,10 @@ function unsupportedModel(error: unknown, selection: string | null): string | nu
   const bare = /Unsupported model:\s*(\S+)/.exec(message)
   const rejected = quoted?.[1] ?? listed?.[1] ?? bare?.[1]
   if (rejected === undefined) return null
-  if (selection !== null && (rejected === modelDisplayId(selection) || canonicalModelSelection(rejected) === canonicalModelSelection(selection)))
+  if (
+    selection !== null &&
+    (rejected === modelDisplayId(selection) || canonicalModelSelection(rejected) === canonicalModelSelection(selection))
+  )
     return selection
   return selection === null || modelVendorId(selection) === "native" ? rejected : null
 }
@@ -1393,6 +1396,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
 
   /** Model picked while a turn was still running, applied as soon as that turn settles. */
   private readonly pendingModelSwitches = new Map<string, string>()
+  /** The confirmed model at the moment a switch was parked, used to cancel a change of mind. */
+  private readonly pendingModelPrevious = new Map<string, string | null>()
   private readonly modelWrites = new Map<string, Promise<void>>()
   private readonly pendingModelWatchers = new Map<string, () => void>()
   /** In-flight applications of a parked switch, so the next prompt can await them. */
@@ -1551,34 +1556,62 @@ export class CodexClient extends CodexAcpClient<AppState> {
 
   private enqueueModelWrite(id: string, write: () => Promise<void>, replaceRefused = false): Promise<void> {
     const previous = this.modelWrites.get(id) ?? Promise.resolve()
-    const next = previous.then(write, (error: unknown) => {
-      const code = error instanceof Error && "code" in error ? error.code : null
-      if (!replaceRefused || (code !== -32600 && code !== -32602)) throw error
-      return write()
-    }).finally(() => {
-      if (this.modelWrites.get(id) === next) this.modelWrites.delete(id)
-    })
+    const next = previous
+      .then(write, (error: unknown) => {
+        const code = error instanceof Error && "code" in error ? error.code : null
+        if (!replaceRefused || (code !== -32600 && code !== -32602)) throw error
+        return write()
+      })
+      .finally(() => {
+        if (this.modelWrites.get(id) === next) this.modelWrites.delete(id)
+      })
     this.modelWrites.set(id, next)
     return next
   }
 
   override setConfig(id: string, configId: string, value: string | boolean, owner: DraftOwner = "main"): Promise<void> {
     const session = this.state.sessions[id]
-    if (configId === "effort" || configId === "fast-mode" || (session && configId === this.effortConfigId(session.configOptions))) {
-      return this.enqueueModelWrite(id, async () => {
-        if (this.pendingModelSwitches.has(id)) throw new Error(i18n.t("chat.pendingModelBusy"))
-        await this.writeConfig(id, configId, value, owner)
-      }, false)
+    if (
+      configId === "effort" ||
+      configId === "fast-mode" ||
+      (session && configId === this.effortConfigId(session.configOptions))
+    ) {
+      return this.enqueueModelWrite(
+        id,
+        async () => {
+          if (this.pendingModelSwitches.has(id)) throw new Error(i18n.t("chat.pendingModelBusy"))
+          await this.writeConfig(id, configId, value, owner)
+        },
+        false
+      )
     }
     if (configId !== "model" || typeof value !== "string") return this.writeConfig(id, configId, value, owner)
-    const advertised = session !== undefined && modelValues(session.configOptions).some(
-      (entry) => canonicalModelSelection(entry) === canonicalModelSelection(value)
+    const advertised =
+      session !== undefined &&
+      modelValues(session.configOptions).some(
+        (entry) => canonicalModelSelection(entry) === canonicalModelSelection(value)
+      )
+    const parked = this.pendingModelSwitches.get(id)
+    const previous = this.pendingModelPrevious.get(id)
+    if (
+      parked !== undefined &&
+      previous !== undefined &&
+      previous !== null &&
+      canonicalModelSelection(previous) === canonicalModelSelection(value)
+    ) {
+      this.logInfo?.(`[pending-model] cancel id=${id} model=${parked} because previous=${value}`)
+      this.clearParkedModel(id, parked)
+      return Promise.resolve()
+    }
+    return this.enqueueModelWrite(
+      id,
+      () => {
+        const prior = this.pendingModelSwitches.get(id)
+        if (prior !== undefined) this.clearParkedModel(id, prior)
+        return this.writeConfig(id, configId, value, owner)
+      },
+      advertised
     )
-    return this.enqueueModelWrite(id, () => {
-      const prior = this.pendingModelSwitches.get(id)
-      if (prior !== undefined) this.clearParkedModel(id, prior)
-      return this.writeConfig(id, configId, value, owner)
-    }, advertised)
   }
 
   private async writeConfig(
@@ -1636,6 +1669,22 @@ export class CodexClient extends CodexAcpClient<AppState> {
             toast.info(i18n.t("chat.modelNotInCatalog", { from: value, to: sibling }), { duration: 8000 })
             value = sibling
           }
+        }
+        // Choosing the model the conversation is already on cancels a parked switch instead of
+        // parking the current model as another "next turn" change. Otherwise the chip can keep
+        // naming a model the reader already backed away from.
+        const parked = this.pendingModelSwitches.get(id)
+        const previous = this.pendingModelPrevious.get(id)
+        if (
+          parked !== undefined &&
+          (selectedModel(live.configOptions) === value ||
+            (previous !== undefined &&
+              previous !== null &&
+              canonicalModelSelection(previous) === canonicalModelSelection(value)))
+        ) {
+          this.logInfo?.(`[pending-model] cancel id=${id} model=${parked} because current=${value}`)
+          this.clearParkedModel(id, parked)
+          return
         }
       }
       // Every gateway now shares one Codex provider, so a model from another vendor is just a
@@ -1879,7 +1928,9 @@ export class CodexClient extends CodexAcpClient<AppState> {
       this.logInfo?.(`[pending-model] post-stop switch landed id=${id} model=${value}`)
       return true
     } catch (error) {
-      this.logInfo?.(`[pending-model] post-stop switch failed id=${id} model=${value} error=${String(error).slice(0, 200)}`)
+      this.logInfo?.(
+        `[pending-model] post-stop switch failed id=${id} model=${value} error=${String(error).slice(0, 200)}`
+      )
       return false
     }
   }
@@ -1940,6 +1991,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
       this.parkedAttempts.delete(id)
       this.parkedRetryAt.delete(id)
       this.parkedAt.set(id, Date.now())
+      this.pendingModelPrevious.set(id, this.holds(id) ? selectedModel(this.session(id).configOptions) : null)
     }
     this.pendingModelSwitches.set(id, model)
     this.emitPendingModel()
@@ -1966,6 +2018,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
   private clearParkedModel(id: string, requested: string): void {
     if (this.pendingModelSwitches.get(id) !== requested) return
     this.pendingModelSwitches.delete(id)
+    this.pendingModelPrevious.delete(id)
     this.parkedAt.delete(id)
     this.parkedAttempts.delete(id)
     this.parkedRetryAt.delete(id)
@@ -2190,8 +2243,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
       const runtimeRow = this.state.runStates[id]
       const stillRunning = runtimeRow === undefined || this.runtimeRunningFresh(id)
       if (busy !== undefined && busy.state !== "idle" && stillRunning) {
-        if (this.hasModelWrite(id))
-          return this.waitForIdleThenPrompt(id, prompt, options)
+        if (this.hasModelWrite(id)) return this.waitForIdleThenPrompt(id, prompt, options)
         return this.sendImmediate(id, prompt, options)
       }
     }
@@ -2296,11 +2348,14 @@ export class CodexClient extends CodexAcpClient<AppState> {
       prompt.some((block) => block.type === "text" && typeof block.text === "string" && block.text.trim() !== "")
     )
       return this.planPrompt(id, prompt, options, orchestration)
-    const currentRoute = () => this.holds(id) ? selectedModel(this.session(id).configOptions) : null
+    const currentRoute = () => (this.holds(id) ? selectedModel(this.session(id).configOptions) : null)
     const dispatchedModel = currentRoute()
     const routeUnchanged = (model: string | null) => {
       const current = currentRoute()
-      return !this.hasModelWrite(id) && (current === model || (current !== null && model !== null && sameModelIdentity(current, model)))
+      return (
+        !this.hasModelWrite(id) &&
+        (current === model || (current !== null && model !== null && sameModelIdentity(current, model)))
+      )
     }
     try {
       return await this.promptWithTimeout(id, prompt, options)
@@ -2327,7 +2382,12 @@ export class CodexClient extends CodexAcpClient<AppState> {
       }
       const session = this.holds(id) ? this.session(id) : undefined
       const unsupported = unsupportedModel(error, dispatchedModel)
-      if (unsupported === null || dispatchedModel === null || modelVendorId(unsupported) !== modelVendorId(dispatchedModel)) throw error
+      if (
+        unsupported === null ||
+        dispatchedModel === null ||
+        modelVendorId(unsupported) !== modelVendorId(dispatchedModel)
+      )
+        throw error
       // Remember it: a saved 可用模型 row would otherwise keep sending the same dead id.
       retireModel(unsupported)
       const fallback = session ? fallbackModel(session.configOptions, unsupported) : null
@@ -3807,7 +3867,13 @@ export class CodexClient extends CodexAcpClient<AppState> {
         }
       | undefined = this.sessionModels.get(session.id)
   ): void {
-    if (!saved || this.restoring.has(session.id) || this.modelWrites.has(session.id) || this.pendingModelSwitches.has(session.id)) return
+    if (
+      !saved ||
+      this.restoring.has(session.id) ||
+      this.modelWrites.has(session.id) ||
+      this.pendingModelSwitches.has(session.id)
+    )
+      return
     // A chat that never left the model row's own defaults is not pinned to the values it opened
     // with; the row can change and the next open follows it. Only a real deviation — recorded as
     // `effortExplicit` / `fastExplicit` — is replayed verbatim.
@@ -3875,7 +3941,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
       if (wanted.fast !== undefined && fast !== undefined && isBooleanOption(fast) && fast.currentValue !== wanted.fast)
         await this.writeConfig(session.id, "fast-mode", wanted.fast, owner)
     }
-    void this.enqueueModelWrite(session.id, () => apply().finally(() => this.restoring.delete(session.id)))
-      .catch((error) => this.logInfo?.(`[model-restore] id=${session.id} error=${String(error)}`))
+    void this.enqueueModelWrite(session.id, () => apply().finally(() => this.restoring.delete(session.id))).catch(
+      (error) => this.logInfo?.(`[model-restore] id=${session.id} error=${String(error)}`)
+    )
   }
 }

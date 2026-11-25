@@ -1,9 +1,8 @@
 import type { Session } from "@alwith/api"
+import { isGroupedSelect, isSelectOption } from "@alwith/api"
 import { ZapIcon } from "lucide-react"
 import { useSyncExternalStore } from "react"
 import { useTranslation } from "react-i18next"
-
-import { isGroupedSelect, isSelectOption } from "@alwith/api"
 
 import { client } from "@/lib/client"
 
@@ -31,18 +30,26 @@ export function PendingModelChip({ session }: { session: Session }): React.React
         : option.options
       : []
   const label = choices.find((choice) => choice.value === pending)?.name ?? pending
+  const currentValue = option !== undefined && isSelectOption(option) ? option.currentValue : null
+  const currentLabel = choices.find((choice) => choice.value === currentValue)?.name
   return (
     <button
       type="button"
-      className="bg-muted text-muted-foreground hover:bg-muted/70 hover:text-foreground inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] transition-colors"
+      className="inline-flex max-w-[min(26rem,55vw)] shrink-0 items-center gap-1 rounded-md border border-primary/25 bg-primary/8 px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-primary/12 hover:text-foreground"
       role="status"
       title={t("chat.pendingModelHint")}
       aria-label={`${t("chat.pendingModel", { model: label })} — ${t("chat.pendingModelApplyNow")}`}
       onClick={() => void client.applyPendingModelNow(session.id)}
     >
       <ZapIcon className="size-3 shrink-0" aria-hidden="true" />
-      <span>{label}</span>
-      <span className="rounded bg-primary/15 px-1 text-[10px] font-semibold leading-tight text-primary">
+      {currentLabel !== undefined && (
+        <>
+          <span className="truncate opacity-70">{currentLabel}</span>
+          <span className="shrink-0 opacity-50">→</span>
+        </>
+      )}
+      <span className="truncate font-medium text-foreground">{label}</span>
+      <span className="shrink-0 rounded bg-primary/15 px-1 text-[10px] leading-tight font-semibold text-primary">
         {t("chat.pendingModelBadge")}
       </span>
     </button>

@@ -18,8 +18,6 @@ import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
-import { cn } from "@/lib/utils"
-
 import { copyText } from "./chat-context-menu"
 
 interface Placement {
@@ -128,8 +126,8 @@ export function SelectionMenu({
   /** Clears an `external` placement held by the host, which `hide` cannot reach. */
   onDismiss?: () => void
   scope?: "transcript" | "preview"
-  /** When set, external coordinates are relative to this element and the pill is portalled
-   *  inside it, so a preview selection can never float over the chat column. */
+  /** Constrain the pill to this element's viewport bounds. The pill stays at document.body so a
+   *  native iframe can never sit above it and swallow clicks. */
   portalTarget?: HTMLElement | null
 }): ReactNode {
   const { t } = useTranslation()
@@ -246,9 +244,6 @@ export function SelectionMenu({
   }, [hide, measure, dismiss])
 
   const shown = external ?? placement
-  // In-document placements already carry viewport coordinates; only the iframe bridge sends
-  // panel-relative coordinates. Portalling a local placement into the pane would shift it.
-  const usePortal = external !== null && portalTarget !== null
   // The pill's real width depends on the labels, so the estimate under the selection can still
   // hang past the window edge. Measure it, re-center on the selection centre and pull it back
   // inside before paint.
@@ -262,12 +257,27 @@ export function SelectionMenu({
     const rect = node.getBoundingClientRect()
     // `shown.left` was centred on MENU_WIDTH, so the selection centre is recoverable from it.
     const centre = shown.left + MENU_WIDTH / 2
-    const width = usePortal ? portalTarget.clientWidth : window.innerWidth
-    const height = usePortal ? portalTarget.clientHeight : window.innerHeight
-    const left = Math.max(8, Math.min(centre - rect.width / 2, width - rect.width - 8))
-    const top = Math.max(8, Math.min(shown.top, height - rect.height - 8))
+    const bounds = portalTarget?.getBoundingClientRect() ?? null
+    const minLeft = bounds === null ? 8 : Math.max(8, bounds.left + 8)
+    const maxLeft = Math.max(
+      minLeft,
+      Math.min(
+        window.innerWidth - rect.width - 8,
+        bounds === null ? window.innerWidth - rect.width - 8 : bounds.right - rect.width - 8
+      )
+    )
+    const minTop = bounds === null ? 8 : Math.max(8, bounds.top + 8)
+    const maxTop = Math.max(
+      minTop,
+      Math.min(
+        window.innerHeight - rect.height - 8,
+        bounds === null ? window.innerHeight - rect.height - 8 : bounds.bottom - rect.height - 8
+      )
+    )
+    const left = Math.max(minLeft, Math.min(centre - rect.width / 2, maxLeft))
+    const top = Math.max(minTop, Math.min(shown.top, maxTop))
     setBox((current) => (current !== null && current.left === left && current.top === top ? current : { left, top }))
-  }, [shown, portalTarget, usePortal])
+  }, [shown, portalTarget])
   if (shown === null) return null
 
   const copy = (): void => {
@@ -284,9 +294,9 @@ export function SelectionMenu({
     dismiss()
   }
 
-  // Transcript selections render at the document root because an ancestor containing block can
-  // push a fixed pill off-screen. Preview selections render inside the preview surface instead,
-  // with panel-relative coordinates, so they cannot cover the chat column.
+  // Always render at the document root: an ancestor containing block would push a fixed pill
+  // off-screen, and a portal inside the preview pane can be covered by WebKit's native iframe.
+  // Preview selections are constrained to the pane rectangle instead of being nested in it.
   return createPortal(
     <div
       ref={menuRef}
@@ -295,10 +305,7 @@ export function SelectionMenu({
       role="menu"
       // Width follows the labels instead of a fixed 196px: a fixed width made "添加到对话" wrap
       // onto two lines in narrow windows. The clamp below still measures the real box.
-      className={cn(
-        "z-[70] flex w-max items-center gap-0.5 rounded-full border bg-popover px-1 py-1 text-xs whitespace-nowrap text-popover-foreground shadow-lg",
-        usePortal ? "absolute" : "fixed"
-      )}
+      className="fixed z-[70] flex w-max max-w-[calc(100vw-1rem)] items-center gap-0.5 rounded-full border bg-popover px-1 py-1 text-xs whitespace-nowrap text-popover-foreground shadow-lg"
       style={{
         left: box?.left ?? shown.left,
         top: box?.top ?? shown.top
@@ -347,6 +354,6 @@ export function SelectionMenu({
         </>
       )}
     </div>,
-    usePortal ? portalTarget : document.body
+    document.body
   )
 }

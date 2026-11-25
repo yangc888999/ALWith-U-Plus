@@ -375,7 +375,13 @@ test("a model that publishes no Fast option keeps its saved switch", async () =>
 })
 
 test("a scheduled run explicitly disables Fast inherited from the session", async () => {
-  const option: BooleanOption = { configId: "fast-mode", category: "model_config", name: "Fast", type: "boolean", currentValue: false }
+  const option: BooleanOption = {
+    configId: "fast-mode",
+    category: "model_config",
+    name: "Fast",
+    type: "boolean",
+    currentValue: false
+  }
   const { client } = await make((fake) => {
     fake.sessionOptions.current = () => [{ ...option }]
     fake.configResponse.current = (request) => {
@@ -1594,6 +1600,35 @@ test("a model picked mid-turn is parked, never errors, and lands once the turn s
   expect(client.pendingModelFor(id)).toBeNull()
 })
 
+test("picking the model already in use cancels a parked next-turn switch", async () => {
+  const models: ReasoningModelFixture[] = [
+    { id: "gpt-6.1-sol", groupId: "chatgpt", efforts: ["low", "medium", "high"], defaultEffort: "medium" },
+    { id: "deepseek-flash", groupId: "deepseek", efforts: ["low", "high"], defaultEffort: "low" }
+  ]
+  const { client, fake } = await make((fake) => {
+    configureReasoningModels(fake, models, "gpt-6.1-sol", "medium")
+  })
+  const configured = must(fake.configResponse.current, "missing config handler")
+  fake.configResponse.current = (request) => {
+    if (request.configId === "model")
+      throw RequestError.invalidRequest({ sessionId: request.sessionId }, "Wait for the current turn to finish")
+    return configured(request)
+  }
+  const id = await client.newSession("/tmp/cancel-parked")
+  await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "running" })
+
+  await client.setConfig(id, "model", "deepseek-flash")
+  expect(client.pendingModelFor(id)).toBe("deepseek-flash")
+
+  // The reader changed their mind and picked the model the turn is already using. There is no
+  // next-turn change left to show.
+  await client.setConfig(id, "model", "gpt-6.1-sol")
+  expect(client.pendingModelFor(id)).toBeNull()
+  expect(client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue).toBe(
+    "gpt-6.1-sol"
+  )
+})
+
 test("a model picked right after Stop lands instead of parking behind the turn", async () => {
   // What the agent does when a turn is still unwinding: it refuses the provider rebind. For a
   // native model that refusal is routine right after a stop, because every native model resolves to
@@ -2230,7 +2265,10 @@ test("a newer explicit pick supersedes a parked switch", async () => {
 })
 
 const switchModels: ReasoningModelFixture[] = ["first", "second", "third"].map((id) => ({
-  id, groupId: "chatgpt", efforts: ["low", "high"], defaultEffort: id === "second" ? "high" : "low"
+  id,
+  groupId: "chatgpt",
+  efforts: ["low", "high"],
+  defaultEffort: id === "second" ? "high" : "low"
 }))
 
 test("sending immediately after a pick waits for its model and effort, not just the model ACK", async () => {
@@ -2265,10 +2303,16 @@ test("an explicit effort selected immediately after a model wins over that model
   const id = await client.newSession("/tmp/model-manual-effort")
   fake.events.length = 0
   await Promise.all([
-    client.setConfig(id, "model", "second"), client.setConfig(id, "effort", "low"),
+    client.setConfig(id, "model", "second"),
+    client.setConfig(id, "effort", "low"),
     client.prompt(id, [{ type: "text", text: "with manual effort" }])
   ])
-  expect(orchestrationOrder(fake)).toEqual(["config:model=second", "config:reasoning_effort=high", "config:reasoning_effort=low", "prompt:worker"])
+  expect(orchestrationOrder(fake)).toEqual([
+    "config:model=second",
+    "config:reasoning_effort=high",
+    "config:reasoning_effort=low",
+    "prompt:worker"
+  ])
 })
 
 test("a still-refused parked model never dispatches the next prompt on the old route", async () => {
@@ -2294,7 +2338,8 @@ test("a switch acknowledged with the previous model rejects both the pick and th
   const id = await client.newSession("/tmp/model-ack-mismatch")
   fake.configResponse.current = () => ({ configOptions: reasoningCatalog("first", "low", switchModels) })
   const results = await Promise.allSettled([
-    client.setConfig(id, "model", "second"), client.prompt(id, [{ type: "text", text: "private" }])
+    client.setConfig(id, "model", "second"),
+    client.prompt(id, [{ type: "text", text: "private" }])
   ])
   expect(results.map((result) => result.status)).toEqual(["rejected", "rejected"])
   expect(fake.prompts).not.toContain("private")
@@ -2321,7 +2366,9 @@ test("a failed model write does not discard the next pick already queued for thi
 test("a supplement waiting for a rejected switch does not steer or later send on the old model", async () => {
   const { client, fake } = await make((agent) => configureReasoningModels(agent, switchModels, "first", "low"))
   const id = await client.newSession("/tmp/model-steer-race")
-  fake.configResponse.current = () => { throw RequestError.invalidRequest({}, "Switch refused") }
+  fake.configResponse.current = () => {
+    throw RequestError.invalidRequest({}, "Switch refused")
+  }
   await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "running" })
   const result = Promise.allSettled([
     client.setConfig(id, "model", "second"),
@@ -2335,7 +2382,12 @@ test("a supplement waiting for a rejected switch does not steer or later send on
 
 test("a refusal naming the bare upstream model retries a sibling on the same gateway", async () => {
   const ids = ["native-first", "gateway:service:upstream", "gateway:service:sibling"]
-  const models = ids.map((id) => ({ id, groupId: id.startsWith("gateway:") ? "service" : "chatgpt", efforts: ["low"], defaultEffort: "low" }))
+  const models = ids.map((id) => ({
+    id,
+    groupId: id.startsWith("gateway:") ? "service" : "chatgpt",
+    efforts: ["low"],
+    defaultEffort: "low"
+  }))
   const { client, fake } = await make((agent) => configureReasoningModels(agent, models, ids[1]!, "low"))
   const id = await client.newSession("/tmp/model-retry-scope")
   fake.promptError.current = () => {
@@ -2358,7 +2410,9 @@ test("a gateway with no sibling never resends the user's prompt to a different p
     fake.promptError.current = null
     return RequestError.invalidRequest({}, "Unsupported model: 'only'")
   }
-  await expect(client.prompt(id, [{ type: "text", text: "stay on this provider" }])).rejects.toThrow("Unsupported model")
+  await expect(client.prompt(id, [{ type: "text", text: "stay on this provider" }])).rejects.toThrow(
+    "Unsupported model"
+  )
   expect(fake.prompts).toEqual(["stay on this provider"])
   expect(client.session(id).configOptions.find((option) => option.configId === "model")?.currentValue).toBe(selected)
 })
@@ -2367,12 +2421,17 @@ test("a late refusal cannot retire the same slug on the newly selected gateway o
   const before = "gateway:before:shared"
   const after = "gateway:after:shared"
   const models = [before, after, "gateway:after:sibling"].map((id) => ({
-    id, groupId: id.split(":")[1]!, efforts: ["low"], defaultEffort: "low"
+    id,
+    groupId: id.split(":")[1]!,
+    efforts: ["low"],
+    defaultEffort: "low"
   }))
   const { client } = await make((agent) => configureReasoningModels(agent, models, before, "low"))
   const id = await client.newSession("/tmp/model-late-refusal")
   const refusal = Promise.withResolvers<string>()
-  const dispatch = vi.spyOn(client as unknown as { promptWithTimeout: () => Promise<string> }, "promptWithTimeout").mockReturnValueOnce(refusal.promise)
+  const dispatch = vi
+    .spyOn(client as unknown as { promptWithTimeout: () => Promise<string> }, "promptWithTimeout")
+    .mockReturnValueOnce(refusal.promise)
   const result = client.prompt(id, [{ type: "text", text: "original" }])
   await client.setConfig(id, "model", after)
   refusal.reject(RequestError.invalidRequest({}, "Unsupported model: 'shared'"))

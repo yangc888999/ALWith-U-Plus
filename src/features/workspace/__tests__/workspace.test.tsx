@@ -156,7 +156,7 @@ test("only an annotatable HTML selection offers comments, never the next Markdow
   expect(screen.queryByRole("menuitem", { name: "Comment" })).toBeNull()
 })
 
-test("preview selection stays inside its pane, rejects stale frames and clears on chat focus", async () => {
+test("preview selection stays above the iframe, rejects stale frames and clears on chat focus", async () => {
   adapter = createMemoryAdapter({ "/a/report.html": "<body>HTML</body>" })
   render(<Surface cwd="/a" defaultOpen />)
   fireEvent.doubleClick(await screen.findByRole("treeitem", { name: /report.html/ }))
@@ -183,7 +183,10 @@ test("preview selection stays inside its pane, rejects stale frames and clears o
 
   select(frame.src)
   const menu = screen.getByRole("menu")
-  expect(menu.closest(".file-workspace-editor")).not.toBeNull()
+  expect(menu.parentElement).toBe(document.body)
+  // The menu lives above the native iframe; pressing its own action must not clear the host state.
+  fireEvent.pointerDown(within(menu).getByRole("menuitem", { name: /copy/i }))
+  expect(screen.getByRole("menu")).toBe(menu)
 
   // A late message from the previous render must not revive the pill.
   fireEvent.pointerDown(screen.getByText("Chat /a"))

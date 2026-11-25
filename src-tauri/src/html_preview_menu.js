@@ -6,13 +6,13 @@
     var style = document.createElement('style');
     style.id = 'alwith-preview-comment-style';
     // The injected report annotator draws its own floating "批注" bubble above a selection.
-    // The host's selection bar already carries 点评, so the bubble is hidden; the same bubble
-    // is clicked programmatically below to open the report's original comment editor.
+    // The host's selection bar already carries 评论, so the native bubble is always hidden; the
+    // same (hidden) bubble is clicked programmatically below to open the original editor.
     // The preview column has a bottom status strip, so the report's default 24px bottom offset
     // leaves the FAB half clipped. Pull the FAB and its panel inward; the report opened in a
     // normal browser keeps its own layout because this style exists only in the host preview.
     style.textContent =
-      ':root:has(#annoFab) .anno-bubble{display:none!important;}' +
+      '.anno-bubble{display:none!important;}' +
       '.anno-fab{bottom:72px!important;right:36px!important;}' +
       '.anno-panel{bottom:138px!important;right:36px!important;}' +
       '@media (max-width:640px){.anno-fab{bottom:64px!important;right:20px!important;}' +

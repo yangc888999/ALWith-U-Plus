@@ -315,27 +315,49 @@ export function DriveStatus(): ReactNode {
   const t = driveTranslator(locale)
   const { connected, snapshot, error: connectionError } = useDrive(drive)
   const [failures, setFailures] = useState<FailedUpload[]>([])
+  const [failuresReady, setFailuresReady] = useState(false)
   useEffect(() => {
     let active = true
     if (!connected || !snapshot?.running || !snapshot.status?.failed) {
       setFailures([])
+      setFailuresReady(true)
       return
     }
+    setFailuresReady(false)
     void drive
       .request({ type: "failedUploads" })
-      .then((response) => {
+      .then(async (response) => {
         if (response.type !== "failedUploads") throw new Error("Invalid Drive failed transfer response")
-        if (active) setFailures(response.data)
+        // A failed upload can outlive the local file (the file was deleted, moved, or replaced).
+        // Those records retry forever inside Drive and otherwise leave a permanent "1 not uploaded"
+        // badge over unrelated work. Keep only failures that still have a local subject.
+        const current = await Promise.all(
+          response.data.map(async (failure) => {
+            try {
+              return (await drivePathExists(failure.localPath)) ? failure : null
+            } catch {
+              return failure
+            }
+          })
+        )
+        if (!active) return
+        setFailures(current.filter((failure): failure is FailedUpload => failure !== null))
+        setFailuresReady(true)
       })
       .catch((error: unknown) => {
-        if (active) logBackgroundError("drive-status", error)
+        if (active) {
+          setFailuresReady(true)
+          logBackgroundError("drive-status", error)
+        }
       })
     return () => {
       active = false
     }
   }, [connected, snapshot?.generation, snapshot?.running, snapshot?.status?.failed, snapshot?.status?.lastSyncAt])
   if (!visible || !snapshot?.configured) return null
-  const summary = summarize(snapshot.status, failures)
+  const summaryStatus =
+    snapshot.status === null || !failuresReady ? snapshot.status : { ...snapshot.status, failed: failures.length }
+  const summary = summarize(summaryStatus, failuresReady ? failures : undefined)
   const summaryKey = connectionError || snapshot.error ? "drive.summary.error" : summary.key
   return (
     <Popover>

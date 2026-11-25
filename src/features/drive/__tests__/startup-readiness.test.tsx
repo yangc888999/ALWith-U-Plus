@@ -7,10 +7,15 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
 const mock = vi.hoisted(() => ({
   request: vi.fn<(request: DriveRequest) => Promise<DriveResponse>>(),
-  error: vi.fn()
+  error: vi.fn(),
+  pathExists: vi.fn<(path: string) => Promise<boolean>>()
 }))
 vi.mock("../use-drive-visible", () => ({ useDriveVisible: () => true }))
 vi.mock("sonner", () => ({ toast: { error: mock.error } }))
+vi.mock("../filesystem", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  drivePathExists: mock.pathExists
+}))
 vi.mock("../controller", async () => {
   const { createDriveController } = await import("@alwith/module-drive")
   const transport = { request: mock.request, subscribe: () => Promise.resolve(() => {}) }
@@ -44,6 +49,7 @@ const snapshot: Snapshot = {
 const save = async (_path: string): Promise<void> => {}
 
 beforeEach(async () => {
+  mock.pathExists.mockResolvedValue(true)
   await i18n.use(initReactI18next).init({ lng: "en", resources: { en: { translation: {} } } })
   mock.request.mockImplementation((request) => {
     return Promise.try(() => {
@@ -140,6 +146,50 @@ test("failed upload status waits for attachment even when startup has failures",
   await act(() => drive.attach())
   await waitFor(() => expect(mock.request).toHaveBeenCalledWith({ type: "failedUploads" }))
   expect(mock.error).not.toHaveBeenCalled()
+})
+
+test("a failed upload whose local file no longer exists stops owning the status badge", async () => {
+  snapshot.status = {
+    state: { kind: "idle" },
+    pending: 0,
+    uploading: 0,
+    downloading: 0,
+    synced: 4,
+    failed: 1,
+    conflicts: [],
+    errors: [],
+    lastSyncAt: null,
+    pushConnected: false
+  }
+  const handle = mock.request.getMockImplementation()!
+  mock.request.mockImplementation((request) =>
+    request.type === "failedUploads"
+      ? Promise.resolve({
+          type: "failedUploads",
+          data: [
+            {
+              projectId: "499",
+              path: "deleted/report.html",
+              localPath: "/drive/deleted/report.html",
+              name: "report.html",
+              state: "error",
+              message: "PARENT_FOLDER_NOT_FOUND",
+              attempts: 3,
+              direction: "upload",
+              firstAt: "2026-11-22T00:00:00Z",
+              lastAt: "2026-11-22T00:00:05Z",
+              nextAttemptAt: "9999-12-31T00:00:00Z",
+              retryable: false
+            }
+          ]
+        })
+      : handle(request)
+  )
+  mock.pathExists.mockResolvedValue(false)
+  await drive.attach()
+  render(<DriveStatus />)
+  await waitFor(() => expect(mock.pathExists).toHaveBeenCalledWith("/drive/deleted/report.html"))
+  await waitFor(() => expect(screen.getByRole("button", { name: "YUP Drive" })).toHaveTextContent("Up to date"))
 })
 
 test("session archive action waits for attachment before reading private sessions", async () => {

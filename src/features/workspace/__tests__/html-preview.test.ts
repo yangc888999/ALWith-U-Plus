@@ -156,7 +156,8 @@ test("the shipped HTML bridge forwards the selection and opens the report's own 
   try {
     const doc = frame.contentDocument!
     const view = frame.contentWindow!
-    doc.body.innerHTML = '<p>First quote</p><p>Second quote</p><button id="annoFab" class="anno-fab">Notes</button><button class="anno-bubble">Comment</button>'
+    doc.body.innerHTML =
+      '<p>First quote</p><p>Second quote</p><button id="annoFab" class="anno-fab">Notes</button><button class="anno-bubble">Comment</button>'
     const script = doc.createElement("script")
     script.textContent = menuBridge
     doc.head.append(script)
@@ -165,6 +166,7 @@ test("the shipped HTML bridge forwards the selection and opens the report's own 
     const open = vi.fn(() => view.getSelection()?.toString())
     bubble.onclick = open
     expect(view.getComputedStyle(doc.querySelector("#annoFab")!).display).not.toBe("none")
+    expect(view.getComputedStyle(bubble).display).toBe("none")
     const select = (index: number) => {
       const range = doc.createRange()
       range.selectNodeContents(doc.querySelectorAll("p")[index])
@@ -174,12 +176,21 @@ test("the shipped HTML bridge forwards the selection and opens the report's own 
       doc.body.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }))
     }
     select(0)
-    await vi.waitFor(() => expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: "selection", text: "First quote", canComment: true }), "*"))
-    view.dispatchEvent(new MessageEvent("message", { source: view.parent, data: { source: "alwith-preview-host", type: "comment" } }))
+    await vi.waitFor(() =>
+      expect(post).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "selection", text: "First quote", canComment: true }),
+        "*"
+      )
+    )
+    view.dispatchEvent(
+      new MessageEvent("message", { source: view.parent, data: { source: "alwith-preview-host", type: "comment" } })
+    )
     expect(open).toHaveReturnedWith("First quote")
     doc.querySelector("#annoFab")!.remove()
     select(1)
-    await vi.waitFor(() => expect(post).toHaveBeenCalledWith(expect.objectContaining({ text: "Second quote", canComment: false }), "*"))
+    await vi.waitFor(() =>
+      expect(post).toHaveBeenCalledWith(expect.objectContaining({ text: "Second quote", canComment: false }), "*")
+    )
   } finally {
     vi.restoreAllMocks()
     frame.remove()

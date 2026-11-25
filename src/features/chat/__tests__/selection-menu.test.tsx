@@ -1,12 +1,12 @@
 import { drafts, importDraft } from "@alwith/module-chat/conversation"
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
-import { toast } from "sonner"
 import { writeText } from "@tauri-apps/plugin-clipboard-manager"
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { toast } from "sonner"
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
 
 import { initI18n } from "@/lib/i18n"
 
-import { SelectionMenu, appendQuote, composeQuoteText, quoteForComposer } from "../selection-menu"
+import { appendQuote, composeQuoteText, quoteForComposer, SelectionMenu } from "../selection-menu"
 
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn(async () => {}) }))
 
@@ -15,9 +15,21 @@ await initI18n("en")
 // jsdom has no layout: the pill's placement reads Range geometry. Empty rects are enough — the
 // assertions are about visibility, not coordinates.
 beforeEach(() => {
-  const empty = (): DOMRect => ({ x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0, toJSON: () => ({}) })
+  const empty = (): DOMRect => ({
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    toJSON: () => ({})
+  })
   Range.prototype.getClientRects = function getClientRects(): DOMRectList {
-    return Object.assign([empty()], { item: (index: number) => (index === 0 ? empty() : null) }) as unknown as DOMRectList
+    return Object.assign([empty()], {
+      item: (index: number) => (index === 0 ? empty() : null)
+    }) as unknown as DOMRectList
   }
   Range.prototype.getBoundingClientRect = empty
 })
@@ -277,7 +289,6 @@ describe("comment integration", () => {
       trigger.remove()
     }
   })
-
 })
 
 describe("preview selection", () => {
@@ -288,13 +299,45 @@ describe("preview selection", () => {
     try {
       render(<SelectionMenu containerRef={{ current: null }} sessionId="session-1" external={placement} />)
       expect(screen.getAllByRole("menuitem")).toHaveLength(2)
-      await act(async () => { fireEvent.click(screen.getByRole("menuitem", { name: /copy/i })) })
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: /copy/i }))
+      })
       expect(writeText).toHaveBeenCalledWith(placement.text)
       fireEvent.click(screen.getByRole("menuitem", { name: /add/i }))
       expect(drafts.get("session-1")?.text).toContain(placement.text)
       expect(notice).not.toHaveBeenCalled()
     } finally {
       notice.mockRestore()
+    }
+  })
+
+  test("a constrained preview menu stays above the iframe and its actions remain clickable", async () => {
+    const panel = document.createElement("div")
+    panel.className = "file-workspace-editor"
+    panel.getBoundingClientRect = () => new DOMRect(20, 30, 600, 500)
+    document.body.append(panel)
+    vi.mocked(writeText).mockClear()
+    try {
+      render(
+        <SelectionMenu
+          containerRef={{ current: null }}
+          sessionId="portal-session"
+          external={{ left: 40, top: 40, text: "固定浮层里的文字" }}
+          portalTarget={panel}
+        />
+      )
+      const menu = screen.getByRole("menu")
+      // The iframe native layer must not be able to cover the actions.
+      expect(menu.parentElement).toBe(document.body)
+      expect(menu).toHaveClass("fixed")
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: /copy/i }))
+      })
+      expect(writeText).toHaveBeenCalledWith("固定浮层里的文字")
+      fireEvent.click(screen.getByRole("menuitem", { name: /add/i }))
+      expect(drafts.get("portal-session")?.text).toContain("固定浮层里的文字")
+    } finally {
+      panel.remove()
     }
   })
 
@@ -315,14 +358,7 @@ describe("preview selection", () => {
   })
 
   test("a host with no composer can still restrict the pill to copy", () => {
-    render(
-      <SelectionMenu
-        containerRef={{ current: null }}
-        sessionId=""
-        external={placement}
-        allowAdd={false}
-      />
-    )
+    render(<SelectionMenu containerRef={{ current: null }} sessionId="" external={placement} allowAdd={false} />)
     expect(screen.getAllByRole("menuitem")).toHaveLength(1)
   })
 })

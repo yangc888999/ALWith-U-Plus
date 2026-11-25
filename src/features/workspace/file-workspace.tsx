@@ -639,11 +639,13 @@ export function FileWorkspace({
     setPreviewMenu(null)
   }, [activePath, visible, previewExtension])
   // Clicking or focusing anything outside the preview pane dismisses a frame-forwarded selection.
-  // The pill itself is portalled inside the pane, so its own pointer path is not affected.
+  // The pill lives at document.body (above the iframe) but belongs to the pane, so its own clicks
+  // are explicitly exempt.
   useEffect(() => {
     const dismissOutsidePreview = (event: Event): void => {
       const target = event.target
-      if (!(target instanceof Element) || target.closest(".file-workspace-editor") !== null) return
+      if (!(target instanceof Element) || target.closest(".file-workspace-editor, [data-selection-menu]") !== null)
+        return
       setPreviewSelection(null)
     }
     document.addEventListener("pointerdown", dismissOutsidePreview, true)
@@ -698,8 +700,8 @@ export function FileWorkspace({
         // Account for iframe zoom: rect is in the iframe's own coordinate space, so scale by the
         // ratio of the on-screen box width to the frame's intrinsic offsetWidth.
         const a = box.width / (frame.offsetWidth || box.width)
-        const left = box.left - pane.left + (Number(rect.left ?? 0) + Number(rect.width ?? 0) / 2) * a - 98
-        const top = box.top - pane.top + Number(rect.bottom ?? 0) * a + 8
+        const left = box.left + (Number(rect.left ?? 0) + Number(rect.width ?? 0) / 2) * a - 98
+        const top = box.top + Number(rect.bottom ?? 0) * a + 8
         setPreviewSelection({
           left,
           top,
