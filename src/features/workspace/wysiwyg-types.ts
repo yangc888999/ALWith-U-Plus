@@ -99,6 +99,12 @@ export interface WysiwygLabels {
   htmlDeleted: string
   /** Label of the toast action that restores the deleted node. */
   htmlUndoDelete: string
+  /** HTML save conflict dialog. Optional so existing toolbar-only hosts keep compiling. */
+  htmlSaveConflict?: string
+  htmlSaveConflictDescription?: string
+  htmlLocalDraft?: string
+  htmlDiskVersion?: string
+  htmlKeepDraft?: string
 }
 
 /** iframe → host. `nonce` is minted per handshake; stale frames are ignored. */
@@ -142,11 +148,7 @@ export interface HtmlEditErrorMessage {
   message: string
 }
 export type HtmlEditMessage =
-  | HtmlEditReadyMessage
-  | HtmlEditModeMessage
-  | HtmlEditStateMessage
-  | HtmlEditDirtyMessage
-  | HtmlEditErrorMessage
+  HtmlEditReadyMessage | HtmlEditModeMessage | HtmlEditStateMessage | HtmlEditDirtyMessage | HtmlEditErrorMessage
 
 export interface HtmlHostInitMessage {
   source: typeof HTML_EDIT_HOST_SOURCE
@@ -177,11 +179,7 @@ export interface HtmlHostUndoMessage {
   nonce: string
 }
 export type HtmlHostMessage =
-  | HtmlHostInitMessage
-  | HtmlHostSetModeMessage
-  | HtmlHostCommandMessage
-  | HtmlHostFlushMessage
-  | HtmlHostUndoMessage
+  HtmlHostInitMessage | HtmlHostSetModeMessage | HtmlHostCommandMessage | HtmlHostFlushMessage | HtmlHostUndoMessage
 
 /** Type guard for anything arriving on `window.message` that claims to be the edit bridge. */
 export function isHtmlEditMessage(data: unknown): data is HtmlEditMessage {

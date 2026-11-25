@@ -1,3 +1,4 @@
+import { drafts, importDraft } from "@alwith/module-chat/conversation"
 // Floating menu over a text selection inside the transcript: 复制 / 添加到对话.
 //
 // The chat surface had no selection affordance at all: selecting text only produced WebKit's
@@ -12,20 +13,12 @@
 // - A selection spanning several blocks has no sensible single rect: the last visual line is
 //   used, which is where the eye (and the pointer) ends up.
 import { CopyIcon, MessageSquareIcon, MessageSquarePlusIcon } from "lucide-react"
-import {
-  type RefObject,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState
-} from "react"
+import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
-import { drafts, importDraft } from "@alwith/module-chat/conversation"
+import { cn } from "@/lib/utils"
 
 import { copyText } from "./chat-context-menu"
 
@@ -119,7 +112,8 @@ export function SelectionMenu({
   external = null,
   allowAdd = true,
   onDismiss,
-  scope
+  scope,
+  portalTarget = null
 }: {
   /** The transcript root: selections outside it (sidebar, header) never open the menu. */
   containerRef: RefObject<HTMLElement | null>
@@ -134,6 +128,9 @@ export function SelectionMenu({
   /** Clears an `external` placement held by the host, which `hide` cannot reach. */
   onDismiss?: () => void
   scope?: "transcript" | "preview"
+  /** When set, external coordinates are relative to this element and the pill is portalled
+   *  inside it, so a preview selection can never float over the chat column. */
+  portalTarget?: HTMLElement | null
 }): ReactNode {
   const { t } = useTranslation()
   const [placement, setPlacement] = useState<Placement | null>(null)
@@ -174,8 +171,7 @@ export function SelectionMenu({
     // rule is an allow-list, and editing surfaces are excluded inside it — a .md/.html document
     // in edit mode is a text editor (native cut/copy/paste), not a preview.
     const inTranscript =
-      element.closest("[data-chat-content]") !== null ||
-      (containerRef.current?.contains(element) ?? false)
+      element.closest("[data-chat-content]") !== null || (containerRef.current?.contains(element) ?? false)
     const inPreview = element.closest(".file-workspace-editor") !== null
     const editing =
       element.closest(
@@ -195,7 +191,8 @@ export function SelectionMenu({
     const last = rects.at(-1) ?? range.getBoundingClientRect()
     const left = Math.max(8, Math.min(last.left + last.width / 2 - MENU_WIDTH / 2, window.innerWidth - MENU_WIDTH - 8))
     // Below the selection when there is room, above it otherwise.
-    const top = last.bottom + MENU_HEIGHT + 8 < window.innerHeight ? last.bottom + 8 : Math.max(8, last.top - MENU_HEIGHT - 8)
+    const top =
+      last.bottom + MENU_HEIGHT + 8 < window.innerHeight ? last.bottom + 8 : Math.max(8, last.top - MENU_HEIGHT - 8)
     setPlacement({ left, top, text: text.slice(0, 20_000) })
   }, [containerRef, hide, scope])
 
@@ -249,6 +246,9 @@ export function SelectionMenu({
   }, [hide, measure, dismiss])
 
   const shown = external ?? placement
+  // In-document placements already carry viewport coordinates; only the iframe bridge sends
+  // panel-relative coordinates. Portalling a local placement into the pane would shift it.
+  const usePortal = external !== null && portalTarget !== null
   // The pill's real width depends on the labels, so the estimate under the selection can still
   // hang past the window edge. Measure it, re-center on the selection centre and pull it back
   // inside before paint.
@@ -262,10 +262,12 @@ export function SelectionMenu({
     const rect = node.getBoundingClientRect()
     // `shown.left` was centred on MENU_WIDTH, so the selection centre is recoverable from it.
     const centre = shown.left + MENU_WIDTH / 2
-    const left = Math.max(8, Math.min(centre - rect.width / 2, window.innerWidth - rect.width - 8))
-    const top = Math.max(8, Math.min(shown.top, window.innerHeight - rect.height - 8))
+    const width = usePortal ? portalTarget.clientWidth : window.innerWidth
+    const height = usePortal ? portalTarget.clientHeight : window.innerHeight
+    const left = Math.max(8, Math.min(centre - rect.width / 2, width - rect.width - 8))
+    const top = Math.max(8, Math.min(shown.top, height - rect.height - 8))
     setBox((current) => (current !== null && current.left === left && current.top === top ? current : { left, top }))
-  }, [shown])
+  }, [shown, portalTarget, usePortal])
   if (shown === null) return null
 
   const copy = (): void => {
@@ -282,8 +284,9 @@ export function SelectionMenu({
     dismiss()
   }
 
-  // Rendered at the document root: inside the transcript the pill inherits whatever containing
-  // block an ancestor establishes (filter, backdrop-filter, contain) and lands off-screen.
+  // Transcript selections render at the document root because an ancestor containing block can
+  // push a fixed pill off-screen. Preview selections render inside the preview surface instead,
+  // with panel-relative coordinates, so they cannot cover the chat column.
   return createPortal(
     <div
       ref={menuRef}
@@ -292,7 +295,10 @@ export function SelectionMenu({
       role="menu"
       // Width follows the labels instead of a fixed 196px: a fixed width made "添加到对话" wrap
       // onto two lines in narrow windows. The clamp below still measures the real box.
-      className="bg-popover text-popover-foreground fixed z-[70] flex w-max items-center gap-0.5 rounded-full border px-1 py-1 text-xs whitespace-nowrap shadow-lg"
+      className={cn(
+        "z-[70] flex w-max items-center gap-0.5 rounded-full border bg-popover px-1 py-1 text-xs whitespace-nowrap text-popover-foreground shadow-lg",
+        usePortal ? "absolute" : "fixed"
+      )}
       style={{
         left: box?.left ?? shown.left,
         top: box?.top ?? shown.top
@@ -303,7 +309,7 @@ export function SelectionMenu({
       <button
         type="button"
         role="menuitem"
-        className="hover:bg-muted flex flex-1 items-center justify-center gap-1.5 rounded-full px-2 py-1 whitespace-nowrap"
+        className="flex flex-1 items-center justify-center gap-1.5 rounded-full px-2 py-1 whitespace-nowrap hover:bg-muted"
         onClick={copy}
       >
         <CopyIcon className="size-3.5" />
@@ -311,11 +317,11 @@ export function SelectionMenu({
       </button>
       {allowAdd && (
         <>
-          <span className="bg-border h-4 w-px" aria-hidden="true" />
+          <span className="h-4 w-px bg-border" aria-hidden="true" />
           <button
             type="button"
             role="menuitem"
-            className="hover:bg-muted flex flex-1 items-center justify-center gap-1.5 rounded-full px-2 py-1 whitespace-nowrap"
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-full px-2 py-1 whitespace-nowrap hover:bg-muted"
             onClick={addToChat}
           >
             <MessageSquarePlusIcon className="size-3.5" />
@@ -325,11 +331,11 @@ export function SelectionMenu({
       )}
       {external?.onComment && (
         <>
-          <span className="bg-border h-4 w-px" aria-hidden="true" />
+          <span className="h-4 w-px bg-border" aria-hidden="true" />
           <button
             type="button"
             role="menuitem"
-            className="hover:bg-muted flex flex-1 items-center justify-center gap-1.5 rounded-full px-2 py-1 whitespace-nowrap"
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-full px-2 py-1 whitespace-nowrap hover:bg-muted"
             onClick={() => {
               external.onComment?.()
               dismiss()
@@ -341,6 +347,6 @@ export function SelectionMenu({
         </>
       )}
     </div>,
-    document.body
+    usePortal ? portalTarget : document.body
   )
 }

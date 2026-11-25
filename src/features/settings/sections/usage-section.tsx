@@ -2,46 +2,53 @@
 // from the machine, so the page opens with a plain "read the ledger" call and no polling — a
 // number that only changes when a turn ends does not need a timer.
 
+import { isTauri } from "@tauri-apps/api/core"
 import { ChevronDownIcon, CloudIcon, PlusIcon, RefreshCwIcon } from "lucide-react"
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { isTauri } from "@tauri-apps/api/core"
 
 import { commands, type UsageReport } from "@/bindings"
+import { Button } from "@/components/ui/button"
 import {
-  usePriceStore,
-  costOf,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from "@/components/ui/dialog"
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { nativeModelOverrides, providerGroups } from "@/lib/providers"
+import { useProviders } from "@/lib/use-providers"
+import { cn } from "@/lib/utils"
+
+import { HourActivityChart } from "../hour-activity-chart"
+import { addUnpricedModels, refreshPricesIfDue } from "../price-refresh"
+import {
   blankPrice,
   canonicalVendor,
+  costOf,
+  type Currency,
   customModelVendor,
   displayModelName,
   guessVendor,
   matchesModel,
   modelMatchKey,
+  type ModelPrice,
   parseOpenRouterPrices,
   parsePriceArray,
   parseVendorPrices,
-  type Currency,
-  type ModelPrice
+  usePriceStore
 } from "../price-store"
-import { Button } from "@/components/ui/button"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
-import { cn } from "@/lib/utils"
-import { nativeModelOverrides, providerGroups } from "@/lib/providers"
-import { useProviders } from "@/lib/use-providers"
-import { addUnpricedModels, refreshPricesIfDue } from "../price-refresh"
-
-import { SettingsCard, SettingsDetails, SettingsNote } from "./shared"
 import { Donut, GroupLines, seriesColor, Spark, StackedBars } from "../usage-charts"
-import { WordCloud } from "../usage-word-cloud"
 import {
   ALL_GROUP,
   ALL_SCOPES,
   cacheHitRate,
   change,
-  cutoff,
   type CostedPoint,
+  cutoff,
   dailyBuckets,
   dayKey,
   filterByScope,
@@ -64,14 +71,9 @@ import {
   utcDayOf,
   within
 } from "../usage-data"
-import {
-  HEAT_RANGES,
-  type HeatRange,
-  firstLocalDay,
-  heatRangeFrom,
-  hourlyBuckets
-} from "../usage-heatmap"
-import { HourActivityChart } from "../hour-activity-chart"
+import { firstLocalDay, HEAT_RANGES, type HeatRange, heatRangeFrom, hourlyBuckets } from "../usage-heatmap"
+import { WordCloud } from "../usage-word-cloud"
+import { SettingsCard, SettingsNote } from "./shared"
 
 type ChartKind = "bar" | "line" | "pie"
 
@@ -171,7 +173,7 @@ function Stat({
                 <span
                   role="img"
                   aria-label={info}
-                  className="flex h-3.5 w-3.5 cursor-pointer items-center justify-center rounded-full border border-current text-[9px] font-bold leading-none"
+                  className="flex h-3.5 w-3.5 cursor-pointer items-center justify-center rounded-full border border-current text-[9px] leading-none font-bold"
                 >
                   ?
                 </span>
@@ -188,7 +190,7 @@ function Stat({
               role="img"
               aria-label={info}
               title={info}
-              className="flex h-3.5 w-3.5 cursor-pointer items-center justify-center rounded-full border border-current text-[9px] font-bold leading-none"
+              className="flex h-3.5 w-3.5 cursor-pointer items-center justify-center rounded-full border border-current text-[9px] leading-none font-bold"
             >
               ?
             </span>
@@ -197,7 +199,9 @@ function Stat({
       </div>
       <div className="mt-0.5 flex items-end gap-2">
         <div className="truncate text-lg leading-6 font-semibold tabular-nums">{value}</div>
-        {spark !== undefined && <Spark values={spark} className="mb-1 h-4 w-12 shrink-0 text-[var(--settings-accent)]" />}
+        {spark !== undefined && (
+          <Spark values={spark} className="mb-1 h-4 w-12 shrink-0 text-[var(--settings-accent)]" />
+        )}
       </div>
       <div className="mt-1 flex flex-wrap items-baseline gap-x-1 text-[10px] leading-4">
         {delta !== undefined && delta !== null && (
@@ -305,7 +309,14 @@ const DETAIL_PAGE_SIZE = 100
 /** TOP ranking choices: every integer from 1 to 10, so the chart can show a single model or ten. */
 const TOP_OPTIONS = Array.from({ length: 10 }, (_, index) => index + 1)
 
-export function UsageSection() {
+export function UsageSection({
+  priceConfigOpen = false,
+  onPriceConfigOpenChange
+}: {
+  /** Controlled from the usage-page header, so the entry lives in the page's top-right corner. */
+  priceConfigOpen?: boolean
+  onPriceConfigOpenChange?: (open: boolean) => void
+} = {}) {
   const { t, i18n } = useTranslation()
   const locale = i18n.language
   const [report, setReport] = useState<UsageReport | null>(null)
@@ -420,7 +431,7 @@ export function UsageSection() {
   const displayName = useCallback(
     (id: string): string => {
       const normalized = displayModelName(id)
-      return customModelVendor(id) === null ? modelNames.get(modelMatchKey(id)) ?? normalized : normalized
+      return customModelVendor(id) === null ? (modelNames.get(modelMatchKey(id)) ?? normalized) : normalized
     },
     [modelNames]
   )
@@ -451,9 +462,7 @@ export function UsageSection() {
       // The engine files calls under UTC days. Localize once at the boundary, so every range,
       // chart and the log agree with the local dates the reader picked. A normal read returns the
       // last snapshot instantly — even an expired one — while Rust rebuilds in the background.
-      const next = localizeUsageReport(
-        await (force ? commands.usageReportRefresh() : commands.usageReport())
-      )
+      const next = localizeUsageReport(await (force ? commands.usageReportRefresh() : commands.usageReport()))
       if (force) {
         // Incremental sync feedback: the rebuild only re-parses transcripts the fingerprint says
         // changed, and the report tells us how many calls the delta added.
@@ -569,16 +578,8 @@ export function UsageSection() {
   const scopedRecent = useMemo(() => filterByScope(report?.recent ?? [], scopeFilter), [report, scopeFilter])
 
   // Prices come first: the analysis view's "cost" metric reads them while bucketing.
-  const {
-    usdToCny,
-    utcOffset,
-    vendorSources,
-    setPrices,
-    setUsdToCny,
-    setUtcOffset,
-    setVendorSource,
-    resetPrices
-  } = usePriceStore()
+  const { usdToCny, utcOffset, vendorSources, setPrices, setUsdToCny, setUtcOffset, setVendorSource, resetPrices } =
+    usePriceStore()
 
   const view = useMemo(() => {
     const all: CostedPoint[] = scopedPoints.map((point) => ({
@@ -594,10 +595,13 @@ export function UsageSection() {
     const days = dailyBuckets(points, from, to)
     const peak = peakDay(days)
     const models = ranking(points, "model", "tokens", 1)
-    const topModel = models[0] === undefined ? undefined : {
-      ...models[0],
-      label: displayName(models[0].key)
-    }
+    const topModel =
+      models[0] === undefined
+        ? undefined
+        : {
+            ...models[0],
+            label: displayName(models[0].key)
+          }
     const activeDays = days.filter((day) => day.requests > 0).length
     const streak = longestStreak(days)
     const previousDays = dailyBuckets(earlier, previousFrom, from)
@@ -655,7 +659,15 @@ export function UsageSection() {
       ...entry,
       label: entry.key === ALL_GROUP ? allLabel : displayName(entry.key)
     }))
-    const stackedRaw = seriesByGroup(points, grain === "total" ? "day" : grain, groupBy, metric, top, analysisRange.from, analysisRange.to)
+    const stackedRaw = seriesByGroup(
+      points,
+      grain === "total" ? "day" : grain,
+      groupBy,
+      metric,
+      top,
+      analysisRange.from,
+      analysisRange.to
+    )
     const stacked = {
       ...stackedRaw,
       groups: stackedRaw.groups.map((group) => ({
@@ -735,7 +747,8 @@ export function UsageSection() {
       setExpandedVendors((previous) => new Set(previous).add(existing.vendor))
       return
     }
-    const vendor = customModelVendor(model) ?? canonicalVendor(vendorForModel.get(modelMatchKey(model)) ?? guessVendor(model))
+    const vendor =
+      customModelVendor(model) ?? canonicalVendor(vendorForModel.get(modelMatchKey(model)) ?? guessVendor(model))
     const normalizedModel = displayModelName(model)
     setPrices([...prices, { ...blankPrice(vendor), model: normalizedModel, free: isFreeModelId(model) }])
     setExpandedVendors((previous) => new Set(previous).add(vendor))
@@ -768,7 +781,8 @@ export function UsageSection() {
         })
       }
     }
-    reader.onerror = () => setUpdateState({ status: "error", msg: t("usageReport.importFailed", { error: "read error" }) })
+    reader.onerror = () =>
+      setUpdateState({ status: "error", msg: t("usageReport.importFailed", { error: "read error" }) })
     reader.readAsText(file)
   }
 
@@ -782,13 +796,18 @@ export function UsageSection() {
   // Per-vendor one-click update: fetch that vendor's official pricing page, run its regex, and swap
   // that vendor's rows only. Other vendors are untouched; a bad/empty regex throws and leaves the
   // table intact (an empty result can never wipe a vendor).
-  const [vendorStatus, setVendorStatus] = useState<Record<string, { status: "loading" | "ok" | "error"; msg?: string }>>({})
+  const [vendorStatus, setVendorStatus] = useState<
+    Record<string, { status: "loading" | "ok" | "error"; msg?: string }>
+  >({})
 
   const updateVendor = useCallback(
     async (vendor: string) => {
       const source = vendorSources[vendor]
       if (source === undefined || source.url.trim() === "") {
-        setVendorStatus((current) => ({ ...current, [vendor]: { status: "error", msg: t("usageReport.vendorUrlEmpty") } }))
+        setVendorStatus((current) => ({
+          ...current,
+          [vendor]: { status: "error", msg: t("usageReport.vendorUrlEmpty") }
+        }))
         return
       }
       setVendorStatus((current) => ({ ...current, [vendor]: { status: "loading" } }))
@@ -844,9 +863,7 @@ export function UsageSection() {
         const tracked = new Set(
           prices.filter((price) => price.vendor === vendor).map((price) => modelMatchKey(price.model))
         )
-        const newModels = parsed
-          .filter((row) => !tracked.has(modelMatchKey(row.model)))
-          .map((row) => row.model)
+        const newModels = parsed.filter((row) => !tracked.has(modelMatchKey(row.model))).map((row) => row.model)
         setPendingNewModels((current) => ({ ...current, [vendor]: newModels }))
         if (updated === 0 && newModels.length === 0) {
           throw new Error(t("usageReport.vendorNoMatch", { count: parsed.length }))
@@ -974,7 +991,10 @@ export function UsageSection() {
   // Newest first, and long enough to reach back over everything the ledger holds.
   const monthOptions = useMemo(() => {
     const current = to.slice(0, 7)
-    const newest = report?.last === null || report?.last === undefined || report.last.slice(0, 7) < current ? current : report.last.slice(0, 7)
+    const newest =
+      report?.last === null || report?.last === undefined || report.last.slice(0, 7) < current
+        ? current
+        : report.last.slice(0, 7)
     return monthKeysEndingAt(newest, 12).reverse()
   }, [report, to])
 
@@ -1062,9 +1082,7 @@ export function UsageSection() {
               items={[
                 { value: ALL_SCOPES, label: t("usageReport.scopeAll") },
                 { value: "internal", label: t("usageReport.scopeInternal") },
-                ...(externalEnabled
-                  ? [{ value: "external", label: t("usageReport.scopeExternal") }]
-                  : [])
+                ...(externalEnabled ? [{ value: "external", label: t("usageReport.scopeExternal") }] : [])
               ]}
               value={externalEnabled ? usageScope : "internal"}
               onValueChange={(value) => setUsageScope(value as UsageScopeFilter)}
@@ -1075,9 +1093,7 @@ export function UsageSection() {
               <SelectContent>
                 <SelectItem value={ALL_SCOPES}>{t("usageReport.scopeAll")}</SelectItem>
                 <SelectItem value="internal">{t("usageReport.scopeInternal")}</SelectItem>
-                {externalEnabled && (
-                  <SelectItem value="external">{t("usageReport.scopeExternal")}</SelectItem>
-                )}
+                {externalEnabled && <SelectItem value="external">{t("usageReport.scopeExternal")}</SelectItem>}
               </SelectContent>
             </Select>
             <Select
@@ -1118,7 +1134,9 @@ export function UsageSection() {
             </span>
             {pending && <span>{t("usageReport.building")}</span>}
             {syncNote !== null && !pending && (
-              <span data-testid="usage-sync-note" className="text-foreground/80">{syncNote}</span>
+              <span data-testid="usage-sync-note" className="text-foreground/80">
+                {syncNote}
+              </span>
             )}
             {(report.updatedAt ?? 0) > 0 && (
               <span>
@@ -1373,7 +1391,7 @@ export function UsageSection() {
                     <li key={entry.key} className="min-w-0">
                       <div className="flex items-baseline justify-between gap-2">
                         <span className="truncate text-[11px]">{entry.label}</span>
-                        <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                        <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
                           {metric === "cost"
                             ? money(entry.cost, locale)
                             : metric === "tokens"
@@ -1403,11 +1421,16 @@ export function UsageSection() {
             {/* One shared legend for every chart kind, including the pie: all entries sit below the
                 chart and are centred. The pie used to have none, so its slices were unreadable
                 without hovering each one. */}
-            <div data-usage-legend className="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 pb-3 text-[10px] text-muted-foreground">
+            <div
+              data-usage-legend
+              className="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 pb-3 text-[10px] text-muted-foreground"
+            >
               {analysisView.stacked.groups.map((group, index) => (
                 <span key={group.key} className="flex items-center gap-1">
                   <span className="size-[7px] rounded-[2px]" style={{ backgroundColor: seriesColor(index) }} />
-                  <span className="max-w-[9rem] truncate" title={group.key.startsWith("__") ? undefined : group.key}>{group.label}</span>
+                  <span className="max-w-[9rem] truncate" title={group.key.startsWith("__") ? undefined : group.key}>
+                    {group.label}
+                  </span>
                 </span>
               ))}
             </div>
@@ -1472,7 +1495,7 @@ export function UsageSection() {
                   // Fluid block: the column decides its width, the cells follow. A fixed 99px block
                   // inside a 1/6 column overflowed the column on a narrow window and the months
                   // drew on top of each other. `max-w` keeps a wide window from inflating them.
-                  <div key={block.key} className="w-full min-w-0 max-w-[99px] justify-self-start">
+                  <div key={block.key} className="w-full max-w-[99px] min-w-0 justify-self-start">
                     <div className="mb-1 flex items-baseline gap-2">
                       <span
                         className="min-w-0 truncate text-[11px] leading-4 text-muted-foreground"
@@ -1541,9 +1564,7 @@ export function UsageSection() {
             {report === null ? (
               <SettingsNote>{t("usageReport.loading")}</SettingsNote>
             ) : !hourHeat.active ? (
-              <div className="py-6 text-center text-xs text-muted-foreground">
-                {t("usageReport.hourHeatmapEmpty")}
-              </div>
+              <div className="py-6 text-center text-xs text-muted-foreground">{t("usageReport.hourHeatmapEmpty")}</div>
             ) : (
               <HourActivityChart
                 heat={hourHeat}
@@ -1556,244 +1577,271 @@ export function UsageSection() {
 
           {stage >= 2 && (
             <>
-          <SettingsCard title={t("usageReport.details")} desc={t("usageReport.detailsDesc", { count: detailTurns.length })}>
-            {/* The filter lives in the body, not the card header: two date fields in the header
+              <SettingsCard
+                title={t("usageReport.details")}
+                desc={t("usageReport.detailsDesc", { count: detailTurns.length })}
+              >
+                {/* The filter lives in the body, not the card header: two date fields in the header
                 squeezed the title into three lines as soon as the window got narrow. */}
-            <div className="flex flex-wrap items-center gap-1.5">
-              <div className="flex items-center gap-1">
-                {DETAIL_WINDOWS.map((window) => {
-                  const active =
-                    detailTo === todayKey &&
-                    (window.daysBack === null
-                      ? detailFrom === ""
-                      : detailFrom === dayBack(window.daysBack))
-                  return (
-                    <button
-                      key={String(window.daysBack)}
-                      type="button"
-                      aria-pressed={active}
-                      onClick={() => setDetailWindow(window.daysBack)}
-                      className={`h-8 rounded-md border px-2 text-xs transition-colors ${
-                        active
-                          ? "border-primary/40 bg-primary/10 text-primary"
-                          : "border-input text-muted-foreground hover:bg-muted"
-                      }`}
-                    >
-                      {t(window.label)}
-                    </button>
-                  )
-                })}
-              </div>
-              <input
-                type="date"
-                aria-label={t("usageReport.detailFrom")}
-                value={draftFrom}
-                max={draftTo || undefined}
-                onChange={(event) => setDraftFrom(event.currentTarget.value)}
-                className="h-8 w-[136px] rounded-md border border-input bg-transparent px-2 text-xs tabular-nums shadow-xs outline-none [color-scheme:light] focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:[color-scheme:dark] dark:bg-input/30"
-              />
-              <span className="text-[10px] text-muted-foreground">—</span>
-              <input
-                type="date"
-                aria-label={t("usageReport.detailTo")}
-                value={draftTo}
-                min={draftFrom || undefined}
-                onChange={(event) => setDraftTo(event.currentTarget.value || draftTo)}
-                className="h-8 w-[136px] rounded-md border border-input bg-transparent px-2 text-xs tabular-nums shadow-xs outline-none [color-scheme:light] focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:[color-scheme:dark] dark:bg-input/30"
-              />
-              <Select
-                items={[{ value: "", label: t("usageReport.allVendors") }, ...detailVendors.map((vendor) => ({ value: vendor, label: vendor }))]}
-                value={detailVendor}
-                onValueChange={(value) => setDetailVendor(value ?? "")}
-              >
-                <SelectTrigger size="sm" aria-label={t("usageReport.filterVendor")} className="w-[140px]">
-                  <SelectValue placeholder={t("usageReport.filterVendor")} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="">{t("usageReport.allVendors")}</SelectItem>
-                  {detailVendors.map((vendor) => (
-                    <SelectItem key={vendor} value={vendor}>
-                      {vendor}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select
-                items={[{ value: "", label: t("usageReport.allModels") }, ...detailModels.map((model) => ({ value: model, label: displayName(model) }))]}
-                value={detailModel}
-                onValueChange={(value) => setDetailModel(value ?? "")}
-              >
-                <SelectTrigger size="sm" aria-label={t("usageReport.filterModel")} className="w-[180px]">
-                  <SelectValue placeholder={t("usageReport.filterModel")} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="">{t("usageReport.allModels")}</SelectItem>
-                  {detailModels.map((model) => (
-                    <SelectItem key={model} value={model}>
-                      {displayName(model)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {/* Directly after the last filter (模型 ID), not pushed to the far right: the button
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <div className="flex items-center gap-1">
+                    {DETAIL_WINDOWS.map((window) => {
+                      const active =
+                        detailTo === todayKey &&
+                        (window.daysBack === null ? detailFrom === "" : detailFrom === dayBack(window.daysBack))
+                      return (
+                        <button
+                          key={String(window.daysBack)}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => setDetailWindow(window.daysBack)}
+                          className={`h-8 rounded-md border px-2 text-xs transition-colors ${
+                            active
+                              ? "border-primary/40 bg-primary/10 text-primary"
+                              : "border-input text-muted-foreground hover:bg-muted"
+                          }`}
+                        >
+                          {t(window.label)}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <input
+                    type="date"
+                    aria-label={t("usageReport.detailFrom")}
+                    value={draftFrom}
+                    max={draftTo || undefined}
+                    onChange={(event) => setDraftFrom(event.currentTarget.value)}
+                    className="h-8 w-[136px] rounded-md border border-input bg-transparent px-2 text-xs tabular-nums [color-scheme:light] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30 dark:[color-scheme:dark]"
+                  />
+                  <span className="text-[10px] text-muted-foreground">—</span>
+                  <input
+                    type="date"
+                    aria-label={t("usageReport.detailTo")}
+                    value={draftTo}
+                    min={draftFrom || undefined}
+                    onChange={(event) => setDraftTo(event.currentTarget.value || draftTo)}
+                    className="h-8 w-[136px] rounded-md border border-input bg-transparent px-2 text-xs tabular-nums [color-scheme:light] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30 dark:[color-scheme:dark]"
+                  />
+                  <Select
+                    items={[
+                      { value: "", label: t("usageReport.allVendors") },
+                      ...detailVendors.map((vendor) => ({ value: vendor, label: vendor }))
+                    ]}
+                    value={detailVendor}
+                    onValueChange={(value) => setDetailVendor(value ?? "")}
+                  >
+                    <SelectTrigger size="sm" aria-label={t("usageReport.filterVendor")} className="w-[140px]">
+                      <SelectValue placeholder={t("usageReport.filterVendor")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">{t("usageReport.allVendors")}</SelectItem>
+                      {detailVendors.map((vendor) => (
+                        <SelectItem key={vendor} value={vendor}>
+                          {vendor}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    items={[
+                      { value: "", label: t("usageReport.allModels") },
+                      ...detailModels.map((model) => ({ value: model, label: displayName(model) }))
+                    ]}
+                    value={detailModel}
+                    onValueChange={(value) => setDetailModel(value ?? "")}
+                  >
+                    <SelectTrigger size="sm" aria-label={t("usageReport.filterModel")} className="w-[180px]">
+                      <SelectValue placeholder={t("usageReport.filterModel")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">{t("usageReport.allModels")}</SelectItem>
+                      {detailModels.map((model) => (
+                        <SelectItem key={model} value={model}>
+                          {displayName(model)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {/* Directly after the last filter (模型 ID), not pushed to the far right: the button
                   belongs to the filter group it submits, so it wraps with 模型 ID on narrow panes. */}
-              <button
-                type="button"
-                aria-label={t("usageReport.query")}
-                onClick={applyDetailRange}
-                className={`h-8 rounded-md border px-3 text-xs transition-colors ${
-                  draftFrom !== detailFrom || draftTo !== detailTo
-                    ? "border-primary/40 bg-primary/10 text-primary"
-                    : "border-input text-muted-foreground hover:bg-muted"
-                }`}
-              >
-                {t("usageReport.query")}
-              </button>
-            </div>
-            {detailTurns.length === 0 ? (
-              <p className="py-4 text-xs text-muted-foreground">{t("usageReport.detailEmpty")}</p>
-            ) : (
-              <div
-                data-slot="usage-log-scroll"
-                className="mt-3 max-h-[420px] overflow-auto rounded-lg border border-border/60"
-                onScroll={(event) => {
-                  const el = event.currentTarget
-                  if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) {
-                    setVisibleRows((current) => Math.min(pageRows.length, current + 20))
-                  }
-                }}
-              >
-              <table className="w-full table-fixed text-[11px] tabular-nums">
-              <thead className="sticky top-0 z-10 bg-card">
-                <tr className="border-b border-border text-left text-muted-foreground">
-                  <th scope="col" className="w-[18%] px-2 py-2 text-[10px] font-medium uppercase tracking-wide">
-                    {t("usageReport.columnTime")}
-                  </th>
-                  <th scope="col" className="w-[28%] px-2 py-2 text-[10px] font-medium uppercase tracking-wide">
-                    {t("usageReport.columnModel")}
-                  </th>
-                  <th scope="col" className="w-[13%] px-2 py-2 text-right text-[10px] font-medium uppercase tracking-wide">
-                    {t("usageReport.columnInput")}
-                  </th>
-                  <th scope="col" className="w-[13%] px-2 py-2 text-right text-[10px] font-medium uppercase tracking-wide">
-                    {t("usageReport.columnOutput")}
-                  </th>
-                  <th scope="col" className="w-[15%] px-2 py-2 text-right text-[10px] font-medium uppercase tracking-wide">
-                    {t("usageReport.columnCacheHit")}
-                  </th>
-                  <th scope="col" className="w-[13%] px-2 py-2 text-right text-[10px] font-medium uppercase tracking-wide">
-                    {t("usageReport.columnCost")}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((turn, index) => {
-                  const at = new Date(turn.at)
-                  const stamp = Number.isNaN(at.getTime())
-                    ? turn.at.slice(5, 16).replace("T", " ")
-                    : `${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")} ${String(
-                        at.getHours()
-                      ).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`
-                  const utcHour = Number(turn.at.slice(11, 13))
-                  const amount = costOf(
-                    {
-                      date: turn.date,
-                      hour: Number.isFinite(utcHour) && utcHour >= 0 && utcHour < 24 ? utcHour : 0,
-                      model: turn.model,
-                      input: turn.input,
-                      cached: turn.cached,
-                      output: turn.output
-                    },
-                    prices,
-                    usdToCny,
-                    utcOffset
-                  )
-                  const read = turn.input + turn.cached
-                  return (
-                    <tr
-                      key={`${turn.at}-${index}`}
-                      className="border-t border-border/50 transition-colors hover:bg-muted/40"
-                    >
-                      <td className="px-2 py-2 whitespace-nowrap text-muted-foreground">{stamp}</td>
-                      <td className="max-w-0 px-2 py-2 text-foreground">
-                        {/* The reader's own model name; the raw id stays in the tooltip so the
-                            ledger row can still be traced back to the transcript. */}
-                        <span className="truncate" title={turn.model}>{displayName(turn.model)}</span>
-                      </td>
-                      <td className="px-2 py-2 text-right text-foreground/90">{exact(turn.input, locale)}</td>
-                      <td className="px-2 py-2 text-right text-foreground/90">{exact(turn.output, locale)}</td>
-                      <td className="px-2 py-2 text-right text-muted-foreground">
-                        {percent(read === 0 ? 0 : turn.cached / read, locale)}
-                      </td>
-                      <td className="px-2 py-2 text-right font-medium text-foreground">
-                        {amount === null ? "—" : money(amount, locale)}
-                      </td>
-                    </tr>
-                  )
-                })}
-                </tbody>
-              </table>
-              {visibleRows < pageRows.length && (
-                <p className="py-2 text-center text-[10px] text-muted-foreground">
-                  {t("usageReport.loadMoreHint", { shown: visibleRows, total: pageRows.length })}
-                </p>
-              )}
-              </div>
-            )}
-            {detailTurns.length > DETAIL_PAGE_SIZE && (
-              <div className="mt-3 flex flex-wrap items-center justify-center gap-2 text-[11px] text-muted-foreground">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={currentPage <= 1}
-                  onClick={() => goToDetailPage(currentPage - 1)}
-                >
-                  {t("usageReport.pagePrev")}
-                </Button>
-                <div className="flex flex-wrap items-center justify-center gap-1">
-                  {pageItems(currentPage, detailPages).map((entry, index) =>
-                    entry === "gap" ? (
-                      <span key={`gap-${index}`} className="px-1 text-muted-foreground">
-                        …
-                      </span>
-                    ) : (
-                      <Button
-                        key={entry}
-                        variant={entry === currentPage ? "default" : "ghost"}
-                        size="sm"
-                        className="h-7 min-w-7 px-1.5 tabular-nums"
-                        aria-current={entry === currentPage ? "page" : undefined}
-                        onClick={() => goToDetailPage(entry)}
-                      >
-                        {entry}
-                      </Button>
-                    )
-                  )}
+                  <button
+                    type="button"
+                    aria-label={t("usageReport.query")}
+                    onClick={applyDetailRange}
+                    className={`h-8 rounded-md border px-3 text-xs transition-colors ${
+                      draftFrom !== detailFrom || draftTo !== detailTo
+                        ? "border-primary/40 bg-primary/10 text-primary"
+                        : "border-input text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    {t("usageReport.query")}
+                  </button>
                 </div>
-                <span className="tabular-nums">
-                  {t("usageReport.pageTotal", { total: detailTurns.length })}
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={currentPage >= detailPages}
-                  onClick={() => goToDetailPage(currentPage + 1)}
-                >
-                  {t("usageReport.pageNext")}
-                </Button>
-              </div>
-            )}
-          </SettingsCard>
+                {detailTurns.length === 0 ? (
+                  <p className="py-4 text-xs text-muted-foreground">{t("usageReport.detailEmpty")}</p>
+                ) : (
+                  <div
+                    data-slot="usage-log-scroll"
+                    className="mt-3 max-h-[420px] overflow-auto rounded-lg border border-border/60"
+                    onScroll={(event) => {
+                      const el = event.currentTarget
+                      if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) {
+                        setVisibleRows((current) => Math.min(pageRows.length, current + 20))
+                      }
+                    }}
+                  >
+                    <table className="w-full table-fixed text-[11px] tabular-nums">
+                      <thead className="sticky top-0 z-10 bg-card">
+                        <tr className="border-b border-border text-left text-muted-foreground">
+                          <th scope="col" className="w-[18%] px-2 py-2 text-[10px] font-medium tracking-wide uppercase">
+                            {t("usageReport.columnTime")}
+                          </th>
+                          <th scope="col" className="w-[28%] px-2 py-2 text-[10px] font-medium tracking-wide uppercase">
+                            {t("usageReport.columnModel")}
+                          </th>
+                          <th
+                            scope="col"
+                            className="w-[13%] px-2 py-2 text-right text-[10px] font-medium tracking-wide uppercase"
+                          >
+                            {t("usageReport.columnInput")}
+                          </th>
+                          <th
+                            scope="col"
+                            className="w-[13%] px-2 py-2 text-right text-[10px] font-medium tracking-wide uppercase"
+                          >
+                            {t("usageReport.columnOutput")}
+                          </th>
+                          <th
+                            scope="col"
+                            className="w-[15%] px-2 py-2 text-right text-[10px] font-medium tracking-wide uppercase"
+                          >
+                            {t("usageReport.columnCacheHit")}
+                          </th>
+                          <th
+                            scope="col"
+                            className="w-[13%] px-2 py-2 text-right text-[10px] font-medium tracking-wide uppercase"
+                          >
+                            {t("usageReport.columnCost")}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((turn, index) => {
+                          const at = new Date(turn.at)
+                          const stamp = Number.isNaN(at.getTime())
+                            ? turn.at.slice(5, 16).replace("T", " ")
+                            : `${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")} ${String(
+                                at.getHours()
+                              ).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`
+                          const utcHour = Number(turn.at.slice(11, 13))
+                          const amount = costOf(
+                            {
+                              date: turn.date,
+                              hour: Number.isFinite(utcHour) && utcHour >= 0 && utcHour < 24 ? utcHour : 0,
+                              model: turn.model,
+                              input: turn.input,
+                              cached: turn.cached,
+                              output: turn.output
+                            },
+                            prices,
+                            usdToCny,
+                            utcOffset
+                          )
+                          const read = turn.input + turn.cached
+                          return (
+                            <tr
+                              key={`${turn.at}-${index}`}
+                              className="border-t border-border/50 transition-colors hover:bg-muted/40"
+                            >
+                              <td className="px-2 py-2 whitespace-nowrap text-muted-foreground">{stamp}</td>
+                              <td className="max-w-0 px-2 py-2 text-foreground">
+                                {/* The reader's own model name; the raw id stays in the tooltip so the
+                            ledger row can still be traced back to the transcript. */}
+                                <span className="truncate" title={turn.model}>
+                                  {displayName(turn.model)}
+                                </span>
+                              </td>
+                              <td className="px-2 py-2 text-right text-foreground/90">{exact(turn.input, locale)}</td>
+                              <td className="px-2 py-2 text-right text-foreground/90">{exact(turn.output, locale)}</td>
+                              <td className="px-2 py-2 text-right text-muted-foreground">
+                                {percent(read === 0 ? 0 : turn.cached / read, locale)}
+                              </td>
+                              <td className="px-2 py-2 text-right font-medium text-foreground">
+                                {amount === null ? "—" : money(amount, locale)}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                    {visibleRows < pageRows.length && (
+                      <p className="py-2 text-center text-[10px] text-muted-foreground">
+                        {t("usageReport.loadMoreHint", { shown: visibleRows, total: pageRows.length })}
+                      </p>
+                    )}
+                  </div>
+                )}
+                {detailTurns.length > DETAIL_PAGE_SIZE && (
+                  <div className="mt-3 flex flex-wrap items-center justify-center gap-2 text-[11px] text-muted-foreground">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={currentPage <= 1}
+                      onClick={() => goToDetailPage(currentPage - 1)}
+                    >
+                      {t("usageReport.pagePrev")}
+                    </Button>
+                    <div className="flex flex-wrap items-center justify-center gap-1">
+                      {pageItems(currentPage, detailPages).map((entry, index) =>
+                        entry === "gap" ? (
+                          <span key={`gap-${index}`} className="px-1 text-muted-foreground">
+                            …
+                          </span>
+                        ) : (
+                          <Button
+                            key={entry}
+                            variant={entry === currentPage ? "default" : "ghost"}
+                            size="sm"
+                            className="h-7 min-w-7 px-1.5 tabular-nums"
+                            aria-current={entry === currentPage ? "page" : undefined}
+                            onClick={() => goToDetailPage(entry)}
+                          >
+                            {entry}
+                          </Button>
+                        )
+                      )}
+                    </div>
+                    <span className="tabular-nums">{t("usageReport.pageTotal", { total: detailTurns.length })}</span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={currentPage >= detailPages}
+                      onClick={() => goToDetailPage(currentPage + 1)}
+                    >
+                      {t("usageReport.pageNext")}
+                    </Button>
+                  </div>
+                )}
+              </SettingsCard>
 
-          <SettingsNote>
-            {view.source !== ""
-              ? t("usageReport.source", { path: view.source, scanned: view.scanned })
-              : t("usageReport.note")}
-          </SettingsNote>
+              <SettingsNote>
+                {view.source !== ""
+                  ? t("usageReport.source", { path: view.source, scanned: view.scanned })
+                  : t("usageReport.note")}
+              </SettingsNote>
+            </>
+          )}
+        </>
+      )}
 
-          <SettingsDetails summary={t("usageReport.priceConfig")}>
-            <p className="mb-3 text-xs leading-5 text-muted-foreground">{t("usageReport.priceConfigDesc")}</p>
-
+      <Dialog open={priceConfigOpen} onOpenChange={(open) => onPriceConfigOpenChange?.(open)}>
+        <DialogContent className="flex max-h-[min(88vh,920px)] max-w-[min(1120px,calc(100vw-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(1120px,calc(100vw-2rem))]">
+          <DialogHeader className="border-b border-border/60 px-5 py-4">
+            <DialogTitle>{t("usageReport.priceConfig")}</DialogTitle>
+            <DialogDescription className="max-w-4xl leading-5">{t("usageReport.priceConfigDesc")}</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
             {/* One rate converts every USD-quoted vendor into RMB; the offset decides which wall
                 clock the peak windows refer to. */}
             <div className="mb-4 grid gap-3 rounded-md border border-[color-mix(in_oklab,var(--border)_60%,transparent)] p-3 sm:grid-cols-2">
@@ -1862,9 +1910,7 @@ export function UsageSection() {
             {updateState.status === "ok" && (
               <p className="mb-2 text-[11px] text-emerald-600 dark:text-emerald-400">{updateState.msg}</p>
             )}
-            {updateState.status === "error" && (
-              <p className="mb-2 text-[11px] text-destructive">{updateState.msg}</p>
-            )}
+            {updateState.status === "error" && <p className="mb-2 text-[11px] text-destructive">{updateState.msg}</p>}
 
             {/* Models the ledger used but no price covers, biggest spender first. One click inserts
                 a row in the same shape the built-in prices use, in the vendor the model belongs to,
@@ -1875,10 +1921,8 @@ export function UsageSection() {
                 className="mb-3 rounded-xl border border-amber-500/40 bg-amber-500/5 p-3"
               >
                 <div className="mb-2 flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-semibold text-foreground">
-                    {t("usageReport.unpricedTitle")}
-                  </span>
-                  <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] tabular-nums text-amber-700 dark:text-amber-400">
+                  <span className="text-xs font-semibold text-foreground">{t("usageReport.unpricedTitle")}</span>
+                  <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-700 tabular-nums dark:text-amber-400">
                     {t("usageReport.modelCount", { count: cost.unpricedModels.length })}
                   </span>
                   <span className="text-[10px] text-muted-foreground">{t("usageReport.unpricedHint")}</span>
@@ -1887,7 +1931,9 @@ export function UsageSection() {
                   {cost.unpricedModels.map((entry) => {
                     // Surface the vendor the model will land in — the list used to hide it, so the
                     // reader had to guess which card the row appeared in after clicking.
-                    const vendor = canonicalVendor(vendorForModel.get(modelMatchKey(entry.model)) ?? guessVendor(entry.model))
+                    const vendor = canonicalVendor(
+                      vendorForModel.get(modelMatchKey(entry.model)) ?? guessVendor(entry.model)
+                    )
                     return (
                       <div
                         key={entry.model}
@@ -1907,7 +1953,7 @@ export function UsageSection() {
                         >
                           {vendor}
                         </span>
-                        <span className="text-[10px] tabular-nums text-muted-foreground">
+                        <span className="text-[10px] text-muted-foreground tabular-nums">
                           {t("usageReport.unpricedUsage", {
                             tokens: formatTokens(entry.tokens, locale),
                             requests: exact(entry.requests, locale)
@@ -1951,400 +1997,407 @@ export function UsageSection() {
               {vendorGroups.map(([vendor, rows]) => {
                 const expanded = expandedVendors.has(vendor)
                 return (
-                <div
-                  // Keyed by the first row's index, not the vendor name: renaming a vendor must
-                  // not remount the group and steal focus from the name input mid-typing.
-                  key={rows[0]?.index ?? vendor}
-                  data-testid="price-vendor"
-                  data-vendor={vendor}
-                  className="overflow-hidden rounded-xl border border-border/60 bg-card/40"
-                >
-                  <div className="flex flex-wrap items-center gap-2 bg-muted/30 px-3 py-2">
-                    <button
-                      type="button"
-                      aria-expanded={expanded}
-                      onClick={() => toggleVendor(vendor)}
-                      className="flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-background"
-                    >
-                      <ChevronDownIcon
-                        className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", !expanded && "-rotate-90")}
-                        aria-hidden="true"
-                      />
-                      <span className="truncate text-sm font-semibold">{vendor}</span>
-                    </button>
-                    <span className="rounded-full bg-background px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground">
-                      {t("usageReport.modelCount", { count: rows.length })}
-                    </span>
-                    {expanded && (
-                      <>
-                        <input
-                          type="text"
-                          value={vendor}
-                          aria-label={t("usageReport.vendor")}
-                          onChange={(event) => renameVendor(vendor, event.currentTarget.value)}
-                          className="h-7 w-32 rounded-md border border-transparent bg-transparent px-1.5 text-sm font-semibold outline-none transition-colors hover:border-input focus-visible:border-ring"
-                        />
-                        <div className="ms-auto flex items-center gap-0.5">
-                          <button
-                            type="button"
-                            onClick={() => addModel(vendor)}
-                            className="rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
-                          >
-                            {t("usageReport.addModel")}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => removeVendor(vendor)}
-                            className="rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-background hover:text-destructive"
-                          >
-                            {t("usageReport.removeVendor")}
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                  {expanded && (
-                  <>
-                  <div className="flex flex-col gap-2 border-t border-border/50 px-3 py-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <input
-                        type="url"
-                        value={vendorSources[vendor]?.url ?? ""}
-                        placeholder={t("usageReport.vendorUrlPlaceholder")}
-                        onChange={(event) => setVendorSource(vendor, { url: event.currentTarget.value })}
-                        className="h-8 min-w-0 flex-1 rounded-md border border-border/60 bg-background/60 px-2 font-mono text-[11px] outline-none transition-colors focus-visible:border-ring"
-                      />
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={vendorStatus[vendor]?.status === "loading"}
-                        onClick={() => void updateVendor(vendor)}
+                  <div
+                    // Keyed by the first row's index, not the vendor name: renaming a vendor must
+                    // not remount the group and steal focus from the name input mid-typing.
+                    key={rows[0]?.index ?? vendor}
+                    data-testid="price-vendor"
+                    data-vendor={vendor}
+                    className="overflow-hidden rounded-xl border border-border/60 bg-card/40"
+                  >
+                    <div className="flex flex-wrap items-center gap-2 bg-muted/30 px-3 py-2">
+                      <button
+                        type="button"
+                        aria-expanded={expanded}
+                        onClick={() => toggleVendor(vendor)}
+                        className="flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-background"
                       >
-                        <RefreshCwIcon
+                        <ChevronDownIcon
                           className={cn(
-                            "size-3.5",
-                            vendorStatus[vendor]?.status === "loading" && "animate-spin"
+                            "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                            !expanded && "-rotate-90"
                           )}
                           aria-hidden="true"
                         />
-                        {vendorStatus[vendor]?.status === "loading"
-                          ? t("usageReport.updating")
-                          : t("usageReport.vendorUpdate")}
-                      </Button>
-                    </div>
-                    <details>
-                      <summary className="w-fit cursor-pointer list-none text-[10px] text-muted-foreground transition-colors hover:text-foreground">
-                        ▸ {t("usageReport.vendorRule")}
-                      </summary>
-                      <div className="mt-2 flex flex-col gap-2 rounded-lg bg-muted/30 p-2">
-                        {vendorSources[vendor]?.openrouter !== undefined ? (
-                          <p className="text-[10px] leading-4 text-muted-foreground">
-                            {t("usageReport.vendorOpenRouter", { prefix: vendorSources[vendor]?.openrouter })}
-                          </p>
-                        ) : (
-                          <>
-                            <textarea
-                              value={vendorSources[vendor]?.regex ?? ""}
-                              rows={3}
-                              spellCheck={false}
-                              onChange={(event) => setVendorSource(vendor, { regex: event.currentTarget.value })}
-                              className="w-full rounded-md border border-border/60 bg-background/60 px-2 py-1.5 font-mono text-[10px] leading-4 outline-none focus-visible:border-ring"
-                            />
-                            <p className="text-[10px] leading-4 text-muted-foreground">
-                              {t("usageReport.vendorRuleHint")}
-                            </p>
-                          </>
-                        )}
-                        <label className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                          {t("usageReport.vendorCurrency")}
-                          <select
-                            value={vendorSources[vendor]?.currency ?? "USD"}
-                            onChange={(event) =>
-                              setVendorSource(vendor, { currency: event.currentTarget.value as Currency })
-                            }
-                            className="h-6 rounded-md border border-border/60 bg-background/60 px-1.5 text-[10px] outline-none focus-visible:border-ring"
-                          >
-                            <option value="USD">USD</option>
-                            <option value="CNY">CNY</option>
-                          </select>
-                        </label>
-                      </div>
-                    </details>
-                  </div>
-                  {vendorStatus[vendor]?.status !== undefined && vendorStatus[vendor]?.status !== "loading" && (
-                    <div
-                      className={cn(
-                        "flex items-start gap-1.5 border-t border-border/50 px-3 py-1.5 text-[11px]",
-                        vendorStatus[vendor]?.status === "ok"
-                          ? "bg-emerald-600/10 text-emerald-700 dark:text-emerald-400"
-                          : "bg-destructive/10 text-destructive"
+                        <span className="truncate text-sm font-semibold">{vendor}</span>
+                      </button>
+                      <span className="rounded-full bg-background px-2 py-0.5 text-[10px] text-muted-foreground tabular-nums">
+                        {t("usageReport.modelCount", { count: rows.length })}
+                      </span>
+                      {expanded && (
+                        <>
+                          <input
+                            type="text"
+                            value={vendor}
+                            aria-label={t("usageReport.vendor")}
+                            onChange={(event) => renameVendor(vendor, event.currentTarget.value)}
+                            className="h-7 w-32 rounded-md border border-transparent bg-transparent px-1.5 text-sm font-semibold transition-colors outline-none hover:border-input focus-visible:border-ring"
+                          />
+                          <div className="ms-auto flex items-center gap-0.5">
+                            <button
+                              type="button"
+                              onClick={() => addModel(vendor)}
+                              className="rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+                            >
+                              {t("usageReport.addModel")}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removeVendor(vendor)}
+                              className="rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-background hover:text-destructive"
+                            >
+                              {t("usageReport.removeVendor")}
+                            </button>
+                          </div>
+                        </>
                       )}
-                    >
-                      <span className="mt-[5px] size-1.5 shrink-0 rounded-full bg-current" />
-                      <span className="min-w-0 break-words">{vendorStatus[vendor]?.msg}</span>
                     </div>
-                  )}
-                  <div className="overflow-x-auto px-3 pb-2">
-                    <table className="w-full table-fixed text-[11px] tabular-nums">
-                      <thead>
-                        <tr className="text-left text-[10px] uppercase tracking-wide text-muted-foreground">
-                          <th className="w-[22%] py-2 font-medium">{t("usageReport.priceModel")}</th>
-                          <th className="w-[9%] py-2 font-medium">{t("usageReport.priceCurrency")}</th>
-                          <th className="w-[12%] py-2 text-right font-medium">{t("usageReport.priceInput")}</th>
-                          <th className="w-[12%] py-2 text-right font-medium">{t("usageReport.priceCached")}</th>
-                          <th className="w-[12%] py-2 text-right font-medium">{t("usageReport.priceOutput")}</th>
-                          <th className="w-[7%] py-2 text-center font-medium">{t("usageReport.priceFree")}</th>
-                          <th className="w-[9%] py-2 text-center font-medium">{t("usageReport.offPeak")}</th>
-                          <th className="w-[9%] py-2 text-center font-medium">{t("usageReport.priceDiscount")}</th>
-                          <th className="w-[8%] py-2 font-medium" />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rows.map(({ price, index }) => (
-                          <Fragment key={`${vendor}-${index}`}>
-                            <tr className="border-t border-border/50">
-                              <td className="py-1.5 pr-2">
-                                {/* Two independent fields: the reader's own name for the model
-                                    (display only) and the id that matching uses. Keeping them in
-                                    one input made renaming a row silently break its pricing. */}
-                                <input
-                                  type="text"
-                                  value={price.label ?? ""}
-                                  aria-label={t("usageReport.priceName")}
-                                  placeholder={displayName(price.model) || t("usageReport.priceNamePlaceholder")}
-                                  onChange={(event) => patchPrice(index, { label: event.currentTarget.value })}
-                                  className="mb-1 h-7 w-full rounded-md border border-border/50 bg-background/60 px-1.5 text-xs outline-none transition-colors focus-visible:border-ring"
-                                />
-                                <input
-                                  type="text"
-                                  value={price.model}
-                                  aria-label={t("usageReport.priceModelId")}
-                                  placeholder={t("usageReport.priceModelPlaceholder")}
-                                  onChange={(event) => patchPrice(index, { model: event.currentTarget.value })}
-                                  className="h-7 w-full rounded-md border border-border/50 bg-background/60 px-1.5 font-mono text-xs outline-none transition-colors focus-visible:border-ring"
-                                />
-                                {price.note !== "" && (
-                                  <div
-                                    className="mt-0.5 max-w-full truncate text-[9px] leading-3 text-muted-foreground"
-                                    title={price.note}
-                                  >
-                                    {price.note}
-                                  </div>
-                                )}
-                                {price.model !== "" && (
-                                  <div className="mt-0.5">
-                                    {[...usedModels].some((used) => matchesModel(price, used)) ? (
-                                      <span className="rounded bg-emerald-600/15 px-1.5 py-0.5 text-[9px] text-emerald-600 dark:text-emerald-400">
-                                        {t("usageReport.usedInRange")}
-                                      </span>
-                                    ) : (
-                                      <span className="rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
-                                        {t("usageReport.unusedInRange")}
-                                      </span>
-                                    )}
-                                  </div>
-                                )}
-                              </td>
-                              <td className="py-1.5 pr-2">
+                    {expanded && (
+                      <>
+                        <div className="flex flex-col gap-2 border-t border-border/50 px-3 py-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              type="url"
+                              value={vendorSources[vendor]?.url ?? ""}
+                              placeholder={t("usageReport.vendorUrlPlaceholder")}
+                              onChange={(event) => setVendorSource(vendor, { url: event.currentTarget.value })}
+                              className="h-8 min-w-0 flex-1 rounded-md border border-border/60 bg-background/60 px-2 font-mono text-[11px] transition-colors outline-none focus-visible:border-ring"
+                            />
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={vendorStatus[vendor]?.status === "loading"}
+                              onClick={() => void updateVendor(vendor)}
+                            >
+                              <RefreshCwIcon
+                                className={cn("size-3.5", vendorStatus[vendor]?.status === "loading" && "animate-spin")}
+                                aria-hidden="true"
+                              />
+                              {vendorStatus[vendor]?.status === "loading"
+                                ? t("usageReport.updating")
+                                : t("usageReport.vendorUpdate")}
+                            </Button>
+                          </div>
+                          <details>
+                            <summary className="w-fit cursor-pointer list-none text-[10px] text-muted-foreground transition-colors hover:text-foreground">
+                              ▸ {t("usageReport.vendorRule")}
+                            </summary>
+                            <div className="mt-2 flex flex-col gap-2 rounded-lg bg-muted/30 p-2">
+                              {vendorSources[vendor]?.openrouter !== undefined ? (
+                                <p className="text-[10px] leading-4 text-muted-foreground">
+                                  {t("usageReport.vendorOpenRouter", { prefix: vendorSources[vendor]?.openrouter })}
+                                </p>
+                              ) : (
+                                <>
+                                  <textarea
+                                    value={vendorSources[vendor]?.regex ?? ""}
+                                    rows={3}
+                                    spellCheck={false}
+                                    onChange={(event) => setVendorSource(vendor, { regex: event.currentTarget.value })}
+                                    className="w-full rounded-md border border-border/60 bg-background/60 px-2 py-1.5 font-mono text-[10px] leading-4 outline-none focus-visible:border-ring"
+                                  />
+                                  <p className="text-[10px] leading-4 text-muted-foreground">
+                                    {t("usageReport.vendorRuleHint")}
+                                  </p>
+                                </>
+                              )}
+                              <label className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                                {t("usageReport.vendorCurrency")}
                                 <select
-                                  value={price.currency}
-                                  aria-label={t("usageReport.priceCurrency")}
-                                  disabled={price.free === true}
+                                  value={vendorSources[vendor]?.currency ?? "USD"}
                                   onChange={(event) =>
-                                    patchPrice(index, { currency: event.currentTarget.value as Currency })
+                                    setVendorSource(vendor, { currency: event.currentTarget.value as Currency })
                                   }
-                                  className="h-7 w-full rounded-md border border-border/50 bg-background/60 px-1 text-[10px] outline-none transition-colors focus-visible:border-ring disabled:opacity-40"
+                                  className="h-6 rounded-md border border-border/60 bg-background/60 px-1.5 text-[10px] outline-none focus-visible:border-ring"
                                 >
                                   <option value="USD">USD</option>
                                   <option value="CNY">CNY</option>
                                 </select>
-                              </td>
-                              {(["input", "cached", "output"] as const).map((field) => (
-                                <td key={field} className="py-1.5 pr-2">
-                                  <input
-                                    type="number"
-                                    step="0.001"
-                                    min="0"
-                                    value={price[field]}
-                                    disabled={price.free === true}
-                                    aria-label={`${t("usageReport.priceModel")} ${field}`}
-                                    onChange={(event) => updatePrice(index, field, event.currentTarget.value)}
-                                    className="h-7 w-full rounded-md border border-border/50 bg-background/60 px-1.5 text-right text-xs outline-none transition-colors focus-visible:border-ring disabled:opacity-40"
-                                  />
-                                </td>
-                              ))}
-                              <td className="py-1.5 text-center">
-                                <input
-                                  type="checkbox"
-                                  checked={price.free === true}
-                                  aria-label={t("usageReport.priceFree")}
-                                  onChange={(event) =>
-                                    patchPrice(index, {
-                                      free: event.currentTarget.checked,
-                                      // A free row carries no price and no peak tier; leaving the old
-                                      // numbers behind would silently bill it again when unchecked.
-                                      ...(event.currentTarget.checked
-                                        ? { input: 0, cached: 0, output: 0, offPeak: null }
-                                        : {})
-                                    })
-                                  }
-                                />
-                              </td>
-                              <td className="py-1.5 text-center">
-                                <input
-                                  type="checkbox"
-                                  checked={price.offPeak !== null}
-                                  disabled={price.free === true}
-                                  aria-label={t("usageReport.offPeak")}
-                                  onChange={(event) => {
-                                    if (event.currentTarget.checked) {
-                                      patchPrice(index, {
-                                        offPeak: {
-                                          input: price.input / 2,
-                                          cached: price.cached / 2,
-                                          output: price.output / 2
-                                        },
-                                        peakWindows: price.peakWindows || "09:00-12:00,14:00-18:00",
-                                        weekdaysOnly: true
-                                      })
-                                    } else {
-                                      patchPrice(index, { offPeak: null })
-                                    }
-                                  }}
-                                />
-                              </td>
-                              <td className="py-1.5 text-center">
-                                <input
-                                  type="number"
-                                  step="1"
-                                  min="0"
-                                  max="100"
-                                  value={Math.round((price.discount ?? 0) * 100)}
-                                  disabled={price.free === true}
-                                  aria-label={t("usageReport.priceDiscount")}
-                                  onChange={(event) =>
-                                    patchPrice(index, { discount: Number(event.currentTarget.value) / 100 })
-                                  }
-                                  className="h-7 w-14 rounded-md border border-border/50 bg-background/60 px-1 text-right text-xs tabular-nums outline-none transition-colors focus-visible:border-ring disabled:opacity-40"
-                                />
-                              </td>
-                              <td className="py-1.5 text-right">
-                                <button
-                                  type="button"
-                                  onClick={() => removeModel(index)}
-                                  className="text-[10px] text-muted-foreground hover:text-destructive"
-                                >
-                                  {t("usageReport.removeModel")}
-                                </button>
-                              </td>
-                            </tr>
-                            {price.offPeak !== null && (
-                              <tr className="bg-muted/40">
-                                <td colSpan={9} className="px-2 py-2">
-                                  <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
-                                    <Field label={t("usageReport.peakWindows")}>
+                              </label>
+                            </div>
+                          </details>
+                        </div>
+                        {vendorStatus[vendor]?.status !== undefined && vendorStatus[vendor]?.status !== "loading" && (
+                          <div
+                            className={cn(
+                              "flex items-start gap-1.5 border-t border-border/50 px-3 py-1.5 text-[11px]",
+                              vendorStatus[vendor]?.status === "ok"
+                                ? "bg-emerald-600/10 text-emerald-700 dark:text-emerald-400"
+                                : "bg-destructive/10 text-destructive"
+                            )}
+                          >
+                            <span className="mt-[5px] size-1.5 shrink-0 rounded-full bg-current" />
+                            <span className="min-w-0 break-words">{vendorStatus[vendor]?.msg}</span>
+                          </div>
+                        )}
+                        <div className="overflow-x-auto px-3 pb-2">
+                          <table className="w-full table-fixed text-[11px] tabular-nums">
+                            <thead>
+                              <tr className="text-left text-[10px] tracking-wide text-muted-foreground uppercase">
+                                <th className="w-[22%] py-2 font-medium">{t("usageReport.priceModel")}</th>
+                                <th className="w-[9%] py-2 font-medium">{t("usageReport.priceCurrency")}</th>
+                                <th className="w-[12%] py-2 text-right font-medium">{t("usageReport.priceInput")}</th>
+                                <th className="w-[12%] py-2 text-right font-medium">{t("usageReport.priceCached")}</th>
+                                <th className="w-[12%] py-2 text-right font-medium">{t("usageReport.priceOutput")}</th>
+                                <th className="w-[7%] py-2 text-center font-medium">{t("usageReport.priceFree")}</th>
+                                <th className="w-[9%] py-2 text-center font-medium">{t("usageReport.offPeak")}</th>
+                                <th className="w-[9%] py-2 text-center font-medium">
+                                  {t("usageReport.priceDiscount")}
+                                </th>
+                                <th className="w-[8%] py-2 font-medium" />
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {rows.map(({ price, index }) => (
+                                <Fragment key={`${vendor}-${index}`}>
+                                  <tr className="border-t border-border/50">
+                                    <td className="py-1.5 pr-2">
+                                      {/* Two independent fields: the reader's own name for the model
+                                    (display only) and the id that matching uses. Keeping them in
+                                    one input made renaming a row silently break its pricing. */}
                                       <input
                                         type="text"
-                                        value={price.peakWindows}
-                                        placeholder="09:00-12:00,14:00-18:00"
-                                        onChange={(event) =>
-                                          patchPrice(index, { peakWindows: event.currentTarget.value })
-                                        }
-                                        className="h-7 w-44 rounded border border-input bg-transparent px-1.5 text-[11px] tabular-nums outline-none focus-visible:border-ring"
+                                        value={price.label ?? ""}
+                                        aria-label={t("usageReport.priceName")}
+                                        placeholder={displayName(price.model) || t("usageReport.priceNamePlaceholder")}
+                                        onChange={(event) => patchPrice(index, { label: event.currentTarget.value })}
+                                        className="mb-1 h-7 w-full rounded-md border border-border/50 bg-background/60 px-1.5 text-xs transition-colors outline-none focus-visible:border-ring"
                                       />
-                                    </Field>
-                                    <label className="flex items-center gap-1.5 pb-1 text-[10px] text-muted-foreground">
-                                      <input
-                                        type="checkbox"
-                                        checked={price.weekdaysOnly}
-                                        onChange={(event) =>
-                                          patchPrice(index, { weekdaysOnly: event.currentTarget.checked })
-                                        }
-                                      />
-                                      {t("usageReport.weekdaysOnly")}
-                                    </label>
-                                    <Field label={t("usageReport.nonWorkdays")}>
                                       <input
                                         type="text"
-                                        value={price.nonWorkdays ?? ""}
-                                        placeholder="2026-10-01~2026-10-07"
-                                        title={t("usageReport.nonWorkdaysHint")}
-                                        onChange={(event) =>
-                                          patchPrice(index, { nonWorkdays: event.currentTarget.value })
-                                        }
-                                        className="h-7 w-64 rounded border border-input bg-transparent px-1.5 text-[11px] tabular-nums outline-none focus-visible:border-ring"
+                                        value={price.model}
+                                        aria-label={t("usageReport.priceModelId")}
+                                        placeholder={t("usageReport.priceModelPlaceholder")}
+                                        onChange={(event) => patchPrice(index, { model: event.currentTarget.value })}
+                                        className="h-7 w-full rounded-md border border-border/50 bg-background/60 px-1.5 font-mono text-xs transition-colors outline-none focus-visible:border-ring"
                                       />
-                                    </Field>
-                                    <span className="pb-1 text-[10px] text-muted-foreground">
-                                      {t("usageReport.offPeakPrices")}
-                                    </span>
-                                    {(["input", "cached", "output"] as const).map((field) => (
-                                      <Field
-                                        key={field}
-                                        label={t(
-                                          `usageReport.offPeak${field === "input" ? "Input" : field === "cached" ? "Cached" : "Output"}`
-                                        )}
+                                      {price.note !== "" && (
+                                        <div
+                                          className="mt-0.5 max-w-full truncate text-[9px] leading-3 text-muted-foreground"
+                                          title={price.note}
+                                        >
+                                          {price.note}
+                                        </div>
+                                      )}
+                                      {price.model !== "" && (
+                                        <div className="mt-0.5">
+                                          {[...usedModels].some((used) => matchesModel(price, used)) ? (
+                                            <span className="rounded bg-emerald-600/15 px-1.5 py-0.5 text-[9px] text-emerald-600 dark:text-emerald-400">
+                                              {t("usageReport.usedInRange")}
+                                            </span>
+                                          ) : (
+                                            <span className="rounded bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
+                                              {t("usageReport.unusedInRange")}
+                                            </span>
+                                          )}
+                                        </div>
+                                      )}
+                                    </td>
+                                    <td className="py-1.5 pr-2">
+                                      <select
+                                        value={price.currency}
+                                        aria-label={t("usageReport.priceCurrency")}
+                                        disabled={price.free === true}
+                                        onChange={(event) =>
+                                          patchPrice(index, { currency: event.currentTarget.value as Currency })
+                                        }
+                                        className="h-7 w-full rounded-md border border-border/50 bg-background/60 px-1 text-[10px] transition-colors outline-none focus-visible:border-ring disabled:opacity-40"
                                       >
+                                        <option value="USD">USD</option>
+                                        <option value="CNY">CNY</option>
+                                      </select>
+                                    </td>
+                                    {(["input", "cached", "output"] as const).map((field) => (
+                                      <td key={field} className="py-1.5 pr-2">
                                         <input
                                           type="number"
                                           step="0.001"
                                           min="0"
-                                          value={price.offPeak?.[field] ?? 0}
-                                          onChange={(event) => updateOffPeak(index, field, event.currentTarget.value)}
-                                          className="h-7 w-20 rounded border border-input bg-transparent px-1.5 text-right text-[11px] tabular-nums outline-none focus-visible:border-ring"
+                                          value={price[field]}
+                                          disabled={price.free === true}
+                                          aria-label={`${t("usageReport.priceModel")} ${field}`}
+                                          onChange={(event) => updatePrice(index, field, event.currentTarget.value)}
+                                          className="h-7 w-full rounded-md border border-border/50 bg-background/60 px-1.5 text-right text-xs transition-colors outline-none focus-visible:border-ring disabled:opacity-40"
                                         />
-                                      </Field>
+                                      </td>
                                     ))}
-                                    <span className="w-full text-[10px] leading-4 text-muted-foreground">
-                                      {t("usageReport.nonWorkdaysHint")}
-                                    </span>
-                                  </div>
-                                </td>
-                              </tr>
-                            )}
-                          </Fragment>
-                        ))}
-                      </tbody>
-                    </table>
-                    {pendingNewModels[vendor]?.length ? (
-                      <div className="mt-2 rounded-lg border border-dashed border-border/60 bg-muted/20 px-3 py-2">
-                        <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
-                          <PlusIcon className="size-3" aria-hidden="true" />
-                          {t("usageReport.newModelsFound", { count: pendingNewModels[vendor].length })}
-                        </p>
-                        <div className="flex flex-wrap gap-1.5">
-                          {pendingNewModels[vendor].map((model) => (
-                            <button
-                              key={model}
-                              type="button"
-                              onClick={() => {
-                                addModelId(vendor, model)
-                                setPendingNewModels((current) => ({
-                                  ...current,
-                                  [vendor]: (current[vendor] ?? []).filter((m) => m !== model)
-                                }))
-                              }}
-                              className="flex items-center gap-1 rounded-md border border-border/60 bg-background px-2 py-1 font-mono text-[10px] text-foreground transition-colors hover:border-ring hover:bg-accent"
-                            >
-                              <PlusIcon className="size-3" aria-hidden="true" />
-                              {model}
-                            </button>
-                          ))}
+                                    <td className="py-1.5 text-center">
+                                      <input
+                                        type="checkbox"
+                                        checked={price.free === true}
+                                        aria-label={t("usageReport.priceFree")}
+                                        onChange={(event) =>
+                                          patchPrice(index, {
+                                            free: event.currentTarget.checked,
+                                            // A free row carries no price and no peak tier; leaving the old
+                                            // numbers behind would silently bill it again when unchecked.
+                                            ...(event.currentTarget.checked
+                                              ? { input: 0, cached: 0, output: 0, offPeak: null }
+                                              : {})
+                                          })
+                                        }
+                                      />
+                                    </td>
+                                    <td className="py-1.5 text-center">
+                                      <input
+                                        type="checkbox"
+                                        checked={price.offPeak !== null}
+                                        disabled={price.free === true}
+                                        aria-label={t("usageReport.offPeak")}
+                                        onChange={(event) => {
+                                          if (event.currentTarget.checked) {
+                                            patchPrice(index, {
+                                              offPeak: {
+                                                input: price.input / 2,
+                                                cached: price.cached / 2,
+                                                output: price.output / 2
+                                              },
+                                              peakWindows: price.peakWindows || "09:00-12:00,14:00-18:00",
+                                              weekdaysOnly: true
+                                            })
+                                          } else {
+                                            patchPrice(index, { offPeak: null })
+                                          }
+                                        }}
+                                      />
+                                    </td>
+                                    <td className="py-1.5 text-center">
+                                      <input
+                                        type="number"
+                                        step="1"
+                                        min="0"
+                                        max="100"
+                                        value={Math.round((price.discount ?? 0) * 100)}
+                                        disabled={price.free === true}
+                                        aria-label={t("usageReport.priceDiscount")}
+                                        onChange={(event) =>
+                                          patchPrice(index, { discount: Number(event.currentTarget.value) / 100 })
+                                        }
+                                        className="h-7 w-14 rounded-md border border-border/50 bg-background/60 px-1 text-right text-xs tabular-nums transition-colors outline-none focus-visible:border-ring disabled:opacity-40"
+                                      />
+                                    </td>
+                                    <td className="py-1.5 text-right">
+                                      <button
+                                        type="button"
+                                        onClick={() => removeModel(index)}
+                                        className="text-[10px] text-muted-foreground hover:text-destructive"
+                                      >
+                                        {t("usageReport.removeModel")}
+                                      </button>
+                                    </td>
+                                  </tr>
+                                  {price.offPeak !== null && (
+                                    <tr className="bg-muted/40">
+                                      <td colSpan={9} className="px-2 py-2">
+                                        <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
+                                          <Field label={t("usageReport.peakWindows")}>
+                                            <input
+                                              type="text"
+                                              value={price.peakWindows}
+                                              placeholder="09:00-12:00,14:00-18:00"
+                                              onChange={(event) =>
+                                                patchPrice(index, { peakWindows: event.currentTarget.value })
+                                              }
+                                              className="h-7 w-44 rounded border border-input bg-transparent px-1.5 text-[11px] tabular-nums outline-none focus-visible:border-ring"
+                                            />
+                                          </Field>
+                                          <label className="flex items-center gap-1.5 pb-1 text-[10px] text-muted-foreground">
+                                            <input
+                                              type="checkbox"
+                                              checked={price.weekdaysOnly}
+                                              onChange={(event) =>
+                                                patchPrice(index, { weekdaysOnly: event.currentTarget.checked })
+                                              }
+                                            />
+                                            {t("usageReport.weekdaysOnly")}
+                                          </label>
+                                          <Field label={t("usageReport.nonWorkdays")}>
+                                            <input
+                                              type="text"
+                                              value={price.nonWorkdays ?? ""}
+                                              placeholder="2026-10-01~2026-10-07"
+                                              title={t("usageReport.nonWorkdaysHint")}
+                                              onChange={(event) =>
+                                                patchPrice(index, { nonWorkdays: event.currentTarget.value })
+                                              }
+                                              className="h-7 w-64 rounded border border-input bg-transparent px-1.5 text-[11px] tabular-nums outline-none focus-visible:border-ring"
+                                            />
+                                          </Field>
+                                          <span className="pb-1 text-[10px] text-muted-foreground">
+                                            {t("usageReport.offPeakPrices")}
+                                          </span>
+                                          {(["input", "cached", "output"] as const).map((field) => (
+                                            <Field
+                                              key={field}
+                                              label={t(
+                                                `usageReport.offPeak${field === "input" ? "Input" : field === "cached" ? "Cached" : "Output"}`
+                                              )}
+                                            >
+                                              <input
+                                                type="number"
+                                                step="0.001"
+                                                min="0"
+                                                value={price.offPeak?.[field] ?? 0}
+                                                onChange={(event) =>
+                                                  updateOffPeak(index, field, event.currentTarget.value)
+                                                }
+                                                className="h-7 w-20 rounded border border-input bg-transparent px-1.5 text-right text-[11px] tabular-nums outline-none focus-visible:border-ring"
+                                              />
+                                            </Field>
+                                          ))}
+                                          <span className="w-full text-[10px] leading-4 text-muted-foreground">
+                                            {t("usageReport.nonWorkdaysHint")}
+                                          </span>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  )}
+                                </Fragment>
+                              ))}
+                            </tbody>
+                          </table>
+                          {pendingNewModels[vendor]?.length ? (
+                            <div className="mt-2 rounded-lg border border-dashed border-border/60 bg-muted/20 px-3 py-2">
+                              <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
+                                <PlusIcon className="size-3" aria-hidden="true" />
+                                {t("usageReport.newModelsFound", { count: pendingNewModels[vendor].length })}
+                              </p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {pendingNewModels[vendor].map((model) => (
+                                  <button
+                                    key={model}
+                                    type="button"
+                                    onClick={() => {
+                                      addModelId(vendor, model)
+                                      setPendingNewModels((current) => ({
+                                        ...current,
+                                        [vendor]: (current[vendor] ?? []).filter((m) => m !== model)
+                                      }))
+                                    }}
+                                    className="flex items-center gap-1 rounded-md border border-border/60 bg-background px-2 py-1 font-mono text-[10px] text-foreground transition-colors hover:border-ring hover:bg-accent"
+                                  >
+                                    <PlusIcon className="size-3" aria-hidden="true" />
+                                    {model}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
-                      </div>
-                    ) : null}
+                      </>
+                    )}
                   </div>
-                  </>
-                  )}
-                </div>
                 )
               })}
             </div>
-          </SettingsDetails>
-            </>
-          )}
-        </>
-      )}
+          </div>
+          <DialogFooter className="border-t border-border/60 px-5 py-3">
+            <Button variant="outline" onClick={() => onPriceConfigOpenChange?.(false)}>
+              {t("actions.close")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

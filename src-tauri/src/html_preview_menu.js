@@ -37,6 +37,7 @@
       window.parent.postMessage({
         source: 'alwith-preview',
         type: 'context-menu',
+        frameToken: window.location.href,
         text: text,
         x: event.clientX,
         y: event.clientY
@@ -65,6 +66,7 @@
       window.parent.postMessage({
         source: 'alwith-preview',
         type: 'selection',
+        frameToken: window.location.href,
         text: text,
         canComment: document.getElementById('annoFab') !== null,
         rect: rect
@@ -78,7 +80,12 @@
   document.addEventListener('mousedown', function (event) {
     if (event.button !== 0) return;
     savedRange = null;
-    if (lastText !== '') { lastText = ''; try { window.parent.postMessage({ source: 'alwith-preview', type: 'selection', text: '', rect: null }, '*'); } catch (error) {} }
+    if (lastText !== '') { lastText = ''; try { window.parent.postMessage({ source: 'alwith-preview', type: 'selection', frameToken: window.location.href, text: '', rect: null }, '*'); } catch (error) {} }
+  }, true);
+  // The host pill is positioned in the preview pane, not inside this frame. Once the selected
+  // text scrolls away, keeping the pill would leave it detached from its quote.
+  document.addEventListener('scroll', function () {
+    if (lastText !== '') { lastText = ''; try { window.parent.postMessage({ source: 'alwith-preview', type: 'selection', frameToken: window.location.href, text: '', rect: null }, '*'); } catch (error) {} }
   }, true);
   document.addEventListener('keydown', function (event) {
     if (event.key === 'Escape') reportSelection();

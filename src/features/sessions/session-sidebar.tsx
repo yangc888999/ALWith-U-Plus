@@ -9,11 +9,12 @@ import {
   HoverInfoAction,
   isQuickChatDirectory,
   NavigationStack,
+  projectName,
   QUICK_CHATS_GROUP,
   SessionList,
   type SessionListExpansion,
-  projectName,
-  SessionRow
+  SessionRow,
+  useDeleteSession
 } from "@alwith/module-chat/session-list"
 import { ScrollArea } from "@base-ui/react/scroll-area"
 import {
@@ -22,10 +23,12 @@ import {
   CalendarClockIcon,
   ChartColumnIcon,
   ChevronRightIcon,
+  CircleAlertIcon,
   CirclePlusIcon,
   CloudIcon,
   FolderIcon,
   FolderMinusIcon,
+  LoaderCircleIcon,
   type LucideIcon,
   MessagesSquareIcon,
   PuzzleIcon,
@@ -33,6 +36,7 @@ import {
   SettingsIcon,
   SmartphoneIcon,
   SparklesIcon,
+  Trash2Icon,
   UsersIcon
 } from "lucide-react"
 import type { ReactNode } from "react"
@@ -55,7 +59,6 @@ import { CollectionPanel } from "@/features/collection/collection-panel"
 import { dispatchCollection, reportCollection } from "@/features/collection/store"
 import { DriveArchiveAction } from "@/features/drive/archive-action"
 import { useDriveVisible } from "@/features/drive/use-drive-visible"
-import { useDriveEnabledPreference } from "@/lib/drive-visible-preference"
 import { GroupPanel } from "@/features/groups/group-panel"
 import { GuideButton } from "@/features/guide/guide-button"
 import {
@@ -69,12 +72,14 @@ import { ONLINE_BI_VIEW_ID } from "@/features/workspace/online-bi"
 import { usePreviewExtension } from "@/features/workspace/preview-extension"
 import { automationSessionRows, automationTitleOf, subscribeAutomationSessionRows } from "@/lib/automation-sessions"
 import { useApp } from "@/lib/client"
-import { isTemporaryChatDir } from "@/lib/quick-chat"
+import { useDriveEnabledPreference } from "@/lib/drive-visible-preference"
 import { isGroupDirectory } from "@/lib/groups"
+import { isTemporaryChatDir } from "@/lib/quick-chat"
 import { cn } from "@/lib/utils"
 import { openSettingsWindow, toggleSettingsWindow } from "@/lib/window-manager"
 
 import { ActivityPanel } from "./activity-panel"
+import type { PendingChatRow } from "./pending-chat"
 import { SessionListHostProvider } from "./session-list-host"
 import { SidebarAccountMenu } from "./sidebar-account-menu"
 import { SidebarMenuRow } from "./sidebar-menu-row"
@@ -84,6 +89,7 @@ import { useActivityNotification } from "./use-activity-notification"
 /** U's own hover-card actions on a session row: collections, then drive. */
 function SessionRowActions({ sessionRow, collectionId }: { sessionRow: SessionSummary; collectionId?: string }) {
   const { t } = useTranslation()
+  const deleteSession = useDeleteSession()
   return (
     <>
       <AddToCollectionAction sessionId={sessionRow.sessionId} allowRemove={collectionId === undefined} />
@@ -96,6 +102,12 @@ function SessionRowActions({ sessionRow, collectionId }: { sessionRow: SessionSu
           }
         />
       )}
+      <HoverInfoAction
+        icon={<Trash2Icon />}
+        label={t("sidebar.delete")}
+        variant="destructive"
+        onClick={() => deleteSession(sessionRow)}
+      />
       <DriveArchiveAction sessionId={sessionRow.sessionId} />
     </>
   )
@@ -272,6 +284,9 @@ function SidebarRailButton({ label, icon: Icon, active, muted, hint, onSelect, d
 
 type SessionSidebarProps = {
   pendingDirectory?: string | null
+  /** Local click-first row, before the native draft has an id. */
+  pendingChat?: PendingChatRow | null
+  onSelectPending?: () => void
   screen: MainScreen
   leadingPage: "plugins" | "extensions" | "archives" | "automation" | "usage" | "skills"
   selectedId: string | null
@@ -308,6 +323,8 @@ export function SessionSidebar(props: SessionSidebarProps) {
 
 function SidebarPanels({
   pendingDirectory,
+  pendingChat,
+  onSelectPending,
   screen,
   leadingPage,
   selectedId,
@@ -338,17 +355,61 @@ function SidebarPanels({
   const setView = useSessionsUiStore((s) => s.setView)
   const listedSessions = useApp((state) => state.sessionList)
   const listReady = useApp((state) => state.sessionListLoaded)
-  const pendingGroup = pendingDirectory === undefined ? undefined : isTemporaryChatDir(pendingDirectory) ? null : pendingDirectory
+  const pending =
+    pendingChat ??
+    (pendingDirectory === undefined
+      ? null
+      : { key: "legacy-pending", directory: pendingDirectory, status: "draft" as const })
+  const pendingGroup = pending === null ? undefined : isTemporaryChatDir(pending.directory) ? null : pending.directory
   const draftOwners = useApp((state) => state.draftSessions)
-  const showPending = pendingGroup !== undefined && !listedSessions.some((row) =>
-    draftOwners[row.sessionId] === "main" && (pendingGroup === null ? isTemporaryChatDir(row.cwd) : row.cwd === pendingGroup)
-  )
-  const pendingRow = showPending ? (
-    <div role="status" className="flex items-center gap-2 px-4 py-1 text-sm text-muted-foreground">
-      <span aria-hidden="true" className="size-3 animate-spin rounded-full border border-current border-t-transparent motion-reduce:animate-none" />
-      {t("sidebar.untitled")}
-    </div>
-  ) : null
+  const pendingSummary: SessionSummary | null =
+    pending === null
+      ? null
+      : {
+          sessionId: `pending:${pending.key}`,
+          cwd: pendingGroup ?? "",
+          title: t("sidebar.untitled"),
+          updatedAt: null,
+          archived: false
+        }
+  const pendingStatusLabel =
+    pending?.status === "retryable"
+      ? t("sidebar.pendingRetry")
+      : pending?.status === "connecting"
+        ? t("sidebar.pendingConnecting")
+        : t("sidebar.pendingPreparing")
+  const showPending =
+    pending !== null &&
+    !(pending.sessionId !== undefined && listedSessions.some((row) => row.sessionId === pending.sessionId)) &&
+    !listedSessions.some(
+      (row) =>
+        draftOwners[row.sessionId] === "main" &&
+        (pendingGroup === null ? isTemporaryChatDir(row.cwd) : row.cwd === pendingGroup)
+    )
+  const pendingRow =
+    showPending && pendingSummary !== null ? (
+      <div className="relative" data-pending-chat={pending?.status}>
+        <SessionRow
+          key={pendingSummary.sessionId}
+          sessionRow={pendingSummary}
+          active={false}
+          onSelect={() => onSelectPending?.()}
+        />
+        <span
+          className="pointer-events-none absolute end-2 top-1/2 flex -translate-y-1/2 items-center text-muted-foreground"
+          title={pendingStatusLabel}
+        >
+          {pending?.status === "retryable" ? (
+            <CircleAlertIcon aria-hidden="true" className="size-3.5 text-destructive" />
+          ) : (
+            <LoaderCircleIcon aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" />
+          )}
+          <span className="sr-only" role="status">
+            {pendingStatusLabel}
+          </span>
+        </span>
+      </div>
+    ) : null
   useEffect(() => {
     if (pendingGroup === undefined) return
     const key = pendingGroup ?? QUICK_CHATS_GROUP
@@ -752,12 +813,16 @@ function SidebarPanels({
               <Pane className="session-list-scroll" viewportRef={setViewport} viewportClassName="ps-2 pe-0 pb-1">
                 {/* Observe content height as groups expand, collapse or reveal more rows. */}
                 <ScrollArea.Content render={<NavigationStack />} style={{ minWidth: 0 }}>
-                  {showPending && pendingGroup !== undefined && (!listReady || (pendingGroup !== null && !sessions.some((row) => row.cwd === pendingGroup))) && (
-                    <div>
-                      <div className="px-2 py-1 text-sm font-medium">{pendingGroup === null ? t("sidebar.quickChats") : projectName(pendingGroup)}</div>
-                      {pendingRow}
-                    </div>
-                  )}
+                  {showPending &&
+                    pendingGroup !== undefined &&
+                    (!listReady || (pendingGroup !== null && !sessions.some((row) => row.cwd === pendingGroup))) && (
+                      <div>
+                        <div className="px-2 py-1 text-sm font-medium">
+                          {pendingGroup === null ? t("sidebar.quickChats") : projectName(pendingGroup)}
+                        </div>
+                        {pendingRow}
+                      </div>
+                    )}
                   <SessionList
                     selectedId={selectedId}
                     onSelect={onSelect}

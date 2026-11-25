@@ -8,16 +8,17 @@
 // 不往 settingsStore 的 Rust 白名单加键。
 
 import {
-  isRepeatRule,
-  type AutomationState,
   type AutomationRunRequest,
   type AutomationRunResult,
+  type AutomationState,
+  type DeliveryReceipt,
+  isRepeatRule,
   type LarkTarget,
   type RepeatRule,
   type RunRecord,
   type RunStatus,
-  type ScheduleSpec,
   type ScheduledTask,
+  type ScheduleSpec,
   type TaskDraft
 } from "./types"
 
@@ -210,11 +211,11 @@ function coerceTask(raw: unknown): ScheduledTask | null {
     fastMode: value.fastMode === true,
     larkNotify: value.larkNotify === true,
     larkTargets: coerceTargets(value.larkTargets),
+    larkEmptyResultNoticeToSelf: value.larkEmptyResultNoticeToSelf === true,
     // 旧快照（没有 monitorSessionId 字段）里的任务默认存的是 user，而普通 CLI 登录不含
     // im:message.send_as_user，按本人身份推送必然失败。把这一代旧任务一次性拨回开箱可用的
     // 飞书 CLI 助手；新版保存的任务都带该字段，用户之后主动选 user 会被原样保留。
-    larkIdentity:
-      "monitorSessionId" in value && value.larkIdentity === "user" ? "user" : "bot",
+    larkIdentity: "monitorSessionId" in value && value.larkIdentity === "user" ? "user" : "bot",
     repeat,
     intervalMinutes: typeof value.intervalMinutes === "number" ? value.intervalMinutes : 60,
     time: typeof value.time === "string" ? value.time : "09:00",
@@ -232,7 +233,32 @@ function coerceRun(raw: unknown): RunRecord | null {
   const value = raw as Record<string, unknown>
   if (typeof value.id !== "string" || typeof value.taskId !== "string") return null
   const status: RunStatus =
-    value.status === "running" || value.status === "success" || value.status === "failed" ? value.status : "failed"
+    value.status === "running" ||
+    value.status === "success" ||
+    value.status === "no_content" ||
+    value.status === "failed"
+      ? value.status
+      : "failed"
+  const deliveries: DeliveryReceipt[] = Array.isArray(value.deliveries)
+    ? value.deliveries.flatMap((entry) => {
+        if (typeof entry !== "object" || entry === null) return []
+        const delivery = entry as Record<string, unknown>
+        if (typeof delivery.targetId !== "string" || typeof delivery.targetName !== "string") return []
+        const deliveryStatus =
+          delivery.status === "sent" || delivery.status === "failed" || delivery.status === "skipped"
+            ? delivery.status
+            : "failed"
+        return [
+          {
+            targetId: delivery.targetId,
+            targetName: delivery.targetName,
+            kind: typeof delivery.kind === "string" ? delivery.kind : "chat",
+            status: deliveryStatus as DeliveryReceipt["status"],
+            error: typeof delivery.error === "string" ? delivery.error : null
+          }
+        ]
+      })
+    : []
   return {
     id: value.id,
     taskId: value.taskId,
@@ -243,7 +269,8 @@ function coerceRun(raw: unknown): RunRecord | null {
     summary: typeof value.summary === "string" ? value.summary : "",
     sessionId: typeof value.sessionId === "string" ? value.sessionId : null,
     error: typeof value.error === "string" ? value.error : null,
-    needsAuth: value.needsAuth === true
+    needsAuth: value.needsAuth === true,
+    deliveries
   }
 }
 
@@ -256,9 +283,7 @@ function parseState(raw: unknown): AutomationState {
     const tasks = Array.isArray(parsed.tasks)
       ? parsed.tasks.map(coerceTask).filter((t): t is ScheduledTask => t !== null)
       : []
-    const runs = Array.isArray(parsed.runs)
-      ? parsed.runs.map(coerceRun).filter((r): r is RunRecord => r !== null)
-      : []
+    const runs = Array.isArray(parsed.runs) ? parsed.runs.map(coerceRun).filter((r): r is RunRecord => r !== null) : []
     return { tasks, runs }
   } catch {
     // 配额错误或旧版本写入的坏数据：当作空状态，不阻塞 UI。
@@ -461,6 +486,7 @@ export function createTask(draft: TaskDraft): ScheduledTask {
   const now = Date.now()
   const task: ScheduledTask = {
     ...draft,
+    larkEmptyResultNoticeToSelf: draft.larkEmptyResultNoticeToSelf === true,
     id: newId(),
     nextRunAt: null,
     monitorSessionId: null,
@@ -531,9 +557,7 @@ export function markTaskFired(id: string, at: number = Date.now()): void {
   const enabled = existing.repeat === "once" ? false : existing.enabled
   commit({
     ...snapshot,
-    tasks: snapshot.tasks.map((task) =>
-      task.id === id ? { ...task, nextRunAt: next, enabled, updatedAt: at } : task
-    )
+    tasks: snapshot.tasks.map((task) => (task.id === id ? { ...task, nextRunAt: next, enabled, updatedAt: at } : task))
   })
 }
 
@@ -667,7 +691,8 @@ export function finishAutomationRun(result: AutomationRunResult): void {
                 status: result.status,
                 summary: result.summary,
                 sessionId: result.sessionId,
-                error: result.error
+                error: result.error,
+                deliveries: result.deliveries
               }
             : run
         )
@@ -685,7 +710,8 @@ export function finishAutomationRun(result: AutomationRunResult): void {
     status: result.status,
     summary: result.summary,
     sessionId: result.sessionId,
-    error: result.error
+    error: result.error,
+    deliveries: result.deliveries
   }
   commit({ ...snapshot, runs: capRuns([record, ...snapshot.runs]) })
 }

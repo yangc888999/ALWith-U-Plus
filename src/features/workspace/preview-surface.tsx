@@ -1,6 +1,6 @@
 import { Allotment, type AllotmentHandle, LayoutPriority } from "allotment"
 import { FolderTree, Maximize2, Minimize2, X } from "lucide-react"
-import { type ReactNode, useContext, useEffect, useRef, useState } from "react"
+import { type ReactNode, type RefObject, useContext, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import { Button } from "@/components/ui/button"
@@ -18,7 +18,8 @@ export function PreviewSurface({
   onShowProjectTree,
   maximized,
   onMaximize,
-  onClose
+  onClose,
+  editorRef
 }: {
   tree: ReactNode
   editor: (controls: { leading: ReactNode; trailing: ReactNode }) => ReactNode
@@ -33,6 +34,8 @@ export function PreviewSurface({
   maximized: boolean
   onMaximize: () => void
   onClose: () => void
+  /** The editor pane owns the preview's local overlay coordinate space. */
+  editorRef?: RefObject<HTMLDivElement | null>
 }): ReactNode {
   const { t } = useTranslation()
   const controls = useContext(PanelControlsContext)
@@ -67,86 +70,86 @@ export function PreviewSurface({
   }, [treePx, containerWidth])
   return (
     <div ref={root} className="h-full min-h-0 w-full">
-    <Allotment
-      ref={allotment}
-      proportionalLayout={false}
-      onDragEnd={(sizes) => {
-        const width = sizes[1]
-        const total = sizes[0] + sizes[1]
-        // Persist the file tree share the user settled on; `0` means the pane is collapsed.
-        if (typeof width === "number" && width > 0 && total > 0) {
-          const nextTreeOfPreview = width / total
-          // Convert "share of the preview container" back to "share of the workspace width".
-          // The region is `tree + preview`: using only `previewRatio` made the whole region shrink
-          // by the tree's share on every drag, which is the "widths jump after resizing" bug.
-          const region = treeRatio + previewRatio
-          if (region > 0) {
-            saveWorkspaceLayout({
-              treeRatio: region * nextTreeOfPreview,
-              previewRatio: region * (1 - nextTreeOfPreview)
-            })
+      <Allotment
+        ref={allotment}
+        proportionalLayout={false}
+        onDragEnd={(sizes) => {
+          const width = sizes[1]
+          const total = sizes[0] + sizes[1]
+          // Persist the file tree share the user settled on; `0` means the pane is collapsed.
+          if (typeof width === "number" && width > 0 && total > 0) {
+            const nextTreeOfPreview = width / total
+            // Convert "share of the preview container" back to "share of the workspace width".
+            // The region is `tree + preview`: using only `previewRatio` made the whole region shrink
+            // by the tree's share on every drag, which is the "widths jump after resizing" bug.
+            const region = treeRatio + previewRatio
+            if (region > 0) {
+              saveWorkspaceLayout({
+                treeRatio: region * nextTreeOfPreview,
+                previewRatio: region * (1 - nextTreeOfPreview)
+              })
+            }
           }
-        }
-      }}
-      onVisibleChange={(index, visible) => {
-        if (index === 1) onTreeVisibleChange(visible)
-      }}
-    >
-      <Allotment.Pane minSize={0} priority={LayoutPriority.High}>
-        <div className="file-workspace-editor" data-tree-hidden={!treeVisible}>
-          {editor({
-            leading: !treeVisible && (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-expanded={false}
-                aria-label={t("workspace.showTree")}
-                title={t("workspace.showTree")}
-                onClick={() => {
-                  if (onShowProjectTree !== undefined) onShowProjectTree()
-                  else onTreeVisibleChange(true)
-                }}
-              >
-                <FolderTree />
-              </Button>
-            ),
-            trailing: (
-              <>
+        }}
+        onVisibleChange={(index, visible) => {
+          if (index === 1) onTreeVisibleChange(visible)
+        }}
+      >
+        <Allotment.Pane minSize={0} priority={LayoutPriority.High}>
+          <div ref={editorRef} className="file-workspace-editor" data-tree-hidden={!treeVisible}>
+            {editor({
+              leading: !treeVisible && (
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  aria-pressed={expanded}
-                  aria-label={t(expanded ? "workspace.exitViewMode" : "workspace.enterViewMode")}
-                  title={t(expanded ? "workspace.exitViewMode" : "workspace.enterViewMode")}
-                  onClick={controls?.toggleExpanded ?? onMaximize}
+                  aria-expanded={false}
+                  aria-label={t("workspace.showTree")}
+                  title={t("workspace.showTree")}
+                  onClick={() => {
+                    if (onShowProjectTree !== undefined) onShowProjectTree()
+                    else onTreeVisibleChange(true)
+                  }}
                 >
-                  {expanded ? <Minimize2 /> : <Maximize2 />}
+                  <FolderTree />
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={t("workspace.closePreview")}
-                  title={t("workspace.closePreview")}
-                  onClick={onClose}
-                >
-                  <X />
-                </Button>
-              </>
-            )
-          })}
-        </div>
-      </Allotment.Pane>
-      <Allotment.Pane minSize={0} preferredSize={treePx} snap visible={treeVisible}>
-        <div
-          className="file-workspace-tree"
-          data-collapsed={!treeVisible}
-          inert={!treeVisible}
-          aria-hidden={!treeVisible}
-        >
-          {tree}
-        </div>
-      </Allotment.Pane>
-    </Allotment>
+              ),
+              trailing: (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-pressed={expanded}
+                    aria-label={t(expanded ? "workspace.exitViewMode" : "workspace.enterViewMode")}
+                    title={t(expanded ? "workspace.exitViewMode" : "workspace.enterViewMode")}
+                    onClick={controls?.toggleExpanded ?? onMaximize}
+                  >
+                    {expanded ? <Minimize2 /> : <Maximize2 />}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={t("workspace.closePreview")}
+                    title={t("workspace.closePreview")}
+                    onClick={onClose}
+                  >
+                    <X />
+                  </Button>
+                </>
+              )
+            })}
+          </div>
+        </Allotment.Pane>
+        <Allotment.Pane minSize={0} preferredSize={treePx} snap visible={treeVisible}>
+          <div
+            className="file-workspace-tree"
+            data-collapsed={!treeVisible}
+            inert={!treeVisible}
+            aria-hidden={!treeVisible}
+          >
+            {tree}
+          </div>
+        </Allotment.Pane>
+      </Allotment>
     </div>
   )
 }

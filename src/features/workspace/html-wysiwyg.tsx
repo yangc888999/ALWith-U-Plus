@@ -22,6 +22,7 @@
 import type { EditorController, EditorDocument, PreviewProvider } from "@alwith/module-editor"
 import type { PreviewContext, PreviewHost } from "@alwith/module-editor/previews"
 import type { FileSystem } from "@alwith/module-fs/core"
+import { info } from "@tauri-apps/plugin-log"
 import {
   Bold,
   Check,
@@ -36,33 +37,106 @@ import {
   Quote,
   SquareCode,
   Strikethrough,
-  Undo2,
-  Underline
+  Underline,
+  Undo2
 } from "lucide-react"
 import type { ReactNode } from "react"
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { toast } from "sonner"
 
+import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from "@/components/ui/dialog"
+
+import { Toolbar, type ToolbarItem } from "./components/Toolbar"
 import { htmlEditBridgeScript } from "./html-edit-bridge"
 import { acceptFrameMessage, hostMessage, mintNonce, postToFrame } from "./html-edit-protocol"
 import type { HtmlPreviewHostControl } from "./html-preview"
 import {
   createSnapshotStore,
   EMPTY_FORMAT_STATE,
-  formatStateEqual,
   type FormatState,
+  formatStateEqual,
   type SnapshotStore,
   type WysiwygCommand,
   type WysiwygLabels
 } from "./wysiwyg-types"
-
-import { Toolbar, type ToolbarItem } from "./components/Toolbar"
 
 /** Structural DOM deletions bypass the frame's native undo stack; the host offers toast+undo. */
 const DELETION_COMMANDS: ReadonlySet<WysiwygCommand> = new Set(["deleteRow", "deleteColumn", "deleteImage"])
 
 /** How long to wait for the frame's dirty reply after a flush before leaving edit mode anyway. */
 const FLUSH_TIMEOUT = 2_000
+/** A sync may rotate a file version between the two stats of a read. Retry a few times, but
+ *  never accept a torn read as the base for an overwrite. */
+const STABLE_READ_ATTEMPTS = 5
+const STABLE_READ_DELAY = 40
+/** Our write already succeeded when this reload starts. A race in the preview refresh must not
+ *  turn into a false save failure. */
+const PREVIEW_REFRESH_ATTEMPTS = 3
+
+interface StableHtmlSnapshot {
+  text: string
+  version: string
+}
+
+class HtmlSaveConflictError extends Error {
+  readonly localText: string
+  readonly currentText: string
+  constructor(localText: string, currentText: string) {
+    super("HTML changed on disk while the local draft was being saved")
+    this.name = "HtmlSaveConflictError"
+    this.localText = localText
+    this.currentText = currentText
+  }
+}
+
+const delay = (milliseconds: number): Promise<void> =>
+  new Promise((resolve) => window.setTimeout(resolve, milliseconds))
+
+function decodeHtml(bytes: Uint8Array): string {
+  return new TextDecoder().decode(bytes)
+}
+
+/** Read bytes and version only when both stats agree. A version that moved while reading is a
+ *  sync race, not a content decision; retry instead of using the half-observed pair. */
+async function readStableHtml(fs: FileSystem, path: string): Promise<StableHtmlSnapshot> {
+  for (let attempt = 0; attempt < STABLE_READ_ATTEMPTS; attempt += 1) {
+    const before = await fs.stat(path)
+    if (before === null) throw new Error("File is no longer available")
+    const bytes = await fs.readFile(path)
+    const after = await fs.stat(path)
+    if (after !== null && after.version === before.version) {
+      return { text: decodeHtml(bytes), version: after.version }
+    }
+    if (attempt + 1 < STABLE_READ_ATTEMPTS) await delay(STABLE_READ_DELAY)
+  }
+  throw new Error("File changed while opening; reopen it")
+}
+
+function isVersionConflict(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /changed on disk|expectedVersion|version conflict/i.test(message)
+}
+
+function isTransientReadRace(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /changed while opening|changed on disk/i.test(message)
+}
+
+function saveLog(line: string): void {
+  try {
+    void info(`[html-save] ${line}`).catch(() => {})
+  } catch {
+    // Outside Tauri (tests): the local save result is still authoritative.
+  }
+}
 
 /** Marks the live frame as being edited so the workspace context menu can offer cut/paste. */
 export const HTML_EDITING_ATTRIBUTE = "data-alwith-html-editing"
@@ -158,7 +232,11 @@ function HtmlSessionBoundary({
   const previewDocument = source === document.savedText ? document : { ...document, savedText: source }
 
   const session: HtmlEditSession = { document, context, editing, setEditing }
-  return <HtmlSessionContext.Provider value={session}>{provider.render(previewDocument, context)}</HtmlSessionContext.Provider>
+  return (
+    <HtmlSessionContext.Provider value={session}>
+      {provider.render(previewDocument, context)}
+    </HtmlSessionContext.Provider>
+  )
 }
 
 /**
@@ -202,6 +280,7 @@ function HtmlToolbar({
   const store = useRef<SnapshotStore<FormatState>>(createSnapshotStore(EMPTY_FORMAT_STATE, formatStateEqual))
   const [ready, setReady] = useState(false)
   const [editable, setEditable] = useState(false)
+  const [conflict, setConflict] = useState<{ local: string; current: string } | null>(null)
   const nonceRef = useRef<string | null>(null)
   const editingRef = useRef(false)
   const dirtyRef = useRef(false)
@@ -228,14 +307,45 @@ function HtmlToolbar({
     sessionIdRef.current = documentId
     nonceRef.current = null
     dirtyRef.current = false
-    lastSaved.current = null
+    lastSaved.current = document?.savedText ?? null
     pendingHtml.current = null
     flushWaiters.current = []
   }
 
   const frame = (): HTMLIFrameElement | null => frameElRef.current ?? iframeRef.current
 
-  /** Persist the frame's HTML. Serialized saves; a write that lands mid-save is re-flushed after. */
+  useEffect(() => {
+    setConflict(null)
+  }, [documentId])
+
+  /** Refresh the editor snapshot after the local write. This is a separate phase: a sync racing
+   *  the read must not turn a successful save into a save error. */
+  const refreshPreview = async (documentId: string, path: string): Promise<void> => {
+    for (let attempt = 0; attempt < PREVIEW_REFRESH_ATTEMPTS; attempt += 1) {
+      try {
+        const refreshed = await options.controller.reload(documentId)
+        saveLog(
+          refreshed
+            ? `preview-refreshed path=${path} attempt=${attempt + 1}`
+            : `preview-refresh-skipped path=${path} attempt=${attempt + 1}`
+        )
+        return
+      } catch (error) {
+        if (!isTransientReadRace(error) || attempt + 1 >= PREVIEW_REFRESH_ATTEMPTS) {
+          // The bytes are already on disk. Let the file watcher refresh the preview later instead
+          // of reporting a failed save for a read-only refresh race.
+          if (!isTransientReadRace(error)) throw error
+          saveLog(`preview-refresh-deferred path=${path} error=${String(error)}`)
+          return
+        }
+        await delay(STABLE_READ_DELAY)
+      }
+    }
+  }
+
+  /** Persist the frame's HTML. Serialized saves; a write that lands mid-save is re-flushed after.
+   *  The local write is the success boundary; preview refresh and cloud upload are reported
+   *  separately. */
   const save = async (html: string): Promise<void> => {
     const current = sessionRef.current
     if (current === null) return
@@ -245,25 +355,55 @@ function HtmlToolbar({
       return
     }
     savingRef.current = true
+    let conflicted = false
     try {
-      const stat = await options.fs.stat(current.document.path)
-      if (stat === null) throw new Error("File is no longer available")
-      options.previewControl.markSelfWrite(current.document.path)
-      await options.fs.writeFile(current.document.path, new TextEncoder().encode(html), {
-        mode: "replace",
-        expectedVersion: stat.version
-      })
+      const path = current.document.path
+      const base = lastSaved.current ?? current.document.savedText
+      let snapshot = await readStableHtml(options.fs, path)
+      if (snapshot.text === html) {
+        lastSaved.current = html
+        saveLog(`local-unchanged path=${path} version=${snapshot.version}`)
+        await refreshPreview(current.document.id, path)
+        return
+      }
+      if (snapshot.text !== base) throw new HtmlSaveConflictError(html, snapshot.text)
+      let written = false
+      for (let attempt = 0; attempt < 2 && !written; attempt += 1) {
+        try {
+          options.previewControl.markSelfWrite(path)
+          await options.fs.writeFile(path, new TextEncoder().encode(html), {
+            mode: "replace",
+            expectedVersion: snapshot.version
+          })
+          written = true
+        } catch (error) {
+          if (!isVersionConflict(error)) throw error
+          snapshot = await readStableHtml(options.fs, path)
+          if (snapshot.text === html) {
+            // Another writer already landed the exact draft. Adopt that version instead of
+            // overwriting it with the same bytes.
+            written = true
+            break
+          }
+          if (snapshot.text !== base) throw new HtmlSaveConflictError(html, snapshot.text)
+        }
+      }
+      if (!written) throw new Error("File changed on disk; the local draft was not saved")
       lastSaved.current = html
-      // Keep the controller's version current so a later source-mode save does not hit the
-      // optimistic lock. The document is clean in preview mode, so reload is silent.
-      await options.controller.reload(current.document.id)
+      saveLog(`local-write path=${path} version=${snapshot.version} wrote=${written}`)
+      await refreshPreview(current.document.id, path)
     } catch (error) {
-      current.context.onError(error)
+      if (error instanceof HtmlSaveConflictError) {
+        conflicted = true
+        setConflict({ local: error.localText, current: error.currentText })
+      } else {
+        current.context.onError(error)
+      }
     } finally {
       savingRef.current = false
       const next = pendingHtml.current
       pendingHtml.current = null
-      if (next !== null && next !== lastSaved.current) void save(next)
+      if (!conflicted && next !== null && next !== lastSaved.current) void save(next)
     }
   }
 
@@ -287,7 +427,7 @@ function HtmlToolbar({
             const nonce = mintNonce()
             nonceRef.current = nonce
             dirtyRef.current = false
-            lastSaved.current = null
+            lastSaved.current = sessionRef.current?.document.savedText ?? null
             store.current.publish(EMPTY_FORMAT_STATE)
             postToFrame(frame(), hostMessage({ type: "init", nonce }))
           }
@@ -435,7 +575,41 @@ function HtmlToolbar({
     }))
   ]
 
-  return <Toolbar ariaLabel="HTML formatting" items={items} />
+  return (
+    <>
+      <Toolbar ariaLabel="HTML formatting" items={items} />
+      <Dialog open={conflict !== null} onOpenChange={(open) => !open && setConflict(null)}>
+        <DialogContent className="max-w-4xl" data-testid="html-save-conflict">
+          <DialogHeader>
+            <DialogTitle>{labels.htmlSaveConflict ?? "Content changed on disk"}</DialogTitle>
+            <DialogDescription>
+              {labels.htmlSaveConflictDescription ??
+                "The local draft was kept. Compare it with the current file before choosing what to keep."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid max-h-[55vh] min-h-0 grid-cols-2 gap-3">
+            <section className="flex min-h-0 flex-col gap-1.5">
+              <h3 className="text-sm font-medium">{labels.htmlLocalDraft ?? "Local draft"}</h3>
+              <pre className="min-h-0 flex-1 overflow-auto rounded-md border bg-muted p-3 text-xs whitespace-pre-wrap">
+                {conflict?.local ?? ""}
+              </pre>
+            </section>
+            <section className="flex min-h-0 flex-col gap-1.5">
+              <h3 className="text-sm font-medium">{labels.htmlDiskVersion ?? "Current file"}</h3>
+              <pre className="min-h-0 flex-1 overflow-auto rounded-md border bg-muted p-3 text-xs whitespace-pre-wrap">
+                {conflict?.current ?? ""}
+              </pre>
+            </section>
+          </div>
+          <DialogFooter>
+            <Button type="button" onClick={() => setConflict(null)}>
+              {labels.htmlKeepDraft ?? "Keep editing draft"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
 }
 
 interface ToolbarButtonSpec {

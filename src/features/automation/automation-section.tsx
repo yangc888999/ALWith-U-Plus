@@ -20,11 +20,11 @@ import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import { commands } from "@/bindings"
-import { defaultModelChoice } from "@/lib/default-model"
-import { modelDisplayId } from "@/lib/model-identity"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
+import { defaultModelChoice } from "@/lib/default-model"
+import { modelDisplayId } from "@/lib/model-identity"
 import { useBooleanSetting } from "@/lib/use-boolean-setting"
 import { cn } from "@/lib/utils"
 
@@ -159,6 +159,7 @@ export function AutomationSection() {
       fastMode: task.fastMode,
       larkNotify: task.larkNotify,
       larkTargets: task.larkTargets,
+      larkEmptyResultNoticeToSelf: task.larkEmptyResultNoticeToSelf === true,
       larkIdentity: task.larkIdentity,
       monitorSessionId: task.monitorSessionId
     }
@@ -185,10 +186,18 @@ export function AutomationSection() {
       </div>
       {/* 顶部 tab：定时任务 | 运行记录 */}
       <div className="flex items-center gap-1 border-b border-border/60 pb-2">
-        <TabButton active={tab === "tasks"} onClick={() => setTab("tasks")} icon={<CalendarClockIcon className="size-3.5" />}>
+        <TabButton
+          active={tab === "tasks"}
+          onClick={() => setTab("tasks")}
+          icon={<CalendarClockIcon className="size-3.5" />}
+        >
           {t("automation.tabTasks")}
         </TabButton>
-        <TabButton active={tab === "runs"} onClick={() => setTab("runs")} icon={<ListChecksIcon className="size-3.5" />}>
+        <TabButton
+          active={tab === "runs"}
+          onClick={() => setTab("runs")}
+          icon={<ListChecksIcon className="size-3.5" />}
+        >
           {t("automation.tabRuns")}
         </TabButton>
       </div>
@@ -209,7 +218,12 @@ export function AutomationSection() {
                 aria-label={t("automation.search")}
               />
             </div>
-            <Button variant="outline" size="sm" aria-pressed={showFilters} onClick={() => setShowFilters((value) => !value)}>
+            <Button
+              variant="outline"
+              size="sm"
+              aria-pressed={showFilters}
+              onClick={() => setShowFilters((value) => !value)}
+            >
               <FilterIcon className="size-3.5" data-icon="inline-start" />
               {t("automation.filter")}
             </Button>
@@ -331,8 +345,7 @@ function TaskCard({
       : choice?.model
         ? shortModelId(choice.model)
         : t("automation.modelDefault")
-  const effortText =
-    task.effort !== "" ? task.effort : (choice?.effort ?? t("automation.effortDefaultShort"))
+  const effortText = task.effort !== "" ? task.effort : (choice?.effort ?? t("automation.effortDefaultShort"))
   const fastOn = task.model !== "" ? task.fastMode : choice?.fastMode === true
   const workspaceText = task.cwd !== "" ? task.cwd : defaultCwd
   return (
@@ -346,15 +359,11 @@ function TaskCard({
         <h3 className="min-w-0 flex-1 truncate text-sm font-semibold" title={task.name}>
           {task.name}
         </h3>
-        <Switch
-          checked={task.enabled}
-          onCheckedChange={onToggle}
-          aria-label={t("automation.filterEnabled")}
-        />
+        <Switch checked={task.enabled} onCheckedChange={onToggle} aria-label={t("automation.filterEnabled")} />
       </div>
 
       {/* 提示词摘要：两三行截断 */}
-      <p className="mt-2 line-clamp-3 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
+      <p className="mt-2 line-clamp-3 text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
         {task.prompt}
       </p>
 
@@ -370,7 +379,9 @@ function TaskCard({
               {t("automation.summaryModel", { value: modelText })}
             </span>
             <span>{t("automation.summaryEffort", { value: effortText })}</span>
-            <span>{t("automation.summaryFast", { value: t(fastOn ? "automation.fastOn" : "automation.fastOff") })}</span>
+            <span>
+              {t("automation.summaryFast", { value: t(fastOn ? "automation.fastOn" : "automation.fastOff") })}
+            </span>
           </div>
           <div className="mt-0.5 truncate font-mono text-xs text-muted-foreground/70" title={workspaceText}>
             {workspaceText !== ""
@@ -399,10 +410,22 @@ function TaskCard({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
-          <Button variant="ghost" size="icon-xs" title={t("automation.runNow")} aria-label={t("automation.runNow")} onClick={onRunNow}>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            title={t("automation.runNow")}
+            aria-label={t("automation.runNow")}
+            onClick={onRunNow}
+          >
             <PlayIcon className="size-3.5" />
           </Button>
-          <Button variant="ghost" size="icon-xs" title={t("automation.edit")} aria-label={t("automation.edit")} onClick={onEdit}>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            title={t("automation.edit")}
+            aria-label={t("automation.edit")}
+            onClick={onEdit}
+          >
             <PencilIcon className="size-3.5" />
           </Button>
           <Button

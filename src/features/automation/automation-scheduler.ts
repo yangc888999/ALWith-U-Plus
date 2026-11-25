@@ -134,10 +134,7 @@ export function serialAutomationExecutor(
  * `canRun` 让主窗口在引擎还没连上时跳过这一轮（不消耗排期、不写 failed 记录）。
  * 返回的函数同时停掉定时器和跨窗口订阅。
  */
-export function startAutomationScheduler(
-  execute: AutomationExecutor,
-  canRun: () => boolean = () => true
-): () => void {
+export function startAutomationScheduler(execute: AutomationExecutor, canRun: () => boolean = () => true): () => void {
   // 僵尸记录的判定水位：调度器启动时刻，必须是本函数的第一件事 —— 早于 startAutomationSync
   // 和任何一次派发。selfHeal 内部要先 await KV hydrate，而下面第一轮 tick 会同步先把到期任务
   // 派发出去（startAutomationRun 立刻写下 running 记录）；没有这道水位，hydrate 返回后的
@@ -185,6 +182,7 @@ export function startAutomationScheduler(
           fastMode: task.fastMode,
           larkNotify: task.larkNotify,
           larkTargets: task.larkTargets,
+          larkEmptyResultNoticeToSelf: task.larkEmptyResultNoticeToSelf === true,
           larkIdentity: task.larkIdentity,
           monitorSessionId: task.monitorSessionId,
           taskFiredAt: now

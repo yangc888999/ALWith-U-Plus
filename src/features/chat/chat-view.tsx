@@ -18,7 +18,6 @@ import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import type { SessionSummary } from "@/agent/client"
-import { CollectionPicker } from "@/features/collection/collection-menu"
 import { SessionPreview } from "@/features/computer/session-preview"
 import { GroupDiscussionBar } from "@/features/groups/group-bar"
 import { useGroupDiscussion } from "@/features/groups/use-group-discussion"
@@ -30,7 +29,6 @@ import { snapshotProjectMemory } from "@/lib/project-memory"
 import { isTemporaryChatDir } from "@/lib/quick-chat"
 
 import { ChatActionsMenu } from "./chat-actions-menu"
-import { ModelEntry } from "./composer/model-entry"
 import { ChatBranchProvider } from "./chat-branches"
 import {
   ChatContextMenu,
@@ -41,21 +39,22 @@ import {
 } from "./chat-context-menu"
 import { ChatEdgeActions } from "./chat-edge-actions"
 import { ChatHeader } from "./chat-header"
+import { ChatHeaderActions } from "./chat-header-actions"
 import { useChatHost, useTimelineSlots } from "./chat-host"
 import { ChatComposer } from "./composer"
+import { ModelEntry } from "./composer/model-entry"
 import { ChatSearch } from "./dialogs/chat-search"
 import { FilePreviewModal } from "./dialogs/file-preview-modal"
 import { ImageLightbox } from "./dialogs/image-lightbox"
 import { ChatDirectoryContext, ChatOpenSessionContext } from "./file-actions"
-import { SendModeSwitch } from "./send-mode-switch"
 import { appendQuote, SelectionMenu } from "./selection-menu"
+import { SendModeSwitch } from "./send-mode-switch"
 import { useOrchestrationProviderWarning } from "./use-orchestration-provider-warning"
 
 type ChatViewProps = {
   session: Session
   voiceResume?: VoiceResume
   onSelectSession?: (sessionRow: SessionSummary) => void
-  onOpenWindow?: () => void
   onReturnToMain?: () => void
   headerTarget?: HTMLElement | null
   projectMenu?: ReactNode
@@ -128,7 +127,6 @@ function findScrollContainer(root: HTMLElement | null): HTMLElement | null {
 function Conversation({
   session,
   voiceResume,
-  onOpenWindow,
   onReturnToMain,
   headerTarget,
   projectMenu,
@@ -293,17 +291,19 @@ function Conversation({
         >
           <div className="ms-1 flex shrink-0 items-center gap-1">
             <SendModeSwitch />
-            <CollectionPicker sessionId={session.id} favorite />
-            <ChatActionsMenu
-              surface={headerTarget === undefined ? "main" : "floating"}
-              onOpenWindow={onOpenWindow}
-              onReturnToMain={onReturnToMain}
-              session={session}
-              cwd={session.cwd}
-              onNewChat={onNewChat}
-              onNewProject={onNewProject}
-              onDeleted={onDeleted}
-            />
+            {headerTarget === undefined ? (
+              <ChatHeaderActions session={session} />
+            ) : (
+              <ChatActionsMenu
+                surface="floating"
+                onReturnToMain={onReturnToMain}
+                session={session}
+                cwd={session.cwd}
+                onNewChat={onNewChat}
+                onNewProject={onNewProject}
+                onDeleted={onDeleted}
+              />
+            )}
           </div>
         </ChatHeader>
       }

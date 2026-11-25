@@ -1,11 +1,10 @@
 import type { TextEditorProps } from "@alwith/module-editor"
-import { ownsItsContextMenu } from "../file-workspace"
 import { type FsAdapter, normalizePath, type WriteOptions } from "@alwith/module-fs"
 import type { NativeRequest } from "@alwith/module-fs/tauri"
 import { createMemoryAdapter } from "@alwith/module-fs/testing"
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
-import { toast } from "sonner"
 import { StrictMode, useState } from "react"
+import { toast } from "sonner"
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
 import { WindowsWorkspaceControlsContext } from "@/components/alwith-ui/windows-main-window-shell"
@@ -16,7 +15,7 @@ import { initI18n } from "@/lib/i18n"
 import { settingsStore } from "@/lib/settings-store"
 
 import { WorkspaceHeaderContext } from "../context"
-import { FileWorkspace } from "../file-workspace"
+import { FileWorkspace, ownsItsContextMenu } from "../file-workspace"
 import { DRAFT_DIRECTORY_KEY, projectDirectoryAttempt, type ProjectDirectoryReason } from "../project-directory"
 
 vi.mock("@/features/guide/guide-window", () => ({ openGuideWindow: vi.fn() }))
@@ -124,12 +123,25 @@ test("only an annotatable HTML selection offers comments, never the next Markdow
   adapter = createMemoryAdapter({ "/a/report.html": "<body>HTML</body>", "/a/notes.MD": "# Notes" })
   render(<Surface cwd="/a" defaultOpen />)
   fireEvent.doubleClick(await screen.findByRole("treeitem", { name: /report.html/ }))
-  const frame = await waitFor(() => required(document.querySelector<HTMLIFrameElement>(".file-workspace-editor iframe")))
+  const frame = await waitFor(() =>
+    required(document.querySelector<HTMLIFrameElement>(".file-workspace-editor iframe"))
+  )
   const target = required(frame.contentWindow)
   const select = (canComment: boolean): void => {
-    fireEvent(window, new MessageEvent("message", { source: target, data: {
-      source: "alwith-preview", type: "selection", text: "HTML", rect: { left: 2, bottom: 10, width: 30 }, canComment
-    } }))
+    fireEvent(
+      window,
+      new MessageEvent("message", {
+        source: target,
+        data: {
+          source: "alwith-preview",
+          type: "selection",
+          frameToken: frame.src,
+          text: "HTML",
+          rect: { left: 2, bottom: 10, width: 30 },
+          canComment
+        }
+      })
+    )
   }
   select(false)
   expect(screen.getAllByRole("menuitem")).toHaveLength(2)
@@ -142,6 +154,42 @@ test("only an annotatable HTML selection offers comments, never the next Markdow
   await waitFor(() => expect(screen.queryByTestId("header-comments-toggle")).toBeNull())
   select(true)
   expect(screen.queryByRole("menuitem", { name: "Comment" })).toBeNull()
+})
+
+test("preview selection stays inside its pane, rejects stale frames and clears on chat focus", async () => {
+  adapter = createMemoryAdapter({ "/a/report.html": "<body>HTML</body>" })
+  render(<Surface cwd="/a" defaultOpen />)
+  fireEvent.doubleClick(await screen.findByRole("treeitem", { name: /report.html/ }))
+  const frame = await waitFor(() =>
+    required(document.querySelector<HTMLIFrameElement>(".file-workspace-editor iframe"))
+  )
+  const target = required(frame.contentWindow)
+  const select = (frameToken: string): void => {
+    fireEvent(
+      window,
+      new MessageEvent("message", {
+        source: target,
+        data: {
+          source: "alwith-preview",
+          type: "selection",
+          frameToken,
+          text: "HTML",
+          rect: { left: 2, bottom: 10, width: 30 },
+          canComment: true
+        }
+      })
+    )
+  }
+
+  select(frame.src)
+  const menu = screen.getByRole("menu")
+  expect(menu.closest(".file-workspace-editor")).not.toBeNull()
+
+  // A late message from the previous render must not revive the pill.
+  fireEvent.pointerDown(screen.getByText("Chat /a"))
+  expect(screen.queryByRole("menu")).toBeNull()
+  select(`${frame.src}?stale`)
+  expect(screen.queryByRole("menu")).toBeNull()
 })
 
 test("remount restores pinned files, active file and expanded folders without draft persistence", async () => {
@@ -847,13 +895,9 @@ test("project tree shortcut opens the preview and reopens a collapsed tree witho
   fireEvent.click(screen.getByTestId("tree-toggle"))
   expect(screen.getByTestId("tree-toggle")).toHaveAttribute("aria-expanded", "false")
   fireEvent.keyDown(window, { key: "e", metaKey: true, shiftKey: true })
-  await waitFor(() =>
-    expect(screen.getByTestId("tree-toggle")).toHaveAttribute("aria-expanded", "true")
-  )
+  await waitFor(() => expect(screen.getByTestId("tree-toggle")).toHaveAttribute("aria-expanded", "true"))
   fireEvent.keyDown(window, { key: "E", ctrlKey: true, shiftKey: true })
-  await waitFor(() =>
-    expect(screen.getByTestId("tree-toggle")).toHaveAttribute("aria-expanded", "true")
-  )
+  await waitFor(() => expect(screen.getByTestId("tree-toggle")).toHaveAttribute("aria-expanded", "true"))
 })
 
 test("native project tree menu opens the current workspace", async () => {
@@ -894,10 +938,7 @@ test("a column the reader closed stays closed when the next project opens", asyn
     key === "workspace.treeVisible" ? (false as T) : undefined
   )
   render(<Surface cwd="/a" defaultOpen />)
-  expect(await screen.findByTestId("tree-toggle")).toHaveAttribute(
-    "aria-expanded",
-    "false"
-  )
+  expect(await screen.findByTestId("tree-toggle")).toHaveAttribute("aria-expanded", "false")
   expect(screen.queryByRole("treeitem", { name: /one.txt/ })).toBeNull()
 })
 
@@ -1130,23 +1171,15 @@ test("a directory-less (missing) surface starts with the file column closed and 
 // `invalid` is NOT excluded from `defaultFourColumns` (`app.tsx:507-508`): the repair hint must
 // be on screen without any click. Construct the real combination, including the rejected path.
 test("an invalid Groups-root directory opens the column and offers the one-click repair without a click", async () => {
-  render(
-    <Surface
-      cwd={null}
-      reason="invalid"
-      defaultOpen
-      invalidDirectory="/Users/me/Documents/ALWith/groups"
-    />
-  )
+  render(<Surface cwd={null} reason="invalid" defaultOpen invalidDirectory="/Users/me/Documents/ALWith/groups" />)
   expect(document.querySelector(".file-workspace-layout")).toHaveAttribute("data-open", "true")
   const slab = document.querySelector(".file-workspace-preview-slide .file-workspace-slab")
   expect(slab).toHaveAttribute("aria-hidden", "false")
   expect(slab?.hasAttribute("inert")).toBe(false)
-  expect(await screen.findByTestId("workspace-empty-state")).toHaveAttribute(
-    "data-workspace-empty-reason",
-    "invalid"
-  )
-  expect(screen.getByText("Use the one-click repair below to point the directory back at this meeting's own folder.")).toBeTruthy()
+  expect(await screen.findByTestId("workspace-empty-state")).toHaveAttribute("data-workspace-empty-reason", "invalid")
+  expect(
+    screen.getByText("Use the one-click repair below to point the directory back at this meeting's own folder.")
+  ).toBeTruthy()
   expect(screen.getByRole("button", { name: "Repair now" })).toBeTruthy()
   // Task #5 / ③: a failed heal must not be a dead end — the manual picker is always available.
   expect(screen.getByRole("button", { name: "Choose a folder" })).toBeTruthy()
@@ -1193,10 +1226,7 @@ test("an invalid empty state writes a folder pick under the app's directoryKey, 
       invalidDirectory="/Users/me/Documents/ALWith/groups"
     />
   )
-  expect(await screen.findByTestId("workspace-empty-state")).toHaveAttribute(
-    "data-workspace-empty-reason",
-    "invalid"
-  )
+  expect(await screen.findByTestId("workspace-empty-state")).toHaveAttribute("data-workspace-empty-reason", "invalid")
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Choose a folder" }))
   })

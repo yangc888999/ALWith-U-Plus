@@ -44,10 +44,16 @@ function showSidebar(pendingDirectory?: string | null) {
   )
 }
 
-test.each([[null, true], [null, false], ["/new-project", true], ["/new-project", false]] as const)("shows the pending row for %s, list loaded=%s", (cwd, loaded) => {
+test.each([
+  [null, true],
+  [null, false],
+  ["/new-project", true],
+  ["/new-project", false]
+] as const)("shows the pending row for %s, list loaded=%s", (cwd, loaded) => {
   client.store.setState({ sessionListLoaded: loaded, sessionList: [] })
   const view = showSidebar(cwd)
-  expect(view.getByRole("status", { name: "" })).toHaveTextContent("New chat")
+  expect(view.getByRole("button", { name: "New chat" })).toBeInTheDocument()
+  expect(view.getByRole("status")).toHaveTextContent("Creating the conversation")
   expect(client.state.sessionList).toEqual([])
 })
 
@@ -59,6 +65,64 @@ test("empty quick chats stays first and collapsed with a project hover card", ()
   expect(quick.closest('[data-slot="popover-trigger"]')).not.toBeNull()
   // Every group starts collapsed, so nothing in the sidebar is expanded yet.
   expect(view.queryAllByRole("button", { expanded: true })).toHaveLength(0)
+})
+
+test("the local pending row is clickable and reports a retryable failure", () => {
+  client.store.setState({ sessionListLoaded: true, sessionList: [] })
+  let selected = 0
+  const view = render(
+    <SidebarProvider>
+      <SessionSidebar
+        pendingChat={{ key: "pending-1", directory: null, status: "retryable" }}
+        onSelectPending={() => {
+          selected += 1
+        }}
+        screen="main"
+        leadingPage="plugins"
+        selectedId={null}
+        onSelect={() => {}}
+        onNewChat={() => {}}
+        onNewProjectChat={() => {}}
+        onSearch={() => {}}
+        onOpenSettings={() => {}}
+        onOpenPlugins={() => {}}
+        onOpenExtensions={() => {}}
+        onOpenAutomation={() => {}}
+        onSwitchScreen={() => {}}
+      />
+    </SidebarProvider>
+  )
+  fireEvent.click(view.getByRole("button", { name: "New chat" }))
+  expect(selected).toBe(1)
+  expect(view.getByRole("status")).toHaveTextContent("Preparation failed; click to retry")
+})
+
+test("the local row disappears once its native session is in the list", () => {
+  client.store.setState({
+    sessionListLoaded: true,
+    sessionList: [{ sessionId: "native-1", cwd: "/project", title: "Real chat", updatedAt: null, archived: false }]
+  })
+  const view = showSidebar()
+  view.rerender(
+    <SidebarProvider>
+      <SessionSidebar
+        pendingChat={{ key: "pending-1", directory: "/project", status: "connecting", sessionId: "native-1" }}
+        screen="main"
+        leadingPage="plugins"
+        selectedId={null}
+        onSelect={() => {}}
+        onNewChat={() => {}}
+        onNewProjectChat={() => {}}
+        onSearch={() => {}}
+        onOpenSettings={() => {}}
+        onOpenPlugins={() => {}}
+        onOpenExtensions={() => {}}
+        onOpenAutomation={() => {}}
+        onSwitchScreen={() => {}}
+      />
+    </SidebarProvider>
+  )
+  expect(view.queryByRole("button", { name: "New chat" })).toBeNull()
 })
 
 test("group expansion, load more and collapse update the scrollbar without scrolling or resizing the viewport", async () => {

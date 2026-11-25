@@ -1,13 +1,23 @@
-import { createEditorController, type EditorController, type EditorDocument, type PreviewProvider } from "@alwith/module-editor"
+import {
+  createEditorController,
+  type EditorController,
+  type EditorDocument,
+  type PreviewProvider
+} from "@alwith/module-editor"
 import { createPreviewProviders, type PreviewContext, type PreviewHost } from "@alwith/module-editor/previews"
 import { createFileSystem, type FileSystem } from "@alwith/module-fs"
 import { createMemoryAdapter } from "@alwith/module-fs/testing"
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
-import { createWysiwygHtmlIntegration, freezeHtmlSourceDuringEditing, isEditableHtmlPath, sourceHasBody } from "../html-wysiwyg"
 import { HTML_EDIT_BRIDGE_ID } from "../html-edit-bridge"
-import { HTML_EDIT_FRAME_SOURCE, HTML_EDIT_HOST_SOURCE, type FormatState, type WysiwygLabels } from "../wysiwyg-types"
+import {
+  createWysiwygHtmlIntegration,
+  freezeHtmlSourceDuringEditing,
+  isEditableHtmlPath,
+  sourceHasBody
+} from "../html-wysiwyg"
+import { type FormatState, HTML_EDIT_FRAME_SOURCE, HTML_EDIT_HOST_SOURCE, type WysiwygLabels } from "../wysiwyg-types"
 
 const labels: WysiwygLabels = {
   bold: "Bold",
@@ -65,13 +75,15 @@ function contextFixture(overrides: Partial<PreviewContext> = {}): PreviewContext
  * a memory filesystem and a real editor controller, with a fake native host that serves an
  * about:blank iframe so the bridge protocol can be simulated with real MessageEvents.
  */
-async function setup(options: {
-  path?: string
-  source?: string
-  readOnly?: boolean
-  dirty?: boolean
-  base?: PreviewHost["htmlIntegration"]
-} = {}): Promise<Harness> {
+async function setup(
+  options: {
+    path?: string
+    source?: string
+    readOnly?: boolean
+    dirty?: boolean
+    base?: PreviewHost["htmlIntegration"]
+  } = {}
+): Promise<Harness> {
   const path = options.path ?? "/repo/report.html"
   const source = options.source ?? SOURCE
   const fs = createFileSystem({
@@ -86,7 +98,9 @@ async function setup(options: {
     reportError: () => {}
   })
   const opened = await controller.open(path)
-  const document: EditorDocument = options.dirty ? { ...opened, dirty: true, text: `${source}<!-- unsaved -->` } : opened
+  const document: EditorDocument = options.dirty
+    ? { ...opened, dirty: true, text: `${source}<!-- unsaved -->` }
+    : opened
   const context = contextFixture({ readOnly: options.readOnly ?? false })
 
   const markSelfWrite = vi.fn()
@@ -211,7 +225,11 @@ test("transform appends the resident edit bridge after the base transform", asyn
     render: () => null
   }
   const fs = createFileSystem({ adapter: createMemoryAdapter({}), reportError: () => {} })
-  const controller = createEditorController({ fs, confirmClose: () => Promise.resolve("cancel"), reportError: () => {} })
+  const controller = createEditorController({
+    fs,
+    confirmClose: () => Promise.resolve("cancel"),
+    reportError: () => {}
+  })
   const integration = createWysiwygHtmlIntegration(base, {
     fs,
     controller,
@@ -240,7 +258,22 @@ test("entering edit mode sends set-mode true and enables the format buttons once
   await waitFor(() => expect(h.sent.some((m) => m.type === "set-mode" && m.editing === true)).toBe(true))
   // The frame confirms the mode and reports an editable format state.
   h.send("mode", { editing: true })
-  h.send("state", { state: { bold: false, italic: false, underline: false, strike: false, blockquote: false, ul: false, ol: false, code: false, codeBlock: false, inTable: false, hasImage: false, canEdit: true } satisfies FormatState })
+  h.send("state", {
+    state: {
+      bold: false,
+      italic: false,
+      underline: false,
+      strike: false,
+      blockquote: false,
+      ul: false,
+      ol: false,
+      code: false,
+      codeBlock: false,
+      inTable: false,
+      hasImage: false,
+      canEdit: true
+    } satisfies FormatState
+  })
   await waitFor(() => expect(screen.getByRole("button", { name: "Bold" })).not.toBeDisabled())
   expect(screen.getByRole("button", { name: "Done" })).toBeInTheDocument()
   // The native host is told to suspend rebuilds for this path.
@@ -251,7 +284,22 @@ test("a format command is posted to the frame with the handshake nonce", async (
   const h = await setup()
   fireEvent.click(screen.getByRole("button", { name: "Edit" }))
   h.send("mode", { editing: true })
-  h.send("state", { state: { bold: false, italic: false, underline: false, strike: false, blockquote: false, ul: false, ol: false, code: false, codeBlock: false, inTable: false, hasImage: false, canEdit: true } satisfies FormatState })
+  h.send("state", {
+    state: {
+      bold: false,
+      italic: false,
+      underline: false,
+      strike: false,
+      blockquote: false,
+      ul: false,
+      ol: false,
+      code: false,
+      codeBlock: false,
+      inTable: false,
+      hasImage: false,
+      canEdit: true
+    } satisfies FormatState
+  })
   await waitFor(() => expect(screen.getByRole("button", { name: "Bold" })).not.toBeDisabled())
   fireEvent.click(screen.getByRole("button", { name: "Bold" }))
   const command = h.sent.find((m) => m.type === "command")
@@ -275,6 +323,70 @@ test("a dirty report saves through fs.writeFile with replace + expectedVersion, 
   expect(typeof writeOptions?.expectedVersion).toBe("string")
   expect(h.markSelfWrite).toHaveBeenCalledWith(h.document.path)
   await waitFor(() => expect(reloadSpy).toHaveBeenCalledWith(h.document.id))
+})
+
+test("a stable read retries through a version change instead of reporting a save failure", async () => {
+  const h = await setup()
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }))
+  h.send("mode", { editing: true })
+  const originalStat = h.fs.stat.bind(h.fs)
+  let pathStats = 0
+  vi.spyOn(h.fs, "stat").mockImplementation(async (path) => {
+    const result = await originalStat(path)
+    if (path !== h.document.path) return result
+    pathStats += 1
+    return pathStats === 2 && result !== null ? { ...result, version: `torn-${result.version}` } : result
+  })
+  const writeSpy = vi.spyOn(h.fs, "writeFile")
+  const edited = "<!DOCTYPE html><html><head><title>Report</title></head><body><p>Stable</p></body></html>"
+  h.send("dirty", { html: edited })
+  await waitFor(() => expect(writeSpy).toHaveBeenCalledTimes(1))
+  expect(h.context.onError).not.toHaveBeenCalled()
+})
+
+test("an identical body adopts the newer version without rewriting the file", async () => {
+  const h = await setup()
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }))
+  h.send("mode", { editing: true })
+  const edited = "<!DOCTYPE html><html><head><title>Report</title></head><body><p>Same</p></body></html>"
+  await h.fs.writeFile(h.document.path, new TextEncoder().encode(edited), { mode: "replace" })
+  const writeSpy = vi.spyOn(h.fs, "writeFile")
+  const reloadSpy = vi.spyOn(h.controller, "reload")
+  h.send("dirty", { html: edited })
+  await waitFor(() => expect(reloadSpy).toHaveBeenCalledWith(h.document.id))
+  expect(writeSpy).not.toHaveBeenCalled()
+  expect(h.context.onError).not.toHaveBeenCalled()
+})
+
+test("a real concurrent body change keeps both versions and never overwrites", async () => {
+  const h = await setup()
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }))
+  h.send("mode", { editing: true })
+  const disk = "<!DOCTYPE html><html><head><title>Report</title></head><body><p>Cloud edit</p></body></html>"
+  const local = "<!DOCTYPE html><html><head><title>Report</title></head><body><p>Local edit</p></body></html>"
+  await h.fs.writeFile(h.document.path, new TextEncoder().encode(disk), { mode: "replace" })
+  const writeSpy = vi.spyOn(h.fs, "writeFile")
+  h.send("dirty", { html: local })
+  const conflict = await screen.findByTestId("html-save-conflict")
+  expect(within(conflict).getByText(local)).toBeInTheDocument()
+  expect(within(conflict).getByText(disk)).toBeInTheDocument()
+  expect(writeSpy).not.toHaveBeenCalled()
+  expect(h.context.onError).not.toHaveBeenCalled()
+})
+
+test("a preview refresh race after a successful write does not surface as a save error", async () => {
+  const h = await setup()
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }))
+  h.send("mode", { editing: true })
+  const reloadSpy = vi
+    .spyOn(h.controller, "reload")
+    .mockRejectedValue(new Error("File changed while opening; reopen it"))
+  const writeSpy = vi.spyOn(h.fs, "writeFile")
+  const edited = "<!DOCTYPE html><html><head><title>Report</title></head><body><p>Saved once</p></body></html>"
+  h.send("dirty", { html: edited })
+  await waitFor(() => expect(writeSpy).toHaveBeenCalledTimes(1))
+  await waitFor(() => expect(reloadSpy).toHaveBeenCalledTimes(3))
+  expect(h.context.onError).not.toHaveBeenCalled()
 })
 
 test("finishing edit mode flushes before leaving, and replays the held rebuild on exit", async () => {
@@ -368,7 +480,22 @@ test("unmounting while editing with unsaved edits posts a final flush", async ()
   const h = await setup()
   fireEvent.click(screen.getByRole("button", { name: "Edit" }))
   h.send("mode", { editing: true })
-  h.send("state", { state: { bold: false, italic: false, underline: false, strike: false, blockquote: false, ul: false, ol: false, code: false, codeBlock: false, inTable: false, hasImage: false, canEdit: true } satisfies FormatState })
+  h.send("state", {
+    state: {
+      bold: false,
+      italic: false,
+      underline: false,
+      strike: false,
+      blockquote: false,
+      ul: false,
+      ol: false,
+      code: false,
+      codeBlock: false,
+      inTable: false,
+      hasImage: false,
+      canEdit: true
+    } satisfies FormatState
+  })
   await waitFor(() => expect(screen.getByRole("button", { name: "Bold" })).not.toBeDisabled())
   // Make a change that schedules a flush in the real bridge; here we simulate the dirty report
   // arriving but intercept the save so the session stays dirty at unmount time.

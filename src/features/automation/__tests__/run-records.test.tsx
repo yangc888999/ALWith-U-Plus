@@ -86,3 +86,31 @@ test("a failure leads with its error instead of the empty summary", () => {
   render(<RunRecords />)
   expect(screen.getByText("engine gone")).toBeTruthy()
 })
+
+test("a no-content run is distinct from failure and shows every delivery receipt", () => {
+  const run = request({ runId: "run-empty", larkNotify: true })
+  startAutomationRun(run)
+  finishAutomationRun({
+    runId: run.runId,
+    taskId: run.taskId,
+    status: "no_content",
+    summary: "",
+    sessionId: "session-empty",
+    error: null,
+    finishedAt: Date.now(),
+    deliveries: [
+      { targetId: "oc_group", targetName: "交易健康度监控", kind: "chat", status: "skipped", error: "no_content" },
+      { targetId: "ou_self", targetName: "测试同学", kind: "user", status: "sent", error: null }
+    ]
+  })
+
+  render(<RunRecords />)
+  expect(screen.getByText("No report body was produced in this run")).toBeTruthy()
+  expect(screen.getByText("No body")).toBeTruthy()
+  fireEvent.click(screen.getByText("No report body was produced in this run").closest("button")!)
+  expect(screen.getByText("Delivery receipts")).toBeTruthy()
+  expect(screen.getByText(/交易健康度监控/)).toBeTruthy()
+  expect(screen.getByText("Skipped")).toBeTruthy()
+  expect(screen.getByText(/测试同学/)).toBeTruthy()
+  expect(screen.getByText("Sent")).toBeTruthy()
+})

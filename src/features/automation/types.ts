@@ -6,15 +6,7 @@
 // 依赖任何窗口或框架。
 
 /** 重复规则。顺序即「重复」下拉里的顺序。 */
-export const REPEAT_RULES = [
-  "interval",
-  "once",
-  "daily",
-  "weekly",
-  "biweekly",
-  "monthly",
-  "yearly"
-] as const
+export const REPEAT_RULES = ["interval", "once", "daily", "weekly", "biweekly", "monthly", "yearly"] as const
 
 export type RepeatRule = (typeof REPEAT_RULES)[number]
 
@@ -59,6 +51,9 @@ export interface TaskDraft {
   /** 运行结束后把结果推送到飞书。 */
   larkNotify: boolean
   larkTargets: LarkTarget[]
+  /** When the finished turn has no deliverable report, notify only the signed-in user.
+   *  Defaults to off; the group is never sent an empty-body notice. */
+  larkEmptyResultNoticeToSelf?: boolean
   /** `bot` = 机器人身份（默认，开箱可用）；`user` = 本人身份（需额外授权 scope）。 */
   larkIdentity: string
   repeat: RepeatRule
@@ -82,7 +77,16 @@ export interface ScheduledTask extends ScheduleSpec, TaskDraft {
   updatedAt: number
 }
 
-export type RunStatus = "running" | "success" | "failed"
+export type RunStatus = "running" | "success" | "no_content" | "failed"
+
+/** One delivery attempt per Lark target, persisted with the run for an honest receipt. */
+export interface DeliveryReceipt {
+  targetId: string
+  targetName: string
+  kind: string
+  status: "sent" | "failed" | "skipped"
+  error: string | null
+}
 
 /** 运行记录。 */
 export interface RunRecord {
@@ -97,6 +101,7 @@ export interface RunRecord {
   /** 主窗口为这次运行创建的会话 id，失败时为 null。 */
   sessionId: string | null
   error: string | null
+  deliveries?: DeliveryReceipt[]
   /** 运行中但会话已停在 requires_action：定时任务无人交互，需要用户去主窗口处理。 */
   needsAuth?: boolean
 }
@@ -126,6 +131,7 @@ export interface AutomationRunRequest {
   fastMode: boolean
   larkNotify: boolean
   larkTargets: LarkTarget[]
+  larkEmptyResultNoticeToSelf?: boolean
   larkIdentity: string
   /** 复用的监控会话；省略 / null 表示主窗口需要新建一条并回写任务（兼容旧版请求）。 */
   monitorSessionId?: string | null
@@ -138,10 +144,11 @@ export interface AutomationRunRequest {
 export interface AutomationRunResult {
   runId: string
   taskId: string
-  status: "success" | "failed"
+  status: "success" | "no_content" | "failed"
   summary: string
   sessionId: string | null
   error: string | null
+  deliveries?: DeliveryReceipt[]
   finishedAt: number
 }
 

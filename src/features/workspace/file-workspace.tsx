@@ -99,6 +99,7 @@ import type { PanelControls } from "./panel-controls-context"
 import { usePreviewExtension } from "./preview-extension"
 import { applyStoredCommentsVisibility, commentsHidden, setCommentsHidden } from "./preview-resources"
 import { PreviewSurface } from "./preview-surface"
+import { createResilientWriteFileSystem } from "./resilient-write-fs"
 import { WorkspaceButton } from "./workspace-button"
 import { WorkspaceEditor } from "./workspace-editor"
 import { WorkspacePanels } from "./workspace-panels"
@@ -107,11 +108,7 @@ import { routeHistory, routeReplace } from "./editor-shortcuts"
 import { createHtmlPreviewHost } from "./html-preview"
 import { createWysiwygHtmlIntegration, freezeHtmlSourceDuringEditing, HTML_EDITING_ATTRIBUTE } from "./html-wysiwyg"
 import { localPreviewProviders } from "./local-previews"
-import {
-  createWysiwygMarkdownIntegration,
-  LARGE_MARKDOWN_BYTES,
-  MARKDOWN_EDITING_ATTRIBUTE
-} from "./markdown-wysiwyg"
+import { createWysiwygMarkdownIntegration, LARGE_MARKDOWN_BYTES, MARKDOWN_EDITING_ATTRIBUTE } from "./markdown-wysiwyg"
 import { MoveToDialog } from "./move-to-dialog"
 import { moveWorkspaceFiles, type WorkspaceMoveOutcome } from "./move-workspace-files"
 import { resolvePreviewResource } from "./preview-resources"
@@ -605,8 +602,10 @@ export function FileWorkspace({
     top: number
     text: string
     path: string
+    frameToken: string
     onComment?: () => void
   } | null>(null)
+  const previewEditorRef = useRef<HTMLDivElement | null>(null)
   const noSelectionRoot = useRef<HTMLDivElement | null>(null)
   // The composer on screen belongs to the selected conversation; before the first message the
   // draft chat owns it. Both the floating pill and the right-click menu quote into that composer.
@@ -633,6 +632,27 @@ export function FileWorkspace({
     return () => window.removeEventListener("mousemove", track)
   }, [])
   useEffect(() => () => setActivePreview(null), [])
+  // A selection belongs to one visible file. Closing the pane, switching tabs or opening another
+  // surface drops the pill immediately; it never waits for the frame to announce an empty range.
+  useEffect(() => {
+    setPreviewSelection(null)
+    setPreviewMenu(null)
+  }, [activePath, visible, previewExtension])
+  // Clicking or focusing anything outside the preview pane dismisses a frame-forwarded selection.
+  // The pill itself is portalled inside the pane, so its own pointer path is not affected.
+  useEffect(() => {
+    const dismissOutsidePreview = (event: Event): void => {
+      const target = event.target
+      if (!(target instanceof Element) || target.closest(".file-workspace-editor") !== null) return
+      setPreviewSelection(null)
+    }
+    document.addEventListener("pointerdown", dismissOutsidePreview, true)
+    document.addEventListener("focusin", dismissOutsidePreview, true)
+    return () => {
+      document.removeEventListener("pointerdown", dismissOutsidePreview, true)
+      document.removeEventListener("focusin", dismissOutsidePreview, true)
+    }
+  }, [])
   // The tree, the tabs and the editor keep their own functional context menus (rename, copy path,
   // close others…), so nothing here replaces them with a document-level menu — that would swallow
   // their actions. Only the previewed document needs the translated menu, and it lives in an
@@ -647,16 +667,23 @@ export function FileWorkspace({
         y?: unknown
         rect?: unknown
         canComment?: unknown
+        frameToken?: unknown
       } | null
       if (data === null || data.source !== "alwith-preview") return
       if (data.type === "selection") {
         const text = typeof data.text === "string" ? data.text.trim() : ""
-        if (!visible || previewExtension !== null || activePath === null || !/\.(html?|xhtml)$/i.test(activePath)) return
+        if (!visible || previewExtension !== null || activePath === null || !/\.(html?|xhtml)$/i.test(activePath))
+          return
         const frame = Array.from(document.querySelectorAll<HTMLIFrameElement>(".file-workspace-editor iframe")).find(
           (element) => element.contentWindow === event.source
         )
         if (!frame) return
+        // The native preview URL carries a per-render capability token. Comparing it with the
+        // live frame rejects events that were queued just before a tab switch or rebuild.
+        if (typeof data.frameToken !== "string" || frame.src === "" || data.frameToken !== frame.src) return
         const box = frame.getBoundingClientRect()
+        const pane = previewEditorRef.current?.getBoundingClientRect() ?? null
+        if (pane === null) return
         const rect = data.rect as { left?: number; top?: number; bottom?: number; width?: number } | null
         if (text === "" || rect == null) {
           setPreviewSelection(null)
@@ -671,21 +698,21 @@ export function FileWorkspace({
         // Account for iframe zoom: rect is in the iframe's own coordinate space, so scale by the
         // ratio of the on-screen box width to the frame's intrinsic offsetWidth.
         const a = box.width / (frame.offsetWidth || box.width)
-        const left = Math.max(
-          8,
-          Math.min(box.left + (Number(rect.left ?? 0) + Number(rect.width ?? 0) / 2) * a - 98, window.innerWidth - 204)
-        )
-        const top = box.top + Number(rect.bottom ?? 0) * a + 8
+        const left = box.left - pane.left + (Number(rect.left ?? 0) + Number(rect.width ?? 0) / 2) * a - 98
+        const top = box.top - pane.top + Number(rect.bottom ?? 0) * a + 8
         setPreviewSelection({
           left,
           top,
           text: text.slice(0, 20_000),
           path: activePath,
-          onComment: data.canComment === true
-            ? () => {
-                if (frame.isConnected) frame.contentWindow?.postMessage({ source: "alwith-preview-host", type: "comment" }, "*")
-              }
-            : undefined
+          frameToken: data.frameToken,
+          onComment:
+            data.canComment === true
+              ? () => {
+                  if (frame.isConnected)
+                    frame.contentWindow?.postMessage({ source: "alwith-preview-host", type: "comment" }, "*")
+                }
+              : undefined
         })
         return
       }
@@ -693,6 +720,7 @@ export function FileWorkspace({
       const frame = Array.from(document.querySelectorAll("iframe")).find(
         (element) => element.contentWindow === event.source
       )
+      if (!frame || typeof data.frameToken !== "string" || frame.src === "" || data.frameToken !== frame.src) return
       const rect = frame?.getBoundingClientRect()
       // Scale the in-frame pointer coordinates by the iframe zoom ratio. The parent window's own
       // pointer (pointer.current) is unreliable here: mousemove inside the iframe never bubbles to
@@ -827,13 +855,17 @@ export function FileWorkspace({
       finishEditHtml: translateRef.current("workspace.finishEditHtml"),
       htmlEditBlocked: translateRef.current("workspace.htmlEditBlocked"),
       htmlDeleted: translateRef.current("workspace.htmlDeleted"),
-      htmlUndoDelete: translateRef.current("workspace.htmlUndoDelete")
+      htmlUndoDelete: translateRef.current("workspace.htmlUndoDelete"),
+      htmlSaveConflict: translateRef.current("workspace.htmlSaveConflict"),
+      htmlSaveConflictDescription: translateRef.current("workspace.htmlSaveConflictDescription"),
+      htmlLocalDraft: translateRef.current("workspace.htmlLocalDraft"),
+      htmlDiskVersion: translateRef.current("workspace.htmlDiskVersion"),
+      htmlKeepDraft: translateRef.current("workspace.htmlKeepDraft")
     }
     // Drive occupies both integration extension points only for drive documents; the WYSIWYG
     // wrappers layer on top and forward every base hook, so collaboration/comments keep working.
     // A local file must not carry the drive's probing state into its editable contract.
-    const driveIntegrations =
-      driveVisible && activeIsDriveDocument ? drivePreviewIntegrations(previewHost) : {}
+    const driveIntegrations = driveVisible && activeIsDriveDocument ? drivePreviewIntegrations(previewHost) : {}
     const providers = localPreviewProviders({
       ...driveIntegrations,
       createMarkdownIntegration: (document, context) =>
@@ -992,7 +1024,10 @@ export function FileWorkspace({
           }),
           reportError: report
         })
-        const fs = rawFs
+        // Markdown autosave uses the controller's conditional write. Wrap only the editor-facing
+        // filesystem so a sync that rotates the version without changing the body cannot turn every
+        // autosave into a false "changed on disk" error.
+        const fs = createResilientWriteFileSystem(rawFs)
         const editor = yield* Effect.acquireRelease(
           Effect.sync(() =>
             createEditorController({
@@ -1593,9 +1628,12 @@ export function FileWorkspace({
       <SelectionMenu
         containerRef={noSelectionRoot}
         sessionId={composerSessionId}
-        external={visible && previewExtension === null && previewSelection?.path === activePath ? previewSelection : null}
+        external={
+          visible && previewExtension === null && previewSelection?.path === activePath ? previewSelection : null
+        }
         onDismiss={dismissPreviewSelection}
         scope="preview"
+        portalTarget={previewEditorRef.current}
       />
       {showMainControls &&
         headerTarget !== null &&
@@ -1708,6 +1746,7 @@ export function FileWorkspace({
                 setViewMode(false)
                 closePreviewExtension()
               }}
+              editorRef={previewEditorRef}
               tree={
                 hasWorkspace ? (
                   <FileTree

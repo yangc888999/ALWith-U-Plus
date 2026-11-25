@@ -333,6 +333,30 @@ test("without the Lark CLI the toggle is disabled and points at the component in
   expect(screen.getByRole("button", { name: "Install" })).toBeTruthy()
   // 没装 CLI 就不该默认开：否则每个新任务都带一个必然发不出去的动作。
   expect(toggle.getAttribute("aria-checked")).toBe("false")
+  const emptyNotice = screen.getByRole("switch", { name: "Notify me privately when there is no report body" })
+  expect(emptyNotice.getAttribute("aria-checked")).toBe("false")
+  expect(emptyNotice.hasAttribute("disabled") || emptyNotice.hasAttribute("data-disabled")).toBe(true)
+})
+
+test("the no-body private notice is opt-in and saved with the task", async () => {
+  larkApi.status.mockResolvedValue(CLI_READY)
+  larkApi.auth.mockResolvedValue(SIGNED_IN)
+  const { onSubmit } = renderDialog()
+  fillRequiredFields()
+  await waitFor(() =>
+    expect(screen.getByRole("switch", { name: "Send the result to Lark (default)" }).getAttribute("aria-checked")).toBe(
+      "true"
+    )
+  )
+  const emptyNotice = screen.getByRole("switch", { name: "Notify me privately when there is no report body" })
+  expect(emptyNotice.getAttribute("aria-checked")).toBe("false")
+  await act(async () => {
+    fireEvent.click(emptyNotice)
+  })
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /confirm/i }))
+  })
+  expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({ larkEmptyResultNoticeToSelf: true })
 })
 
 test("advanced settings are always visible, with one home for model / effort / fast", () => {

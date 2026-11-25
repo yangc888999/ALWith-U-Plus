@@ -8,7 +8,6 @@ import { ChevronRightIcon, Trash2Icon } from "lucide-react"
 import { useState, useSyncExternalStore } from "react"
 import { useTranslation } from "react-i18next"
 
-import { Button } from "@/components/ui/button"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,6 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from "@/components/ui/alert-dialog"
+import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
 import { clearRuns, getAutomationSnapshot, listRuns, subscribeAutomation } from "./task-store"
@@ -53,6 +53,7 @@ function formatDuration(record: RunRecord): string {
 const STATUS_DOT: Record<RunStatus | "waiting", string> = {
   running: "bg-sky-500",
   success: "bg-emerald-500",
+  no_content: "bg-muted-foreground/60",
   failed: "bg-rose-500",
   waiting: "bg-amber-500"
 }
@@ -60,6 +61,7 @@ const STATUS_DOT: Record<RunStatus | "waiting", string> = {
 const STATUS_TEXT: Record<RunStatus | "waiting", string> = {
   running: "text-sky-700 dark:text-sky-300",
   success: "text-emerald-700 dark:text-emerald-300",
+  no_content: "text-muted-foreground",
   failed: "text-rose-700 dark:text-rose-300",
   waiting: "text-amber-700 dark:text-amber-300"
 }
@@ -70,6 +72,7 @@ const STATUS_TEXT: Record<RunStatus | "waiting", string> = {
  */
 function briefOf(record: RunRecord, runningLabel: string, t: (key: string) => string): string {
   if (record.status === "running") return runningLabel
+  if (record.status === "no_content") return t("automation.runNoContent")
   if (record.status === "success") {
     const ENGINE_STOP_TOKENS = /^(end_turn|tool_call|max_tokens|stop|length|content_filter)$/
     const summary = record.summary?.trim() ?? ""
@@ -120,7 +123,7 @@ export function RunRecords() {
               <AlertDialogCancel>{t("automation.runsClearCancel")}</AlertDialogCancel>
               <AlertDialogAction
                 onClick={() => clearRuns()}
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                className="text-destructive-foreground bg-destructive hover:bg-destructive/90"
               >
                 {t("automation.runsClearConfirm")}
               </AlertDialogAction>
@@ -145,8 +148,13 @@ export function RunRecords() {
                   aria-expanded={open}
                   className="flex w-full items-center gap-2 px-3 py-2 text-start hover:bg-foreground/[0.03]"
                 >
-                  <span className={cn("size-1.5 shrink-0 rounded-full", STATUS_DOT[record.status === "running" && record.needsAuth ? "waiting" : record.status])} />
-                  <span className="w-24 shrink-0 tabular-nums text-[11px] text-muted-foreground">
+                  <span
+                    className={cn(
+                      "size-1.5 shrink-0 rounded-full",
+                      STATUS_DOT[record.status === "running" && record.needsAuth ? "waiting" : record.status]
+                    )}
+                  />
+                  <span className="w-24 shrink-0 text-[11px] text-muted-foreground tabular-nums">
                     {formatWhen(record.startedAt)}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-xs text-foreground">
@@ -154,7 +162,12 @@ export function RunRecords() {
                       ? t("automation.runNowWaiting")
                       : briefOf(record, t("automation.runNowRunning"), t)}
                   </span>
-                  <span className={cn("shrink-0 text-[11px]", STATUS_TEXT[record.status === "running" && record.needsAuth ? "waiting" : record.status])}>
+                  <span
+                    className={cn(
+                      "shrink-0 text-[11px]",
+                      STATUS_TEXT[record.status === "running" && record.needsAuth ? "waiting" : record.status]
+                    )}
+                  >
                     {t(
                       record.status === "running" && record.needsAuth
                         ? "automation.runStatusWaiting"
@@ -162,7 +175,9 @@ export function RunRecords() {
                           ? "automation.runStatusRunning"
                           : record.status === "success"
                             ? "automation.runStatusSuccess"
-                            : "automation.runStatusFailed"
+                            : record.status === "no_content"
+                              ? "automation.runStatusNoContent"
+                              : "automation.runStatusFailed"
                     )}
                   </span>
                   <ChevronRightIcon
@@ -176,13 +191,13 @@ export function RunRecords() {
                       <span className="text-muted-foreground">{t("automation.runColTask")}</span>
                       <span className="min-w-0 break-words text-foreground">{record.taskName || record.taskId}</span>
                       <span className="text-muted-foreground">{t("automation.runDetailStart")}</span>
-                      <span className="tabular-nums text-foreground">{formatClock(record.startedAt)}</span>
+                      <span className="text-foreground tabular-nums">{formatClock(record.startedAt)}</span>
                       <span className="text-muted-foreground">{t("automation.runColDuration")}</span>
-                      <span className="tabular-nums text-foreground">{formatDuration(record)}</span>
+                      <span className="text-foreground tabular-nums">{formatDuration(record)}</span>
                       {record.sessionId !== null && (
                         <>
                           <span className="text-muted-foreground">{t("automation.runDetailSession")}</span>
-                          <span className="min-w-0 break-all font-mono text-[10px] text-muted-foreground">
+                          <span className="min-w-0 font-mono text-[10px] break-all text-muted-foreground">
                             {record.sessionId}
                           </span>
                         </>
@@ -193,9 +208,43 @@ export function RunRecords() {
                         <div className="mb-0.5 text-muted-foreground">
                           {record.error !== null ? t("automation.runDetailError") : t("automation.runDetailResult")}
                         </div>
-                        <pre className="max-h-48 overflow-auto rounded bg-background/70 p-2 font-sans text-[11px] whitespace-pre-wrap break-words text-foreground">
+                        <pre className="max-h-48 overflow-auto rounded bg-background/70 p-2 font-sans text-[11px] break-words whitespace-pre-wrap text-foreground">
                           {record.error ?? record.summary}
                         </pre>
+                      </div>
+                    )}
+                    {record.deliveries !== undefined && record.deliveries.length > 0 && (
+                      <div>
+                        <div className="mb-1 text-muted-foreground">{t("automation.runDeliveries")}</div>
+                        <ul className="space-y-1">
+                          {record.deliveries.map((delivery) => (
+                            <li key={`${delivery.kind}:${delivery.targetId}`} className="flex items-start gap-2">
+                              <span
+                                className={cn(
+                                  "mt-1 size-1.5 shrink-0 rounded-full",
+                                  delivery.status === "sent"
+                                    ? "bg-emerald-500"
+                                    : delivery.status === "failed"
+                                      ? "bg-rose-500"
+                                      : "bg-muted-foreground/50"
+                                )}
+                              />
+                              <span className="min-w-0 flex-1 break-words text-foreground">
+                                {delivery.targetName}
+                                {delivery.error !== null ? ` · ${delivery.error}` : ""}
+                              </span>
+                              <span className="shrink-0 text-muted-foreground">
+                                {t(
+                                  delivery.status === "sent"
+                                    ? "automation.deliverySent"
+                                    : delivery.status === "failed"
+                                      ? "automation.deliveryFailed"
+                                      : "automation.deliverySkipped"
+                                )}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
                       </div>
                     )}
                   </div>

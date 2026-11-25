@@ -68,6 +68,11 @@ test("a chat still loading its options keeps the plain engine picker", () => {
     // not be the recovery picker while the list is merely still loading.
     expect(view.getByTestId("slot")).toBeInTheDocument()
     expect(view.queryByTestId("recovery-picker")).not.toBeInTheDocument()
+    // Main chat header: the old overflow menu and favourite/shortcut cluster are gone; only the
+    // rename and find icons remain beside the send-mode switch.
+    expect(view.queryByRole("button", { name: "More actions" })).toBeNull()
+    expect(view.getByRole("button", { name: "Rename" })).toBeInTheDocument()
+    expect(view.getByRole("button", { name: "Find in chat" })).toBeInTheDocument()
   } finally {
     view.unmount()
   }

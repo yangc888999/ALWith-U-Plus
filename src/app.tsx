@@ -26,7 +26,7 @@ import {
   startAutomationScheduler
 } from "@/features/automation/automation-scheduler"
 import { getTask, patchRunRecord, setTaskMonitorSession } from "@/features/automation/task-store"
-import type { OnRunTask } from "@/features/automation/types"
+import type { DeliveryReceipt, OnRunTask } from "@/features/automation/types"
 import { ActionCard, ElicitationFormDialog } from "@/features/chat/action-card"
 import { ChatView } from "@/features/chat/chat-view"
 import { DRAFT_SESSION_ID, DraftChat } from "@/features/chat/draft-chat"
@@ -50,6 +50,7 @@ import { MainSidebarLayout } from "@/features/layout/components/main-sidebar-lay
 import { TrailingBoard } from "@/features/layout/components/trailing-board"
 import { CommandPalette } from "@/features/palette/command-palette"
 import { startFreeModelWatch } from "@/features/providers/free-model-watch"
+import type { PendingChatRow } from "@/features/sessions/pending-chat"
 import { recentMainActivity } from "@/features/sessions/recent-main-activity"
 import { selectSession } from "@/features/sessions/select-session"
 import { SessionSidebar } from "@/features/sessions/session-sidebar"
@@ -118,6 +119,10 @@ import { openSettingsWindow } from "@/lib/window-manager"
 // Matches `lib/startup-window.ts#FALLBACK_MS`: a startup failure keeps retrying while the silent
 // window is open, and this is how long that window lasts at most before the banner may speak.
 const STARTUP_RECOVERY_MS = 20_000
+
+function pendingChatKey(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
 
 // Pages behind a navigation click. Keeping them out of the startup chunk leaves the first paint
 // with only the chat surface to parse, which is what the window shows anyway; each page's chunk
@@ -576,17 +581,30 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     id: string
     generation: number
   } | null>(null)
-  const [pendingDraftGeneration, setPendingDraftGeneration] = useState<number | null>(null)
+  const [pendingChat, setPendingChat] = useState<PendingChatRow | null>(null)
+  const [quickChatDirectoryPending, setQuickChatDirectoryPending] = useState(false)
   const newChatInDirectory = useCallback(
-    (cwd?: string | null, collectionId?: string, groupId: string | null = null) => {
+    (
+      cwd?: string | null,
+      collectionId?: string,
+      groupId: string | null = null,
+      pending?: { key?: string; directory?: string | null }
+    ) => {
+      const directory = newChatDirectory(cwd === undefined ? (extensionSession.current?.cwd ?? lastDirectory) : cwd)
+      const pendingGroup = isTemporaryChatDir(directory) ? null : directory
+      const pendingKey = groupId === null ? (pending?.key ?? pendingChatKey()) : null
+      if (pendingKey !== null) {
+        setPendingChat((current) =>
+          current?.key === pendingKey
+            ? { ...current, directory: pendingGroup ?? pending?.directory ?? null, status: "draft" }
+            : { key: pendingKey, directory: pendingGroup ?? pending?.directory ?? null, status: "draft" }
+        )
+      }
+      setQuickChatDirectoryPending(false)
       void operation
         .run(
           async () => {
-            const directory = newChatDirectory(
-              cwd === undefined ? (extensionSession.current?.cwd ?? lastDirectory) : cwd
-            )
             client.releaseDraftSlot("main")
-            setPendingDraftGeneration(groupId === null ? surfaceGeneration + 1 : null)
             setDraftCollection(
               collectionId === undefined ? null : { id: collectionId, generation: surfaceGeneration + 1 }
             )
@@ -602,16 +620,32 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           },
           { handoff: true }
         )
-        .catch((error: unknown) => toast.error(describeError(error)))
+        .catch((error: unknown) => {
+          setPendingChat((current) =>
+            current !== null && current.key === pendingKey ? { ...current, status: "retryable" } : current
+          )
+          toast.error(describeError(error))
+        })
     },
     [chooseDraftFolder, initialPreferences.defaultStartSurface, lastDirectory, operation, surfaceGeneration]
   )
 
   /** 新建会话: a temporary chat in its own folder under the quick-chat root, never inside a project. */
   const newChat = useCallback(() => {
+    const key = pendingChatKey()
+    setPendingChat({ key, directory: null, status: "draft" })
+    setQuickChatDirectoryPending(true)
+    setView("chat")
+    setSelectedId(null)
     void createChatDirectory()
-      .then((directory) => newChatInDirectory(directory))
-      .catch((error: unknown) => toast.error(describeError(error)))
+      .then((directory) => newChatInDirectory(directory, undefined, null, { key }))
+      .catch((error: unknown) => {
+        setQuickChatDirectoryPending(false)
+        setPendingChat((current) =>
+          current !== null && current.key === key ? { ...current, status: "retryable" } : current
+        )
+        toast.error(describeError(error))
+      })
   }, [newChatInDirectory])
 
   /** A recent-project card opens that project's newest conversation, not another blank draft. */
@@ -677,9 +711,30 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   )
 
   const draftCreated = useCallback((id: string) => {
-    setPendingDraftGeneration(null)
+    setPendingChat((current) => (current === null ? current : { ...current, sessionId: id, status: "connecting" }))
     setSelectedId(id)
   }, [])
+
+  // Once the native draft row is in the list, the local placeholder has done its job. Rendering
+  // both would look like two chats and lose the in-place transition.
+  useEffect(() => {
+    if (pendingChat?.sessionId === undefined) return
+    if (knownSessions.some((row) => row.sessionId === pendingChat.sessionId)) setPendingChat(null)
+  }, [knownSessions, pendingChat?.sessionId])
+
+  const selectPendingChat = useCallback(() => {
+    if (pendingChat === null) return
+    if (pendingChat.status === "retryable" && pendingChat.sessionId === undefined) {
+      // A quick-chat folder that never got created has no draft surface to retry yet.
+      if (pendingChat.directory === null) {
+        newChat()
+        return
+      }
+    }
+    setView("chat")
+    setSelectedId(pendingChat.sessionId ?? null)
+    setChatRevealRequest((value) => value + 1)
+  }, [newChat, pendingChat])
 
   useEffect(() => {
     let disposed = false
@@ -1057,16 +1112,27 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           const started = new Date()
           const pad2 = (value: number): string => String(value).padStart(2, "0")
           const runStamp = `${started.getFullYear()}-${pad2(started.getMonth() + 1)}-${pad2(started.getDate())} ${pad2(started.getHours())}:${pad2(started.getMinutes())}`
-          await client.prompt(sessionId, [{ type: "text", text: request.prompt }], {
+          const receipt = await client.promptAndWait(sessionId, [{ type: "text", text: request.prompt }], {
             display: [{ type: "text", text: `【${runStamp} 运行】\n${request.prompt}` }]
           })
-          // The ACP stop reason ("end_turn") is meaningless to a reader. Push and record what the
-          // agent actually wrote in this turn; an empty string means there was no readable answer.
+          // Acceptance is not completion. Wait for the actual terminal turn, then read only what
+          // the agent wrote in this turn. A turn still running after the watchdog is unfinished,
+          // not a successful empty report.
+          if (client.state.sessions[sessionId]?.turnEndedAt[receipt] === undefined)
+            return {
+              runId: request.runId,
+              taskId: request.taskId,
+              status: "failed",
+              summary: "",
+              sessionId,
+              error: "本轮在执行器放行前仍未结束；未把过程输出当作日报推送。",
+              finishedAt: Date.now()
+            }
           const answer = client.answerSince(sessionId, before)
           return {
             runId: request.runId,
             taskId: request.taskId,
-            status: "success",
+            status: answer.trim() === "" ? "no_content" : "success",
             summary: answer,
             sessionId,
             error: null,
@@ -1100,28 +1166,111 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     }
     const execute = serialAutomationExecutor(async (request) => {
       const result = await executeAutomationRun(run, request)
-      // Notifications are best effort: a Lark outage must never turn a successful task into a
-      // failed one, and the run record is already written by the time we get here.
-      if (request.larkNotify && request.larkTargets.length > 0) {
+      // Delivery is a separate phase from execution: the local run record is already final. A
+      // no-body turn never sends the "empty result" placeholder to a group.
+      if (request.larkNotify) {
         const now = new Date()
         const pad = (value: number): string => String(value).padStart(2, "0")
         const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
-        const body =
-          result.status === "success"
-            ? result.summary.trim() !== ""
-              ? result.summary.trim()
-              : t("automation.larkEmptyResult")
-            : (result.error ?? t("automation.toastRunFailed"))
-        const header = result.status === "success" ? stamp : `${stamp} · ${t("automation.runStatusFailed")}`
-        // The message IS the result — no task/session ids, no "状态：完成" shell around an empty
-        // body. Only a failed run gets an explicit failure marker.
-        const text = [`【${request.taskName}】`, header, "", body].join("\n").slice(0, 4000)
-        void commands
-          .larkCliSend({ targets: request.larkTargets, text, identity: request.larkIdentity })
-          .then((failures) => {
+        const send = async (targets: typeof request.larkTargets, text: string): Promise<DeliveryReceipt[]> => {
+          const receipts: DeliveryReceipt[] = targets.map((target) => ({
+            targetId: target.id,
+            targetName: target.name,
+            kind: target.kind,
+            status: "skipped",
+            error: null
+          }))
+          try {
+            const failures = await commands.larkCliSend({ targets, text, identity: request.larkIdentity })
+            for (const receipt of receipts) {
+              const failure = failures.find(
+                (entry) => entry.startsWith(`${receipt.targetName}：`) || entry.startsWith(`${receipt.targetName}:`)
+              )
+              if (failure !== undefined) {
+                receipt.status = "failed"
+                receipt.error = failure
+              } else {
+                receipt.status = "sent"
+              }
+            }
             if (failures.length > 0) toast.error(`飞书推送部分失败：${failures.join("；")}`)
-          })
-          .catch((cause: unknown) => toast.error(describeError(cause)))
+          } catch (cause: unknown) {
+            const message = describeError(cause)
+            for (const receipt of receipts) {
+              receipt.status = "failed"
+              receipt.error = message
+            }
+            toast.error(message)
+          }
+          return receipts
+        }
+
+        let receipts: DeliveryReceipt[] = []
+        if (result.status === "no_content") {
+          // Configured groups are recorded as skipped rather than receiving a placeholder body.
+          receipts = request.larkTargets.map((target) => ({
+            targetId: target.id,
+            targetName: target.name,
+            kind: target.kind,
+            status: "skipped",
+            error: "no_content"
+          }))
+          if (request.larkEmptyResultNoticeToSelf === true) {
+            try {
+              const auth = await commands.larkCliAuthStatus()
+              const self = auth.identities.find(
+                (identity) =>
+                  identity.kind === "user" &&
+                  identity.available &&
+                  typeof identity.openId === "string" &&
+                  identity.openId !== ""
+              )
+              const selfId = self?.openId
+              if (typeof selfId === "string" && selfId !== "") {
+                const selfName = self?.userName ?? t("automation.larkSelfFallback")
+                const notice = [`【${request.taskName}】`, stamp, "", t("automation.larkEmptyResult")]
+                  .join("\n")
+                  .slice(0, 4000)
+                receipts.push(
+                  ...(await send(
+                    [
+                      {
+                        id: selfId,
+                        name: selfName,
+                        kind: "user"
+                      }
+                    ],
+                    notice
+                  ))
+                )
+              } else {
+                receipts.push({
+                  targetId: "self",
+                  targetName: t("automation.larkSelfFallback"),
+                  kind: "user",
+                  status: "skipped",
+                  error: t("automation.larkAuthMissing")
+                })
+              }
+            } catch (cause: unknown) {
+              receipts.push({
+                targetId: "self",
+                targetName: t("automation.larkSelfFallback"),
+                kind: "user",
+                status: "failed",
+                error: describeError(cause)
+              })
+            }
+          }
+        } else if (request.larkTargets.length > 0) {
+          const body =
+            result.status === "success" ? result.summary.trim() : (result.error ?? t("automation.toastRunFailed"))
+          const header = result.status === "success" ? stamp : `${stamp} · ${t("automation.runStatusFailed")}`
+          const text = [`【${request.taskName}】`, header, "", body].join("\n").slice(0, 4000)
+          receipts = await send(request.larkTargets, text)
+        }
+        result.deliveries = receipts
+        patchRunRecord(result.runId, { deliveries: receipts })
       }
       return result
     }, taskStillRunnable)
@@ -1321,6 +1470,13 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           <span>{t("chat.openingSession")}</span>
         </div>
       )
+    if (quickChatDirectoryPending && selectedId === null)
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+          <span className="size-5 animate-spin rounded-full border-2 border-muted-foreground/25 border-t-muted-foreground" />
+          <span>{t("chat.preparingNewChat")}</span>
+        </div>
+      )
     if (session !== null && !draftSessions[session.id] && submittingDraftId !== session.id)
       return (
         <ChatView
@@ -1336,7 +1492,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
             />
           }
           onSelectSession={select}
-          onOpenWindow={moveToWindow}
           onNewChat={newProjectChat}
           onClearContext={(cwd) => clearContextInPlace(session.id, cwd)}
           onDeleted={deleted}
@@ -1363,10 +1518,15 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           onCwdChange={chooseDraftFolder}
           onOpenProject={openRecentProject}
           onCreated={draftCreated}
-          onPrepareFailed={() => setPendingDraftGeneration(null)}
-          onSendingChange={(id, sending) =>
-            setSubmittingDraftId((current) => (sending ? id : current === id ? null : current))
+          onPrepareFailed={() =>
+            setPendingChat((current) => (current === null ? current : { ...current, status: "retryable" }))
           }
+          onSendingChange={(id, sending) => {
+            setSubmittingDraftId((current) => (sending ? id : current === id ? null : current))
+            setPendingChat((current) =>
+              current?.sessionId === id ? { ...current, status: sending ? "connecting" : "draft" } : current
+            )
+          }}
           onVoiceHandoff={voiceHandoff.accept}
           onAuthRequired={() => void openSettingsWindow("provider")}
           providerSnapshot={providerSnapshot}
@@ -1411,7 +1571,8 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           sidebar={
             leading ? null : (
               <SessionSidebar
-                pendingDirectory={view === "chat" && selectedId === null && pendingDraftGeneration === surfaceGeneration ? lastDirectory : undefined}
+                pendingChat={pendingChat}
+                onSelectPending={selectPendingChat}
                 screen={leading ? "leading" : "main"}
                 leadingPage={leadingPage}
                 selectedId={view === "chat" && mainVisible ? selectedId : null}

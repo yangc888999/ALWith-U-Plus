@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { useState } from "react"
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
 import { dayKey } from "@/features/settings/usage-data"
@@ -42,13 +43,14 @@ vi.mock("@/lib/settings-bridge", () => ({
 }))
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (key: string, options?: Record<string, unknown>) => (options === undefined ? key : `${key}${JSON.stringify(options)}`),
+    t: (key: string, options?: Record<string, unknown>) =>
+      options === undefined ? key : `${key}${JSON.stringify(options)}`,
     i18n: { language: "en" }
   })
 }))
 
-import { UsageSection } from "../usage-section"
 import { blankPrice, usePriceStore } from "../../price-store"
+import { UsageSection } from "../usage-section"
 
 const today = dayKey(new Date())
 const yesterday = dayKey(new Date(Date.now() - 86_400_000))
@@ -256,7 +258,9 @@ test("全部 / 内部 / 外部 scope filters the overview, analysis and the call
 
   await chooseScope("usageReport.scopeInternal")
   await waitFor(() => expect(screen.getAllByText("900.0K").length).toBeGreaterThan(0))
-  expect(screen.getByRole("combobox", { name: "usageReport.scopeLabel" })).toHaveTextContent("usageReport.scopeInternal")
+  expect(screen.getByRole("combobox", { name: "usageReport.scopeLabel" })).toHaveTextContent(
+    "usageReport.scopeInternal"
+  )
   expect(screen.queryByText("1.5M")).toBeNull()
   expect(document.querySelector("[data-usage-legend]")?.textContent).not.toContain("external-model")
   expect(screen.getByText("internal-log")).toBeInTheDocument()
@@ -264,7 +268,9 @@ test("全部 / 内部 / 外部 scope filters the overview, analysis and the call
 
   await chooseScope("usageReport.scopeExternal")
   await waitFor(() => expect(screen.getAllByText("600.0K").length).toBeGreaterThan(0))
-  expect(screen.getByRole("combobox", { name: "usageReport.scopeLabel" })).toHaveTextContent("usageReport.scopeExternal")
+  expect(screen.getByRole("combobox", { name: "usageReport.scopeLabel" })).toHaveTextContent(
+    "usageReport.scopeExternal"
+  )
   expect(screen.queryByText("900.0K")).toBeNull()
   expect(document.querySelector("[data-usage-legend]")?.textContent).not.toContain("internal-model")
   expect(screen.getByText("external-log")).toBeInTheDocument()
@@ -445,8 +451,26 @@ test("a long log collapses its page numbers", async () => {
 test("the request table opens on the whole history and 今日 narrows it", async () => {
   const old = dayKey(new Date(Date.now() - 9 * 86_400_000))
   const recent = [
-    { at: `${today}T10:00:00.000Z`, date: today, provider: "kimi", model: "recent-model", input: 1, cached: 0, output: 1, tokens: 2 },
-    { at: `${old}T10:00:00.000Z`, date: old, provider: "kimi", model: "stale-model", input: 1, cached: 0, output: 1, tokens: 2 }
+    {
+      at: `${today}T10:00:00.000Z`,
+      date: today,
+      provider: "kimi",
+      model: "recent-model",
+      input: 1,
+      cached: 0,
+      output: 1,
+      tokens: 2
+    },
+    {
+      at: `${old}T10:00:00.000Z`,
+      date: old,
+      provider: "kimi",
+      model: "stale-model",
+      input: 1,
+      cached: 0,
+      output: 1,
+      tokens: 2
+    }
   ]
   native.report.mockResolvedValue(report({ recent }))
   render(<UsageSection />)
@@ -503,8 +527,26 @@ test("a call filed under yesterday's UTC day still counts as today, in 分析 an
 test("changing the dates brings an older call back into the table", async () => {
   const old = dayKey(new Date(Date.now() - 9 * 86_400_000))
   const recent = [
-    { at: `${today}T10:00:00.000Z`, date: today, provider: "kimi", model: "recent-model", input: 1, cached: 0, output: 1, tokens: 2 },
-    { at: `${old}T10:00:00.000Z`, date: old, provider: "kimi", model: "stale-model", input: 1, cached: 0, output: 1, tokens: 2 }
+    {
+      at: `${today}T10:00:00.000Z`,
+      date: today,
+      provider: "kimi",
+      model: "recent-model",
+      input: 1,
+      cached: 0,
+      output: 1,
+      tokens: 2
+    },
+    {
+      at: `${old}T10:00:00.000Z`,
+      date: old,
+      provider: "kimi",
+      model: "stale-model",
+      input: 1,
+      cached: 0,
+      output: 1,
+      tokens: 2
+    }
   ]
   native.report.mockResolvedValue(report({ recent }))
   render(<UsageSection />)
@@ -545,12 +587,21 @@ test("a custom end date only takes effect after 查询", async () => {
   expect(screen.getByText("usageReport.detailEmpty")).toBeInTheDocument()
 })
 
-/** Opens the price configuration disclosure; it is collapsed by default like any other detail. */
+function PriceConfigHarness() {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button type="button" data-testid="open-price-config" onClick={() => setOpen(true)}>
+        open
+      </button>
+      <UsageSection priceConfigOpen={open} onPriceConfigOpenChange={setOpen} />
+    </>
+  )
+}
+
+/** Opens the price configuration dialog, which production launches from the usage-page header. */
 function openPriceConfig(): void {
-  const summary = screen.getByText("usageReport.priceConfig")
-  const details = summary.closest("details")
-  if (details === null) throw new Error("missing price details")
-  details.open = true
+  fireEvent.click(screen.getByTestId("open-price-config"))
 }
 
 test("the refresh button reports how many new calls the incremental sync brought in", async () => {
@@ -573,7 +624,7 @@ test("the refresh button reports how many new calls the incremental sync brought
 })
 
 test("price vendors start collapsed and only the opened one renders its table", async () => {
-  render(<UsageSection />)
+  render(<PriceConfigHarness />)
   await waitForStagedCards()
   openPriceConfig()
   const vendors = screen.getAllByTestId("price-vendor")
@@ -590,8 +641,19 @@ test("price vendors start collapsed and only the opened one renders its table", 
   expect(openai.querySelector("button[aria-expanded]")).toHaveAttribute("aria-expanded", "true")
   expect(screen.getAllByLabelText("usageReport.priceModelId").length).toBeGreaterThan(0)
   // Another vendor stays closed, so opening one does not flood the page.
-  const deepseek = screen.getAllByTestId("price-vendor").find((node) => node.getAttribute("data-vendor") === "DeepSeek")!
+  const deepseek = screen
+    .getAllByTestId("price-vendor")
+    .find((node) => node.getAttribute("data-vendor") === "DeepSeek")!
   expect(deepseek.querySelector("button[aria-expanded]")).toHaveAttribute("aria-expanded", "false")
+})
+
+test("the price configuration dialog closes from its footer", async () => {
+  render(<PriceConfigHarness />)
+  await waitForStagedCards()
+  openPriceConfig()
+  const dialog = await screen.findByRole("dialog")
+  fireEvent.click(within(dialog).getByRole("button", { name: "actions.close" }))
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
 })
 
 test("unpriced models sit on top, ordered by usage, and one click inserts a matching row", async () => {
@@ -599,12 +661,34 @@ test("unpriced models sit on top, ordered by usage, and one click inserts a matc
   native.report.mockResolvedValue(
     report({
       points: [
-        { date: today, hour: 3, provider: "custom", model: "deepseek-x9-sample", requests: 3, input: 900_000, cached: 0, output: 100_000, reasoning: 0, tokens: 1_000_000 },
-        { date: today, hour: 4, provider: "custom", model: "tiny-model", requests: 1, input: 100, cached: 0, output: 10, reasoning: 0, tokens: 110 }
+        {
+          date: today,
+          hour: 3,
+          provider: "custom",
+          model: "deepseek-x9-sample",
+          requests: 3,
+          input: 900_000,
+          cached: 0,
+          output: 100_000,
+          reasoning: 0,
+          tokens: 1_000_000
+        },
+        {
+          date: today,
+          hour: 4,
+          provider: "custom",
+          model: "tiny-model",
+          requests: 1,
+          input: 100,
+          cached: 0,
+          output: 10,
+          reasoning: 0,
+          tokens: 110
+        }
       ]
     })
   )
-  render(<UsageSection />)
+  render(<PriceConfigHarness />)
   await waitForStagedCards()
   openPriceConfig()
   const list = screen.getByTestId("unpriced-models")
@@ -613,9 +697,13 @@ test("unpriced models sit on top, ordered by usage, and one click inserts a matc
 
   // Inserting lands in the vendor the id implies, opens it, and keeps the raw id for matching.
   fireEvent.click(screen.getAllByRole("button", { name: "usageReport.addPriceForModel" })[0])
-  const deepseek = screen.getAllByTestId("price-vendor").find((node) => node.getAttribute("data-vendor") === "DeepSeek")!
+  const deepseek = screen
+    .getAllByTestId("price-vendor")
+    .find((node) => node.getAttribute("data-vendor") === "DeepSeek")!
   expect(deepseek.querySelector("button[aria-expanded]")).toHaveAttribute("aria-expanded", "true")
-  const inputs = Array.from(deepseek.querySelectorAll('input[aria-label="usageReport.priceModelId"]')) as HTMLInputElement[]
+  const inputs = Array.from(
+    deepseek.querySelectorAll('input[aria-label="usageReport.priceModelId"]')
+  ) as HTMLInputElement[]
   expect(inputs.map((input) => input.value)).toContain("deepseek-x9-sample")
 })
 
@@ -625,14 +713,34 @@ test("custom gateway models display as bare ids under Finture", async () => {
   native.report.mockResolvedValue(
     report({
       points: [
-        { date: today, hour: 3, provider: "custom", model: customId, requests: 1, input: 100, cached: 0, output: 10, reasoning: 0, tokens: 110 }
+        {
+          date: today,
+          hour: 3,
+          provider: "custom",
+          model: customId,
+          requests: 1,
+          input: 100,
+          cached: 0,
+          output: 10,
+          reasoning: 0,
+          tokens: 110
+        }
       ],
       recent: [
-        { at: `${today}T10:05:00.000Z`, date: today, provider: "custom", model: customId, input: 100, cached: 0, output: 10, tokens: 110 }
+        {
+          at: `${today}T10:05:00.000Z`,
+          date: today,
+          provider: "custom",
+          model: customId,
+          input: 100,
+          cached: 0,
+          output: 10,
+          tokens: 110
+        }
       ]
     })
   )
-  render(<UsageSection />)
+  render(<PriceConfigHarness />)
   await waitForStagedCards()
   expect(screen.getAllByText("deepseek-V4.1-flash").length).toBeGreaterThan(0)
   expect(screen.queryByText(customId)).toBeNull()
@@ -642,7 +750,9 @@ test("custom gateway models display as bare ids under Finture", async () => {
   expect(finture).toBeTruthy()
   fireEvent.click(finture!.querySelector("button[aria-expanded]")!)
   expect(
-    Array.from(finture!.querySelectorAll('input[aria-label="usageReport.priceModelId"]')).map((input) => (input as HTMLInputElement).value)
+    Array.from(finture!.querySelectorAll('input[aria-label="usageReport.priceModelId"]')).map(
+      (input) => (input as HTMLInputElement).value
+    )
   ).toContain("deepseek-V4.1-flash")
 })
 
@@ -650,19 +760,34 @@ test("a model marked free stops being unpriced, and a typed name replaces the id
   native.report.mockResolvedValue(
     report({
       points: [
-        { date: today, hour: 3, provider: "custom", model: "deepseek-x9-sample", requests: 3, input: 900_000, cached: 0, output: 100_000, reasoning: 0, tokens: 1_000_000 }
+        {
+          date: today,
+          hour: 3,
+          provider: "custom",
+          model: "deepseek-x9-sample",
+          requests: 3,
+          input: 900_000,
+          cached: 0,
+          output: 100_000,
+          reasoning: 0,
+          tokens: 1_000_000
+        }
       ]
     })
   )
-  render(<UsageSection />)
+  render(<PriceConfigHarness />)
   await waitForStagedCards()
   openPriceConfig()
   expect(screen.getByTestId("unpriced-models")).toBeTruthy()
 
   // Insert the row for the model that was used, then mark it free instead of typing prices.
   fireEvent.click(screen.getAllByRole("button", { name: "usageReport.addPriceForModel" })[0])
-  const deepseek = screen.getAllByTestId("price-vendor").find((node) => node.getAttribute("data-vendor") === "DeepSeek")!
-  const ids = Array.from(deepseek.querySelectorAll('input[aria-label="usageReport.priceModelId"]')) as HTMLInputElement[]
+  const deepseek = screen
+    .getAllByTestId("price-vendor")
+    .find((node) => node.getAttribute("data-vendor") === "DeepSeek")!
+  const ids = Array.from(
+    deepseek.querySelectorAll('input[aria-label="usageReport.priceModelId"]')
+  ) as HTMLInputElement[]
   const row = ids.find((input) => input.value === "deepseek-x9-sample")!.closest("tr")!
   const free = row.querySelector('input[aria-label="usageReport.priceFree"]') as HTMLInputElement
   expect(free.checked).toBe(false)
@@ -683,7 +808,7 @@ test("a model marked free stops being unpriced, and a typed name replaces the id
 test("the per-row discount input edits the percentage and is independent of off-peak", async () => {
   // The price store is a module singleton; earlier tests may have mutated it. Start clean.
   usePriceStore.getState().resetPrices()
-  render(<UsageSection />)
+  render(<PriceConfigHarness />)
   await waitForStagedCards()
   openPriceConfig()
   // Open the OpenAI vendor so its price rows (and discount inputs) are on screen.
@@ -700,30 +825,49 @@ test("the per-row discount input edits the percentage and is independent of off-
   expect(discountInputs[0].disabled).toBe(false)
   fireEvent.change(discountInputs[0], { target: { value: "25" } })
   // The input shows the percentage; the store keeps the 0–1 fraction.
-  expect((openai.querySelectorAll('input[aria-label="usageReport.priceDiscount"]')[0] as HTMLInputElement).value).toBe("25")
+  expect((openai.querySelectorAll('input[aria-label="usageReport.priceDiscount"]')[0] as HTMLInputElement).value).toBe(
+    "25"
+  )
 })
 
 test("the per-row discount input locks while the model is marked free", async () => {
   native.report.mockResolvedValue(
     report({
       points: [
-        { date: today, hour: 3, provider: "custom", model: "deepseek-x9-sample", requests: 3, input: 900_000, cached: 0, output: 100_000, reasoning: 0, tokens: 1_000_000 }
+        {
+          date: today,
+          hour: 3,
+          provider: "custom",
+          model: "deepseek-x9-sample",
+          requests: 3,
+          input: 900_000,
+          cached: 0,
+          output: 100_000,
+          reasoning: 0,
+          tokens: 1_000_000
+        }
       ]
     })
   )
   // The price store is a module singleton; an earlier test may have priced this model already.
   usePriceStore.getState().resetPrices()
-  render(<UsageSection />)
+  render(<PriceConfigHarness />)
   await waitForStagedCards()
   openPriceConfig()
   fireEvent.click(screen.getAllByRole("button", { name: "usageReport.addPriceForModel" })[0])
-  const deepseek = screen.getAllByTestId("price-vendor").find((node) => node.getAttribute("data-vendor") === "DeepSeek")!
-  const row = (Array.from(deepseek.querySelectorAll('input[aria-label="usageReport.priceModelId"]')) as HTMLInputElement[])
+  const deepseek = screen
+    .getAllByTestId("price-vendor")
+    .find((node) => node.getAttribute("data-vendor") === "DeepSeek")!
+  const row = (
+    Array.from(deepseek.querySelectorAll('input[aria-label="usageReport.priceModelId"]')) as HTMLInputElement[]
+  )
     .find((input) => input.value === "deepseek-x9-sample")!
     .closest("tr")!
   const free = row.querySelector('input[aria-label="usageReport.priceFree"]') as HTMLInputElement
   fireEvent.click(free)
-  await waitFor(() => expect((row.querySelector('input[aria-label="usageReport.priceDiscount"]') as HTMLInputElement).disabled).toBe(true))
+  await waitFor(() =>
+    expect((row.querySelector('input[aria-label="usageReport.priceDiscount"]') as HTMLInputElement).disabled).toBe(true)
+  )
 })
 
 test("the log and the price table show the custom model name while matching stays on the id", async () => {
@@ -761,11 +905,9 @@ test("a vendor update surfaces untracked models as one-click candidates", async 
     regex: "model (?<model>\\S+) price (?<input>[0-9.]+)/(?<output>[0-9.]+)"
   })
   // The fetched page lists the tracked model plus two the table does not track yet.
-  native.fetchText.mockResolvedValue(
-    "model acme-alpha price 1/2 model acme-beta price 3/4 model acme-gamma price 5/6"
-  )
+  native.fetchText.mockResolvedValue("model acme-alpha price 1/2 model acme-beta price 3/4 model acme-gamma price 5/6")
 
-  render(<UsageSection />)
+  render(<PriceConfigHarness />)
   await waitForStagedCards()
   openPriceConfig()
 
@@ -774,9 +916,7 @@ test("a vendor update surfaces untracked models as one-click candidates", async 
   fireEvent.click(within(acme).getByRole("button", { name: "usageReport.vendorUpdate" }))
 
   // The update refreshes the tracked model and lists the two new ones as candidates.
-  await waitFor(() =>
-    expect(screen.getByText('usageReport.newModelsFound{"count":2}')).toBeInTheDocument()
-  )
+  await waitFor(() => expect(screen.getByText('usageReport.newModelsFound{"count":2}')).toBeInTheDocument())
   expect(screen.getByRole("button", { name: "acme-beta" })).toBeInTheDocument()
   expect(screen.getByRole("button", { name: "acme-gamma" })).toBeInTheDocument()
   // The already-tracked model is not offered as a candidate.
@@ -792,7 +932,10 @@ test("a vendor update surfaces untracked models as one-click candidates", async 
 test("额度重置不再挂在用量页：它属于 ChatGPT 账户卡", async () => {
   native.account.value = {
     account: { account: { type: "chatgpt", email: "a@b.c", planType: "pro" }, authConfigured: true },
-    rateLimits: { primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: Math.floor(Date.now() / 1000) + 3600 }, secondary: null }
+    rateLimits: {
+      primary: { usedPercent: 40, windowDurationMins: 300, resetsAt: Math.floor(Date.now() / 1000) + 3600 },
+      secondary: null
+    }
   }
   render(<UsageSection />)
   await waitForStagedCards()

@@ -6,8 +6,7 @@ const STORAGE_KEY = "alwith.automation.v1"
 const DAY_MS = 86_400_000
 
 /** 本地时间 → epoch ms，与时区无关（比较也用同样的构造）。 */
-const at = (y: number, m: number, d: number, h = 0, min = 0): number =>
-  new Date(y, m - 1, d, h, min, 0, 0).getTime()
+const at = (y: number, m: number, d: number, h = 0, min = 0): number => new Date(y, m - 1, d, h, min, 0, 0).getTime()
 
 function draft(overrides: Partial<TaskDraft> = {}): TaskDraft {
   return {
@@ -184,6 +183,7 @@ describe("任务 CRUD 与启停", () => {
     const created = store.createTask(draft())
     expect(created.larkNotify).toBe(false)
     expect(created.larkTargets).toEqual([])
+    expect(created.larkEmptyResultNoticeToSelf).toBe(false)
 
     // A task written by an older build has no `larkNotify` at all; it must not inherit delivery
     // from the mere existence of the feature.
@@ -212,7 +212,44 @@ describe("任务 CRUD 与启停", () => {
       })
     )
     const restored = await reloaded()
-    expect(restored.getTask("legacy")).toMatchObject({ larkNotify: false, larkTargets: [] })
+    expect(restored.getTask("legacy")).toMatchObject({
+      larkNotify: false,
+      larkTargets: [],
+      larkEmptyResultNoticeToSelf: false
+    })
+  })
+
+  test("no-content runs and per-target delivery receipts survive a reload", async () => {
+    const store = await fresh()
+    const run = store.startAutomationRun({
+      runId: "run-no-content",
+      taskId: "task-1",
+      taskName: "日报",
+      prompt: "写日报",
+      cwd: "",
+      fullAccess: true,
+      model: "",
+      effort: "",
+      fastMode: false,
+      larkNotify: true,
+      larkTargets: [{ id: "oc_1", name: "群一", kind: "chat" }],
+      larkIdentity: "bot"
+    })
+    store.finishAutomationRun({
+      runId: run.id,
+      taskId: run.taskId,
+      status: "no_content",
+      summary: "",
+      sessionId: "session-1",
+      error: null,
+      finishedAt: Date.now(),
+      deliveries: [{ targetId: "oc_1", targetName: "群一", kind: "chat", status: "skipped", error: "no_content" }]
+    })
+    const restored = await reloaded()
+    expect(restored.listRuns()[0]).toMatchObject({
+      status: "no_content",
+      deliveries: [{ targetId: "oc_1", targetName: "群一", status: "skipped", error: "no_content" }]
+    })
   })
 
   test("setTaskEnabled 暂停 / 启用；重新启用会重算下次执行、不补跑暂停期间", async () => {
@@ -308,7 +345,7 @@ describe("运行记录", () => {
     fastMode: false,
     larkNotify: false,
     larkTargets: [],
-    larkIdentity: "bot",
+    larkIdentity: "bot"
   }
   const result: AutomationRunResult = {
     runId: "run-1",
@@ -370,7 +407,7 @@ describe("localStorage 持久化往返", () => {
       fastMode: false,
       larkNotify: false,
       larkTargets: [],
-      larkIdentity: "bot",
+      larkIdentity: "bot"
     })
     a.finishAutomationRun({
       runId: "run-rt",

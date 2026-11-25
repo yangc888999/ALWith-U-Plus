@@ -20,18 +20,16 @@ import { cn } from "@/lib/utils"
 export function SendModeSwitch(): ReactNode {
   const { t } = useTranslation()
   const mode = useSyncExternalStore(subscribeChatDisplayPreferences, getQueueSendMode, getQueueSendMode)
-  const options: Array<{ value: QueueSendMode; label: string; hint: string; selectedColor: string }> = [
+  const options: Array<{ value: QueueSendMode; label: string; hint: string }> = [
     {
       value: "immediate",
       label: t("chat.sendModeInterject"),
-      hint: t("chat.sendModeInterjectHint"),
-      selectedColor: "bg-send-interject hover:bg-send-interject"
+      hint: t("chat.sendModeInterjectHint")
     },
     {
       value: "queued",
       label: t("chat.sendModeQueue"),
-      hint: t("chat.sendModeQueueHint"),
-      selectedColor: "bg-send-queue hover:bg-send-queue"
+      hint: t("chat.sendModeQueueHint")
     }
   ]
   return (
@@ -53,9 +51,8 @@ export function SendModeSwitch(): ReactNode {
             title={option.hint}
             onClick={() => setQueueSendMode(option.value)}
             className={cn(
-              "min-w-6 rounded px-1.5 transition-none focus-visible:z-10",
-              active ? "underline underline-offset-2" : "hover:bg-foreground/8 dark:hover:bg-foreground/8",
-              active && option.selectedColor
+              "chat-send-mode-option min-w-6 rounded px-1.5 transition-none focus-visible:z-10",
+              !active && "hover:bg-foreground/8 dark:hover:bg-foreground/8"
             )}
           >
             {option.label}
