@@ -125,6 +125,10 @@ test("Tauri keeps ASCII technical identifiers while displaying ALWith U⁺", () 
   }
   const devConfig = JSON.parse(read("src-tauri/tauri.dev-instance.conf.json")) as { productName?: string }
 
+  for (const job of ["test-bundles", "release"]) {
+    const verify = releaseWorkflow()[job].steps?.find((step) => step.name === "Verify packaged toolchain (macOS)")
+    expect(verify?.run).toContain(`/macos/${config.productName}.app/Contents/MacOS`)
+  }
   expect(config.productName).toBe("ALWith U⁺")
   expect(config.mainBinaryName).toBe("alwith-u")
   expect(config.identifier).toBe("ai.alwith.u")

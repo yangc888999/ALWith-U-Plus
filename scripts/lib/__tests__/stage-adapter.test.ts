@@ -4,8 +4,9 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
 import providers from "../../../src/lib/provider-catalog.json"
-import { codexSidecars } from "../toolchain"
 import { patchAdapter } from "../adapter-patch"
+import { stageDriveNative } from "../drive-artifact"
+import { codexSidecars } from "../toolchain"
 
 const HOST_TRIPLES: Partial<Record<`${NodeJS.Platform}-${string}`, string>> = {
   "darwin-arm64": "aarch64-apple-darwin",
@@ -13,20 +14,31 @@ const HOST_TRIPLES: Partial<Record<`${NodeJS.Platform}-${string}`, string>> = {
   "win32-x64": "x86_64-pc-windows-msvc"
 }
 
+test("desktop staging rejects a target with no published Drive library", () => {
+  expect(() => stageDriveNative("x86_64-unknown-linux-gnu", "", "")).toThrow("has no artifact")
+})
+
 test("the staged toolchain runs with explicit resources outside the executable directory", () => {
   const triple = HOST_TRIPLES[`${process.platform}-${process.arch}`]
   if (triple === undefined) return
   const resources = join(import.meta.dir, "../../../src-tauri/resources")
 
-  const stage = Bun.spawnSync([process.execPath, "scripts/stage.ts", triple], {
-    cwd: join(import.meta.dir, "../../.."),
-    stdout: "ignore",
-    stderr: "pipe",
-    timeout: 45_000
-  })
+  const stage = Bun.spawnSync(
+    [process.execPath, "scripts/stage.ts", triple, ...(process.platform === "linux" ? ["--sidecars-only"] : [])],
+    {
+      cwd: join(import.meta.dir, "../../.."),
+      stdout: "ignore",
+      stderr: "pipe",
+      timeout: 45_000
+    }
+  )
   expect(stage.exitCode, stage.stderr.toString()).toBe(0)
   expect(readFileSync(join(import.meta.dir, "../../../src-tauri/resources/adapter/codex-acp-v2.mjs"))).toEqual(
-    Buffer.from(patchAdapter(readFileSync(join(import.meta.dir, "../../../node_modules/@nyssance/codex-acp-v2/dist/index.js"), "utf8")))
+    Buffer.from(
+      patchAdapter(
+        readFileSync(join(import.meta.dir, "../../../node_modules/@nyssance/codex-acp-v2/dist/index.js"), "utf8")
+      )
+    )
   )
 
   const suffix = process.platform === "win32" ? ".exe" : ""
@@ -48,9 +60,11 @@ test("the staged toolchain runs with explicit resources outside the executable d
   // levels; the app completes them from a full template entry before Codex ever reads the file
   // (`complete_catalog_entry` in providers.rs). Feed Codex the same completed form, or this check
   // would fail on files the app never hands over as-is.
-  const template = (JSON.parse(readFileSync(join(resources, "qwen/models.json"), "utf8")) as {
-    models: Array<Record<string, unknown>>
-  }).models[0]
+  const template = (
+    JSON.parse(readFileSync(join(resources, "qwen/models.json"), "utf8")) as {
+      models: Array<Record<string, unknown>>
+    }
+  ).models[0]
   const catalogDir = mkdtempSync(join(tmpdir(), "alwith-u-catalogs-"))
   try {
     for (const provider of providers) {

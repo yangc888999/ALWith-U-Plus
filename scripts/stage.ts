@@ -118,32 +118,34 @@ mkdirSync(voiceLicenses, { recursive: true })
 for (const entry of ["LICENSE", "THIRD_PARTY_LICENSES.txt"]) {
   copyFileSync(join(voicePackage, entry), join(voiceLicenses, entry))
 }
-// Rebuild generated native output so removed modules cannot survive an upgrade.
-rmSync(join(root, "src-tauri/resources/native"), { recursive: true, force: true })
-for (const entry of readdirSync(licenses)) {
-  if (entry === "alwith-native" || entry.startsWith("alwith-native-"))
-    rmSync(join(licenses, entry), { recursive: true, force: true })
+if (process.argv[3] !== "--sidecars-only") {
+  // Rebuild generated native output so removed modules cannot survive an upgrade.
+  rmSync(join(root, "src-tauri/resources/native"), { recursive: true, force: true })
+  for (const entry of readdirSync(licenses)) {
+    if (entry === "alwith-native" || entry.startsWith("alwith-native-"))
+      rmSync(join(licenses, entry), { recursive: true, force: true })
+  }
+  const nativeLibraries = [
+    stageNativeMobile,
+    stageNativeAuth,
+    stageNativeInstalledApps,
+    stageNativeVoice,
+    stageNativeFs,
+    stageNativeGamepad,
+    stageNativeComputer,
+    (target: string, destination: string, licenseDirectory: string) =>
+      stageDriveNative(target, destination, licenseDirectory),
+    stageNativeExtension,
+    stageNativeEnterprise
+  ].map((stage) => stage(triple, join(root, "src-tauri/resources/native"), licenses))
+  if (triple.endsWith("apple-darwin") && process.env.APPLE_SIGNING_IDENTITY) {
+    // A hardened application must load a library signed by the same team. Verify
+    // the distributed bytes first, then sign the staged copy using the app's identity.
+    for (const library of nativeLibraries)
+      await $`codesign --force --timestamp --options runtime --sign ${process.env.APPLE_SIGNING_IDENTITY} ${library}`
+  }
+  for (const library of nativeLibraries) console.log(`native module -> ${library}`)
 }
-const nativeLibraries = [
-  stageNativeMobile,
-  stageNativeAuth,
-  stageNativeInstalledApps,
-  stageNativeVoice,
-  stageNativeFs,
-  stageNativeGamepad,
-  stageNativeComputer,
-  (target: string, destination: string, licenseDirectory: string) =>
-    stageDriveNative(target, destination, licenseDirectory),
-  stageNativeExtension,
-  stageNativeEnterprise
-].map((stage) => stage(triple, join(root, "src-tauri/resources/native"), licenses))
-if (triple.endsWith("apple-darwin") && process.env.APPLE_SIGNING_IDENTITY) {
-  // A hardened application must load a library signed by the same team. Verify
-  // the distributed bytes first, then sign the staged copy using the app's identity.
-  for (const library of nativeLibraries)
-    await $`codesign --force --timestamp --options runtime --sign ${process.env.APPLE_SIGNING_IDENTITY} ${library}`
-}
-for (const library of nativeLibraries) console.log(`native module -> ${library}`)
 
 const codexPackage = JSON.parse(readFileSync(join(root, "node_modules/@openai/codex/package.json"), "utf8")) as {
   version: string

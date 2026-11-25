@@ -55,7 +55,7 @@ jobs:
           workflowArtifactNamePattern: alwith-u-[version]-[platform]-[arch]-[bundle]
       - name: Verify packaged toolchain (macOS)
         if: runner.os == 'macOS'
-        run: bun scripts/verify-bundled-toolchain.ts "src-tauri/target/${{ matrix.target }}/release/bundle/macos/ALWith L.app/Contents/MacOS"
+        run: bun scripts/verify-bundled-toolchain.ts "src-tauri/target/${{ matrix.target }}/release/bundle/macos/ALWith U⁺.app/Contents/MacOS"
       - name: Verify built toolchain with staged resources (Windows)
         if: runner.os == 'Windows'
         run: bun scripts/verify-bundled-toolchain.ts "src-tauri/target/${{ matrix.target }}/release" "src-tauri/resources"
@@ -199,7 +199,7 @@ jobs:
         env:
           # A signed release must pass strict codesign verification of the .app bundle.
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: bun scripts/verify-bundled-toolchain.ts "src-tauri/target/${{ matrix.target }}/release/bundle/macos/ALWith L.app/Contents/MacOS"
+        run: bun scripts/verify-bundled-toolchain.ts "src-tauri/target/${{ matrix.target }}/release/bundle/macos/ALWith U⁺.app/Contents/MacOS"
       - name: Verify built toolchain with staged resources (Windows)
         if: runner.os == 'Windows'
         run: bun scripts/verify-bundled-toolchain.ts "src-tauri/target/${{ matrix.target }}/release" "src-tauri/resources"
