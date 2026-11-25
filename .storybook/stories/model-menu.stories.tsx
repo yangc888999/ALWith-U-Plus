@@ -120,7 +120,7 @@ export const DelayedEffort: Story = {
   args: { delay: 500 },
   play: async ({ canvas, userEvent }) => {
     await userEvent.click(canvas.getByTestId("model-trigger"))
-    const slider = within(document.body).getByRole("slider", { name: "Effort" })
+    const slider = await within(document.body).findByRole("slider", { name: "Effort" })
     slider.focus()
     await userEvent.keyboard("{ArrowRight}")
     for (let frame = 0; frame < 12; frame++) {
@@ -137,7 +137,7 @@ export const Providers: Story = {
   play: async ({ canvas, userEvent }) => {
     const body = within(document.body)
     await userEvent.click(canvas.getByTestId("model-trigger"))
-    await expect(body.getAllByRole("menuitemradio")).toHaveLength(11)
+    await expect(await body.findAllByRole("menuitemradio")).toHaveLength(11)
     const qwen = body.getByRole("menuitemradio", { name: "3.8 Flash" })
     qwen.focus()
     await userEvent.keyboard("{Enter}")
@@ -145,7 +145,7 @@ export const Providers: Story = {
     canvas.getByTestId("model-trigger").focus()
     await userEvent.keyboard("{Enter}")
     await expect(body.getByRole("menuitemcheckbox", { name: "快速" })).toHaveAttribute("aria-disabled", "true")
-    const slider = body.getByRole("slider", { name: "Effort" })
+    const slider = await body.findByRole("slider", { name: "Effort" })
     await waitFor(async () =>
       expect(
         slider
@@ -160,7 +160,10 @@ export const Providers: Story = {
     await expect(slider.previousElementSibling!.getBoundingClientRect().width).toBe(labelWidth)
     await expect(slider).toHaveAttribute("aria-valuetext", "Extra High")
     await userEvent.keyboard("{Escape}")
-    await expect(canvas.getByTestId("model-trigger")).toHaveTextContent("Extra High")
+    await expect(canvas.getByTestId("model-trigger")).toHaveTextContent("3.8 Flash")
+    await userEvent.click(canvas.getByTestId("model-trigger"))
+    await expect(await body.findByRole("slider", { name: "Effort" })).toHaveAttribute("aria-valuetext", "Extra High")
+    await userEvent.keyboard("{Escape}")
     await waitFor(async () => expect(document.querySelector("[data-base-ui-focus-guard]")).toBeNull())
   }
 }

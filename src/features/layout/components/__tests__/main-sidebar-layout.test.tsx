@@ -435,7 +435,7 @@ function workspaceLayout(initialPinned: boolean) {
  * unconsumed. These cases are about the canvas actually changing region, so the boxes are supplied
  * for the duration of one test and restored afterwards.
  */
-function withCanvasGeometry(run: () => void, viewport = 1200, sidebar = 248) {
+function withCanvasGeometry(run: () => void | Promise<void>, viewport = 1200, sidebar = 248) {
   const patched = ["clientWidth", "offsetWidth", "scrollWidth"] as const
   const original = patched.map((key) => Object.getOwnPropertyDescriptor(HTMLElement.prototype, key))
   Object.defineProperty(HTMLElement.prototype, "clientWidth", {
@@ -621,7 +621,7 @@ test("the apps screen becomes interactive when parked and the chat dot brings th
   // jsdom never advances Embla's animation frames, so an eased return trip would not settle
   // within the test. Reduced motion makes every jump instant — the settled end state is the
   // same one a real window reaches after the animation.
-  const media = window.matchMedia
+  const media = window.matchMedia.bind(window)
   window.matchMedia = ((query: string) => ({
     ...media(query),
     matches: query.includes("prefers-reduced-motion")

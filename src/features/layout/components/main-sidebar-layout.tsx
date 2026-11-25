@@ -34,6 +34,7 @@ import { useWindowFullscreen } from "@/lib/use-window-fullscreen"
 import { zoomStore } from "@/lib/zoom"
 
 import { CanvasContext } from "../lib/canvas-context"
+import { CANVAS_RAIL_SPACE } from "../lib/canvas-geometry"
 import { useMainCanvas } from "../lib/use-main-canvas"
 import { CanvasDots } from "./canvas-dots"
 
@@ -263,6 +264,7 @@ export function MainSidebarLayout({
         data-sidebar-presentation={docked || canvas.moving ? "docked" : presentation}
         style={
           {
+            "--canvas-rail-space": `${CANVAS_RAIL_SPACE}px`,
             "--sidebar-width": `${sidebarHidden ? 0 : effectiveSidebarPx}px`,
             "--leading-sidebar-width": "var(--sidebar-width)",
             "--canvas-sidebar-offset": `${Math.max(0, (canvas.geometry.stops[canvas.selected] ?? 0) - canvas.geometry.leading)}px`,
@@ -289,6 +291,7 @@ export function MainSidebarLayout({
             <div ref={canvas.ref} className="main-canvas-viewport">
               <div
                 className="main-screen-track"
+                dir={canvas.direction}
                 data-panning={canvas.panning ? "" : undefined}
                 style={
                   {
@@ -334,7 +337,7 @@ export function MainSidebarLayout({
                     {pinnedOnScreen && (
                       <div className="main-sidebar-resize">
                         <PanelDivider
-                          label={t("workspace.resize")}
+                          label={t("sidebar.resize")}
                           width={effectiveSidebarPx}
                           direction={canvas.direction}
                           onStart={() => {

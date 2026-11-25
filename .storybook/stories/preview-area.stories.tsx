@@ -1,14 +1,15 @@
 import { createEditorController, createEditorWorkspace } from "@alwith/module-editor"
-import { createFileTreeController, FileTree } from "@alwith/module-file-tree"
+import { createFileTreeController, FileTree, type FileTreeProps } from "@alwith/module-file-tree"
 import { createFileSystem } from "@alwith/module-fs"
 import { createMemoryAdapter } from "@alwith/module-fs/testing"
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { FolderTree } from "lucide-react"
 import { type ReactNode, useEffect, useState } from "react"
-import { expect, waitFor } from "storybook/test"
+import { expect, waitFor, within } from "storybook/test"
 
 import { useTheme } from "../../src/components/theme-provider"
 import { Button } from "../../src/components/ui/button"
+import { ContextMenuItem } from "../../src/components/ui/context-menu"
 import { PreviewSurface } from "../../src/features/workspace/preview-surface"
 import { createTreeOpener } from "../../src/features/workspace/tree-opener"
 import { WorkspaceEditor } from "../../src/features/workspace/workspace-editor"
@@ -16,7 +17,7 @@ import "@alwith/module-file-tree/styles.css"
 import "@alwith/module-editor/styles.css"
 import "../../src/features/workspace/workspace.css"
 
-function PreviewExample(): ReactNode {
+function PreviewExample({ renderActions }: Pick<FileTreeProps, "renderActions">): ReactNode {
   const { resolvedTheme } = useTheme()
   const [error, setError] = useState("")
   const [treeVisible, setTreeVisible] = useState(true)
@@ -76,6 +77,7 @@ function PreviewExample(): ReactNode {
                 onError={state.reportError}
                 onOpenFile={(path) => state.opener.open(path)}
                 onPinFile={(path) => state.opener.open(path, true)}
+                renderActions={renderActions}
                 explorerControl={
                   <Button variant="ghost" size="icon-sm" aria-label="Hide tree" onClick={() => setTreeVisible(false)}>
                     <FolderTree />
@@ -110,6 +112,30 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 export const NewTab: Story = {}
+export const FileMenuTypography: Story = {
+  args: { renderActions: () => <ContextMenuItem>Sharing and permissions</ContextMenuItem> },
+  play: async ({ canvas, canvasElement, userEvent }) => {
+    const file = await canvas.findByRole("treeitem", { name: "summary.txt" })
+    await userEvent.pointer({ target: file, keys: "[MouseRight]" })
+    const popup = within(await within(canvasElement.ownerDocument.body).findByRole("menu"))
+    const builtin = popup.getByRole("menuitem", { name: "Open" })
+    const extension = popup.getByRole("menuitem", { name: "Sharing and permissions" })
+    const metrics = (item: HTMLElement) => {
+      const style = getComputedStyle(item)
+      return [style.fontSize, style.lineHeight, style.paddingBlock, style.paddingInline, item.offsetHeight]
+    }
+    const root = canvasElement.ownerDocument.documentElement
+    const original = root.style.fontSize
+    try {
+      for (const size of ["16px", "22px"]) {
+        root.style.fontSize = size
+        await expect(metrics(extension)).toEqual(metrics(builtin))
+      }
+    } finally {
+      root.style.fontSize = original
+    }
+  }
+}
 export const TabInteractions: Story = {
   play: async ({ canvas, userEvent }) => {
     await userEvent.click(await canvas.findByRole("treeitem", { name: "summary.txt" }))

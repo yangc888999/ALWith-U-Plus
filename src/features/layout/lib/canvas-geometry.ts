@@ -1,8 +1,11 @@
-type CanvasRegion = "leading" | "chat" | "preview" | "trailing"
+export const CANVAS_RAIL_SPACE = 62
+
+export type CanvasRegion = "leading" | "chat" | "preview" | "trailing"
 
 export type CanvasGeometryInput = {
   viewport: number
   navigation: number
+  railSpace?: number
   pinned: boolean
   chat: number
   preview: number
@@ -18,7 +21,7 @@ export function resolveMainCanvasGeometry(input: CanvasGeometryInput, trailing: 
   const { viewport, navigation, pinned, chat, preview } = input
   const leading = Math.max(0, viewport - navigation)
   const main = leading + (pinned ? 0 : navigation)
-  const budget = Math.max(0, viewport - (pinned ? navigation : 0))
+  const budget = Math.max(0, viewport - (pinned ? navigation : (input.railSpace ?? 0)))
   const content = Math.max(budget, chat + preview)
   const baseStops = [0, main]
   if (chat > 0 && preview > 0 && chat + preview > budget) baseStops.push(leading + navigation + chat)

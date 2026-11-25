@@ -111,6 +111,7 @@ export const LivePreview: Story = {
       void expect(preview.scrollHeight - preview.clientHeight - preview.scrollTop).toBeLessThanOrEqual(1)
     })
     await userEvent.click(canvas.getByRole("button", { name: "Finish reasoning" }))
+    await userEvent.click(await canvas.findByRole("button", { name: "Worked" }))
     await waitFor(() =>
       expect(canvas.getByRole("button", { name: "Thought" })).toHaveAttribute("aria-expanded", "true")
     )

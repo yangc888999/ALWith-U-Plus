@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
 /**
@@ -52,6 +52,40 @@ test("every cold launch parks on the conversation screen", () => {
   render(<Harness onScreenChange={onScreenChange} />)
   expect(screen.getByTestId("selected").dataset.value).toBe("1")
   expect(onScreenChange).not.toHaveBeenCalled()
+})
+
+test("merging preview into chat never selects the trailing screen at its old index", () => {
+  function Workspace() {
+    const canvas = useMainCanvas("main", true, undefined, true)
+    return (
+      <div ref={canvas.ref}>
+        <div ref={canvas.navigationRef} />
+        <div className="main-screen-track" />
+        <output>{canvas.geometry.regions[canvas.selected]}</output>
+        <button onClick={() => canvas.context.navigate("preview")}>Preview</button>
+        <button
+          onClick={() => canvas.context.setWorkspace({ chat: 1000, preview: 1000, visible: true, maximized: false })}
+        >
+          Separate
+        </button>
+        <button
+          onClick={() => canvas.context.setWorkspace({ chat: 500, preview: 500, visible: true, maximized: false })}
+        >
+          Merge
+        </button>
+      </div>
+    )
+  }
+  render(<Workspace />)
+  for (const [button, region] of [
+    ["Preview", "chat"],
+    ["Separate", "preview"],
+    ["Merge", "chat"],
+    ["Separate", "preview"]
+  ]) {
+    fireEvent.click(screen.getByRole("button", { name: button }))
+    expect(screen.getByRole("status")).toHaveTextContent(region)
+  }
 })
 
 test("the track offset follows the selected screen and never reads the DOM back", async () => {

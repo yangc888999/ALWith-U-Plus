@@ -119,10 +119,8 @@ test("hiding navigation preserves a manual split until the divider is adjusted a
   expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 1000, preview: 1256, visible: true, maximized: false })
   view.rerender(renderPanels(1256))
   expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 1256, preview: 1256, visible: true, maximized: false })
-  // At the maximum the keyboard clamps rather than shrinking the preview below the band, so the
-  // divider stays functional and the preview remains open on its own screen.
   fireEvent.keyDown(divider, { key: "ArrowRight" })
-  expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 1256, preview: 1256, visible: true, maximized: false })
+  expect(setWorkspace).toHaveBeenLastCalledWith({ chat: 576, preview: 680, visible: true, maximized: false })
 })
 
 test("dragging left hides chat and reversing the same pointer gesture restores the draft", () => {

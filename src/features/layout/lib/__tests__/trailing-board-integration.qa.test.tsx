@@ -63,7 +63,7 @@ afterEach(() => {
 
 /** jsdom 不推进 Embla 动画帧；reduced-motion 让每次跳转瞬时落位（与真实窗口动画结束态一致）。 */
 function withReducedMotion(run: () => Promise<void>): Promise<void> {
-  const media = window.matchMedia
+  const media = window.matchMedia.bind(window)
   window.matchMedia = ((query: string) => ({
     ...media(query),
     matches: query.includes("prefers-reduced-motion")

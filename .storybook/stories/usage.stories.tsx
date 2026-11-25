@@ -49,6 +49,7 @@ const ROWS: Row[] = [
 
 const POINTS: UsagePoint[] = ROWS.map(([days, provider, model, requests, input, cached, output, tokens]) => ({
   date: dateDaysAgo(days),
+  hour: 12,
   provider,
   model,
   requests,
@@ -77,6 +78,7 @@ const RECENT: UsageTurn[] = POINTS.filter((point) => point.date >= dateDaysAgo(2
 
 const REPORT: UsageReport = {
   points: POINTS,
+  prompts: [],
   recent: RECENT,
   sessions: 13,
   scanned: 54,
@@ -98,6 +100,7 @@ function installMock(report: UsageReport): void {
 
 const EMPTY: UsageReport = {
   points: [],
+  prompts: [],
   recent: [],
   sessions: 0,
   scanned: 0,
@@ -108,7 +111,7 @@ const EMPTY: UsageReport = {
 
 const meta = {
   title: "Settings/Usage",
-  component: UsageSection,
+  component: () => <UsageSection />,
   globals: { locale: "zh-CN" },
   beforeEach: () => installMock(REPORT),
   decorators: [
@@ -118,7 +121,7 @@ const meta = {
       </div>
     )
   ]
-} satisfies Meta<typeof UsageSection>
+} satisfies Meta
 
 export default meta
 type Story = StoryObj<typeof meta>

@@ -13,7 +13,7 @@ vi.mock("@/bindings", () => ({
 }))
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }))
 
-import { initI18n } from "@/lib/i18n"
+import i18n, { initI18n } from "@/lib/i18n"
 
 import { useMainCanvas } from "../use-main-canvas"
 
@@ -55,6 +55,18 @@ afterEach(() => {
 test("the chat snap uses the rendered content position, not the geometry estimate", async () => {
   render(<Harness pinned />)
   await waitFor(() => expect(screen.getByTestId("track").style.transform).toContain("-1513px"))
+})
+
+test("RTL snaps measure from the right edge of the slide", async () => {
+  await i18n.changeLanguage("ar")
+  try {
+    chatOffsetLeft = 100
+    render(<Harness pinned />)
+    await waitFor(() => expect(screen.getByTestId("track").style.transform).toContain("(1413px,"))
+  } finally {
+    cleanup()
+    await i18n.changeLanguage("en")
+  }
 })
 
 test("after collapsing the sidebar the snap follows the new DOM position with no blank strip", async () => {

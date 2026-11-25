@@ -70,6 +70,7 @@ export function WorkspacePanels({
   // While dragging, the pointer owns the width; the persisted store wins once the drag ends.
   const [dragWidth, setDragWidth] = useState<number | null>(null)
   const dragWidthRef = useRef(0)
+  const separatedRequest = useRef<number | null>(null)
   const layout = useWorkspaceLayout()
   const [manuallySeparated, setManuallySeparated] = useState(false)
   const [edgeZone, setEdgeZone] = useState<"start" | "end" | null>(null)
@@ -116,9 +117,10 @@ export function WorkspacePanels({
   useEffect(() => {
     if (!navigate) return
     if (visible && (!previousVisible.current || (maximized && !previousMaximized.current))) navigate("preview")
+    else if (!visible && previousVisible.current && canvas?.selected === 2 && !canvas.trailingActive) navigate("chat")
     previousVisible.current = visible
     previousMaximized.current = maximized
-  }, [navigate, visible, maximized])
+  }, [navigate, visible, maximized, canvas?.selected, canvas?.trailingActive])
 
   useLayoutEffect(() => {
     const node = root.current
@@ -203,7 +205,8 @@ export function WorkspacePanels({
                   onStart={() => {
                     if (maximized) onMaximizedChange(false)
                     // Keep the requested width when splitting substitutes a full-screen display width.
-                    dragStart.current = previewWidth || fileWidth
+                    dragStart.current = manuallySeparated ? (separatedRequest.current ?? requestedPreview) : requestedPreview
+                    if (canvas?.selected === 1 && !maximized) canvas.navigate("chat")
                     dragWidthRef.current = dragStart.current
                     dragging.current = true
                     setDraggingPreview(true)
@@ -227,7 +230,8 @@ export function WorkspacePanels({
                     // never starve the chat column on another.
                     const settled = dragWidthRef.current
                     const next = resolvePanelWidths(budget, true, settled, fullViewportWidth)
-                    if (budget > 0) {
+                    separatedRequest.current = next.chat + next.preview > budget ? settled : null
+                    if (budget > 0 && separatedRequest.current === null && settled !== dragStart.current) {
                       // Inside the workspace the three content shares add up to `1 - navigation`,
                       // so scale them back onto the window-wide 100% budget.
                       const scale = 1 - layout.navigationRatio
@@ -242,8 +246,6 @@ export function WorkspacePanels({
                     }
                     // The store now owns the width; drop the pointer-owned preview value.
                     setDragWidth(null)
-                    // A manual resize on main overrides preview intent retained from an earlier merged layout.
-                    if (canvas?.selected === 1 && !maximized) canvas.navigate("chat")
                     dragging.current = false
                     setDraggingPreview(false)
                     canvas?.setDividerDragging(false)

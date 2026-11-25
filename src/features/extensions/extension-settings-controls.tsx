@@ -12,8 +12,30 @@ export function ExtensionSettingsControls({ container }: { container: HTMLElemen
   const [mounts, setMounts] = useState<ControlMount[]>([])
   useEffect(() => {
     const controls = new Map<NativeControl, ControlMount>()
+    const namedInputs = new Map<HTMLInputElement, string>()
+    const restoreLabel = (input: HTMLInputElement, label: string) => {
+      if (input.getAttribute("aria-label") === label) input.removeAttribute("aria-label")
+      namedInputs.delete(input)
+    }
     const scan = () => {
       let changed = false
+      for (const [input, label] of namedInputs) {
+        if (!container.contains(input)) restoreLabel(input, label)
+      }
+      for (const input of container.querySelectorAll<HTMLInputElement>(
+        '.setting-item input:not([type="checkbox"]):not([type="hidden"])'
+      )) {
+        const label = input.closest(".setting-item")?.querySelector(".setting-item-name")?.textContent?.trim()
+        if (
+          label &&
+          !input.labels?.length &&
+          !input.hasAttribute("aria-labelledby") &&
+          (!input.hasAttribute("aria-label") || input.getAttribute("aria-label") === namedInputs.get(input))
+        ) {
+          input.setAttribute("aria-label", label)
+          namedInputs.set(input, label)
+        }
+      }
       for (const [input, mount] of controls) {
         if (!container.contains(input) || !container.contains(mount.container)) {
           mount.restore()
@@ -57,6 +79,7 @@ export function ExtensionSettingsControls({ container }: { container: HTMLElemen
     observer.observe(container, { childList: true, subtree: true })
     return () => {
       observer.disconnect()
+      for (const [input, label] of namedInputs) restoreLabel(input, label)
       for (const mount of controls.values()) mount.restore()
     }
   }, [container])

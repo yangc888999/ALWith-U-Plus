@@ -192,6 +192,7 @@ export function MobileSection() {
               <p className="text-sm">{t("mobile.scanHint")}</p>
               {remaining > 0 && status?.relayConnected ? (
                 <QRCodeSVG
+                  title={t("mobile.pair")}
                   size={200}
                   marginSize={4}
                   bgColor="transparent"

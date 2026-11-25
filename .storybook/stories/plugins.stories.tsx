@@ -132,8 +132,8 @@ export const SkillMarkdown: Story = {
     const dialog = heading.closest('[data-slot="dialog-content"]')!
     const header = dialog.firstElementChild!
     const scroller = dialog.querySelector(".skill-document")!
+    await waitFor(() => expect(scroller.getBoundingClientRect().height).toBeCloseTo(window.innerHeight * 0.45, 0))
     const top = header.getBoundingClientRect().top
-    await expect(scroller.getBoundingClientRect().height).toBeCloseTo(window.innerHeight * 0.45, 0)
     scroller.scrollTop = scroller.scrollHeight
     await expect(scroller.scrollTop).toBeGreaterThan(0)
     await expect(header.getBoundingClientRect().top).toBe(top)

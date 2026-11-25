@@ -23,6 +23,7 @@ export function PhoneLoginView({ onBack, onContinue }: { onBack: () => void; onC
             <p className="text-center text-sm text-muted-foreground">{t("mobile.login.scanHint")}</p>
             <div className="rounded-xl bg-background p-3">
               <QRCodeSVG
+                title={t("mobile.login.scanHint")}
                 size={180}
                 marginSize={4}
                 bgColor="transparent"

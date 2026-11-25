@@ -17,7 +17,7 @@ import { events } from "@/bindings"
 import { useThreeFingerSwipeEnabled } from "@/lib/trackpad-preference"
 
 import type { CanvasContext, CanvasWorkspace } from "./canvas-context"
-import { resolveMainCanvasGeometry } from "./canvas-geometry"
+import { CANVAS_RAIL_SPACE, type CanvasRegion, resolveMainCanvasGeometry } from "./canvas-geometry"
 
 /**
  * A window resize delivers a new viewport width on every frame. The conversation column grows
@@ -77,15 +77,21 @@ export function useMainCanvas(
 
   // The only source of truth for the visible screen. Derived from `screen`; user gestures update
   // it through `goTo`, which also notifies the app. The app echoing `screen` back is idempotent.
-  const [selected, setSelected] = useState(screen === "leading" ? 0 : 1)
-  const selectedRef = useRef(selected)
-  selectedRef.current = selected
+  const [requestedRegion, setRequestedRegion] = useState<CanvasRegion>(screen === "leading" ? "leading" : "chat")
 
   const geometry = useMemo(
-    () => resolveMainCanvasGeometry({ ...size, pinned, chat: workspace.chat, preview: workspace.preview }, trailing),
+    () =>
+      resolveMainCanvasGeometry(
+        { ...size, pinned, railSpace: CANVAS_RAIL_SPACE, chat: workspace.chat, preview: workspace.preview },
+        trailing
+      ),
     [size, pinned, workspace.chat, workspace.preview, trailing]
   )
   const regions = geometry.regions
+  const requestedIndex = regions.indexOf(requestedRegion)
+  const selected = requestedIndex < 0 ? 1 : requestedIndex
+  const selectedRef = useRef(selected)
+  selectedRef.current = selected
   const regionsRef = useRef(regions)
   regionsRef.current = regions
   const stopsRef = useRef(geometry.stops)
@@ -102,11 +108,8 @@ export function useMainCanvas(
     const regionsNow = regionsRef.current
     const clamped = Math.max(0, Math.min(index, Math.max(regionsNow.length - 1, 0)))
     // Prefer a measured slide position; fall back to geometry until the first measurement lands.
-    const value =
-      snaps[clamped] !== undefined
-        ? snaps[clamped]
-        : (stopsRef.current[clamped] ?? 0)
-    return (rtlRef.current ? value : -value)
+    const value = snaps[clamped] !== undefined ? snaps[clamped] : (stopsRef.current[clamped] ?? 0)
+    return rtlRef.current ? value : -value
   }, [])
 
   const readSnaps = useCallback((): void => {
@@ -123,9 +126,7 @@ export function useMainCanvas(
       const marked: HTMLElement | null = node.querySelector<HTMLElement>(`[data-snap-region="${region}"]`)
       const slide: HTMLElement | null =
         marked ??
-        (region === "preview"
-          ? node.querySelector<HTMLElement>(".file-workspace-preview-slide")
-          : null) ??
+        (region === "preview" ? node.querySelector<HTMLElement>(".file-workspace-preview-slide") : null) ??
         (region === "chat" ? node.querySelector<HTMLElement>(".main-sidebar-shell") : null)
       // offsetLeft is relative to the track; the same frame the carousel uses. A nested slide
       // (preview) is offset within its own parent, so accumulate up to the track.
@@ -135,15 +136,16 @@ export function useMainCanvas(
         position += parent.offsetLeft
         parent = parent.offsetParent
       }
-      anchors.push(marked || slide ? position : (stopsRef.current[anchors.length] ?? 0))
+      const logicalStart = rtlRef.current ? node.clientWidth - position - (slide?.offsetWidth ?? 0) : position
+      const inset = region === "preview" && node.closest("[data-rail-show]") ? CANVAS_RAIL_SPACE : 0
+      anchors.push(slide ? logicalStart - inset : (stopsRef.current[anchors.length] ?? 0))
     }
     snapRef.current = anchors
   }, [])
 
   // The app changed the view (a sidebar destination, a palette action). Follow it, never argue.
   useEffect(() => {
-    const index = screen === "leading" ? 0 : 1
-    if (selectedRef.current !== index) setSelected(index)
+    setRequestedRegion((current) => (screen === "leading" ? "leading" : current === "leading" ? "chat" : current))
   }, [screen])
 
   // Measurement only feeds geometry arithmetic. A floating/collapsed sidebar reports 0px; that is
@@ -193,10 +195,10 @@ export function useMainCanvas(
   const goTo = useCallback(
     (index: number): void => {
       const clamped = Math.max(0, Math.min(index, regionsRef.current.length - 1))
-      if (clamped === selectedRef.current) return
-      setSelected(clamped)
       const region = regionsRef.current[clamped]
-      if (region === "leading" || region === "chat") onScreenChange?.(region === "chat" ? "main" : "leading")
+      setRequestedRegion(region)
+      if (clamped !== selectedRef.current && (region === "leading" || region === "chat" || selectedRef.current === 0))
+        onScreenChange?.(region === "leading" ? "leading" : "main")
     },
     [onScreenChange]
   )
@@ -205,11 +207,11 @@ export function useMainCanvas(
   // It never changes which *screen* the app is on unless the target really is leading/chat.
   const navigate = useCallback(
     (region: "chat" | "preview" | "trailing"): void => {
-      if (region === "preview" && !workspace.visible) return
       const index = regionsRef.current.indexOf(region)
       if (index >= 0) goTo(index)
+      else if (region === "preview") setRequestedRegion(region)
     },
-    [goTo, workspace.visible]
+    [goTo]
   )
 
   const setDividerDragging = useCallback((dragging: boolean): void => {
@@ -305,7 +307,8 @@ export function useMainCanvas(
     if (!root) return
     const isPanButton = (button: number): boolean => button === 1 || button === 3 || button === 4
     const inDragZone = (target: EventTarget | null): boolean =>
-      target instanceof Element && target.closest("[data-no-drag], [role=separator], button, input, textarea, a") !== null
+      target instanceof Element &&
+      target.closest("[data-no-drag], [role=separator], button, input, textarea, a") !== null
     const down = (event: PointerEvent): void => {
       if (!isPanButton(event.button) || inDragZone(event.target)) return
       if (!beginPan("mouse", event.clientX, root.clientWidth)) return
@@ -392,7 +395,15 @@ export function useMainCanvas(
       const backward = rtl ? "ArrowRight" : "ArrowLeft"
       const current = selectedRef.current
       const target =
-        event.key === "Home" ? 0 : event.key === "End" ? regionsRef.current.length - 1 : event.key === forward ? current + 1 : event.key === backward ? current - 1 : null
+        event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? regionsRef.current.length - 1
+            : event.key === forward
+              ? current + 1
+              : event.key === backward
+                ? current - 1
+                : null
       if (target === null) return
       event.preventDefault()
       goTo(target)
@@ -412,7 +423,18 @@ export function useMainCanvas(
     // transform does not contaminate it.
     readSnaps()
     node.style.transform = `translate3d(${offsetFor(selected)}px,0,0)`
-  }, [offsetFor, selected, geometry.stops, geometry.content, panning, regions, readSnaps, pinned, workspace.visible])
+  }, [
+    offsetFor,
+    selected,
+    geometry.stops,
+    geometry.content,
+    panning,
+    regions,
+    readSnaps,
+    pinned,
+    rtl,
+    workspace.visible
+  ])
 
   const trackStyle = useMemo<CSSProperties>(
     () => ({ transition: panning || dividerDragging ? "none" : undefined }),
@@ -421,8 +443,8 @@ export function useMainCanvas(
 
   const context = useMemo(
     () => ({
-      viewportWidth: size.viewport,
-      budget: Math.max(0, size.viewport - (pinned ? size.navigation : 0)),
+      viewportWidth: Math.max(0, size.viewport - CANVAS_RAIL_SPACE),
+      budget: Math.max(0, size.viewport - (pinned ? size.navigation : CANVAS_RAIL_SPACE)),
       selected,
       trailingActive: regions[selected] === "trailing",
       split: geometry.split,

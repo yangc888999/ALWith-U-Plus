@@ -76,6 +76,8 @@ const meta = {
           <>
             <LeadingNavigation
               activePage="archives"
+              onOpenSkills={() => {}}
+              onOpenUsage={() => {}}
               onOpenPlugins={() => {}}
               onOpenExtensions={() => {}}
               onOpenArchives={() => {}}

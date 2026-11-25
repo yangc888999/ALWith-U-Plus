@@ -4,6 +4,7 @@ import { expect, waitFor } from "storybook/test"
 
 import { Button } from "../../src/components/ui/button"
 import { ChatHeader } from "../../src/features/chat/chat-header"
+import { getWorkspaceLayout, saveWorkspaceLayout } from "../../src/features/workspace/layout-preferences"
 import { PreviewSurface } from "../../src/features/workspace/preview-surface"
 import { WorkspacePanels } from "../../src/features/workspace/workspace-panels"
 
@@ -67,6 +68,11 @@ function WorkspaceExample({ width = 1200 }: { width?: number }): ReactNode {
 const meta = {
   title: "Layout/Workspace",
   component: WorkspaceExample,
+  beforeEach: () => {
+    const original = getWorkspaceLayout()
+    saveWorkspaceLayout({ navigationRatio: 0.16, chatRatio: 0.42, treeRatio: 0.12, previewRatio: 0.3 })
+    return () => saveWorkspaceLayout(original)
+  },
   parameters: { layout: "fullscreen" }
 } satisfies Meta<typeof WorkspaceExample>
 export default meta
@@ -80,9 +86,10 @@ export const EqualPanels: Story = {
     await waitFor(async () => {
       const left = chat.getBoundingClientRect(),
         right = preview.getBoundingClientRect()
-      await expect(left.width).toBeCloseTo(right.width, 0)
-      await expect(right.left - left.right).toBe(8)
-      await expect(getComputedStyle(chat).borderRadius).toBe("14px")
+      await expect(left.width).toBe(layout.clientWidth / 2)
+      await expect(right.width + 8).toBe(layout.clientWidth / 2)
+      await expect(right.left - left.right).toBe(4)
+      await expect(getComputedStyle(preview).borderRadius).toBe("14px")
     })
     await userEvent.type(canvas.getByRole("textbox", { name: "Message" }), "Keep this message")
     await userEvent.click(canvas.getByRole("button", { name: "Maximize" }))
@@ -92,7 +99,10 @@ export const EqualPanels: Story = {
     })
     await userEvent.click(canvas.getByRole("button", { name: "Restore" }))
     await waitFor(
-      async () => await expect(chat.getBoundingClientRect().width).toBeCloseTo(preview.getBoundingClientRect().width, 0)
+      async () =>
+        await expect(chat.getBoundingClientRect().width + preview.getBoundingClientRect().width + 8).toBe(
+          layout.clientWidth
+        )
     )
     await expect(canvas.getByRole("textbox", { name: "Message" })).toHaveValue("Keep this message")
     await userEvent.click(canvas.getByRole("button", { name: "Hide tree" }))
@@ -102,10 +112,13 @@ export const EqualPanels: Story = {
         await expect(canvasElement.querySelector(".file-workspace-tree")).toHaveAttribute("data-collapsed", "false")
     )
     await userEvent.click(canvas.getByRole("button", { name: "Close preview" }))
-    await waitFor(async () => expect(chat.getBoundingClientRect().width).toBe(layout.clientWidth - 8))
+    await waitFor(async () => expect(chat.getBoundingClientRect().width).toBe(layout.clientWidth))
     await userEvent.click(canvas.getByRole("button", { name: "Open preview" }))
     await waitFor(
-      async () => await expect(preview.getBoundingClientRect().width).toBeCloseTo(chat.getBoundingClientRect().width, 0)
+      async () =>
+        await expect(preview.getBoundingClientRect().width + chat.getBoundingClientRect().width + 8).toBe(
+          layout.clientWidth
+        )
     )
     await expect(canvas.getByRole("textbox", { name: "Document" })).toHaveValue("Retained draft")
   }
@@ -135,13 +148,13 @@ export const ResizeBoundaries: Story = {
     await userEvent.click(divider)
     await userEvent.keyboard("{ArrowLeft}")
     await waitFor(async () => expect(preview.getBoundingClientRect().width).toBe(layout.clientWidth / 2 + 20))
-    for (let index = 0; index < 11; index++) await userEvent.keyboard("{ArrowRight}")
+    for (let index = 0; index < 12; index++) await userEvent.keyboard("{ArrowRight}")
     await waitFor(async () => {
       await expect(preview.getBoundingClientRect().width).toBe(layout.clientWidth)
       await expect(layout).toHaveAttribute("data-open", "true")
     })
     await userEvent.keyboard("{ArrowLeft}")
-    await waitFor(async () => expect(preview.getBoundingClientRect().width).toBe(layout.clientWidth / 2 - 180))
+    await waitFor(async () => expect(preview.getBoundingClientRect().width).toBe(layout.clientWidth / 2 - 200))
     await userEvent.click(canvas.getByRole("separator", { name: "Resize workspace" }))
     for (let index = 0; index < 28; index++) await userEvent.keyboard("{ArrowLeft}")
     await waitFor(async () => {
@@ -164,13 +177,15 @@ export const WindowResize: Story = {
     await userEvent.click(canvas.getByRole("separator", { name: "Resize workspace" }))
     await userEvent.keyboard("{ArrowLeft}")
     const draggedWidth = layout.clientWidth / 2 + 20
+    const share = draggedWidth / layout.clientWidth
     await waitFor(async () => expect(preview.getBoundingClientRect().width).toBe(draggedWidth))
     frame.style.width = "1600px"
     await waitFor(async () => {
-      await expect(preview.getBoundingClientRect().width).toBe(draggedWidth)
+      const scaled = Math.round(share * layout.clientWidth)
+      await expect(preview.getBoundingClientRect().width).toBe(scaled)
       await expect(
         canvasElement.querySelector<HTMLElement>(".file-workspace-slide")!.getBoundingClientRect().width
-      ).toBe(layout.clientWidth - draggedWidth)
+      ).toBe(layout.clientWidth - scaled)
     })
   }
 }

@@ -70,6 +70,8 @@ export const LeadingApps: Story = {
             <>
               <LeadingNavigation
                 activePage={active ? null : "extensions"}
+                onOpenSkills={() => setActive(null)}
+                onOpenUsage={() => setActive(null)}
                 onOpenPlugins={() => setActive(null)}
                 onOpenArchives={() => setActive(null)}
                 onOpenExtensions={() => setActive(null)}
@@ -94,7 +96,7 @@ export const LeadingApps: Story = {
     )
   },
   play: async ({ canvas, userEvent }) => {
-    const fixed = canvas.getByRole("button", { name: "Extensions" })
+    const fixed = canvas.getByRole("button", { name: "Features" })
     const top = fixed.getBoundingClientRect().top
     const list = canvas.getByRole("region", { name: "Extension navigation" })
     await expect(list.scrollHeight).toBeGreaterThan(list.clientHeight)
@@ -103,7 +105,7 @@ export const LeadingApps: Story = {
     await expect(canvas.getByRole("heading")).toHaveTextContent("app-19/page")
     await expect(fixed.getBoundingClientRect().top).toBe(top)
     await expect(canvas.getByRole("button", { name: "App 20" })).toHaveAttribute("aria-current", "page")
-    await expect(canvas.getByRole("button", { name: "Extensions" })).not.toHaveAttribute("aria-current")
+    await expect(fixed).not.toHaveAttribute("aria-current")
   }
 }
 
@@ -111,7 +113,7 @@ export const LeadingFeatures: Story = {
   args: { screen: "leading" },
   globals: { locale: "zh-CN" },
   render: function Render(args) {
-    const [page, setPage] = useState<"plugins" | "extensions" | "archives">("plugins")
+    const [page, setPage] = useState<"plugins" | "extensions" | "archives" | "skills" | "usage">("plugins")
     return (
       <div className="h-[640px] bg-sidebar">
         <MainSidebarLayout
@@ -120,6 +122,8 @@ export const LeadingFeatures: Story = {
             <>
               <LeadingNavigation
                 activePage={page}
+                onOpenSkills={() => setPage("skills")}
+                onOpenUsage={() => setPage("usage")}
                 onOpenPlugins={() => setPage("plugins")}
                 onOpenExtensions={() => setPage("extensions")}
                 onOpenArchives={() => setPage("archives")}
@@ -180,22 +184,6 @@ export const ArabicActivity: Story = {
   }
 }
 
-export const ArabicFloatingSidebar: Story = {
-  args: { initialPinned: false },
-  globals: { locale: "ar" },
-  play: async ({ canvasElement, userEvent }) => {
-    const toggle = canvasElement.querySelector<HTMLButtonElement>(".main-sidebar-toggle button")!
-    await userEvent.hover(toggle)
-    await waitFor(async () => {
-      const sidebar = canvasElement.querySelector(".main-sidebar-panel")!
-      const viewport = canvasElement.querySelector('[data-slot="sidebar-wrapper"]')!
-      await expect(viewport.getAttribute("data-sidebar-mode")).toBe("floating")
-      await expect(sidebar.getBoundingClientRect().right).toBeCloseTo(viewport.getBoundingClientRect().right - 8, 0)
-      await expect(getComputedStyle(sidebar).visibility).toBe("visible")
-    })
-  }
-}
-
 /** Observe every resize frame: settled-only checks miss width-transition drift. */
 export const ContinuousResize: Story = {
   globals: { locale: "en" },
@@ -219,11 +207,13 @@ export const ContinuousResize: Story = {
     for (const width of [980, 940, 900, 850, 800, 850, 920, 1000]) {
       host.style.width = `${width}px`
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      await waitFor(async () => {
       const panel = main.getBoundingClientRect()
       const content = chat.getBoundingClientRect()
-      void expect(panel.left).toBeCloseTo(sidebar.getBoundingClientRect().right, 0)
-      void expect(panel.right).toBeCloseTo(host.getBoundingClientRect().right - 4, 0)
-      void expect((content.left + content.right) / 2).toBeCloseTo((panel.left + panel.right) / 2, 0)
+      await expect(panel.left).toBeCloseTo(sidebar.getBoundingClientRect().right, 0)
+      await expect(panel.right).toBeCloseTo(host.getBoundingClientRect().right - 4, 0)
+      await expect((content.left + content.right) / 2).toBeCloseTo((panel.left + panel.right) / 2, 0)
+      })
     }
   }
 }
@@ -231,24 +221,18 @@ export const ContinuousResize: Story = {
 export const EnglishFloatingSidebar: Story = {
   args: { initialPinned: false },
   globals: { locale: "en" },
-  play: async ({ canvasElement, userEvent }) => {
-    const toggle = canvasElement.querySelector<HTMLButtonElement>(".main-sidebar-toggle button")!
+  play: async ({ canvasElement, canvas, userEvent }) => {
+    const host = canvasElement.querySelector<HTMLElement>("[data-sidebar-mode]")!
+    const toggle = canvas.getByRole("switch")
     await userEvent.hover(toggle)
-    await waitFor(async () => {
-      const sidebar = canvasElement.querySelector(".main-sidebar-panel")!
-      const viewport = canvasElement.querySelector('[data-slot="sidebar-wrapper"]')!
-      await expect(viewport.getAttribute("data-sidebar-mode")).toBe("floating")
-      await expect(sidebar.getBoundingClientRect().left).toBeCloseTo(viewport.getBoundingClientRect().left + 8, 0)
-      const surface = canvasElement.querySelector(".main-sidebar-viewport")!
-      await expect(surface.getBoundingClientRect().left).toBeCloseTo(viewport.getBoundingClientRect().left + 8, 0)
-      const style = getComputedStyle(surface)
-      await expect([
-        style.borderTopLeftRadius,
-        style.borderTopRightRadius,
-        style.borderBottomLeftRadius,
-        style.borderBottomRightRadius
-      ]).toEqual(["14px", "14px", "14px", "14px"])
-      await expect(style.visibility).toBe("visible")
-    })
+    await expect(host).toHaveAttribute("data-rail-show")
+    await expect(toggle).toHaveAttribute("aria-expanded", "false")
+    await userEvent.click(toggle)
+    await waitFor(() => expect(host).toHaveAttribute("data-sidebar-mode", "pinned"))
+    await expect(toggle).toHaveAttribute("aria-expanded", "true")
+    await userEvent.click(toggle)
+    await waitFor(() => expect(host).toHaveAttribute("data-sidebar-mode", "hidden"))
   }
 }
+
+export const ArabicFloatingSidebar: Story = { ...EnglishFloatingSidebar, globals: { locale: "ar" } }

@@ -261,7 +261,7 @@ function Choice<T extends string>({
             "rounded-[5px] px-2 py-1 text-[11px] leading-4 whitespace-nowrap transition-colors",
             option.value === value
               ? "bg-[var(--card)] text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.12)]"
-              : "text-muted-foreground hover:text-foreground"
+              : "text-foreground/80 hover:text-foreground"
           )}
           onClick={() => onChange(option.value)}
         >
@@ -1683,6 +1683,7 @@ export function UsageSection({
                 ) : (
                   <div
                     data-slot="usage-log-scroll"
+                    tabIndex={0}
                     className="mt-3 max-h-[420px] overflow-auto rounded-lg border border-border/60"
                     onScroll={(event) => {
                       const el = event.currentTarget

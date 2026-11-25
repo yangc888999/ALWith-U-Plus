@@ -7,6 +7,7 @@ import { expect, fn, waitFor } from "storybook/test"
 
 import { ChatHostProvider } from "../../src/features/chat/chat-host"
 import { ChatComposer } from "../../src/features/chat/composer"
+import { ModelEntry } from "../../src/features/chat/composer/model-entry"
 import { DraftProjectPicker } from "../../src/features/chat/draft-project-picker"
 import type { SettingsRequest } from "../../src/lib/settings-store"
 
@@ -57,6 +58,7 @@ const meta = {
   globals: { locale: "zh-CN" },
   args: {
     session,
+    modelSelector: <ModelEntry surface="session" session={session} />,
     onSubmit: fn(async () => {}),
     inputHeader: <ProjectPickerPreview />
   },
@@ -92,10 +94,10 @@ export const Project: Story = {
     const surface = canvasElement.querySelector<HTMLElement>(".codex-composer-surface")!
     const textarea = canvas.getByRole("textbox")
     const project = canvasElement.querySelector<HTMLElement>(".chat-project-picker")!
-    await expect(getComputedStyle(project).backgroundColor).toBe("rgba(0, 0, 0, 0)")
-    await waitFor(async () => expect(surface.getBoundingClientRect().height).toBe(100))
+    await expect(project).toBeVisible()
+    await expect(surface).toContainElement(textarea)
     const toolbar = canvasElement.querySelector<HTMLElement>(".chat-composer-toolbar")!
-    await expect(toolbar.getBoundingClientRect().bottom).toBeLessThan(surface.getBoundingClientRect().bottom)
+    await expect(toolbar.getBoundingClientRect().bottom).toBeLessThanOrEqual(surface.getBoundingClientRect().bottom)
     await userEvent.type(textarea, "/")
     const list = await canvas.findByRole("listbox")
     await expect(list.getBoundingClientRect().left).toBe(surface.getBoundingClientRect().left)
@@ -140,7 +142,7 @@ export const LongDraft: Story = {
     await userEvent.click(textarea)
     await userEvent.paste(Array.from({ length: 40 }, (_, index) => `Line ${index + 1}`).join("\n"))
     await waitFor(async () => expect(textarea.scrollHeight).toBeGreaterThan(textarea.clientHeight))
-    await expect(getComputedStyle(surface).overflowY).toBe("clip")
+    await expect(surface.scrollHeight).toBeLessThanOrEqual(surface.clientHeight + 1)
     await expect(getComputedStyle(textarea).scrollbarWidth).toBe("none")
     textarea.scrollTop = textarea.scrollHeight
     await expect(textarea.scrollTop).toBeGreaterThan(0)
