@@ -27,7 +27,7 @@ export interface HtmlPreviewHostControl {
 export type HtmlPreviewHost = NonNullable<PreviewHost["htmlPreview"]> & HtmlPreviewHostControl
 
 /** How long a self-write suppresses the matching watch event. */
-export const SELF_WRITE_WINDOW = 1200
+const SELF_WRITE_WINDOW = 1200
 
 /** Native capabilities share the workspace's authorization and existing filesystem watcher. */
 export function createHtmlPreviewHost(

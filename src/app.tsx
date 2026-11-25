@@ -25,6 +25,8 @@ import {
   serialAutomationExecutor,
   startAutomationScheduler
 } from "@/features/automation/automation-scheduler"
+import { deliverLarkResult } from "@/features/automation/lark-delivery"
+import { completedRun, failedRun } from "@/features/automation/run-outcome"
 import { getTask, patchRunRecord, setTaskMonitorSession } from "@/features/automation/task-store"
 import type { DeliveryReceipt, OnRunTask } from "@/features/automation/types"
 import { ActionCard, ElicitationFormDialog } from "@/features/chat/action-card"
@@ -50,7 +52,7 @@ import { MainSidebarLayout } from "@/features/layout/components/main-sidebar-lay
 import { TrailingBoard } from "@/features/layout/components/trailing-board"
 import { CommandPalette } from "@/features/palette/command-palette"
 import { startFreeModelWatch } from "@/features/providers/free-model-watch"
-import type { PendingChatRow } from "@/features/sessions/pending-chat"
+import { usePendingChat } from "@/features/sessions/pending-chat"
 import { recentMainActivity } from "@/features/sessions/recent-main-activity"
 import { selectSession } from "@/features/sessions/select-session"
 import { SessionSidebar } from "@/features/sessions/session-sidebar"
@@ -88,10 +90,11 @@ import { useMainWindowSurface } from "@/lib/chat-window-state"
 import { client, markRead, useApp, useSession, watchRunStates } from "@/lib/client"
 import { playCompletionSound, soundForRunState } from "@/lib/completion-sound"
 import { bumpDockBadge, clearDockBadge } from "@/lib/dock-badge"
+import { defaultModelChoice } from "@/lib/default-model"
 import { describeError } from "@/lib/error-text"
 import { ensureDefaultGroupRoles } from "@/lib/group-roles"
 import { groupSessionRows } from "@/lib/group-sessions"
-import { groupByDirectory } from "@/lib/groups"
+import { groupByDirectory, isGroupDirectory } from "@/lib/groups"
 import { notify, watchForNotifications } from "@/lib/notifications"
 import { notifyConversation } from "@/lib/notify"
 import { type Preferences, savePreference } from "@/lib/preferences"
@@ -119,10 +122,6 @@ import { openSettingsWindow } from "@/lib/window-manager"
 // Matches `lib/startup-window.ts#FALLBACK_MS`: a startup failure keeps retrying while the silent
 // window is open, and this is how long that window lasts at most before the banner may speak.
 const STARTUP_RECOVERY_MS = 20_000
-
-function pendingChatKey(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`
-}
 
 // Pages behind a navigation click. Keeping them out of the startup chunk leaves the first paint
 // with only the chat surface to parse, which is what the window shows anyway; each page's chunk
@@ -355,7 +354,11 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   useReadVisibleSession(selectedId, focused && view === "chat")
   useProjectMemory()
 
+  const { pendingChat, setPendingChat, begin, cancel, requestedKey, onListed } = usePendingChat(selectedId)
+  const [quickChatDirectoryPending, setQuickChatDirectoryPending] = useState(false)
   const select = useCallback((sessionRow: SessionSummary) => {
+    cancel()
+    setQuickChatDirectoryPending(false)
     // A project opened from history must have its memory file too, not only the ones picked in
     // the composer: the read-memory action would otherwise find nothing on older projects.
     void ensureProjectMemory(sessionRow.cwd)
@@ -404,7 +407,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       },
       isCurrent
     )
-  }, [])
+  }, [cancel])
 
   // Expose this `select` to the rest of the app as the one entrance for opening a conversation
   // (toasts, command palette, deep links). It is stable (`[]` deps), so registering on mount is enough.
@@ -581,25 +584,22 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     id: string
     generation: number
   } | null>(null)
-  const [pendingChat, setPendingChat] = useState<PendingChatRow | null>(null)
-  const [quickChatDirectoryPending, setQuickChatDirectoryPending] = useState(false)
+  const pickDraftFolder = (directory: string) => {
+    if (directory === lastDirectory) return
+    if (isGroupDirectory(directory)) cancel()
+    else begin(directory)
+    chooseDraftFolder(directory)
+  }
   const newChatInDirectory = useCallback(
     (
       cwd?: string | null,
       collectionId?: string,
       groupId: string | null = null,
-      pending?: { key?: string; directory?: string | null }
+      existingKey?: string
     ) => {
       const directory = newChatDirectory(cwd === undefined ? (extensionSession.current?.cwd ?? lastDirectory) : cwd)
-      const pendingGroup = isTemporaryChatDir(directory) ? null : directory
-      const pendingKey = groupId === null ? (pending?.key ?? pendingChatKey()) : null
-      if (pendingKey !== null) {
-        setPendingChat((current) =>
-          current?.key === pendingKey
-            ? { ...current, directory: pendingGroup ?? pending?.directory ?? null, status: "draft" }
-            : { key: pendingKey, directory: pendingGroup ?? pending?.directory ?? null, status: "draft" }
-        )
-      }
+      const pendingKey = groupId === null && !isGroupDirectory(directory) ? existingKey ?? begin(directory) : null
+      if (pendingKey === null) cancel()
       setQuickChatDirectoryPending(false)
       void operation
         .run(
@@ -627,26 +627,28 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           toast.error(describeError(error))
         })
     },
-    [chooseDraftFolder, initialPreferences.defaultStartSurface, lastDirectory, operation, surfaceGeneration]
+    [begin, cancel, chooseDraftFolder, initialPreferences.defaultStartSurface, lastDirectory, operation, setPendingChat, surfaceGeneration]
   )
 
   /** 新建会话: a temporary chat in its own folder under the quick-chat root, never inside a project. */
   const newChat = useCallback(() => {
-    const key = pendingChatKey()
-    setPendingChat({ key, directory: null, status: "draft" })
+    const key = begin(null)
     setQuickChatDirectoryPending(true)
     setView("chat")
     setSelectedId(null)
     void createChatDirectory()
-      .then((directory) => newChatInDirectory(directory, undefined, null, { key }))
+      .then((directory) => {
+        if (requestedKey.current === key) newChatInDirectory(directory, undefined, null, key)
+      })
       .catch((error: unknown) => {
+        if (requestedKey.current !== key) return
         setQuickChatDirectoryPending(false)
         setPendingChat((current) =>
           current !== null && current.key === key ? { ...current, status: "retryable" } : current
         )
         toast.error(describeError(error))
       })
-  }, [newChatInDirectory])
+  }, [begin, newChatInDirectory, requestedKey, setPendingChat])
 
   /** A recent-project card opens that project's newest conversation, not another blank draft. */
   const openRecentProject = useCallback(
@@ -711,16 +713,8 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   )
 
   const draftCreated = useCallback((id: string) => {
-    setPendingChat((current) => (current === null ? current : { ...current, sessionId: id, status: "connecting" }))
     setSelectedId(id)
   }, [])
-
-  // Once the native draft row is in the list, the local placeholder has done its job. Rendering
-  // both would look like two chats and lose the in-place transition.
-  useEffect(() => {
-    if (pendingChat?.sessionId === undefined) return
-    if (knownSessions.some((row) => row.sessionId === pendingChat.sessionId)) setPendingChat(null)
-  }, [knownSessions, pendingChat?.sessionId])
 
   const selectPendingChat = useCallback(() => {
     if (pendingChat === null) return
@@ -1040,13 +1034,13 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   // 用 newSession 的对象形式（而非默认 draft slot）是为了不抢占当前打开的对话。
   useEffect(() => {
     const run: OnRunTask = async (request) => {
+      let sessionId = request.monitorSessionId ?? ""
       try {
         const cwd = request.cwd.trim() !== "" ? request.cwd : await commands.quickChatDirectory()
         // One task = one monitor conversation, named after the task. Every run appends to that
         // same thread, so the sidebar keeps a single 「监控」row instead of growing a chat a day.
         // After an app restart the thread is no longer attached: re-open it with the options form
         // of `open`, which only attaches/replays and does not steal the user's active chat slot.
-        let sessionId: string = request.monitorSessionId ?? ""
         let created = false
         if (sessionId !== "" && !client.holds(sessionId)) {
           try {
@@ -1062,19 +1056,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
             meta: { codex: { mode: request.fullAccess ? "agent-full-access" : "workspace-write" } }
           })
           created = true
-        }
-        // A task may pin its own model. setConfig("model") also re-applies that model's effort
-        // ladder (client.landModelSwitch), so a scheduled run never inherits the previous default
-        // model's effort. Leaving it empty keeps the session default untouched.
-        if (request.model.trim() !== "") {
-          await client.setConfig(sessionId, "model", request.model.trim())
-        }
-        // Explicit overrides come *after* the model switch: landModelSwitch re-applies that
-        // model's default effort/fast-mode, so writing them first would be silently overwritten.
-        // The client clamps both against what the new model actually publishes — a task that saved
-        // "max" and was later re-pointed at a model with three levels must still run.
-        if (request.effort.trim() !== "" || request.fastMode) {
-          await client.applyRunOverrides(sessionId, request.effort.trim(), request.fastMode)
         }
         // Mark the origin by id, not by title: a task's first prompt has no `#` heading, which is
         // the only signal the old `codex exec` runs gave the sidebar to divert them out of 项目.
@@ -1105,7 +1086,12 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           }
         }, 2000)
         try {
-          const before = client.state.sessions[sessionId]?.items.length ?? 0
+          const pinned = request.model.trim()
+          const defaults = pinned ? null : defaultModelChoice()
+          const model = await client.prepareAutomationModel(sessionId, pinned || defaults?.model || null, created)
+          const effort = pinned ? request.effort.trim() : defaults?.effort ?? ""
+          const fast = pinned ? request.fastMode : defaults?.fastMode
+          if (effort || fast !== undefined) await client.applyRunOverrides(sessionId, effort, fast)
           // Same thread, many runs: label each run with its timestamp in the visible timeline so
           // the monitor reads as a dated log. `display` only changes what the reader sees; the
           // agent still receives the untouched prompt.
@@ -1114,28 +1100,12 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           const runStamp = `${started.getFullYear()}-${pad2(started.getMonth() + 1)}-${pad2(started.getDate())} ${pad2(started.getHours())}:${pad2(started.getMinutes())}`
           const receipt = await client.promptAndWait(sessionId, [{ type: "text", text: request.prompt }], {
             display: [{ type: "text", text: `【${runStamp} 运行】\n${request.prompt}` }]
-          })
-          // Acceptance is not completion. Wait for the actual terminal turn, then read only what
-          // the agent wrote in this turn. A turn still running after the watchdog is unfinished,
-          // not a successful empty report.
-          if (client.state.sessions[sessionId]?.turnEndedAt[receipt] === undefined)
-            return {
-              runId: request.runId,
-              taskId: request.taskId,
-              status: "failed",
-              summary: "",
-              sessionId,
-              error: "本轮在执行器放行前仍未结束；未把过程输出当作日报推送。",
-              finishedAt: Date.now()
-            }
-          const answer = client.answerSince(sessionId, before)
+          }, model)
           return {
             runId: request.runId,
             taskId: request.taskId,
-            status: answer.trim() === "" ? "no_content" : "success",
-            summary: answer,
+            ...completedRun(client.state.sessions[sessionId], receipt),
             sessionId,
-            error: null,
             finishedAt: Date.now()
           }
         } finally {
@@ -1145,10 +1115,8 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
         return {
           runId: request.runId,
           taskId: request.taskId,
-          status: "failed",
-          summary: "",
-          sessionId: null,
-          error: error instanceof Error ? error.message : String(error),
+          ...failedRun(error),
+          sessionId: sessionId || null,
           finishedAt: Date.now()
         }
       }
@@ -1169,9 +1137,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       // Delivery is a separate phase from execution: the local run record is already final. A
       // no-body turn never sends the "empty result" placeholder to a group.
       if (request.larkNotify) {
-        const now = new Date()
-        const pad = (value: number): string => String(value).padStart(2, "0")
-        const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
         const send = async (targets: typeof request.larkTargets, text: string): Promise<DeliveryReceipt[]> => {
           const receipts: DeliveryReceipt[] = targets.map((target) => ({
             targetId: target.id,
@@ -1205,70 +1170,13 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           return receipts
         }
 
-        let receipts: DeliveryReceipt[] = []
-        if (result.status === "no_content") {
-          // Configured groups are recorded as skipped rather than receiving a placeholder body.
-          receipts = request.larkTargets.map((target) => ({
-            targetId: target.id,
-            targetName: target.name,
-            kind: target.kind,
-            status: "skipped",
-            error: "no_content"
-          }))
-          if (request.larkEmptyResultNoticeToSelf === true) {
-            try {
-              const auth = await commands.larkCliAuthStatus()
-              const self = auth.identities.find(
-                (identity) =>
-                  identity.kind === "user" &&
-                  identity.available &&
-                  typeof identity.openId === "string" &&
-                  identity.openId !== ""
-              )
-              const selfId = self?.openId
-              if (typeof selfId === "string" && selfId !== "") {
-                const selfName = self?.userName ?? t("automation.larkSelfFallback")
-                const notice = [`【${request.taskName}】`, stamp, "", t("automation.larkEmptyResult")]
-                  .join("\n")
-                  .slice(0, 4000)
-                receipts.push(
-                  ...(await send(
-                    [
-                      {
-                        id: selfId,
-                        name: selfName,
-                        kind: "user"
-                      }
-                    ],
-                    notice
-                  ))
-                )
-              } else {
-                receipts.push({
-                  targetId: "self",
-                  targetName: t("automation.larkSelfFallback"),
-                  kind: "user",
-                  status: "skipped",
-                  error: t("automation.larkAuthMissing")
-                })
-              }
-            } catch (cause: unknown) {
-              receipts.push({
-                targetId: "self",
-                targetName: t("automation.larkSelfFallback"),
-                kind: "user",
-                status: "failed",
-                error: describeError(cause)
-              })
-            }
-          }
-        } else if (request.larkTargets.length > 0) {
-          const body =
-            result.status === "success" ? result.summary.trim() : (result.error ?? t("automation.toastRunFailed"))
-          const header = result.status === "success" ? stamp : `${stamp} · ${t("automation.runStatusFailed")}`
-          const text = [`【${request.taskName}】`, header, "", body].join("\n").slice(0, 4000)
-          receipts = await send(request.larkTargets, text)
-        }
+        const receipts = await deliverLarkResult(
+          request,
+          result,
+          t("automation.runStatusFailed"),
+          t("automation.toastRunFailed"),
+          send
+        )
         result.deliveries = receipts
         patchRunRecord(result.runId, { deliveries: receipts })
       }
@@ -1441,7 +1349,10 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
         )
         .catch((error) => toast.error(describeError(error)))
     }
-    const newProjectChat = newChat
+    const newProjectChat = (cwd: string | null) => {
+      if (cwd === null || isTemporaryChatDir(cwd)) newChat()
+      else newChatInDirectory(cwd)
+    }
 
     const deleted = (sessionId: string): void => {
       setSelectedId((current) => (current === sessionId ? null : current))
@@ -1487,12 +1398,14 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
             <ChatProjectMenu
               cwd={session.cwd}
               currentSessionId={session.id}
+              pendingChat={pendingChat}
+              onSelectPending={selectPendingChat}
               onSelect={select}
               onNewChat={newProjectChat}
             />
           }
           onSelectSession={select}
-          onNewChat={newProjectChat}
+          onNewChat={newChat}
           onClearContext={(cwd) => clearContextInPlace(session.id, cwd)}
           onDeleted={deleted}
         />
@@ -1504,22 +1417,26 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           collectionId={draftCollection?.generation === surfaceGeneration ? draftCollection.id : undefined}
           owner="main"
           key={`draft-${surfaceGeneration}`}
-          onNewChat={newProjectChat}
+          onNewChat={newChat}
           startSurface={draftStartSurface}
           cwd={lastDirectory}
           projectMenu={
             <ChatProjectMenu
               cwd={lastDirectory}
               currentSessionId={selectedId}
+              pendingChat={pendingChat}
+              onSelectPending={selectPendingChat}
               onSelect={select}
               onNewChat={newProjectChat}
             />
           }
-          onCwdChange={chooseDraftFolder}
+          onCwdChange={pickDraftFolder}
+          onCwdResolved={chooseDraftFolder}
+          onListed={onListed}
           onOpenProject={openRecentProject}
           onCreated={draftCreated}
           onPrepareFailed={() =>
-            setPendingChat((current) => (current === null ? current : { ...current, status: "retryable" }))
+            setPendingChat((current) => (current === null ? current : { ...current, sessionId: undefined, status: "retryable" }))
           }
           onSendingChange={(id, sending) => {
             setSubmittingDraftId((current) => (sending ? id : current === id ? null : current))

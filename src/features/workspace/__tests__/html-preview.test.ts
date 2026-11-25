@@ -150,6 +150,38 @@ test("ending editing without a held change does not refresh", async () => {
   expect(refresh).not.toHaveBeenCalled()
   off()
 })
+test("a selection without mouseup survives scrolling while visible and hides outside the frame", async () => {
+  const frame = document.createElement("iframe")
+  document.body.append(frame)
+  try {
+    const doc = frame.contentDocument!
+    const view = frame.contentWindow!
+    doc.body.textContent = "Report passage"
+    const script = doc.createElement("script")
+    script.textContent = menuBridge
+    doc.head.append(script)
+    const post = vi.spyOn(view.parent, "postMessage").mockImplementation(() => {})
+    const range = doc.createRange()
+    range.selectNodeContents(doc.body)
+    let top = 40
+    range.getBoundingClientRect = () => new DOMRect(10, top, 100, 20)
+    view.getSelection()!.addRange(range)
+    doc.dispatchEvent(new Event("selectionchange"))
+    const sent = (payload: object) => expect(post).toHaveBeenLastCalledWith(expect.objectContaining(payload), "*")
+    await vi.waitFor(() => sent({ text: "Report passage", rect: expect.objectContaining({ top: 40 }) }))
+    top = 28
+    doc.dispatchEvent(new Event("scroll"))
+    await vi.waitFor(() => sent({ text: "Report passage", rect: expect.objectContaining({ top: 28 }), repositionOnly: true }))
+    top = -200
+    doc.dispatchEvent(new Event("scroll"))
+    await vi.waitFor(() => sent({ text: "", rect: null }))
+    expect(view.getSelection()?.toString()).toBe("Report passage")
+  } finally {
+    vi.restoreAllMocks()
+    frame.remove()
+  }
+})
+
 test("the shipped HTML bridge forwards the selection and opens the report's own annotator", async () => {
   const frame = document.createElement("iframe")
   document.body.append(frame)

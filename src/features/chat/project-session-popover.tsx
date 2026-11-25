@@ -19,10 +19,12 @@ import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Separator } from "@/components/ui/separator"
 import { CollectionPicker } from "@/features/collection/collection-menu"
+import { pendingChatGroup, type PendingChatRow } from "@/features/sessions/pending-chat"
+import { PendingChatButton } from "@/features/sessions/pending-chat-button"
 import { ProjectPathAction } from "@/features/sessions/project-path-action"
 import { SessionListHostProvider } from "@/features/sessions/session-list-host"
 import { useChatWindowSurface, useMainWindowSurface } from "@/lib/chat-window-state"
-import { client } from "@/lib/client"
+import { client, useApp } from "@/lib/client"
 import { describeError } from "@/lib/error-text"
 import { basename } from "@/lib/path"
 import { cn } from "@/lib/utils"
@@ -33,8 +35,10 @@ type ProjectActions = {
   actionLabel?: string
   cwd: string | null
   currentSessionId?: string | null
+  pendingChat?: PendingChatRow | null
+  onSelectPending?: () => void
   onSelect: (sessionRow: SessionSummary) => void
-  onNewChat: () => void
+  onNewChat: (cwd: string | null) => void
 }
 
 type DirectoryState =
@@ -88,6 +92,8 @@ function ProjectPopover({
   cwd,
   currentSessionId,
   directory,
+  pendingChat,
+  onSelectPending,
   onSelect,
   onNewChat,
   trigger
@@ -210,6 +216,8 @@ function ProjectPopover({
               key={cwd ?? "quick-chats"}
               cwd={cwd}
               currentSessionId={currentSessionId}
+              pendingChat={pendingChat}
+              onSelectPending={() => leave(() => onSelectPending?.())}
               directory={directory}
               showHeading={trigger === undefined}
               expanded={expanded}
@@ -217,8 +225,10 @@ function ProjectPopover({
                 expandPointer.current = { x, y }
                 setExpanded(true)
               }}
-              onSelect={(sessionRow) => leave(() => onSelect(sessionRow))}
-              onNewChat={() => leave(onNewChat)}
+              onSelect={(sessionRow) => leave(() => {
+                if (sessionRow.sessionId !== currentSessionId) onSelect(sessionRow)
+              })}
+              onNewChat={() => leave(() => onNewChat(cwd))}
               onOpened={() => setOpen(false)}
               onCollectionOpenChange={setCollectionOpen}
             />
@@ -238,6 +248,8 @@ function distanceToPopup(point: { x: number; y: number }, bounds: DOMRect): numb
 function ProjectContents({
   cwd,
   currentSessionId,
+  pendingChat,
+  onSelectPending,
   directory,
   onSelect,
   onNewChat,
@@ -246,7 +258,8 @@ function ProjectContents({
   expanded,
   onExpand,
   onCollectionOpenChange
-}: ProjectActions & {
+}: Omit<ProjectActions, "onNewChat"> & {
+  onNewChat: () => void
   directory: DirectoryState
   onOpened: () => void
   showHeading: boolean
@@ -258,13 +271,23 @@ function ProjectContents({
   const { result, retry } = useProjectSessions(cwd)
   const mainSessionId = useMainWindowSurface((state) => (state.visible ? state.sessionId : null))
   const chatSessionId = useChatWindowSurface((state) => (state.visible ? state.sessionId : null))
+  const activeDraftId = useApp((state) => {
+    const id = currentSessionId ?? mainSessionId
+    return id !== null && state.draftSessions[id] === "main" ? id : null
+  })
+  const localRow =
+    pendingChat && pendingChatGroup(pendingChat.directory) === pendingChatGroup(cwd) &&
+    !(result?.status === "ready" && result.sessionRows.some((row) => row.sessionId === pendingChat.sessionId))
+      ? pendingChat
+      : null
   const sessionRows =
     result?.status === "ready"
       ? result.sessionRows.filter(
           (sessionRow) =>
-            sessionRow.sessionId !== currentSessionId &&
-            sessionRow.sessionId !== mainSessionId &&
-            sessionRow.sessionId !== chatSessionId
+            sessionRow.sessionId === activeDraftId ||
+            (sessionRow.sessionId !== currentSessionId &&
+              sessionRow.sessionId !== mainSessionId &&
+              sessionRow.sessionId !== chatSessionId)
         )
       : []
   const listRef = useRef<HTMLDivElement>(null)
@@ -294,7 +317,7 @@ function ProjectContents({
             {cwd === null ? t("sidebar.quickChats") : basename(cwd)}
           </span>
           <span className="shrink-0 text-xs text-muted-foreground" aria-live="polite">
-            {result?.status === "ready" ? t("chat.project.chatCount", { count: sessionRows.length }) : null}
+            {result?.status === "ready" ? t("chat.project.chatCount", { count: sessionRows.length + (localRow ? 1 : 0) }) : null}
           </span>
         </div>
       )}
@@ -304,6 +327,7 @@ function ProjectContents({
         viewportRef={listRef}
         viewportProps={{ tabIndex: -1 }}
       >
+        {localRow && <PendingChatButton row={localRow} onSelect={onSelectPending} />}
         {(result === undefined || result.status === "loading") && (
           <p role="status" className="px-3 py-2 text-sm text-muted-foreground">
             {t("chat.project.loading")}
@@ -319,7 +343,7 @@ function ProjectContents({
             </Button>
           </div>
         )}
-        {result?.status === "ready" && sessionRows.length === 0 && (
+        {result?.status === "ready" && localRow === null && sessionRows.length === 0 && (
           <p className="px-3 py-2 text-sm text-muted-foreground">{t("sidebar.noResults")}</p>
         )}
         {result?.status === "ready" &&

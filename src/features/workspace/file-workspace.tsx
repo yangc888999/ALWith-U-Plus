@@ -602,7 +602,6 @@ export function FileWorkspace({
     top: number
     text: string
     path: string
-    frameToken: string
     onComment?: () => void
   } | null>(null)
   const previewEditorRef = useRef<HTMLDivElement | null>(null)
@@ -669,23 +668,24 @@ export function FileWorkspace({
         y?: unknown
         rect?: unknown
         canComment?: unknown
+        repositionOnly?: unknown
         frameToken?: unknown
       } | null
-      if (data === null || data.source !== "alwith-preview") return
+      if (!data || data.source !== "alwith-preview" || (data.type !== "selection" && data.type !== "context-menu"))
+        return
+      const editor = previewEditorRef.current
+      if (!editor || typeof data.frameToken !== "string") return
+      const frame = Array.from(editor.querySelectorAll("iframe")).find(
+        (element) => element.contentWindow === event.source
+      )
+      // A table-of-contents link changes location.href in the frame, not the iframe's src.
+      // Ignore only the fragment; a different capability, file or query still identifies a different preview.
+      if (!frame || !frame.src || frame.src.split("#", 1)[0] !== data.frameToken.split("#", 1)[0]) return
       if (data.type === "selection") {
         const text = typeof data.text === "string" ? data.text.trim() : ""
         if (!visible || previewExtension !== null || activePath === null || !/\.(html?|xhtml)$/i.test(activePath))
           return
-        const frame = Array.from(document.querySelectorAll<HTMLIFrameElement>(".file-workspace-editor iframe")).find(
-          (element) => element.contentWindow === event.source
-        )
-        if (!frame) return
-        // The native preview URL carries a per-render capability token. Comparing it with the
-        // live frame rejects events that were queued just before a tab switch or rebuild.
-        if (typeof data.frameToken !== "string" || frame.src === "" || data.frameToken !== frame.src) return
         const box = frame.getBoundingClientRect()
-        const pane = previewEditorRef.current?.getBoundingClientRect() ?? null
-        if (pane === null) return
         const rect = data.rect as { left?: number; top?: number; bottom?: number; width?: number } | null
         if (text === "" || rect == null) {
           setPreviewSelection(null)
@@ -702,12 +702,17 @@ export function FileWorkspace({
         const a = box.width / (frame.offsetWidth || box.width)
         const left = box.left + (Number(rect.left ?? 0) + Number(rect.width ?? 0) / 2) * a - 98
         const top = box.top + Number(rect.bottom ?? 0) * a + 8
+        if (data.repositionOnly === true) {
+          setPreviewSelection((current) =>
+            current?.path === activePath && current.text === text ? { ...current, left, top } : current
+          )
+          return
+        }
         setPreviewSelection({
           left,
           top,
           text: text.slice(0, 20_000),
           path: activePath,
-          frameToken: data.frameToken,
           onComment:
             data.canComment === true
               ? () => {
@@ -718,23 +723,18 @@ export function FileWorkspace({
         })
         return
       }
-      if (data.type !== "context-menu") return
-      const frame = Array.from(document.querySelectorAll("iframe")).find(
-        (element) => element.contentWindow === event.source
-      )
-      if (!frame || typeof data.frameToken !== "string" || frame.src === "" || data.frameToken !== frame.src) return
-      const rect = frame?.getBoundingClientRect()
+      const rect = frame.getBoundingClientRect()
       // Scale the in-frame pointer coordinates by the iframe zoom ratio. The parent window's own
       // pointer (pointer.current) is unreliable here: mousemove inside the iframe never bubbles to
       // the parent, so the last position before entering the frame is often 0. Prefer the scaled
       // formula; when a === 1 (no zoom) keep the measured pointer as a fallback.
-      const a = rect ? rect.width / (frame ? frame.offsetWidth || rect.width : rect.width) : 1
-      const x = a === 1 && pointer.current.x > 0 ? pointer.current.x : (rect?.left ?? 0) + Number(data.x ?? 0) * a
-      const y = a === 1 && pointer.current.y > 0 ? pointer.current.y : (rect?.top ?? 0) + Number(data.y ?? 0) * a
+      const a = rect.width / (frame.offsetWidth || rect.width || 1)
+      const x = a === 1 && pointer.current.x > 0 ? pointer.current.x : rect.left + Number(data.x ?? 0) * a
+      const y = a === 1 && pointer.current.y > 0 ? pointer.current.y : rect.top + Number(data.y ?? 0) * a
       // While the HTML frame is in WYSIWYG edit mode its body is contenteditable, so cut/paste
       // apply. The frame's own editing state never reaches this document; the toolbar marks the
       // live iframe element instead.
-      const editable = frame?.getAttribute(HTML_EDITING_ATTRIBUTE) === "true"
+      const editable = frame.getAttribute(HTML_EDITING_ATTRIBUTE) === "true"
       // In edit mode the native browser right-click menu (cut/copy/paste) is what the user wants,
       // not the translated preview menu — skip it (the Rust bridge already lets it through, see T03).
       if (editable) return
@@ -788,10 +788,12 @@ export function FileWorkspace({
   // surface "Drive is not running" from these lookups.
   const driveRoot =
     driveVisible && activeDocument
-      ? driveState?.roots.find((root) => containsPath(root.localPath, activeDocument.path))
+      ? driveState?.roots.find((root) => containsPath(root.localPath, activeDocument.path)) ?? null
       : null
   const driveFile =
-    driveVisible && activeDocument ? driveState?.files.find((file) => file.localPath === activeDocument.path) : null
+    driveVisible && activeDocument
+      ? driveState?.files.find((file) => file.localPath === activeDocument.path) ?? null
+      : null
   // Drive preview integrations belong to documents that actually live in the drive. Handing them
   // to a plain file (memory.md in a local folder) made the collab probe own `editable()`: it stays
   // false while probing and only flips after the drive answers — with the drive unreachable that
@@ -1349,6 +1351,8 @@ export function FileWorkspace({
   // re-runs that effect (and cancels the in-flight load) every time the preview opens.
   const visibleRef = useRef(visible)
   visibleRef.current = visible
+  const displayedWorkspace = useRef(workspace)
+  displayedWorkspace.current = workspace
   const previousCwd = useRef<string | null | undefined>(undefined)
   useEffect(() => {
     if (previousCwd.current === cwd) return
@@ -1493,14 +1497,15 @@ export function FileWorkspace({
   useEffect(() => {
     let disposed = false
     const newTab = (): void => {
-      if (document.querySelector('[role="dialog"]')) return
+      if (disposed || document.querySelector('[role="dialog"]')) return
+      const previous = displayedWorkspace.current
       const generation = ++requestGeneration.current
       const owner = cwd
       void ensure(cwd)
         .then((target) => {
           if (disposed || generation !== requestGeneration.current || owner !== currentCwd.current) return
           if (
-            target === workspace ||
+            target === previous ||
             target.tabs.getSnapshot().tabs.length !== 1 ||
             target.tabs.getSnapshot().tabs[0].kind !== "new"
           )
@@ -1511,13 +1516,15 @@ export function FileWorkspace({
         .catch(report)
     }
     const closeTab = (): void => {
-      if (!workspace || document.querySelector('[role="dialog"]')) return
-      const id = workspace.tabs.getSnapshot().activeId
-      if (id !== null) void workspace.tabs.requestClose(id).catch(report)
+      const target = displayedWorkspace.current
+      if (disposed || !target || document.querySelector('[role="dialog"]')) return
+      const id = target.tabs.getSnapshot().activeId
+      if (id !== null) void target.tabs.requestClose(id).catch(report)
     }
     const reopenTab = (): void => {
-      if (!workspace || document.querySelector('[role="dialog"]')) return
-      void workspace.tabs
+      const target = displayedWorkspace.current
+      if (disposed || !target || document.querySelector('[role="dialog"]')) return
+      void target.tabs
         .reopenClosed()
         .then(() => {
           if (!disposed) setVisible(true)
@@ -1531,7 +1538,7 @@ export function FileWorkspace({
         event.preventDefault()
         if (event.shiftKey) reopenTab()
         else newTab()
-      } else if (key === "w" && !event.shiftKey && visible) {
+      } else if (key === "w" && !event.shiftKey && visibleRef.current) {
         event.preventDefault()
         closeTab()
       }
@@ -1549,7 +1556,7 @@ export function FileWorkspace({
       window.removeEventListener("keydown", onKeyDown)
       for (const subscription of subscriptions) void subscription.then((stop) => stop()).catch(report)
     }
-  }, [cwd, ensure, visible, workspace])
+  }, [cwd, ensure])
   const revealEntry = useCallback(
     async (path: string, root: string): Promise<void> => {
       const target = await ensure(root)
@@ -1950,7 +1957,7 @@ export function FileWorkspace({
                 ) : (
                   <DriveDocumentSurface host={previewHost} path={markdownPreview ? null : activePath}>
                     <ChatDirectoryContext.Provider value={workspace.root}>
-                      <div className="contents" onContextMenu={previewContextMenu}>
+                      <div className="contents" data-workspace-selection-owner="" onContextMenu={previewContextMenu}>
                         <WorkspaceEditor
                           tabs={workspace.tabs}
                           leading={leading}

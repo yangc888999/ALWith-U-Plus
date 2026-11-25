@@ -7,7 +7,6 @@ import { invoke } from "@tauri-apps/api/core"
 import { ArrowUpRightIcon, FolderIcon } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { toast } from "sonner"
 
 import type { DraftOwner } from "@/agent/client"
 import {
@@ -37,6 +36,7 @@ import { ChatHeader } from "./chat-header"
 import { ChatHostProvider } from "./chat-host"
 import { ChatComposer } from "./composer"
 import { ModelEntry } from "./composer/model-entry"
+import { selectSessionModel } from "./composer/select-session-model"
 import { FilePreviewModal } from "./dialogs/file-preview-modal"
 import { chooseFolder, DraftProjectPicker } from "./draft-project-picker"
 import { greetingKey, greetingPeriod, welcomeName, welcomeSubtitleKey } from "./welcome-greeting"
@@ -72,6 +72,8 @@ export function DraftChat({
   owner,
   cwd,
   onCwdChange,
+  onCwdResolved = onCwdChange,
+  onListed,
   onCreated,
   onPrepareFailed,
   collectionId,
@@ -92,6 +94,8 @@ export function DraftChat({
   owner: DraftOwner
   cwd: string | null
   onCwdChange: (cwd: string) => void
+  onCwdResolved?: (cwd: string) => void
+  onListed?: (sessionId: string, directory: string) => void
   /** Bind the precreated session to this surface without materializing a history entry. */
   onCreated: (sessionId: string) => void
   onPrepareFailed?: () => void
@@ -131,10 +135,11 @@ export function DraftChat({
   // Select-text actions (copy / quote into the composer) work on the welcome screen too.
   const selectionRoot = useRef<HTMLDivElement>(null)
   // Temporary chats live in the quick-chat folder: no project may be picked from here.
-  const temporaryChat = isTemporaryChatDir(session?.cwd ?? cwd)
-  const workProjectSelected = !temporaryChat
   const [preparing, setPreparing] = useState(true)
   const [error, setError] = useState<unknown>(null)
+  const displayDirectory = error === null ? cwd ?? session?.cwd ?? null : session?.cwd ?? cwd
+  const temporaryChat = isTemporaryChatDir(session?.cwd ?? cwd)
+  const workProjectSelected = !temporaryChat
   const [surface, setSurface] = useState<"chat" | "work">(startSurface)
   const [projectReminderOpen, setProjectReminderOpen] = useState(false)
   const chatSurface = surface === "chat"
@@ -157,8 +162,8 @@ export function DraftChat({
     inheritedEffort.current = inherited?.effort ?? null
     return inherited?.model ?? null
   })
-  const callbacks = useRef({ onCwdChange, onCreated, onPrepareFailed })
-  callbacks.current = { onCwdChange, onCreated, onPrepareFailed }
+  const callbacks = useRef({ onCwdResolved, onListed, onCreated, onPrepareFailed })
+  callbacks.current = { onCwdResolved, onListed, onCreated, onPrepareFailed }
   const currentId = useRef(id)
   currentId.current = id
   const mounted = useRef(false)
@@ -171,20 +176,12 @@ export function DraftChat({
       mounted.current = false
     }
   }, [])
-  const recentProjects = useMemo(
-    () => [
-      ...new Set(
-        [...sessionRows]
-          .toSorted((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
-          .map((sessionRow) => sessionRow.cwd)
-      )
-    ],
+  const projects = useMemo(
+    () => recentProjectsFrom(sessionRows, Infinity, isTemporaryChatDir),
     [sessionRows]
   )
-  const recentProjectItems = useMemo(
-    () => recentProjectsFrom(sessionRows, 4, isTemporaryChatDir),
-    [sessionRows]
-  )
+  const recentProjects = useMemo(() => projects.map((project) => project.cwd), [projects])
+  const recentProjectItems = projects.slice(0, 4)
   const profile = useDisplayProfile()
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
@@ -205,6 +202,7 @@ export function DraftChat({
     // and the error card (both explicit) own reconnection; preparation only re-runs on real input.
     void attempt
     let active = true
+    const notifyListed = callbacks.current.onListed
     setPreparing(true)
     setError(null)
     const pending = (async (): Promise<string | null> => {
@@ -220,7 +218,11 @@ export function DraftChat({
       // prompt has materialized its session. Keep that conversation selected.
       if (current !== null && client.state.sessions[current]?.cwd === directory && !client.state.draftSessions[current])
         return current
-      const next = await client.prepareDraft(owner, directory, model)
+      const next = notifyListed === undefined
+        ? await client.prepareDraft(owner, directory, model)
+        : await client.prepareDraft(owner, directory, model, false, (id) => {
+            if (active) notifyListed(id, directory)
+          })
       const previous = currentId.current
       if (previous !== next) {
         const input = drafts.get(previous ?? DRAFT_SESSION_ID)
@@ -234,7 +236,7 @@ export function DraftChat({
       if (!mounted.current) return next
       setId(next)
       callbacks.current.onCreated(next)
-      if (active && cwd !== directory) callbacks.current.onCwdChange(directory)
+      if (active && cwd !== directory) callbacks.current.onCwdResolved(directory)
       return next
     })()
     preparation.current = pending
@@ -334,7 +336,7 @@ export function DraftChat({
     <div className="flex min-w-0 flex-col gap-1">
       <div className="flex min-w-0 items-center gap-2">
         <DraftProjectPicker
-          cwd={session?.cwd ?? cwd}
+          cwd={displayDirectory}
           recentProjects={recentProjects}
           onChange={onCwdChange}
           preparing={preparing}
@@ -456,7 +458,7 @@ export function DraftChat({
                           client.state.runStates[session.id]?.state === "running" ||
                           client.state.draftSessions[session.id] === undefined)
                       if (started) {
-                        void client.setConfig(session.id, "model", value).catch((failure: unknown) => toast.error(describeError(failure)))
+                        void selectSessionModel(session.id, value)
                         return
                       }
                       if (value === model) {

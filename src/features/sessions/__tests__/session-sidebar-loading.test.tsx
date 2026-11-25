@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, within } from "@testing-library/react"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { SidebarProvider } from "@/components/ui/sidebar"
@@ -7,6 +7,7 @@ import { client } from "@/lib/client"
 import { initI18n } from "@/lib/i18n"
 
 import { SessionSidebar } from "../session-sidebar"
+import type { PendingChatRow } from "../pending-chat"
 import { useSessionsUiStore } from "../store"
 
 await initI18n("en")
@@ -22,11 +23,12 @@ afterEach(async () => {
   })
 })
 
-function showSidebar(pendingDirectory?: string | null) {
+function showSidebar(pendingDirectory?: string | null, pendingChat?: PendingChatRow) {
   return render(
     <SidebarProvider>
       <SessionSidebar
         pendingDirectory={pendingDirectory}
+        pendingChat={pendingChat}
         screen="main"
         leadingPage="plugins"
         selectedId={null}
@@ -44,6 +46,27 @@ function showSidebar(pendingDirectory?: string | null) {
   )
 }
 
+test("the session row offers one delete action and requires confirmation for that session", async () => {
+  const session = { sessionId: "row-to-delete", cwd: "/project", title: "Example chat", updatedAt: null, archived: false }
+  client.store.setState({ sessionListLoaded: true, sessionList: [session] })
+  useSessionsUiStore.setState({ projectOpen: new Map([[session.cwd, true]]) })
+  const remove = vi.spyOn(client, "delete").mockResolvedValue(undefined)
+  try {
+    const view = showSidebar()
+    const row = view.getByRole("button", { name: session.title })
+    await act(async () => row.focus())
+    const archive = await view.findByRole("button", { name: "Archive" })
+    const actions = within(must(archive.closest<HTMLElement>('[data-slot="hover-info-card-actions"]'), "row actions"))
+    fireEvent.click(actions.getByRole("button", { name: "Delete" }))
+    const dialog = await view.findByRole("dialog")
+    expect(remove).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }))
+    expect(remove).toHaveBeenCalledExactlyOnceWith(session.sessionId)
+  } finally {
+    remove.mockRestore()
+  }
+})
+
 test.each([
   [null, true],
   [null, false],
@@ -55,6 +78,20 @@ test.each([
   expect(view.getByRole("button", { name: "New chat" })).toBeInTheDocument()
   expect(view.getByRole("status")).toHaveTextContent("Creating the conversation")
   expect(client.state.sessionList).toEqual([])
+})
+
+test("only the matching, renderable native row can replace a new project placeholder", () => {
+  const row = { sessionId: "previous", cwd: "/project", title: "Previous draft", updatedAt: null, archived: false }
+  client.store.setState({ sessionListLoaded: true, sessionList: [row], draftSessions: { previous: "main" } })
+  const view = showSidebar(undefined, { key: "next", directory: row.cwd, status: "draft" })
+  expect(view.getByRole("button", { name: "New chat" })).toBeVisible()
+  view.unmount()
+  client.store.setState({ sessionListLoaded: false, sessionList: [{ ...row, sessionId: "next-real" }] })
+  const loading = showSidebar(undefined, { key: "next", directory: row.cwd, status: "connecting", sessionId: "next-real" })
+  expect(loading.getByRole("button", { name: "New chat" })).toBeVisible()
+  act(() => client.store.setState({ sessionListLoaded: true }))
+  expect(loading.queryByRole("button", { name: "New chat" })).toBeNull()
+  expect(loading.getByRole("button", { name: "Previous draft" })).toBeVisible()
 })
 
 test("empty quick chats stays first and collapsed with a project hover card", () => {

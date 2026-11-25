@@ -24,6 +24,7 @@ import { useGroupDiscussion } from "@/features/groups/use-group-discussion"
 import type { VoiceResume } from "@/features/voice/use-voice-handoff"
 import { getConversationDetail, subscribeChatDisplayPreferences } from "@/lib/chat-display-preferences"
 import { client } from "@/lib/client"
+import { describeError } from "@/lib/error-text"
 import { groupByDirectory } from "@/lib/groups"
 import { snapshotProjectMemory } from "@/lib/project-memory"
 import { isTemporaryChatDir } from "@/lib/quick-chat"
@@ -479,42 +480,48 @@ export function ChatView(props: ChatViewProps) {
             onContextMenu={openContextMenu}
           >
             <Conversation {...props} rootRef={rootRef} />
-            {/* Temporary chats have no project memory: read/compress/clear do not apply. */}
-            {isTemporaryChatDir(session.cwd) ? null : (
-              <ChatEdgeActions
-                sessionId={session.id}
-                onClearContext={
-                  onClearContext
-                    ? () => {
-                        // Carry the current model/effort into the next conversation instead of
-                        // dropping back to the provider default.
-                        client.rememberCurrentForNextChat(session.id)
-                        onClearContext(session.cwd)
-                      }
-                    : undefined
-                }
-                // Archive first, compress second: a failed archive must abort the compression so
-                // the pre-compression text is never destroyed without a copy in history.md.
-                onCompressMemory={
-                  session.state === "idle"
-                    ? () => {
-                        void snapshotProjectMemory(session.cwd)
-                          .then(() =>
-                            client.prompt(session.id, [{ type: "text", text: t("chat.compressMemoryPrompt") }])
-                          )
-                          .catch((error: unknown) =>
-                            toast.error(error instanceof Error ? error.message : String(error))
-                          )
-                      }
-                    : undefined
-                }
-                // Only a settled session can take a prompt; a busy one would reject it, so the
-                // action falls back to filling the composer instead.
-                onSend={
-                  session.state === "idle" ? (text) => client.prompt(session.id, [{ type: "text", text }]) : undefined
-                }
-              />
-            )}
+            <ChatEdgeActions
+              sessionId={session.id}
+              projectMemory={!isTemporaryChatDir(session.cwd)}
+              contextEnabled={
+                session.attached && !session.readOnly && !session.restoring && session.state === "idle" && session.items.length > 0
+              }
+              onCompactContext={() => {
+                void client
+                  .prompt(session.id, [{ type: "text", text: "/compact" }])
+                  .catch((error: unknown) => toast.error(describeError(error)))
+              }}
+              onClearContext={
+                onClearContext
+                  ? () => {
+                      // Carry the current model/effort into the next conversation instead of
+                      // dropping back to the provider default.
+                      client.rememberCurrentForNextChat(session.id)
+                      onClearContext(session.cwd)
+                    }
+                  : undefined
+              }
+              // Archive first, compress second: a failed archive must abort the compression so
+              // the pre-compression text is never destroyed without a copy in history.md.
+              onCompressMemory={
+                session.state === "idle"
+                  ? () => {
+                      void snapshotProjectMemory(session.cwd)
+                        .then(() =>
+                          client.prompt(session.id, [{ type: "text", text: t("chat.compressMemoryPrompt") }])
+                        )
+                        .catch((error: unknown) =>
+                          toast.error(error instanceof Error ? error.message : String(error))
+                        )
+                    }
+                  : undefined
+              }
+              // Only a settled session can take a prompt; a busy one would reject it, so the
+              // action falls back to filling the composer instead.
+              onSend={
+                session.state === "idle" ? (text) => client.prompt(session.id, [{ type: "text", text }]) : undefined
+              }
+            />
             <ChatContextMenu
               target={menu}
               onClose={() => setMenu(null)}

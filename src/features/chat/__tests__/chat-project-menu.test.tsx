@@ -50,6 +50,32 @@ function sessionRow(sessionId: string, cwd: string): SessionSummary {
   return { sessionId, cwd, title: sessionId, updatedAt: "2026-10-14T00:00:00Z", archived: false }
 }
 
+test("a project menu shows its own pending chat before history loads and hands off to one native row", async () => {
+  const cwd = "/project"
+  const native = sessionRow("Native chat", cwd)
+  client.store.setState({ connection: "disconnected", sessionListLoaded: false })
+  const select = vi.fn()
+  const selectPending = vi.fn()
+  const menu = (directory: string, sessionId?: string) => (
+    <ChatProjectMenu cwd={cwd} currentSessionId={sessionId} onNewChat={() => {}} onSelect={select}
+      pendingChat={{ key: "creating", directory, status: "draft", sessionId }} onSelectPending={selectPending} />
+  )
+  const view = render(menu("/another"))
+  await act(() => Promise.resolve(fireEvent.click(view.getByRole("button", { name: "project" }))))
+  expect(view.queryByText("Creating the conversation")).toBeNull()
+  view.rerender(menu(cwd))
+  const status = view.getByText("Creating the conversation")
+  expect(status).toBeInTheDocument()
+  fireEvent.click(must(status.closest("button"), "pending chat"))
+  expect(selectPending).toHaveBeenCalledOnce()
+  expect(select).not.toHaveBeenCalled()
+  view.rerender(menu(cwd, native.sessionId))
+  act(() => client.store.setState({ sessionListLoaded: true, sessionList: [native], draftSessions: { [native.sessionId]: "main" } }))
+  await act(() => Promise.resolve(fireEvent.click(view.getByRole("button", { name: "project" }))))
+  expect(view.queryByText("Creating the conversation")).toBeNull()
+  expect(view.getAllByRole("button", { name: native.title! })).toHaveLength(1)
+})
+
 test.each(["main", "floating"] as const)(
   "%s header excludes displayed conversations before counting and expanding the project list",
   async (surface) => {
@@ -198,6 +224,16 @@ test.each([
   await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name }))))
   expect(view.getByRole("button", { name: "Project chat" })).toBeVisible()
   expect(view.queryByRole("button", { name: "Quick chat" })).toBeNull()
+  expect(resolveDirectory).not.toHaveBeenCalled()
+})
+
+test("a project starts a chat in its own directory without waiting for history or the default directory", async () => {
+  const start = vi.fn()
+  client.store.setState({ connection: "disconnected", sessionListLoaded: false })
+  const view = render(<ChatProjectMenu cwd="/work/alpha" onSelect={() => {}} onNewChat={start} />)
+  fireEvent.click(view.getByRole("button", { name: "alpha" }))
+  fireEvent.click(await view.findByRole("button", { name: "New chat" }))
+  expect(start).toHaveBeenCalledExactlyOnceWith("/work/alpha")
   expect(resolveDirectory).not.toHaveBeenCalled()
 })
 

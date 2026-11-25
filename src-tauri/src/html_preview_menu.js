@@ -28,6 +28,8 @@
     if (document.body && document.body.isContentEditable) return;
     event.preventDefault();
     event.stopImmediatePropagation();
+    dismissed = true;
+    hideSelection();
     var text = '';
     try {
       var selection = window.getSelection && window.getSelection();
@@ -44,54 +46,82 @@
       }, '*');
     } catch (error) {}
   }, true);
-  var lastText = null;
+  var lastText = '';
+  var lastRect = null;
+  var selectionTimer;
+  var scrollTimer;
+  var dismissed = false;
   var savedRange = null;
   var suppressSelectionReport = false;
-  function reportSelection() {
-    if (suppressSelectionReport) return;
-    var text = '';
-    var rect = null;
-    try {
-      var selection = window.getSelection && window.getSelection();
-      if (selection && selection.rangeCount > 0) {
-        text = String(selection).trim().slice(0, 20000);
-        if (text) savedRange = selection.getRangeAt(0).cloneRange();
-        var box = selection.getRangeAt(0).getBoundingClientRect();
-        rect = { left: box.left, top: box.top, bottom: box.bottom, width: box.width };
-      }
-    } catch (error) {}
-    if (text === lastText) return;
+  function publish(text, rect, repositionOnly) {
     lastText = text;
+    lastRect = rect;
     try {
       window.parent.postMessage({
         source: 'alwith-preview',
         type: 'selection',
         frameToken: window.location.href,
         text: text,
+        repositionOnly: repositionOnly,
         canComment: document.getElementById('annoFab') !== null,
         rect: rect
       }, '*');
     } catch (error) {}
   }
+  function hideSelection() {
+    clearTimeout(selectionTimer);
+    if (lastText) publish('', null, false);
+  }
+  function reportSelection(repositionOnly) {
+    if (dismissed || suppressSelectionReport || (repositionOnly && !lastText)) return;
+    var selection = window.getSelection();
+    var text = selection && selection.rangeCount ? String(selection).trim().slice(0, 20000) : '';
+    if (!text || !document.body || document.body.isContentEditable) return hideSelection();
+    if (repositionOnly && text !== lastText) return;
+    var range = selection.getRangeAt(0);
+    var box = range.getBoundingClientRect();
+    if (box.bottom <= 0 || box.top >= window.innerHeight || box.right <= 0 || box.left >= window.innerWidth)
+      return hideSelection();
+    var sameRange = lastText === text && savedRange && savedRange.startContainer === range.startContainer &&
+      savedRange.endContainer === range.endContainer && savedRange.startOffset === range.startOffset &&
+      savedRange.endOffset === range.endOffset;
+    if (sameRange && lastRect && box.left === lastRect.left && box.top === lastRect.top &&
+        box.width === lastRect.width && box.bottom === lastRect.bottom) return;
+    if (!sameRange) savedRange = range.cloneRange();
+    publish(text, { left: box.left, top: box.top, bottom: box.bottom, width: box.width }, repositionOnly || !!sameRange);
+  }
+  function scheduleSelection(delay) {
+    clearTimeout(selectionTimer);
+    selectionTimer = setTimeout(function () { reportSelection(false); }, delay);
+  }
   document.addEventListener('mouseup', function (event) {
     if (event.button !== 0 || suppressSelectionReport) return;
-    setTimeout(reportSelection, 0);
+    scheduleSelection(0);
   }, true);
   document.addEventListener('mousedown', function (event) {
     if (event.button !== 0) return;
+    dismissed = false;
     savedRange = null;
-    if (lastText !== '') { lastText = ''; try { window.parent.postMessage({ source: 'alwith-preview', type: 'selection', frameToken: window.location.href, text: '', rect: null }, '*'); } catch (error) {} }
+    hideSelection();
   }, true);
   // The host pill is positioned in the preview pane, not inside this frame. Once the selected
   // text scrolls away, keeping the pill would leave it detached from its quote.
   document.addEventListener('scroll', function () {
-    if (lastText !== '') { lastText = ''; try { window.parent.postMessage({ source: 'alwith-preview', type: 'selection', frameToken: window.location.href, text: '', rect: null }, '*'); } catch (error) {} }
+    if (!lastText || scrollTimer !== undefined) return;
+    scrollTimer = setTimeout(function () {
+      scrollTimer = undefined;
+      reportSelection(true);
+    }, 16);
   }, true);
   document.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape') reportSelection();
+    dismissed = event.key === 'Escape';
+    if (dismissed) hideSelection();
   }, true);
-  document.addEventListener('selectionchange', function () {
-    if (window.getSelection && String(window.getSelection()).trim() === '') reportSelection();
+  document.addEventListener('selectionchange', function (event) {
+    if (event.target !== document || dismissed || suppressSelectionReport) return;
+    var selection = window.getSelection();
+    if (!selection || selection.isCollapsed) hideSelection();
+    else scheduleSelection(120);
   }, true);
   // The host selection bar owns 点评. Restore the last selected range, then replay the gesture
   // the report annotator listens for: a mouseup creates its (hidden) bubble, and clicking that

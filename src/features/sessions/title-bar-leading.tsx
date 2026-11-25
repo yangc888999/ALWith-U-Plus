@@ -18,7 +18,7 @@ import { useActivityNotification } from "./use-activity-notification"
 
 const ACTION_CLASS = "size-7 text-sidebar-foreground/70 hover:text-sidebar-foreground aria-[current=page]:bg-foreground/5 aria-[current=page]:text-sidebar-foreground"
 
-export function FloatingWindowButton({
+function FloatingWindowButton({
   onOpenWindow,
   shortcut
 }: {

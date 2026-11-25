@@ -93,9 +93,7 @@ const PREVIEW_MENU_BRIDGE: &str = include_str!("html_preview_menu.js");
 const PREVIEW_MENU_RESOURCE: &str = "__alwith-menu.js";
 
 fn preview_menu_script(token: &str) -> String {
-    format!(
-        "<script src=\"/{token}/{PREVIEW_MENU_RESOURCE}\"></script><script>{PREVIEW_MENU_BRIDGE}</script>"
-    )
+    format!("<script src=\"/{token}/{PREVIEW_MENU_RESOURCE}\"></script><script>{PREVIEW_MENU_BRIDGE}</script>")
 }
 
 /// Returns the document with the context-menu bridge installed.
@@ -245,10 +243,7 @@ mod tests {
         let (_directory, preview) = fixture();
         let (html, mime) = resource(&preview, "report/index.html").unwrap();
         let served = String::from_utf8(html).unwrap();
-        assert!(
-            served.starts_with(&preview_menu_script("token")),
-            "the bridge must run before the document"
-        );
+        assert!(served.starts_with(&preview_menu_script("token")), "the bridge must run before the document");
         assert!(served.contains(PREVIEW_MENU_RESOURCE));
         assert!(served.contains("alwith-preview-comment-style"));
         assert!(served.contains("canComment"));

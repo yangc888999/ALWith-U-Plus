@@ -60,7 +60,7 @@ export async function copyText(text: string): Promise<void> {
  * The webview's asynchronous clipboard rejects `execCommand('paste')`, so the text is spliced into
  * the focused field and reported through an `input` event — the same path a keystroke takes.
  */
-export async function pasteInto(target: HTMLElement | null): Promise<void> {
+async function pasteInto(target: HTMLElement | null): Promise<void> {
   const { readText } = await import("@tauri-apps/plugin-clipboard-manager")
   const clip = await readText()
   if (clip === "") return
@@ -77,7 +77,7 @@ export async function pasteInto(target: HTMLElement | null): Promise<void> {
 }
 
 /** Selects the whole document when nothing is focused, otherwise the focused field's contents. */
-export function selectAllText(): void {
+function selectAllText(): void {
   const active = document.activeElement
   if (active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement) {
     active.focus()

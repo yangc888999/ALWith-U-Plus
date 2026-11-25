@@ -9,7 +9,7 @@
  * would make the toolbar flash and disappear.
  */
 import type { Editor } from "@milkdown/core"
-import { commandsCtx, editorViewCtx, remarkStringifyOptionsCtx, schemaCtx } from "@milkdown/core"
+import { commandsCtx, editorViewCtx, remarkStringifyOptionsCtx } from "@milkdown/core"
 import type { Ctx } from "@milkdown/ctx"
 import type {
   MarkdownIntegration,
@@ -21,8 +21,6 @@ import {
   codeBlockSchema,
   emphasisSchema,
   inlineCodeSchema,
-  isMarkSelectedCommand,
-  isNodeSelectedCommand,
   orderedListSchema,
   strongSchema,
   toggleEmphasisCommand,
@@ -111,7 +109,7 @@ export const LARGE_MARKDOWN_BYTES = 1_048_576
  * module was fixed for. The Markdown preview always loads commonmark + gfm, and `underlineSchema`
  * is installed by `configure`, so all nine lookups are guaranteed to resolve.
  */
-export interface ToolbarSchema {
+interface ToolbarSchema {
   strong: MarkType
   emphasis: MarkType
   underline: MarkType
@@ -123,7 +121,7 @@ export interface ToolbarSchema {
   codeBlock: NodeType
 }
 
-export function resolveToolbarSchema(ctx: Ctx): ToolbarSchema {
+function resolveToolbarSchema(ctx: Ctx): ToolbarSchema {
   return {
     strong: strongSchema.type(ctx),
     emphasis: emphasisSchema.type(ctx),
@@ -141,7 +139,7 @@ export function resolveToolbarSchema(ctx: Ctx): ToolbarSchema {
  * Compute the toolbar's pressed/disabled state. Pure for testability: the resolved schema and the
  * ProseMirror state are both passed in, so nothing is read from module or editor globals.
  */
-export function computeFormatState(schema: ToolbarSchema, state: EditorState, canEdit: boolean): FormatState {
+function computeFormatState(schema: ToolbarSchema, state: EditorState, canEdit: boolean): FormatState {
   const markActive = (type: MarkType): boolean => {
     const { from, to, empty, $from } = state.selection
     if (empty) {
@@ -439,6 +437,3 @@ export function createWysiwygMarkdownIntegration(
     )
   }
 }
-
-/** The schema is needed by tests that build a standalone editor; re-export for convenience. */
-export { schemaCtx, isMarkSelectedCommand, isNodeSelectedCommand }

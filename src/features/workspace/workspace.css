@@ -102,6 +102,10 @@
   padding-block: 0;
   border-bottom: 1px solid var(--border);
 }
+.alwith-tree-menu [role="menuitem"] {
+  font: inherit;
+  padding: 5px 8px;
+}
 .workspace-page-arrow {
   position: absolute;
   z-index: 20;
@@ -261,5 +265,9 @@
    the column. */
 html[data-comments-hidden="true"] [data-testid="comment-rail"],
 html[data-comments-hidden="true"] [data-testid="comment-drawer"] {
+  display: none !important;
+}
+
+body:has([data-workspace-selection-owner]) > [data-testid="comment-selection-button"] {
   display: none !important;
 }

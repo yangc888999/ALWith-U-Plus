@@ -3,6 +3,7 @@ import { ReadableStream, TransformStream, WritableStream } from "node:stream/web
 import { drafts, importDraft } from "@alwith/module-chat/conversation"
 import * as core from "@tauri-apps/api/core"
 import { clearMocks, mockIPC, mockWindows } from "@tauri-apps/api/mocks"
+import * as dialog from "@tauri-apps/plugin-dialog"
 import { act, fireEvent, render as renderView, waitFor, within } from "@testing-library/react"
 import { type ReactElement, StrictMode, useState } from "react"
 import { afterEach, expect, test, vi } from "vitest"
@@ -12,6 +13,7 @@ import { FakeHubPort } from "@/agent/__tests__/fake-runtime-client"
 import { type ClientOptions, CodexClient } from "@/agent/client"
 import { ThemeProvider } from "@/components/theme-provider"
 import { ChatWindow } from "@/features/chat-window/chat-window"
+import { usePendingChat } from "@/features/sessions/pending-chat"
 import { must } from "@/lib/__tests__/must"
 import * as chatWindow from "@/lib/chat-window"
 import { client, useApp, useSession } from "@/lib/client"
@@ -24,7 +26,10 @@ import { mockOf } from "@/test/mock-of"
 import { navigationSoundStore } from "../codex/navigation-sound-store"
 import { DRAFT_SESSION_ID, DraftChat } from "../draft-chat"
 import * as projectPicker from "../draft-project-picker"
+import { ChatProjectMenu } from "../project-session-popover"
 import { Composer } from "./timeline-host"
+
+vi.mock("@tauri-apps/plugin-dialog", async (importOriginal) => ({ ...(await importOriginal<object>()), open: vi.fn() }))
 
 vi.mock("@tauri-apps/api/core", async (importOriginal) => ({ ...(await importOriginal<object>()) }))
 
@@ -916,6 +921,59 @@ test("choosing a gateway in a prepared draft preserves input and sends on a newl
   } finally {
     await act(() => Promise.try(() => view.unmount()))
     restore()
+  }
+})
+
+test("picking another project lists the new draft before session/new, even when the previous request returns late", async () => {
+  const env = await environment()
+  const paths = ["/work/first", "/work/second"]
+  const pick = vi.mocked(dialog.open).mockResolvedValueOnce(paths[0]).mockResolvedValueOnce(paths[1])
+  const history = Promise.withResolvers<void>()
+  const list = vi.spyOn(client, "listSessions").mockReturnValue(history.promise)
+  const gates = new Map<string, () => void>()
+  env.fake.newSessionDelay.current = (cwd) => paths.includes(cwd)
+    ? new Promise((resolve) => gates.set(cwd, resolve)) : Promise.resolve()
+  function Surface() {
+    const [cwd, setCwd] = useState<string | null>("/work/start")
+    const [selectedId, setSelectedId] = useState<string | null>(null)
+    const { pendingChat, begin, onListed } = usePendingChat(selectedId)
+    return <>
+      <DraftChat cwd={cwd} owner="main" onCwdChange={(path) => { begin(path); setCwd(path) }} onCwdResolved={setCwd}
+        onCreated={setSelectedId} onListed={onListed} onNewChat={() => {}} onSendingChange={() => {}} onAuthRequired={() => {}} providerSnapshot={providers} />
+      <ChatProjectMenu cwd={cwd} pendingChat={pendingChat} currentSessionId={selectedId} actionLabel="Project list" onNewChat={() => {}} onSelect={() => {}} />
+    </>
+  }
+  const view = render(<Surface />)
+  const choose = async (label: string) => {
+    const picker = within(must(view.container.querySelector<HTMLElement>(".chat-project-picker"), "project picker"))
+    await act(async () => fireEvent.click(picker.getByRole("button", { name: label })))
+    await act(async () => fireEvent.click(view.getByRole("menuitem", { name: "New project" })))
+  }
+  try {
+    await waitFor(() => expect(env.real.state.sessionList.some((row) => row.cwd === "/work/start")).toBe(true))
+    await choose("start")
+    await waitFor(() => expect(gates.has(paths[0])).toBe(true))
+    await choose("first")
+    await act(async () => fireEvent.click(view.getByRole("button", { name: "Project list" })))
+    expect(view.getByText("Creating the conversation")).toBeInTheDocument()
+    expect(env.real.state.sessionList.some((row) => row.cwd === paths[1])).toBe(false)
+    await act(async () => gates.get(paths[0])!())
+    await waitFor(() => expect(gates.has(paths[1])).toBe(true))
+    expect(view.getByText("Creating the conversation")).toBeInTheDocument()
+    await act(async () => gates.get(paths[1])!())
+    await waitFor(() => expect(view.queryByText("Creating the conversation")).toBeNull())
+    expect(env.real.state.sessionList.filter((row) => row.cwd === paths[1])).toHaveLength(1)
+    expect(view.getByRole("dialog", { name: "second" }).querySelector("[data-pending-chat]")).not.toBeNull()
+    await act(async () => { await env.real.listSessions(); history.resolve() })
+    expect(within(view.getByRole("dialog", { name: "second" })).getByText("1 chat")).toBeVisible()
+    expect(view.getByRole("dialog", { name: "second" }).querySelector("[data-pending-chat]")).toBeNull()
+  } finally {
+    for (const release of gates.values()) release()
+    view.unmount()
+    history.resolve()
+    list.mockRestore()
+    pick.mockReset()
+    env.restore()
   }
 })
 

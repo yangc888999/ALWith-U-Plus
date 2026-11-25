@@ -67,9 +67,7 @@ export function appendQuote(sessionId: string, text: string): boolean {
   if (field !== null) {
     // React tracks the value it last rendered; assigning through the native setter and firing
     // `input` is what makes the controlled onChange see the change instead of ignoring it.
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set
-    if (setter !== undefined) {
-      setter.call(field, merged)
+    if (Reflect.set(HTMLTextAreaElement.prototype, "value", merged, field)) {
       field.dispatchEvent(new Event("input", { bubbles: true }))
       // The package's onChange runs synchronously inside the dispatch and syncs the draft map.
       // If it did not take (a composer that is not accepting input right now), the map still has
@@ -210,7 +208,14 @@ export function SelectionMenu({
       // menu would otherwise sit on top of a leftover selection pill.
       dismiss()
     }
-    const onScroll = (): void => dismiss()
+    const onScroll = (event: Event): void => {
+      const target = event.target
+      if (
+        scope === "preview" && portalTarget && target instanceof Element &&
+        !portalTarget.contains(target) && !target.contains(portalTarget)
+      ) return
+      dismiss()
+    }
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "Escape") dismiss()
     }
@@ -241,7 +246,7 @@ export function SelectionMenu({
       window.removeEventListener("keydown", onKeyDown, true)
       document.removeEventListener("selectionchange", onSelectionChange)
     }
-  }, [hide, measure, dismiss])
+  }, [hide, measure, dismiss, scope, portalTarget])
 
   const shown = external ?? placement
   // The pill's real width depends on the labels, so the estimate under the selection can still
@@ -301,7 +306,6 @@ export function SelectionMenu({
     <div
       ref={menuRef}
       data-selection-menu
-      data-report-comment={external?.onComment ? true : undefined}
       role="menu"
       // Width follows the labels instead of a fixed 196px: a fixed width made "添加到对话" wrap
       // onto two lines in narrow windows. The clamp below still measures the real box.

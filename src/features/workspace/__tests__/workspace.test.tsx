@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs"
+
+import { drafts, importDraft } from "@alwith/module-chat/conversation"
 import type { TextEditorProps } from "@alwith/module-editor"
 import { type FsAdapter, normalizePath, type WriteOptions } from "@alwith/module-fs"
 import type { NativeRequest } from "@alwith/module-fs/tauri"
@@ -9,6 +12,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
 import { WindowsWorkspaceControlsContext } from "@/components/alwith-ui/windows-main-window-shell"
 import { ChatHeader } from "@/features/chat/chat-header"
+import * as driveVisibility from "@/features/drive/use-drive-visible"
 import { openGuideWindow } from "@/features/guide/guide-window"
 import { CanvasContext } from "@/features/layout/lib/canvas-context"
 import { initI18n } from "@/lib/i18n"
@@ -119,6 +123,68 @@ beforeEach(async () => {
   )
 })
 
+test("a local HTML outside Drive roots does not get the Drive selection bridge when Drive is enabled", async () => {
+  const visibility = vi.spyOn(driveVisibility, "useDriveVisible").mockReturnValue(true)
+  try {
+    adapter = createMemoryAdapter({ "/a/local.html": "<body>Local report</body>" })
+    render(<Surface cwd="/a" defaultOpen />)
+    fireEvent.doubleClick(await screen.findByRole("treeitem", { name: /local.html/ }))
+    await waitFor(() => {
+      const open = native.invoke.mock.calls.find(([command]) => command === "html_preview_open")
+      const source = required(open)[1].source
+      expect(source).toContain("Local report")
+      expect(source).not.toContain("__yupCommentBridge")
+    })
+  } finally {
+    visibility.mockRestore()
+  }
+})
+
+test("Drive's body portal cannot show a standalone comment before or after the workspace selection menu", async () => {
+  const style = document.createElement("style")
+  style.textContent = readFileSync("src/features/workspace/workspace.css", "utf8")
+  document.head.append(style)
+  const bubble = document.createElement("button")
+  bubble.dataset.testid = "comment-selection-button"
+  bubble.textContent = "Comment"
+  document.body.append(bubble)
+  try {
+    expect(bubble).toBeVisible()
+    adapter = createMemoryAdapter({ "/a/report.html": "<body>Report</body>" })
+    const view = render(<Surface cwd="/a" defaultOpen />)
+    fireEvent.doubleClick(await screen.findByRole("treeitem", { name: /report.html/ }))
+    const frame = await waitFor(() =>
+      required(document.querySelector<HTMLIFrameElement>(".file-workspace-editor iframe[src]"))
+    )
+    expect(frame.closest("[data-workspace-selection-owner]")).not.toBeNull()
+    expect(bubble).not.toBeVisible()
+    fireEvent(
+      window,
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: {
+          source: "alwith-preview",
+          type: "selection",
+          frameToken: frame.src,
+          text: "Report",
+          canComment: true,
+          rect: { left: 1, bottom: 8, width: 20 }
+        }
+      })
+    )
+    expect(screen.getByRole("menuitem", { name: "Comment" })).toBeVisible()
+    expect(bubble).not.toBeVisible()
+    fireEvent.keyDown(document, { key: "Escape" })
+    await waitFor(() => expect(screen.queryByRole("menuitem", { name: "Comment" })).toBeNull())
+    expect(bubble).not.toBeVisible()
+    view.unmount()
+    expect(bubble).toBeVisible()
+  } finally {
+    bubble.remove()
+    style.remove()
+  }
+})
+
 test("only an annotatable HTML selection offers comments, never the next Markdown tab", async () => {
   adapter = createMemoryAdapter({ "/a/report.html": "<body>HTML</body>", "/a/notes.MD": "# Notes" })
   render(<Surface cwd="/a" defaultOpen />)
@@ -164,7 +230,7 @@ test("preview selection stays above the iframe, rejects stale frames and clears 
     required(document.querySelector<HTMLIFrameElement>(".file-workspace-editor iframe"))
   )
   const target = required(frame.contentWindow)
-  const select = (frameToken: string): void => {
+  const select = (frameToken: string, repositionOnly = false): void => {
     fireEvent(
       window,
       new MessageEvent("message", {
@@ -173,6 +239,7 @@ test("preview selection stays above the iframe, rejects stale frames and clears 
           source: "alwith-preview",
           type: "selection",
           frameToken,
+          repositionOnly,
           text: "HTML",
           rect: { left: 2, bottom: 10, width: 30 },
           canComment: true
@@ -187,12 +254,55 @@ test("preview selection stays above the iframe, rejects stale frames and clears 
   // The menu lives above the native iframe; pressing its own action must not clear the host state.
   fireEvent.pointerDown(within(menu).getByRole("menuitem", { name: /copy/i }))
   expect(screen.getByRole("menu")).toBe(menu)
+  fireEvent.scroll(screen.getByText("Chat /a"))
+  expect(screen.getByRole("menu")).toBe(menu)
 
   // A late message from the previous render must not revive the pill.
   fireEvent.pointerDown(screen.getByText("Chat /a"))
   expect(screen.queryByRole("menu")).toBeNull()
+  select(frame.src, true)
+  expect(screen.queryByRole("menu")).toBeNull()
   select(`${frame.src}?stale`)
   expect(screen.queryByRole("menu")).toBeNull()
+})
+
+test.each(["selection", "context-menu"])("%s can copy and quote after following an HTML report anchor", async (type) => {
+  const sessionId = `report-anchor-${type}`
+  const file = "/a/report #1.html"
+  adapter = createMemoryAdapter({ [file]: '<h2 id="chapter">Report</h2>' })
+  render(<Surface cwd="/a" sessionId={sessionId} defaultOpen />)
+  fireEvent.doubleClick(await screen.findByRole("treeitem", { name: "report #1.html" }))
+  const frame = await waitFor(() =>
+    required(document.querySelector<HTMLIFrameElement>(".file-workspace-editor iframe[src]"))
+  )
+  const text = "Selected passage"
+  const send = (frameToken: string, source = frame.contentWindow): void => {
+    fireEvent(
+      window,
+      new MessageEvent("message", {
+        source,
+        data: { source: "alwith-preview", type, frameToken, text, rect: { left: 10, bottom: 25, width: 65 }, x: 10, y: 25 }
+      })
+    )
+  }
+  expect(frame.src).toContain("%23")
+  send(`${frame.src}?other#chapter`)
+  send(`${frame.src.replace("%231", "%232")}#chapter`)
+  send(`${frame.src.replace("/preview/", "/old-token/")}#chapter`)
+  send(`${frame.src}#chapter`, window)
+  expect(screen.queryByRole("menu")).toBeNull()
+  clipboardText = ""
+  send(`${frame.src}#chapter`)
+  fireEvent.click(screen.getByRole("menuitem", { name: "Copy" }))
+  await waitFor(() => expect(clipboardText).toBe(text))
+  importDraft(sessionId, { text: "Existing draft", attachments: [], mentions: [], modelId: null })
+  try {
+    send(`${frame.src}#another-chapter`)
+    fireEvent.click(screen.getByRole("menuitem", { name: "Add to chat" }))
+    expect(drafts.get(sessionId)?.text).toBe(`> ${text}\n\nExisting draft`)
+  } finally {
+    importDraft(sessionId, null)
+  }
 })
 
 test("remount restores pinned files, active file and expanded folders without draft persistence", async () => {
@@ -1021,10 +1131,10 @@ test("native new-tab menu opens the workspace and close-tab preserves the chat",
   native.nativeMode = true
   render(<Surface cwd="/a" />)
   const handler = (): (() => void) => required(native.listen.mock.calls.find(([name]) => name === "menu:new-tab")?.[1])
+  const close = required(native.listen.mock.calls.find(([name]) => name === "menu:close-tab")?.[1])
   act(() => handler()())
   await screen.findByRole("tab", { name: "New tab" })
-  const close = native.listen.mock.calls.findLast(([name]) => name === "menu:close-tab")?.[1]
-  act(() => required(close)())
+  act(() => close())
   await waitFor(() => expect(screen.queryByRole("tab")).toBeNull())
   expect(screen.getByText("Chat /a")).toBeInTheDocument()
   expect(native.invoke.mock.calls.some(([command]) => command === "workspace_exit")).toBe(false)
