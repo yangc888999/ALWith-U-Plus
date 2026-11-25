@@ -1801,10 +1801,7 @@ mod tests {
         // A base URL that is not a URL is refused rather than guessed at — same token, because the
         // reader's remedy (fix the address) is the same in both cases.
         let broken = ApiCredential { base_url: Some("vip.aipro.love/v1".to_string()), ..kimi.clone() };
-        assert!(matches!(
-            plan_for("custom_x", &broken),
-            Plan::Unsupported(UNSUPPORTED_NO_BASE_URL, _)
-        ));
+        assert!(matches!(plan_for("custom_x", &broken), Plan::Unsupported(UNSUPPORTED_NO_BASE_URL, _)));
     }
 
     #[test]
@@ -1815,10 +1812,7 @@ mod tests {
             disabled: true,
         };
         assert_eq!(plan_for("hakimi", &off), Plan::Unsupported(UNSUPPORTED_DISABLED, DISABLED_DETAIL));
-        assert_eq!(
-            plan_for("openrouter", &off),
-            Plan::Unsupported(UNSUPPORTED_DISABLED, DISABLED_DETAIL)
-        );
+        assert_eq!(plan_for("openrouter", &off), Plan::Unsupported(UNSUPPORTED_DISABLED, DISABLED_DETAIL));
         // Qwen answers without a request, so a closed credential still gets the truthful answer.
         assert_eq!(plan_for("qwen", &off), Plan::QwenConsole);
     }
@@ -1828,10 +1822,8 @@ mod tests {
     #[test]
     fn every_unsupported_path_carries_a_reason_and_nothing_else_does() {
         let now = NOW;
-        let no_base = resolve_quota(
-            "kimi",
-            &ApiCredential { api_key: "sk-test".to_string(), base_url: None, disabled: false },
-        );
+        let no_base =
+            resolve_quota("kimi", &ApiCredential { api_key: "sk-test".to_string(), base_url: None, disabled: false });
         assert_eq!(no_base.status, STATUS_UNSUPPORTED);
         assert_eq!(no_base.unsupported_reason.as_deref(), Some(UNSUPPORTED_NO_BASE_URL));
 
@@ -1846,12 +1838,7 @@ mod tests {
         assert_eq!(off.unsupported_reason.as_deref(), Some(UNSUPPORTED_DISABLED));
 
         // Both probes missing is the one case where the vendor really has no quota API.
-        let no_api = combine_probes(
-            "relay",
-            Probe::Missing("404".to_string()),
-            Probe::Missing("404".to_string()),
-            now,
-        );
+        let no_api = combine_probes("relay", Probe::Missing("404".to_string()), Probe::Missing("404".to_string()), now);
         assert_eq!(no_api.status, STATUS_UNSUPPORTED);
         assert_eq!(no_api.unsupported_reason.as_deref(), Some(UNSUPPORTED_NO_API));
 

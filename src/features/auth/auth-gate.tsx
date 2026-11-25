@@ -54,7 +54,7 @@ export function readPassphraseUnlocked(): boolean {
   }
 }
 
-export function rememberPassphraseUnlocked(): void {
+function rememberPassphraseUnlocked(): void {
   try {
     localStorage.setItem(PASSPHRASE_KEY, "1")
   } catch {

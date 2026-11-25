@@ -122,7 +122,8 @@ pub(super) fn parse_catalog(body: &str) -> Result<Option<CustomProvider>, String
     if value["api_key"].as_str().is_none_or(|key| key.trim().is_empty()) {
         return Ok(None);
     }
-    let provider: IssuedProvider = serde_json::from_value(value).map_err(|_| "模型供应商信息无法识别，请重新登录后重试")?;
+    let provider: IssuedProvider =
+        serde_json::from_value(value).map_err(|_| "模型供应商信息无法识别，请重新登录后重试")?;
     if provider.hidden {
         return Ok(None);
     }
@@ -296,7 +297,10 @@ pub async fn providers_refresh_managed(
             .is_some_and(|cached| serde_json::to_value(cached).ok() == serde_json::to_value(&cache).ok());
         next.managed = Some(cache);
         if !unchanged {
-            next.revision = next.revision.checked_add(1).ok_or_else(|| json!({"message":"模型配置版本号已用尽，请重启应用后重试"}))?;
+            next.revision = next
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| json!({"message":"模型配置版本号已用尽，请重启应用后重试"}))?;
             persist(&state.path, &next).map_err(|_| json!({"message":"无法保存模型配置，请检查磁盘权限"}))?;
         }
         gate.models = model_ids(next.managed.as_ref().and_then(|cache| cache.provider.as_ref()));

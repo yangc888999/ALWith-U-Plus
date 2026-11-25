@@ -80,7 +80,6 @@ fn main_window(window: &tauri::WebviewWindow) -> Result<(), Value> {
     if window.label() == "main" { Ok(()) } else { Err(error("Enterprise account changes belong to the main window")) }
 }
 
-
 /// 平台给企业模型起的展示名（`api_id -> label`）。
 ///
 /// 纯展示层：任何失败（离线、未授权、字段变形）都返回空表，让网关自己的 name 兜底。
@@ -177,9 +176,7 @@ fn source_catalog(app: &AppHandle) -> Result<std::path::PathBuf, Value> {
 /// 共享路由（`bridge::router_base_url`），由 router 转发。所以这里复用既有的
 /// `catalog::connection_params`，只把原生给的 provider 转成它的入参。
 fn build_connection(
-    app: &AppHandle,
-    identity: &str,
-    connection: alwith_enterprise_client::Connection,
+    app: &AppHandle, identity: &str, connection: alwith_enterprise_client::Connection,
 ) -> Result<catalog::Connection, Value> {
     let provider = catalog::IssuedProvider {
         provider_id: connection.provider.id.clone(),
@@ -203,14 +200,7 @@ fn build_connection(
     let path = catalog::relocated_catalog(app, &catalog.path).unwrap_or(catalog.path);
     let router = crate::bridge::router_base_url().ok_or_else(|| error("共享模型路由不可用，请重启应用后重试"))?;
     let id = catalog::scoped_provider_id(identity, &provider.provider_id);
-    Ok(catalog::connection_params(
-        id,
-        provider,
-        connection.relay,
-        path,
-        catalog.has_known_model,
-        &router,
-    ))
+    Ok(catalog::connection_params(id, provider, connection.relay, path, catalog.has_known_model, &router))
 }
 
 impl Enterprise {
@@ -290,11 +280,8 @@ impl Enterprise {
         }
         let host = self.host.get().ok_or_else(|| error("企业账号尚未就绪，请稍后重试"))?.clone();
         let value = host.status(generation).await?;
-        let entry = healthy(&value).then(|| CachedStatus {
-            generation,
-            at: std::time::Instant::now(),
-            value: value.clone(),
-        });
+        let entry =
+            healthy(&value).then(|| CachedStatus { generation, at: std::time::Instant::now(), value: value.clone() });
         *self.status_cache.lock().unwrap() = entry;
         Ok(value)
     }
@@ -393,7 +380,10 @@ pub async fn enterprise_bind(window: tauri::WebviewWindow, account: Account) -> 
 
 #[tauri3_specta::command]
 pub async fn enterprise_refresh(
-    window: tauri::WebviewWindow, account: Account, generation: u64, access_token: String,
+    window: tauri::WebviewWindow,
+    account: Account,
+    generation: u64,
+    access_token: String,
     // 平台为同一批模型给出的展示名（`api_id -> label`）。取不到时传空表：原生会退回网关自己的
     // 名称，登录与续期绝不能因为一次元数据请求失败而中断。
     model_labels: BTreeMap<String, String>,

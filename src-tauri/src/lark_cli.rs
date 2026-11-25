@@ -133,18 +133,18 @@ fn managed_cli_path() -> Option<PathBuf> {
 /// Prefer an explicit override, then the app-managed binary, then the user's own npm install,
 /// then PATH. GUI apps do not inherit the user's shell PATH.
 fn cli_path() -> PathBuf {
-    if let Ok(path) = std::env::var("ALWITH_LARK_CLI") {
-        if !path.trim().is_empty() {
-            return PathBuf::from(path)
-        }
+    if let Ok(path) = std::env::var("ALWITH_LARK_CLI")
+        && !path.trim().is_empty()
+    {
+        return PathBuf::from(path);
     }
     if let Some(managed) = managed_cli_path() {
-        return managed
+        return managed;
     }
     if let Ok(home) = std::env::var("HOME") {
         let candidate = PathBuf::from(home).join(".local/bin/lark-cli");
         if candidate.is_file() {
-            return candidate
+            return candidate;
         }
     }
     PathBuf::from("lark-cli")
@@ -173,26 +173,15 @@ fn run_cli(args: &[String]) -> Result<Value, String> {
             format!("飞书 CLI 执行失败（退出码 {:?}）", output.status.code())
         } else {
             detail
-        })
+        });
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let value: Value = serde_json::from_str(stdout.trim()).map_err(|error| {
-        format!("飞书 CLI 返回的不是 JSON：{}", error)
-    })?;
+    let value: Value =
+        serde_json::from_str(stdout.trim()).map_err(|error| format!("飞书 CLI 返回的不是 JSON：{}", error))?;
     if value.get("ok").and_then(Value::as_bool) != Some(true) {
-        let message = value
-            .pointer("/error/message")
-            .and_then(Value::as_str)
-            .unwrap_or("飞书 CLI 返回失败");
-        let hint = value
-            .pointer("/error/hint")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        return Err(if hint.is_empty() {
-            message.to_string()
-        } else {
-            format!("{message}\n{hint}")
-        })
+        let message = value.pointer("/error/message").and_then(Value::as_str).unwrap_or("飞书 CLI 返回失败");
+        let hint = value.pointer("/error/hint").and_then(Value::as_str).unwrap_or("");
+        return Err(if hint.is_empty() { message.to_string() } else { format!("{message}\n{hint}") });
     }
     Ok(value)
 }
@@ -257,69 +246,39 @@ pub fn parse_users(value: &Value) -> Vec<LarkTarget> {
 /// `im:message.send_as_user` scope that is not granted by a normal CLI login.
 pub fn send_args(target: &LarkTarget, text: &str, identity: &str) -> Vec<String> {
     let flag = if target.kind == "user" { "--user-id" } else { "--chat-id" };
-    [
-        "im",
-        "+messages-send",
-        flag,
-        &target.id,
-        "--text",
-        text,
-        "--as",
-        identity,
-        "--format",
-        "json"
-    ]
-    .iter()
-    .map(|value| (*value).to_string())
-    .collect()
+    ["im", "+messages-send", flag, &target.id, "--text", text, "--as", identity, "--format", "json"]
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect()
 }
 
 /// `--page-all` still honours the CLI's default `--page-limit` of 10 pages × 20 rows, which stopped
 /// the picker at 200 groups even though the list said it had more. Ask for the largest page size and
 /// page limit so a user in hundreds of groups can still find every one of them.
 fn chat_list_args() -> Vec<String> {
-    [
-        "im",
-        "+chat-list",
-        "--format",
-        "json",
-        "--page-all",
-        "--page-limit",
-        "1000",
-        "--page-size",
-        "100"
-    ]
-    .iter()
-    .map(|value| (*value).to_string())
-    .collect()
+    ["im", "+chat-list", "--format", "json", "--page-all", "--page-limit", "1000", "--page-size", "100"]
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect()
 }
 
 #[tauri3_specta::command]
 pub async fn lark_cli_status() -> Result<LarkCliStatus, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let path = cli_path();
-        let probe = Command::new(&path)
-            .arg("--version")
-            .output();
+        let probe = Command::new(&path).arg("--version").output();
         let available = probe.as_ref().is_ok_and(|out| out.status.success());
         let version = probe.ok().and_then(|out| {
-            if out.status.success() {
-                parse_version(&String::from_utf8_lossy(&out.stdout))
-            } else {
-                None
-            }
+            if out.status.success() { parse_version(&String::from_utf8_lossy(&out.stdout)) } else { None }
         });
         let hint = if available {
-            "默认以机器人身份发送；若要以本人身份发送，需先执行 lark-cli auth login --scope \"im:message.send_as_user\"".to_string()
+            "默认以机器人身份发送；若要以本人身份发送，需先执行 lark-cli auth login --scope \"im:message.send_as_user\""
+                .to_string()
         } else {
-            "未检测到 lark-cli，请在「设置 → 应用扩展 → 组件」中点击安装，或设置 ALWITH_LARK_CLI 指向可执行文件".to_string()
+            "未检测到 lark-cli，请在「设置 → 应用扩展 → 组件」中点击安装，或设置 ALWITH_LARK_CLI 指向可执行文件"
+                .to_string()
         };
-        Ok(LarkCliStatus {
-            available,
-            cli_path: path.display().to_string(),
-            version,
-            hint,
-        })
+        Ok(LarkCliStatus { available, cli_path: path.display().to_string(), version, hint })
     })
     .await
     .map_err(|error| error.to_string())?
@@ -331,21 +290,12 @@ pub async fn lark_cli_targets(kind: String, query: String) -> Result<Vec<LarkTar
         let args: Vec<String> = if kind == "user" {
             let term = query.trim().to_string();
             if term.is_empty() {
-                return Ok(Vec::new())
+                return Ok(Vec::new());
             }
-            [
-                "contact",
-                "+search-user",
-                "--query",
-                &term,
-                "--as",
-                "user",
-                "--format",
-                "json"
-            ]
-            .iter()
-            .map(|value| (*value).to_string())
-            .collect()
+            ["contact", "+search-user", "--query", &term, "--as", "user", "--format", "json"]
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect()
         } else {
             chat_list_args()
         };
@@ -357,16 +307,12 @@ pub async fn lark_cli_targets(kind: String, query: String) -> Result<Vec<LarkTar
 }
 
 #[tauri3_specta::command]
-pub async fn lark_cli_send(
-    targets: Vec<LarkTarget>,
-    text: String,
-    identity: String
-) -> Result<Vec<String>, String> {
+pub async fn lark_cli_send(targets: Vec<LarkTarget>, text: String, identity: String) -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         // Empty messages are rejected by the API; refusing here keeps a misconfigured task from
         // producing a wall of identical failures.
         if text.trim().is_empty() {
-            return Err("推送内容为空".to_string())
+            return Err("推送内容为空".to_string());
         }
         let identity = if identity == "user" { "user" } else { "bot" };
         let mut failures = Vec::new();
@@ -399,10 +345,7 @@ fn platform_asset(version: &str) -> Result<(String, String), String> {
     };
     let ext = if os == "windows" { "zip" } else { "tar.gz" };
     let name = format!("lark-cli-{version}-{os}-{arch}.{ext}");
-    let url = format!(
-        "{}/-/binary/lark-cli/v{version}/{name}",
-        crate::codex_update::REGISTRY_BASE
-    );
+    let url = format!("{}/-/binary/lark-cli/v{version}/{name}", crate::codex_update::REGISTRY_BASE);
     Ok((name, url))
 }
 
@@ -421,10 +364,7 @@ fn find_binary(root: &Path) -> Result<PathBuf, String> {
     let name = std::ffi::OsStr::new(binary_name());
     let mut candidates = Vec::new();
     walk(root, name, &mut candidates);
-    candidates
-        .into_iter()
-        .next()
-        .ok_or_else(|| "下载的压缩包里没有 lark-cli 可执行文件".to_string())
+    candidates.into_iter().next().ok_or_else(|| "下载的压缩包里没有 lark-cli 可执行文件".to_string())
 }
 
 fn extract_archive(archive: &Path, destination: &Path) -> Result<(), String> {
@@ -439,7 +379,7 @@ fn extract_archive(archive: &Path, destination: &Path) -> Result<(), String> {
             .output()
             .map_err(|error| error.to_string())?;
         if !status.status.success() {
-            return Err(format!("解压失败：{}", String::from_utf8_lossy(&status.stderr)))
+            return Err(format!("解压失败：{}", String::from_utf8_lossy(&status.stderr)));
         }
         Ok(())
     } else {
@@ -451,8 +391,7 @@ fn extract_archive(archive: &Path, destination: &Path) -> Result<(), String> {
 /// top-level `version`; keeping the parse separate makes the metadata contract testable without
 /// a network call.
 fn parse_registry_version(body: &[u8]) -> Result<String, String> {
-    let value: Value =
-        serde_json::from_slice(body).map_err(|error| format!("registry JSON：{error}"))?;
+    let value: Value = serde_json::from_slice(body).map_err(|error| format!("registry JSON：{error}"))?;
     value
         .get("version")
         .and_then(Value::as_str)
@@ -470,10 +409,8 @@ async fn latest_lark_version() -> Result<String, String> {
 /// current-thread runtime, independent of whichever pool Tauri dispatched this command on.
 async fn fetch_latest_version() -> Result<Option<String>, String> {
     let result: Result<String, String> = tokio::task::spawn_blocking(|| {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| error.to_string())?;
+        let runtime =
+            tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|error| error.to_string())?;
         runtime.block_on(latest_lark_version())
     })
     .await
@@ -490,7 +427,7 @@ async fn fetch_latest_version() -> Result<Option<String>, String> {
 fn current_cli_version() -> Option<String> {
     let output = Command::new(cli_path()).arg("--version").output().ok()?;
     if !output.status.success() {
-        return None
+        return None;
     }
     parse_version(&String::from_utf8_lossy(&output.stdout))
 }
@@ -499,14 +436,12 @@ fn current_cli_version() -> Option<String> {
 /// Reject anything that could escape that segment.
 fn safe_version(version: &str) -> bool {
     !version.is_empty()
-        && version
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '.' || character == '-')
+        && version.chars().all(|character| character.is_ascii_alphanumeric() || character == '.' || character == '-')
 }
 
 async fn install_lark_binary(version: &str) -> Result<String, String> {
     if !safe_version(version) {
-        return Err("非法版本号".to_string())
+        return Err("非法版本号".to_string());
     }
     let (name, url) = platform_asset(version)?;
     let work = tempfile::tempdir().map_err(|error| error.to_string())?;
@@ -523,8 +458,7 @@ async fn install_lark_binary(version: &str) -> Result<String, String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))
-            .map_err(|error| error.to_string())?;
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).map_err(|error| error.to_string())?;
     }
     // Rename swaps the inode in one step: a running CLI keeps its old bytes and a failed
     // download never replaces the working one. Same trick as the engine override.
@@ -534,14 +468,10 @@ async fn install_lark_binary(version: &str) -> Result<String, String> {
 }
 
 async fn install_latest() -> Result<InstallResult, String> {
-    let version = fetch_latest_version()
-        .await?
-        .ok_or_else(|| "无法从镜像获取飞书 CLI 版本号，请检查网络后重试。".to_string())?;
+    let version =
+        fetch_latest_version().await?.ok_or_else(|| "无法从镜像获取飞书 CLI 版本号，请检查网络后重试。".to_string())?;
     let path = install_lark_binary(&version).await?;
-    Ok(InstallResult {
-        ok: true,
-        message: format!("飞书 CLI {version} 已安装到 {path}。"),
-    })
+    Ok(InstallResult { ok: true, message: format!("飞书 CLI {version} 已安装到 {path}。") })
 }
 
 #[tauri3_specta::command]
@@ -552,9 +482,7 @@ pub async fn lark_cli_install() -> Result<InstallResult, String> {
 /// Registry-based check: no CLI self-updater and no GitHub release request at all.
 #[tauri3_specta::command]
 pub async fn lark_cli_check_update() -> Result<LarkUpdateCheck, String> {
-    let current = tauri::async_runtime::spawn_blocking(current_cli_version)
-        .await
-        .map_err(|error| error.to_string())?;
+    let current = tauri::async_runtime::spawn_blocking(current_cli_version).await.map_err(|error| error.to_string())?;
     let latest = fetch_latest_version().await?;
     let has_update = match (&current, &latest) {
         (_, None) => false,
@@ -595,13 +523,9 @@ pub async fn lark_cli_auth_status() -> Result<LarkAuthStatus, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let args = vec!["auth".to_string(), "status".to_string(), "--json".to_string()];
         let output = lark_command(args).output();
-        let output =
-            output.map_err(|error| format!("无法运行 lark-cli auth status：{}", error))?;
+        let output = output.map_err(|error| format!("无法运行 lark-cli auth status：{}", error))?;
         if !output.status.success() {
-            return Err(format!(
-                "读取授权状态失败：{}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
+            return Err(format!("读取授权状态失败：{}", String::from_utf8_lossy(&output.stderr)));
         }
         parse_auth_status(&String::from_utf8_lossy(&output.stdout))
     })
@@ -631,72 +555,38 @@ pub async fn lark_cli_user_profile() -> Result<LarkUserProfile, String> {
 }
 
 fn parse_user_profile(value: &Value) -> Result<LarkUserProfile, String> {
-    let user = value
-        .pointer("/data/user")
-        .ok_or_else(|| "飞书 CLI 没有返回用户资料".to_string())?;
+    let user = value.pointer("/data/user").ok_or_else(|| "飞书 CLI 没有返回用户资料".to_string())?;
     let name = user.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-    let open_id = user
-        .get("open_id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    let open_id = user.get("open_id").and_then(Value::as_str).unwrap_or("").to_string();
     if name.is_empty() && open_id.is_empty() {
-        return Err("飞书 CLI 返回的用户资料为空".to_string())
+        return Err("飞书 CLI 返回的用户资料为空".to_string());
     }
     // Only ever hand an https image URL to the webview; never a scheme we did not ask for.
     let avatar_url = ["avatar_thumb", "avatar_url", "avatar_middle", "avatar_big"]
         .iter()
         .find_map(|key| user.get(*key).and_then(Value::as_str).map(str::to_string))
         .filter(|url| url.starts_with("https://"));
-    Ok(LarkUserProfile {
-        name,
-        open_id,
-        avatar_url,
-    })
+    Ok(LarkUserProfile { name, open_id, avatar_url })
 }
 
 fn parse_auth_status(text: &str) -> Result<LarkAuthStatus, String> {
-    let value: Value =
-        serde_json::from_str(text).map_err(|error| format!("无法解析授权状态：{}", error))?;
+    let value: Value = serde_json::from_str(text).map_err(|error| format!("无法解析授权状态：{}", error))?;
     let brand = value.get("brand").and_then(Value::as_str).map(|value| value.to_string());
     let app_id = value.get("appId").and_then(Value::as_str).map(|value| value.to_string());
     // Real `lark-cli auth status --json` emits `defaultAs` (e.g. "auto"); older builds used
     // `identity`. Read both, otherwise this is always null and the UI silently loses the
     // default identity — the same class of bug as guessing scope names that do not exist.
-    let default_identity = value
-        .get("defaultAs")
-        .or_else(|| value.get("identity"))
-        .and_then(Value::as_str)
-        .map(|value| value.to_string());
+    let default_identity =
+        value.get("defaultAs").or_else(|| value.get("identity")).and_then(Value::as_str).map(|value| value.to_string());
     let mut identities = Vec::new();
     let logged_in = if let Some(map) = value.get("identities").and_then(Value::as_object) {
         for (kind, entry) in map {
-            let available = entry
-                .get("available")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let status = entry
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
-            let user_name = entry
-                .get("userName")
-                .and_then(Value::as_str)
-                .map(|value| value.to_string());
-            let open_id = entry
-                .get("openId")
-                .and_then(Value::as_str)
-                .map(|value| value.to_string());
-            let token_status = entry
-                .get("tokenStatus")
-                .and_then(Value::as_str)
-                .map(|value| value.to_string());
-            let scope = entry
-                .get("scope")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
+            let available = entry.get("available").and_then(Value::as_bool).unwrap_or(false);
+            let status = entry.get("status").and_then(Value::as_str).unwrap_or("").to_string();
+            let user_name = entry.get("userName").and_then(Value::as_str).map(|value| value.to_string());
+            let open_id = entry.get("openId").and_then(Value::as_str).map(|value| value.to_string());
+            let token_status = entry.get("tokenStatus").and_then(Value::as_str).map(|value| value.to_string());
+            let scope = entry.get("scope").and_then(Value::as_str).unwrap_or("").to_string();
             let scopes: Vec<String> = if scope.is_empty() {
                 Vec::new()
             } else {
@@ -716,13 +606,7 @@ fn parse_auth_status(text: &str) -> Result<LarkAuthStatus, String> {
     } else {
         false
     };
-    Ok(LarkAuthStatus {
-        logged_in,
-        brand,
-        app_id,
-        default_identity,
-        identities,
-    })
+    Ok(LarkAuthStatus { logged_in, brand, app_id, default_identity, identities })
 }
 
 /// Device flow cannot start without a scope: `auth login --no-wait --json` with no scope flags
@@ -733,16 +617,8 @@ fn parse_auth_status(text: &str) -> Result<LarkAuthStatus, String> {
 const LOGIN_SCOPE: &str = "contact:user.base:readonly";
 
 fn auth_login_args(scopes: &[String]) -> Vec<String> {
-    let requested: Vec<&str> = scopes
-        .iter()
-        .map(|scope| scope.trim())
-        .filter(|scope| !scope.is_empty())
-        .collect();
-    let scope = if requested.is_empty() {
-        LOGIN_SCOPE.to_string()
-    } else {
-        requested.join(" ")
-    };
+    let requested: Vec<&str> = scopes.iter().map(|scope| scope.trim()).filter(|scope| !scope.is_empty()).collect();
+    let scope = if requested.is_empty() { LOGIN_SCOPE.to_string() } else { requested.join(" ") };
     vec![
         "auth".to_string(),
         "login".to_string(),
@@ -765,34 +641,17 @@ pub async fn lark_cli_auth_login(scopes: Vec<String>) -> Result<LarkAuthLogin, S
         let output = lark_command(auth_login_args(&scopes)).output();
         let output = output.map_err(|error| format!("无法发起授权：{}", error))?;
         if !output.status.success() {
-            return Err(format!(
-                "发起授权失败：{}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
+            return Err(format!("发起授权失败：{}", String::from_utf8_lossy(&output.stderr)));
         }
         let value: Value = serde_json::from_str(String::from_utf8_lossy(&output.stdout).trim())
             .map_err(|error| format!("无法解析授权结果：{}", error))?;
-        let verification_url = value
-            .get("verification_url")
-            .and_then(Value::as_str)
-            .ok_or("授权结果缺少 verification_url")?
-            .to_string();
-        let device_code = value
-            .get("device_code")
-            .and_then(Value::as_str)
-            .ok_or("授权结果缺少 device_code")?
-            .to_string();
-        let user_code = value
-            .get("user_code")
-            .and_then(Value::as_str)
-            .map(|value| value.to_string());
+        let verification_url =
+            value.get("verification_url").and_then(Value::as_str).ok_or("授权结果缺少 verification_url")?.to_string();
+        let device_code =
+            value.get("device_code").and_then(Value::as_str).ok_or("授权结果缺少 device_code")?.to_string();
+        let user_code = value.get("user_code").and_then(Value::as_str).map(|value| value.to_string());
         let expires_in = value.get("expires_in").and_then(Value::as_u64);
-        Ok(LarkAuthLogin {
-            verification_url,
-            device_code,
-            user_code,
-            expires_in,
-        })
+        Ok(LarkAuthLogin { verification_url, device_code, user_code, expires_in })
     })
     .await
     .map_err(|error| error.to_string())?
@@ -817,10 +676,7 @@ pub async fn lark_cli_auth_complete(device_code: String) -> Result<InstallResult
         let output = lark_command(args).output();
         let output = output.map_err(|error| format!("无法完成授权：{}", error))?;
         if !output.status.success() {
-            return Err(format!(
-                "完成授权失败：{}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
+            return Err(format!("完成授权失败：{}", String::from_utf8_lossy(&output.stderr)));
         }
         Ok(parse_auth_complete(&String::from_utf8_lossy(&output.stdout)))
     })
@@ -830,11 +686,7 @@ pub async fn lark_cli_auth_complete(device_code: String) -> Result<InstallResult
 
 fn parse_auth_complete(body: &str) -> InstallResult {
     let parsed: Option<Value> = serde_json::from_str(body.trim()).ok();
-    let ok = parsed
-        .as_ref()
-        .and_then(|value| value.get("ok"))
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
+    let ok = parsed.as_ref().and_then(|value| value.get("ok")).and_then(Value::as_bool).unwrap_or(true);
     let message = parsed
         .as_ref()
         .and_then(|value| value.pointer("/error/message"))
@@ -851,15 +703,9 @@ pub async fn lark_cli_auth_logout() -> Result<InstallResult, String> {
         let output = lark_command(args).output();
         let output = output.map_err(|error| format!("无法登出：{}", error))?;
         if !output.status.success() {
-            return Err(format!(
-                "登出失败：{}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
+            return Err(format!("登出失败：{}", String::from_utf8_lossy(&output.stderr)));
         }
-        Ok(InstallResult {
-            ok: true,
-            message: "已登出。".to_string(),
-        })
+        Ok(InstallResult { ok: true, message: "已登出。".to_string() })
     })
     .await
     .map_err(|error| error.to_string())?
@@ -997,10 +843,7 @@ mod tests {
     #[test]
     fn legacy_identity_field_is_still_accepted() {
         let text = r#"{"identity":"user","identities":{"bot":{"available":true,"status":"ready"}}}"#;
-        assert_eq!(
-            parse_auth_status(text).unwrap().default_identity.as_deref(),
-            Some("user")
-        );
+        assert_eq!(parse_auth_status(text).unwrap().default_identity.as_deref(), Some("user"));
     }
 
     #[test]

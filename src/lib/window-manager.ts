@@ -24,8 +24,8 @@ export type SettingsSection =
  *  48px page padding + three ~180px columns + two 16px gutters, plus slack. Every settings
  *  section shares this reference width; the grid never grows past three columns on a wider
  *  window and drops to two only when the user deliberately narrows below 860px. */
-export const SETTINGS_DEFAULT_WIDTH = 880
-export const SETTINGS_DEFAULT_HEIGHT = 800
+const SETTINGS_DEFAULT_WIDTH = 880
+const SETTINGS_DEFAULT_HEIGHT = 800
 export const SETTINGS_CHANGE_TAB = "settings-change-tab"
 /** Close hides this window instead of destroying it, so its scroll offset survives. Emitted on
  *  every reopen so the page header and the first card (the usage overview) are visible again. */
@@ -129,4 +129,3 @@ export async function openSettingsWindow(section?: SettingsSection, target: Sett
   // Safety net for a `tauri://created` that never arrives, or an attach that hangs.
   setTimeout(() => void win.show().catch(() => undefined), 1500)
 }
-

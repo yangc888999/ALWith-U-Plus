@@ -34,7 +34,7 @@ export const ACCENT_PRESETS: AccentPreset[] = [
   { id: "emerald", labelKey: "settings.accent.emerald", swatch: "oklch(0.68 0.12 168)" }
 ]
 
-export const DEFAULT_ACCENT: AccentId = "yup-red"
+const DEFAULT_ACCENT: AccentId = "yup-red"
 
 /** A stored accent from an older build may have been removed from the picker. */
 export function normalizeAccentId(value: string | null | undefined): AccentId {

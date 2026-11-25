@@ -6,7 +6,7 @@ import { getActivePreview, setActivePreview, subscribeActivePreview, type Active
 import { cn } from "@/lib/utils"
 
 /** Subscribes a component to the document currently shown in the preview pane. */
-export function useActivePreview(): ActivePreviewDocument | null {
+function useActivePreview(): ActivePreviewDocument | null {
   return useSyncExternalStore(subscribeActivePreview, getActivePreview, getActivePreview)
 }
 

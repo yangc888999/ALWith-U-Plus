@@ -10,7 +10,7 @@ export type Range = "1d" | "3d" | "7d" | "30d" | "90d" | "1y" | "6m" | "12m" | "
 export type Metric = "tokens" | "requests" | "cost"
 export type Grain = "day" | "week" | "month"
 export type GroupBy = "model" | "provider" | "all"
-export type ClientSource = "alwith_l" | "workbuddy" | "qwen_office" | "other_agent"
+type ClientSource = "alwith_l" | "workbuddy" | "qwen_office" | "other_agent"
 export const ALL_CLIENT_SOURCES = "all" as const
 export type ClientSourceFilter = ClientSource | typeof ALL_CLIENT_SOURCES
 
@@ -31,7 +31,7 @@ export function filterByClientSource<T extends Pick<UsagePoint, "clientSource">>
  * `clientSource` is the only evidence of a caller — a model id, a provider name or a request path
  * says nothing about which client opened the call, so none of them may decide the scope.
  */
-export type UsageScope = "all" | "internal" | "external"
+type UsageScope = "all" | "internal" | "external"
 export const ALL_SCOPES = "all" as const
 export type UsageScopeFilter = UsageScope
 
@@ -79,14 +79,14 @@ export function sumWithUnknownCost(
 }
 
 /** The metric value a chart, ranking or sparkline should read from a bucket/row. */
-export function metricValue(row: { tokens: number; requests: number; cost?: number | null }, metric: Metric): number {
+function metricValue(row: { tokens: number; requests: number; cost?: number | null }, metric: Metric): number {
   if (metric === "tokens") return row.tokens
   if (metric === "requests") return row.requests
   return row.cost ?? 0
 }
 
 /** `custom` carries its own dates, so the day count only matters for the fixed windows. */
-export const RANGE_DAYS: Record<Range, number> = {
+const RANGE_DAYS: Record<Range, number> = {
   "1d": 1,
   "3d": 3,
   "7d": 7,
@@ -109,9 +109,9 @@ export type Totals = {
   unknownCostRows: number
 }
 
-export const EMPTY_TOTALS: Totals = { requests: 0, input: 0, cached: 0, output: 0, tokens: 0, cost: 0, unknownTokenCount: 0, unknownCostRows: 0 }
+const EMPTY_TOTALS: Totals = { requests: 0, input: 0, cached: 0, output: 0, tokens: 0, cost: 0, unknownTokenCount: 0, unknownCostRows: 0 }
 
-export type Bucket = {
+type Bucket = {
   key: string
   label: string
   tokens: number
@@ -389,7 +389,7 @@ export function peakDay(days: Day[]): Day | null {
   return days.reduce<Day | null>((best, day) => (best === null || day.tokens > best.tokens ? day : best), null)
 }
 
-export type HeatCell = { date: string; tokens: number; requests: number; column: number; row: number }
+type HeatCell = { date: string; tokens: number; requests: number; column: number; row: number }
 
 /** `count` month keys ending at `anchor` (`YYYY-MM`), oldest first: "2026-11", 3 → 09, 10, 11. */
 export function monthKeysEndingAt(anchor: string, count: number): string[] {
@@ -412,7 +412,7 @@ export type MonthBlock = {
 }
 
 /** Days per row in a month block. */
-export const MONTH_COLUMNS = 6
+const MONTH_COLUMNS = 6
 
 /**
  * One block per month, six cells per row in plain reading order (1, 2, 3 … — no weekday columns).

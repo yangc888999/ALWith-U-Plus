@@ -5,7 +5,7 @@
  * 分工 menu. Kept in the same storage family as the other chat preferences so the choice survives
  * restarts and both windows read the same value.
  */
-export interface OrchestrationRoleDefault {
+interface OrchestrationRoleDefault {
   model: string
   /** Explicit effort, or null to follow the model's own catalog default. */
   effort: string | null

@@ -50,4 +50,3 @@ export function welcomeSubtitleKey(period: GreetingPeriod): string {
   if (period === "lateEvening") return "welcome.lateEveningSubtitle"
   return "welcome.subtitle"
 }
-

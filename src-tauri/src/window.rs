@@ -34,8 +34,8 @@ mod native_drag {
     use objc2_foundation::{NSDate, NSPoint, NSRunLoopMode};
 
     pub fn run(window: &tauri::WebviewWindow) -> Result<(), String> {
-        let mtm = MainThreadMarker::new()
-            .ok_or("window drag must run on the main thread; refusing to fake it off-thread")?;
+        let mtm =
+            MainThreadMarker::new().ok_or("window drag must run on the main thread; refusing to fake it off-thread")?;
         let handle = window.ns_window().map_err(|error| error.to_string())?;
         let ns_window: &NSWindow = unsafe { &*(handle as *const NSWindow) };
         let app = NSApplication::sharedApplication(mtm);
@@ -49,22 +49,15 @@ mod native_drag {
         let mode = NSRunLoopMode::from_str("NSEventTrackingRunLoopMode");
 
         loop {
-            let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(
-                mask,
-                Some(&until),
-                &mode,
-                true,
-            ) else {
+            let Some(event) = app.nextEventMatchingMask_untilDate_inMode_dequeue(mask, Some(&until), &mode, true)
+            else {
                 break;
             };
             match event.r#type() {
                 NSEventType::LeftMouseUp => break,
                 NSEventType::LeftMouseDragged => {
                     let mouse = NSEvent::mouseLocation();
-                    ns_window.setFrameOrigin(NSPoint::new(
-                        origin.x + mouse.x - start.x,
-                        origin.y + mouse.y - start.y,
-                    ));
+                    ns_window.setFrameOrigin(NSPoint::new(origin.x + mouse.x - start.x, origin.y + mouse.y - start.y));
                 }
                 _ => {}
             }
@@ -319,14 +312,11 @@ fn parse_display_records(text: &str) -> DisplayRecords {
     // remaining per-display record, then a bare single-record file.
     let map = object.get("by_display").and_then(serde_json::Value::as_object);
     let by_key = |key: &str| {
-        map.and_then(|map| map.get(key))
-            .and_then(|raw| serde_json::from_value::<DisplayRecord>(raw.clone()).ok())
+        map.and_then(|map| map.get(key)).and_then(|raw| serde_json::from_value::<DisplayRecord>(raw.clone()).ok())
     };
-    let carried = object
-        .get("last")
-        .and_then(serde_json::Value::as_str)
-        .and_then(by_key)
-        .or_else(|| map.and_then(|map| map.values().find_map(|raw| serde_json::from_value::<DisplayRecord>(raw.clone()).ok())));
+    let carried = object.get("last").and_then(serde_json::Value::as_str).and_then(by_key).or_else(|| {
+        map.and_then(|map| map.values().find_map(|raw| serde_json::from_value::<DisplayRecord>(raw.clone()).ok()))
+    });
     let single = carried.or_else(|| serde_json::from_value::<DisplayRecord>(value.clone()).ok());
     DisplayRecords { share: single.map(|record| footprint(Some(record))) }
 }
@@ -901,10 +891,10 @@ pub fn on_main_window_moved(app: &tauri::AppHandle) {
                 }
                 state.applying = true;
             }
-            if !is_closing(&handle_for_main) {
-                if let Err(error) = adapt_main_window_to_display(&handle_for_main, &key_for_main) {
-                    log::warn!("Could not adapt main window to new display: {error}");
-                }
+            if !is_closing(&handle_for_main)
+                && let Err(error) = adapt_main_window_to_display(&handle_for_main, &key_for_main)
+            {
+                log::warn!("Could not adapt main window to new display: {error}");
             }
             let mut state = move_state();
             state.applying = false;

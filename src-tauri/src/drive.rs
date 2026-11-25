@@ -29,7 +29,10 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::DynRuntime> {
                 device_name: "ALWith U⁺".into(),
                 client_version: env!("CARGO_PKG_VERSION").into(),
                 open_url: Arc::new(move |url| {
-                    opener.opener().open_url(url, None::<&str>).map_err(|error| alwith_drive::NativeError::new("failed", error))
+                    opener
+                        .opener()
+                        .open_url(url, None::<&str>)
+                        .map_err(|error| alwith_drive::NativeError::new("failed", error))
                 }),
             })?
             .with_existing_default_root()?;

@@ -9,8 +9,8 @@ import { openExternal } from "@/lib/open"
 import { drive } from "./controller"
 import { driveFileSystem } from "./filesystem"
 
-export const maxEditorBytes = 16 * 1024 * 1024
-export const isPdfPreview = (path: string): boolean => /\.pdf(?:\.yupcloud)?$/i.test(path)
+const maxEditorBytes = 16 * 1024 * 1024
+const isPdfPreview = (path: string): boolean => /\.pdf(?:\.yupcloud)?$/i.test(path)
 
 export interface WorkspaceFileHost {
   readFile: (path: string) => Promise<Uint8Array>

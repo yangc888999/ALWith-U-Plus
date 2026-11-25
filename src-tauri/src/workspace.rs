@@ -323,11 +323,8 @@ mod workspace_tests {
             .unwrap()
         };
         // Hold the Drive coordinator as a slow sync round would, then queue a host mutation.
-        let mut sync = Box::pin(drive.with_filesystem(
-            &[],
-            &[],
-            std::future::pending::<Result<(), alwith_drive::NativeError>>(),
-        ));
+        let mut sync =
+            Box::pin(drive.with_filesystem(&[], &[], std::future::pending::<Result<(), alwith_drive::NativeError>>()));
         assert!(timeout(Duration::from_millis(10), &mut sync).await.is_err());
         let mutation_guard = OPERATIONS.lock().await;
         for (operation, target) in [("stat", &path), ("readFile", &path), ("readDirectory", &root)] {

@@ -16,8 +16,8 @@
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 /// One row of the pre-aggregated table: an hour, a provider and a model.
 ///
@@ -99,10 +99,10 @@ fn default_client_source() -> String {
 }
 
 fn codex_home() -> Result<PathBuf, String> {
-    if let Ok(value) = std::env::var("CODEX_HOME") {
-        if !value.trim().is_empty() {
-            return Ok(PathBuf::from(value));
-        }
+    if let Ok(value) = std::env::var("CODEX_HOME")
+        && !value.trim().is_empty()
+    {
+        return Ok(PathBuf::from(value));
     }
     let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
     Ok(PathBuf::from(home).join(".codex"))
@@ -296,10 +296,10 @@ fn parse_file(path: &Path, turns: &mut Vec<UsageTurn>, prompts: &mut Vec<String>
         }
         match record.get("type").and_then(|kind| kind.as_str()) {
             Some("turn_context") => {
-                if let Some(payload) = record.get("payload") {
-                    if let Some(name) = text(payload, "model") {
-                        model = name;
-                    }
+                if let Some(payload) = record.get("payload")
+                    && let Some(name) = text(payload, "model")
+                {
+                    model = name;
                 }
             }
             Some("event_msg") => {
@@ -353,10 +353,7 @@ fn parse_file(path: &Path, turns: &mut Vec<UsageTurn>, prompts: &mut Vec<String>
 
 /// `2026-11-03T02:34:56.789Z` → 2. Timestamps without a parseable hour fall back to midnight.
 fn hour_of(at: &str) -> u8 {
-    at.get(11..13)
-        .and_then(|hour| hour.parse::<u8>().ok())
-        .filter(|hour| *hour < 24)
-        .unwrap_or(0)
+    at.get(11..13).and_then(|hour| hour.parse::<u8>().ok()).filter(|hour| *hour < 24).unwrap_or(0)
 }
 
 /// One transcript's parsed result, kept beside the identity that produced it.
@@ -378,19 +375,19 @@ static PARSED_FILES: Mutex<Option<BTreeMap<PathBuf, ParsedFile>>> = Mutex::new(N
 /// Parses a transcript, reusing the previous result when the file is byte-for-byte the same size
 /// and mtime. Entries for files that disappeared are dropped so the cache cannot grow forever.
 fn parse_file_cached(path: &Path, turns: &mut Vec<UsageTurn>, prompts: &mut Vec<String>) -> bool {
-    let identity = std::fs::metadata(path)
-        .ok()
-        .and_then(|meta| meta.modified().ok().map(|modified| (meta.len(), modified)));
+    let identity =
+        std::fs::metadata(path).ok().and_then(|meta| meta.modified().ok().map(|modified| (meta.len(), modified)));
     if let Some((len, modified)) = identity {
         let mut guard = PARSED_FILES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let cache = guard.get_or_insert_with(BTreeMap::new);
-        if let Some(hit) = cache.get(path) {
-            if hit.len == len && hit.modified == modified {
-                let contributed = hit.contributed;
-                turns.extend(hit.turns.iter().cloned());
-                prompts.extend(hit.prompts.iter().cloned());
-                return contributed;
-            }
+        if let Some(hit) = cache.get(path)
+            && hit.len == len
+            && hit.modified == modified
+        {
+            let contributed = hit.contributed;
+            turns.extend(hit.turns.iter().cloned());
+            prompts.extend(hit.prompts.iter().cloned());
+            return contributed;
         }
         let turns_before = turns.len();
         let prompts_before = prompts.len();
@@ -420,10 +417,7 @@ fn parse_file_cached(path: &Path, turns: &mut Vec<UsageTurn>, prompts: &mut Vec<
 /// run without any other Rust module having landed.
 fn external_ledger_path() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
-    Ok(PathBuf::from(home)
-        .join(".alwith")
-        .join("usage")
-        .join("external.jsonl"))
+    Ok(PathBuf::from(home).join(".alwith").join("usage").join("external.jsonl"))
 }
 
 /// One line of the external ledger, as written by the external proxy script.
@@ -493,10 +487,7 @@ fn read_external_turns(path: &Path) -> Vec<UsageTurn> {
         // tokens: all four token columns stay zero. Otherwise honour `total`, falling back to the
         // sum of the components when a writer left it at zero.
         let (input, cached, output, tokens) = if record.usage_known {
-            let fallback = record
-                .input
-                .saturating_add(record.cached)
-                .saturating_add(record.output);
+            let fallback = record.input.saturating_add(record.cached).saturating_add(record.output);
             let tokens = if record.total == 0 { fallback } else { record.total };
             (record.input, record.cached, record.output, tokens)
         } else {
@@ -550,7 +541,7 @@ fn build(directory: &Path, external: &Path) -> UsageReport {
     summarize(&mut turns, sessions, files.len() as u32, prompts)
 }
 
-fn summarize(turns: &mut Vec<UsageTurn>, sessions: u32, scanned: u32, prompts: Vec<String>) -> UsageReport {
+fn summarize(turns: &mut [UsageTurn], sessions: u32, scanned: u32, prompts: Vec<String>) -> UsageReport {
     // `client_source` is part of the key. An internal engine turn and an external proxy call can
     // share the same (date, hour, provider, model); the old 4-tuple key merged them and let one
     // bucket's first turn label every request in it, which made the 内部/外部 filter wrong. One
@@ -559,13 +550,7 @@ fn summarize(turns: &mut Vec<UsageTurn>, sessions: u32, scanned: u32, prompts: V
     for turn in turns.iter() {
         let hour = hour_of(&turn.at);
         let entry = points
-            .entry((
-                turn.date.clone(),
-                hour,
-                turn.provider.clone(),
-                turn.model.clone(),
-                turn.client_source.clone(),
-            ))
+            .entry((turn.date.clone(), hour, turn.provider.clone(), turn.model.clone(), turn.client_source.clone()))
             .or_insert_with(|| UsagePoint {
                 client_source: turn.client_source.clone(),
                 date: turn.date.clone(),
@@ -596,11 +581,7 @@ fn summarize(turns: &mut Vec<UsageTurn>, sessions: u32, scanned: u32, prompts: V
         scanned,
         first,
         last,
-        source: if scanned == 0 {
-            String::new()
-        } else {
-            directory_label()
-        },
+        source: if scanned == 0 { String::new() } else { directory_label() },
         updated_at: 0,
         pending: false,
     }
@@ -618,18 +599,13 @@ fn directory_label() -> String {
 const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 fn cache_is_fresh(modified: std::time::SystemTime, now: std::time::SystemTime) -> bool {
-    now.duration_since(modified)
-        .is_ok_and(|age| age <= CACHE_TTL)
+    now.duration_since(modified).is_ok_and(|age| age <= CACHE_TTL)
 }
 
 /// Length of the append-only external ledger, or 0 when it does not exist yet.
 /// One `stat` only: opening the usage page must never walk the ~73 MiB session tree.
 fn external_ledger_len() -> u64 {
-    external_ledger_path()
-        .ok()
-        .and_then(|path| std::fs::metadata(path).ok())
-        .map(|meta| meta.len())
-        .unwrap_or(0)
+    external_ledger_path().ok().and_then(|path| std::fs::metadata(path).ok()).map(|meta| meta.len()).unwrap_or(0)
 }
 
 /// The snapshot is stale when its 30-minute lifetime expired **or** the external ledger grew
@@ -637,9 +613,7 @@ fn external_ledger_len() -> u64 {
 /// without waiting for the TTL or pressing refresh: `CachedReport.fingerprint` alone cannot do
 /// that, because the snapshot reader never compares it. Kept pure so the rule is testable.
 fn snapshot_needs_rebuild(
-    cache_mtime: Option<std::time::SystemTime>,
-    now: std::time::SystemTime,
-    cached_ledger_len: u64,
+    cache_mtime: Option<std::time::SystemTime>, now: std::time::SystemTime, cached_ledger_len: u64,
     current_ledger_len: u64,
 ) -> bool {
     let expired = !cache_mtime.is_some_and(|time| cache_is_fresh(time, now));
@@ -656,25 +630,17 @@ static LAST_ATTEMPT_MS: AtomicI64 = AtomicI64::new(0);
 const RETRY_COOLDOWN_MS: i64 = 60_000;
 
 fn now_millis() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|span| span.as_millis() as i64)
-        .unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_millis() as i64).unwrap_or(0)
 }
 
 fn file_millis(modified: std::time::SystemTime) -> i64 {
-    modified
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|span| span.as_millis() as i64)
-        .unwrap_or(0)
+    modified.duration_since(std::time::UNIX_EPOCH).map(|span| span.as_millis() as i64).unwrap_or(0)
 }
 
 /// The whole rebuild, on whichever thread asked for it. The lock makes a background rebuild and
 /// an explicit refresh cooperate instead of scanning (and writing) the same ledger twice.
 fn rebuild_report() -> Result<UsageReport, String> {
-    let _guard = BUILD_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = BUILD_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let directory = sessions_dir()?;
     if !directory.is_dir() {
         return Ok(UsageReport::default());
@@ -711,10 +677,7 @@ fn spawn_rebuild() {
         return;
     }
     LAST_ATTEMPT_MS.store(now, Ordering::SeqCst);
-    if REBUILDING
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
+    if REBUILDING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return;
     }
     std::thread::spawn(|| {
@@ -728,9 +691,7 @@ fn spawn_rebuild() {
 /// rebuild started, so opening the page never blocks the webview on a 73 MiB scan.
 fn usage_report_snapshot() -> Result<UsageReport, String> {
     let path = cache_path()?;
-    let modified = std::fs::metadata(&path)
-        .ok()
-        .and_then(|meta| meta.modified().ok());
+    let modified = std::fs::metadata(&path).ok().and_then(|meta| meta.modified().ok());
     let mut report = std::fs::read(&path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<CachedReport>(&bytes).ok())
@@ -766,11 +727,7 @@ fn store_cache(fingerprint: u64, report: &UsageReport) {
     if std::fs::create_dir_all(parent).is_err() {
         return;
     }
-    let payload = CachedReport {
-        fingerprint,
-        external_ledger_len: external_ledger_len(),
-        report: report.clone(),
-    };
+    let payload = CachedReport { fingerprint, external_ledger_len: external_ledger_len(), report: report.clone() };
     let Ok(bytes) = serde_json::to_vec(&payload) else {
         return;
     };
@@ -805,9 +762,7 @@ pub async fn fetch_text(url: String) -> Result<String, String> {
     // A synchronous command would hold the webview's main thread for up to the 20s timeout.
     // Both callers (the usage page's price refresh and the OpenRouter free-model watch) are
     // background work, so the blocking GET belongs on the blocking pool.
-    tauri::async_runtime::spawn_blocking(move || fetch_text_blocking(url))
-        .await
-        .map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || fetch_text_blocking(url)).await.map_err(|error| error.to_string())?
 }
 
 fn fetch_text_blocking(url: String) -> Result<String, String> {
@@ -851,9 +806,7 @@ fn fetch_text_blocking(url: String) -> Result<String, String> {
                 } else {
                     "网络不可达（多为离线、代理或防火墙拦截），跳过证书校验重试也无法连接"
                 };
-                Err(format!(
-                    "无法拉取 {url}：{diagnosis}。首次：{first_msg}；重试：{second_msg}"
-                ))
+                Err(format!("无法拉取 {url}：{diagnosis}。首次：{first_msg}；重试：{second_msg}"))
             }
         },
     }
@@ -871,17 +824,13 @@ fn is_tls_error(message: &str) -> bool {
 /// pool, so even a forced rebuild can never freeze the webview's main thread.
 #[tauri3_specta::command]
 pub async fn usage_report() -> Result<UsageReport, String> {
-    tauri::async_runtime::spawn_blocking(usage_report_snapshot)
-        .await
-        .map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(usage_report_snapshot).await.map_err(|error| error.to_string())?
 }
 
 /// The refresh button deliberately rebuilds even inside the snapshot lifetime.
 #[tauri3_specta::command]
 pub async fn usage_report_refresh() -> Result<UsageReport, String> {
-    tauri::async_runtime::spawn_blocking(rebuild_report)
-        .await
-        .map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(rebuild_report).await.map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]
@@ -952,11 +901,7 @@ mod tests {
         // A grown file is re-parsed: two calls now, not the stale one.
         std::fs::write(
             &first,
-            format!(
-                "{}\n{}",
-                token("2026-11-13T01:00:00.000Z", 10),
-                token("2026-11-13T02:00:00.000Z", 20)
-            ),
+            format!("{}\n{}", token("2026-11-13T01:00:00.000Z", 10), token("2026-11-13T02:00:00.000Z", 20)),
         )
         .unwrap();
         let mut grown = Vec::new();
@@ -1002,16 +947,8 @@ mod tests {
     /// contract of the reader rather than depending on how the writer constructs its values.
     #[allow(clippy::too_many_arguments)]
     fn external_row(
-        request_id: &str,
-        client: &str,
-        provider: &str,
-        model: &str,
-        at: &str,
-        input: u64,
-        cached: u64,
-        output: u64,
-        total: u64,
-        usage_known: bool,
+        request_id: &str, client: &str, provider: &str, model: &str, at: &str, input: u64, cached: u64, output: u64,
+        total: u64, usage_known: bool,
     ) -> String {
         serde_json::json!({
             "requestId": request_id,
@@ -1100,11 +1037,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let context = turn_context("deepseek-flash");
         let count = token_count("2026-10-14T10:00:05.000Z", 10, 0, 5);
-        write_session(
-            &root.join("2026/10/14"),
-            "rollout-a.jsonl",
-            &[&context, &count, &count],
-        );
+        write_session(&root.join("2026/10/14"), "rollout-a.jsonl", &[&context, &count, &count]);
         let report = build(&root, &empty_ledger(&root));
         assert_eq!(report.points[0].requests, 1);
         let _ = std::fs::remove_dir_all(&root);
@@ -1112,14 +1045,8 @@ mod tests {
 
     #[test]
     fn a_bare_model_name_belongs_to_the_account_engine() {
-        assert_eq!(
-            split_model("gpt-6.1-sol"),
-            ("codex".to_string(), "gpt-6.1-sol".to_string())
-        );
-        assert_eq!(
-            split_model("hakimi/claude-sonnet-5-5"),
-            ("hakimi".to_string(), "claude-sonnet-5-5".to_string())
-        );
+        assert_eq!(split_model("gpt-6.1-sol"), ("codex".to_string(), "gpt-6.1-sol".to_string()));
+        assert_eq!(split_model("hakimi/claude-sonnet-5-5"), ("hakimi".to_string(), "claude-sonnet-5-5".to_string()));
     }
 
     #[test]
@@ -1266,29 +1193,15 @@ mod tests {
         let sessions = root.path().join("sessions");
         std::fs::create_dir_all(&sessions).unwrap();
         let ledger = root.path().join("external.jsonl");
-        let good = external_row(
-            "req-good",
-            "workbuddy",
-            "acme",
-            "acme/gpt-x",
-            "2026-11-15T03:11:05.000Z",
-            10,
-            0,
-            5,
-            15,
-            true,
-        );
+        let good =
+            external_row("req-good", "workbuddy", "acme", "acme/gpt-x", "2026-11-15T03:11:05.000Z", 10, 0, 5, 15, true);
         // A row missing required fields, a half-written append, plain garbage, a blank line and
         // a timestamp too short to yield a UTC day prefix. Only `good` may survive.
         let missing_fields = r#"{"requestId":"req-half","client":"workbuddy"}"#;
-        let short_at = external_row(
-            "req-short", "workbuddy", "acme", "acme/gpt-x", "2026-11", 1, 0, 1, 2, true,
-        );
+        let short_at = external_row("req-short", "workbuddy", "acme", "acme/gpt-x", "2026-11", 1, 0, 1, 2, true);
         std::fs::write(
             &ledger,
-            format!(
-                "not json at all\n{good}\n{{\"requestId\":\"partial\"\n{missing_fields}\n{short_at}\n\n"
-            ),
+            format!("not json at all\n{good}\n{{\"requestId\":\"partial\"\n{missing_fields}\n{short_at}\n\n"),
         )
         .unwrap();
 
@@ -1316,37 +1229,16 @@ mod tests {
         // turns collide on the OLD key; the writer normally stores the full gateway/model name.
         std::fs::write(
             &ledger,
-            external_row(
-                "req-3",
-                "workbuddy",
-                "acme",
-                "gpt-x",
-                "2026-10-14T10:00:05.000Z",
-                300,
-                0,
-                40,
-                340,
-                true,
-            ),
+            external_row("req-3", "workbuddy", "acme", "gpt-x", "2026-10-14T10:00:05.000Z", 300, 0, 40, 340, true),
         )
         .unwrap();
 
         let report = build(&sessions, &ledger);
-        assert_eq!(
-            report.points.len(),
-            2,
-            "internal and external calls must produce two distinct buckets"
-        );
-        let internal = report
-            .points
-            .iter()
-            .find(|point| point.client_source == "alwith_l")
-            .expect("an internal bucket");
-        let external = report
-            .points
-            .iter()
-            .find(|point| point.client_source == "workbuddy")
-            .expect("an external bucket");
+        assert_eq!(report.points.len(), 2, "internal and external calls must produce two distinct buckets");
+        let internal =
+            report.points.iter().find(|point| point.client_source == "alwith_l").expect("an internal bucket");
+        let external =
+            report.points.iter().find(|point| point.client_source == "workbuddy").expect("an external bucket");
 
         // Neither bucket may absorb the other's numbers.
         assert_eq!(internal.requests, 1);
@@ -1366,12 +1258,9 @@ mod tests {
     fn external_rows_normalise_their_source_and_fall_back_for_a_missing_total() {
         let root = tempfile::tempdir().unwrap();
         let ledger = root.path().join("external.jsonl");
-        let empty_client = external_row(
-            "r1", "", "acme", "acme/gpt-x", "2026-11-15T03:11:05.000Z", 10, 0, 5, 0, true,
-        );
-        let internal_marker = external_row(
-            "r2", "alwith_l", "acme", "acme/gpt-x", "2026-11-15T03:11:06.000Z", 20, 0, 7, 0, true,
-        );
+        let empty_client = external_row("r1", "", "acme", "acme/gpt-x", "2026-11-15T03:11:05.000Z", 10, 0, 5, 0, true);
+        let internal_marker =
+            external_row("r2", "alwith_l", "acme", "acme/gpt-x", "2026-11-15T03:11:06.000Z", 20, 0, 7, 0, true);
         std::fs::write(&ledger, format!("{empty_client}\n{internal_marker}")).unwrap();
 
         let turns = read_external_turns(&ledger);
@@ -1396,16 +1285,14 @@ mod tests {
         files.push(ledger.clone());
 
         let missing = fingerprint(&files);
-        let first = external_row(
-            "req-1", "workbuddy", "acme", "acme/gpt-x", "2026-11-15T03:11:05.000Z", 10, 0, 5, 15, true,
-        );
+        let first =
+            external_row("req-1", "workbuddy", "acme", "acme/gpt-x", "2026-11-15T03:11:05.000Z", 10, 0, 5, 15, true);
         std::fs::write(&ledger, &first).unwrap();
         let created = fingerprint(&files);
         assert_ne!(missing, created, "creating the ledger must invalidate the cache");
 
-        let second = external_row(
-            "req-2", "workbuddy", "acme", "acme/gpt-x", "2026-11-15T03:12:05.000Z", 20, 0, 6, 26, true,
-        );
+        let second =
+            external_row("req-2", "workbuddy", "acme", "acme/gpt-x", "2026-11-15T03:12:05.000Z", 20, 0, 6, 26, true);
         std::fs::write(&ledger, format!("{first}\n{second}")).unwrap();
         let grown = fingerprint(&files);
         assert_ne!(created, grown, "appending a row (len/mtime change) must invalidate the cache");
@@ -1483,5 +1370,4 @@ mod tests {
         assert!(snapshot_needs_rebuild(Some(expired), now, 264, 264));
         assert!(snapshot_needs_rebuild(None, now, 0, 0));
     }
-
 }

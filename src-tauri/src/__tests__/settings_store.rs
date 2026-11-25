@@ -55,15 +55,12 @@ fn four_columns_default_is_a_registered_boolean_setting() {
     let mut s = SettingsStore::load(dir.path().into()).unwrap();
     // The Appearance pane writes this key through `updateSettings`. Before it was registered,
     // validate() answered "Unknown or private settings key" and the switch silently did nothing.
-    s.update(changes(json!({"appearance.fourColumnsDefault": false})), None)
-        .unwrap();
+    s.update(changes(json!({"appearance.fourColumnsDefault": false})), None).unwrap();
     assert_eq!(s.values["appearance.fourColumnsDefault"], false);
     let (known, private) = partition_settings(s.values.clone());
     assert_eq!(known["appearance.fourColumnsDefault"], false);
     assert!(!private.contains_key("appearance.fourColumnsDefault"));
-    assert!(s
-        .update(changes(json!({"appearance.fourColumnsDefault": "no"})), None)
-        .is_err());
+    assert!(s.update(changes(json!({"appearance.fourColumnsDefault": "no"})), None).is_err());
     let restarted = SettingsStore::load(dir.path().into()).unwrap();
     assert_eq!(restarted.values["appearance.fourColumnsDefault"], false);
 }
@@ -83,16 +80,12 @@ fn workspace_column_visibility_is_a_persisted_boolean() {
 fn interface_font_is_a_registered_persisted_choice() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = SettingsStore::load(dir.path().into()).unwrap();
-    store
-        .update(changes(json!({"appearance.uiFont": "hiragino"})), None)
-        .unwrap();
+    store.update(changes(json!({"appearance.uiFont": "hiragino"})), None).unwrap();
     assert_eq!(store.values["appearance.uiFont"], "hiragino");
     let (known, private) = partition_settings(store.values.clone());
     assert_eq!(known["appearance.uiFont"], "hiragino");
     assert!(!private.contains_key("appearance.uiFont"));
-    assert!(store
-        .update(changes(json!({"appearance.uiFont": "comic-sans"})), None)
-        .is_err());
+    assert!(store.update(changes(json!({"appearance.uiFont": "comic-sans"})), None).is_err());
     let restarted = SettingsStore::load(dir.path().into()).unwrap();
     assert_eq!(restarted.values["appearance.uiFont"], "hiragino");
 }
@@ -110,18 +103,12 @@ fn per_location_font_sizes_are_registered_and_validated() {
         )
         .unwrap();
     assert_eq!(store.values["appearance.fontSizes"]["composer"], 15);
-    assert!(store
-        .update(
-            changes(json!({"appearance.fontSizes": {"chat": 99, "composer": 15, "sidebar": 14}})),
-            None
-        )
-        .is_err());
-    assert!(store
-        .update(
-            changes(json!({"appearance.fontSizes": {"chat": 14, "composer": 14}})),
-            None
-        )
-        .is_err());
+    assert!(
+        store
+            .update(changes(json!({"appearance.fontSizes": {"chat": 99, "composer": 15, "sidebar": 14}})), None)
+            .is_err()
+    );
+    assert!(store.update(changes(json!({"appearance.fontSizes": {"chat": 14, "composer": 14}})), None).is_err());
 }
 
 #[test]
@@ -500,18 +487,9 @@ fn mobile_bridge_preference_survives_restart_and_rejects_non_boolean_values() {
 fn free_model_watch_and_completion_sound_are_registered_booleans() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = SettingsStore::load(dir.path().into()).unwrap();
-    assert!(store
-        .update(changes(json!({"providers.freeModelWatch": "yes"})), None)
-        .is_err());
-    assert!(store
-        .update(changes(json!({"automation.completionSound": "yes"})), None)
-        .is_err());
-    store
-        .update(
-            changes(json!({"providers.freeModelWatch": true, "automation.completionSound": true})),
-            None,
-        )
-        .unwrap();
+    assert!(store.update(changes(json!({"providers.freeModelWatch": "yes"})), None).is_err());
+    assert!(store.update(changes(json!({"automation.completionSound": "yes"})), None).is_err());
+    store.update(changes(json!({"providers.freeModelWatch": true, "automation.completionSound": true})), None).unwrap();
     let (known, private) = partition_settings(store.values.clone());
     assert_eq!(known["providers.freeModelWatch"], true);
     assert_eq!(known["automation.completionSound"], true);
@@ -524,7 +502,7 @@ fn free_model_watch_and_completion_sound_are_registered_booleans() {
 fn auto_update_defaults_to_disabled_and_only_accepts_booleans() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = SettingsStore::load(dir.path().into()).unwrap();
-    assert!(store.values.get("updater.autoUpdate").is_none());
+    assert!(!store.values.contains_key("updater.autoUpdate"));
     assert!(store.update(changes(json!({"updater.autoUpdate": "true"})), None).is_err());
     store.update(changes(json!({"updater.autoUpdate": true})), None).unwrap();
     let restarted = SettingsStore::load(dir.path().into()).unwrap();

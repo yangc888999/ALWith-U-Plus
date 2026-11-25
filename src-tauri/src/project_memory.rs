@@ -48,10 +48,10 @@ fn turn_marker(block: &str) -> Option<&str> {
     if let Some(start) = block.find(SEP) {
         let rest = &block[start..];
         let inner = &rest[SEP.len_utf8()..];
-        if inner.starts_with("alwith-turn:") {
-            if let Some(end) = inner.find(SEP) {
-                return Some(&rest[..SEP.len_utf8() + end + SEP.len_utf8()]);
-            }
+        if inner.starts_with("alwith-turn:")
+            && let Some(end) = inner.find(SEP)
+        {
+            return Some(&rest[..SEP.len_utf8() + end + SEP.len_utf8()]);
         }
     }
     let start = block.find("<!-- alwith-turn:")?;
@@ -79,11 +79,7 @@ pub fn project_memory_snapshot(root: String, timestamp: String) -> Result<(), St
     block.push_str(&format!("## 压缩前快照 · {timestamp}\n\n---\n\n"));
     block.push_str(content.trim_end());
     block.push('\n');
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&history)
-        .map_err(|error| error.to_string())?;
+    let mut file = OpenOptions::new().create(true).append(true).open(&history).map_err(|error| error.to_string())?;
     file.write_all(block.as_bytes()).map_err(|error| error.to_string())
 }
 
@@ -96,18 +92,13 @@ pub fn project_memory_snapshot(root: String, timestamp: String) -> Result<(), St
 pub fn project_memory_append(root: String, block: String) -> Result<(), String> {
     let path = memory_path(&root)?;
     ensure_file(&path)?;
-    if let Some(marker) = turn_marker(&block) {
-        if let Ok(existing) = fs::read_to_string(&path) {
-            if existing.contains(marker) {
-                return Ok(());
-            }
-        }
+    if let Some(marker) = turn_marker(&block)
+        && let Ok(existing) = fs::read_to_string(&path)
+        && existing.contains(marker)
+    {
+        return Ok(());
     }
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|error| error.to_string())?;
+    let mut file = OpenOptions::new().create(true).append(true).open(&path).map_err(|error| error.to_string())?;
     writeln!(file, "{}", block.trim_end()).map_err(|error| error.to_string())
 }
 
@@ -130,10 +121,7 @@ mod tests {
         let after_first = fs::read_to_string(directory.join("memory.md")).expect("memory exists");
         // A second visit to the same project must be a no-op.
         assert!(!project_memory_ensure(root.clone()).expect("second ensure is a no-op"));
-        assert_eq!(
-            fs::read_to_string(directory.join("memory.md")).expect("memory exists"),
-            after_first
-        );
+        assert_eq!(fs::read_to_string(directory.join("memory.md")).expect("memory exists"), after_first);
         project_memory_append(root, "## 2026-01-01 00:00 · test\n\nhello".into()).expect("append");
         let content = fs::read_to_string(directory.join("memory.md")).expect("memory exists");
         assert!(content.starts_with("# 项目记忆"));

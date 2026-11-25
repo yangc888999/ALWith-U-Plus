@@ -419,7 +419,7 @@ test("registered restart hook resumes legacy enterprise using a process-only ali
     const registration = source.match(/this\.codexAcpClient\.restartForProvider = \(provider\) => this\.restartEngineForProvider\(provider\);/)![0]
     new Function(registration).call(agent)
     const client = agent.codexAcpClient
-    client.codexClient = { threadResume: async () => { throw { provider: "custom-enterprise" } } }
+    client.codexClient = { threadResume: async () => { throw Object.assign(new Error("provider unavailable"), { provider: "custom-enterprise" }) } }
     const result = await resume.call(client, { threadId: "legacy", config: {} })
     expect(starts).toBe(1)
     expect(result.modelProvider).toBe("custom-enterprise")
@@ -442,7 +442,7 @@ test("missing gateways do not spawn a provider and missing hooks preserve the or
     }
     expect(await restart.call(agent, "removed-enterprise")).toBeNull()
     expect(starts).toBe(0)
-    const error = { provider: "custom-enterprise" }
+    const error = Object.assign(new Error("provider unavailable"), { provider: "custom-enterprise" })
     await expect(resume.call({ codexClient: { threadResume: async () => { throw error } } }, { threadId: "legacy" })).rejects.toBe(error)
   })
 })

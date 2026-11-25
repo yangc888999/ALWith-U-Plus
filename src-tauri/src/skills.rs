@@ -26,10 +26,10 @@ pub struct SkillEntry {
 }
 
 fn codex_home() -> Result<PathBuf, String> {
-    if let Ok(value) = std::env::var("CODEX_HOME") {
-        if !value.trim().is_empty() {
-            return Ok(PathBuf::from(value));
-        }
+    if let Ok(value) = std::env::var("CODEX_HOME")
+        && !value.trim().is_empty()
+    {
+        return Ok(PathBuf::from(value));
     }
     let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
     Ok(PathBuf::from(home).join(".codex"))
@@ -56,18 +56,19 @@ fn parse_frontmatter(markdown: &str) -> (Option<String>, Option<String>) {
     }
     let mut current: Option<&str> = None;
     let mut block: Vec<String> = Vec::new();
-    let flush = |key: Option<&str>, block: &mut Vec<String>, name: &mut Option<String>, description: &mut Option<String>| {
-        if block.is_empty() {
-            return;
-        }
-        let joined = block.join(" ").trim().to_string();
-        match key {
-            Some("name") if !joined.is_empty() => *name = Some(joined),
-            Some("description") if !joined.is_empty() => *description = Some(joined),
-            _ => {}
-        }
-        block.clear();
-    };
+    let flush =
+        |key: Option<&str>, block: &mut Vec<String>, name: &mut Option<String>, description: &mut Option<String>| {
+            if block.is_empty() {
+                return;
+            }
+            let joined = block.join(" ").trim().to_string();
+            match key {
+                Some("name") if !joined.is_empty() => *name = Some(joined),
+                Some("description") if !joined.is_empty() => *description = Some(joined),
+                _ => {}
+            }
+            block.clear();
+        };
     for line in lines {
         if line.trim() == "---" {
             break;
@@ -169,11 +170,7 @@ fn move_skill(id: &str, from: &Path, to: &Path) -> Result<(), String> {
 pub fn skills_set_enabled(id: String, enabled: bool) -> Result<(), String> {
     let skills = skills_dir()?;
     let disabled = disabled_dir()?;
-    if enabled {
-        move_skill(&id, &disabled, &skills)
-    } else {
-        move_skill(&id, &skills, &disabled)
-    }
+    if enabled { move_skill(&id, &disabled, &skills) } else { move_skill(&id, &skills, &disabled) }
 }
 
 fn copy_tree(source: &Path, target: &Path) -> Result<(), String> {
@@ -215,16 +212,14 @@ pub fn skills_install(source: String) -> Result<SkillEntry, String> {
     Ok(entry_for(&id, &target, false, true))
 }
 
-
 /// The directory temporary "chat" sessions live in: the app's default project-less folder.
 ///
 /// module-chat treats `~/Documents/Codex` (and `~/Documents/ALwith`) as quick-chat directories,
 /// so a new chat created here belongs to the "会话" section instead of any project.
 #[tauri3_specta::command]
 pub fn quick_chat_directory() -> Result<String, String> {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map_err(|_| "HOME is not set".to_string())?;
+    let home =
+        std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).map_err(|_| "HOME is not set".to_string())?;
     let directory = std::path::PathBuf::from(home).join("Documents").join("Codex");
     std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     Ok(directory.to_string_lossy().to_string())
@@ -267,15 +262,13 @@ pub fn pick_project_directory() -> Result<Option<String>, String> {
     #[cfg(target_os = "macos")]
     {
         let script = r#"POSIX path of (choose folder with prompt "选择项目目录")"#;
-        let output = std::process::Command::new("osascript")
-            .args(["-e", script])
-            .output()
-            .map_err(|error| error.to_string())?;
+        let output =
+            std::process::Command::new("osascript").args(["-e", script]).output().map_err(|error| error.to_string())?;
         if !output.status.success() {
             return Ok(None);
         }
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(if path.is_empty() { None } else { Some(path) });
+        Ok(if path.is_empty() { None } else { Some(path) })
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -283,20 +276,13 @@ pub fn pick_project_directory() -> Result<Option<String>, String> {
     }
 }
 
-
 /// Deletes a user skill's directory (enabled or disabled). Engine built-ins stay read-only.
 ///
 /// Deletion is irreversible, so the id is validated against path traversal and the directory
 /// must actually look like a skill (contains SKILL.md).
 #[tauri3_specta::command]
 pub fn skills_uninstall(id: String) -> Result<(), String> {
-    if id.is_empty()
-        || id.contains('/')
-        || id.contains('\\')
-        || id == "."
-        || id == ".."
-        || id.starts_with('.')
-    {
+    if id.is_empty() || id.contains('/') || id.contains('\\') || id == "." || id == ".." || id.starts_with('.') {
         return Err("Invalid skill id".into());
     }
     for directory in [skills_dir()?, disabled_dir()?] {
@@ -336,16 +322,14 @@ pub fn skills_pick_directory(app: tauri::AppHandle) -> Result<Option<String>, St
     #[cfg(target_os = "macos")]
     {
         let script = r#"POSIX path of (choose folder with prompt "选择技能目录（包含 SKILL.md）")"#;
-        let output = std::process::Command::new("osascript")
-            .args(["-e", script])
-            .output()
-            .map_err(|error| error.to_string())?;
+        let output =
+            std::process::Command::new("osascript").args(["-e", script]).output().map_err(|error| error.to_string())?;
         if !output.status.success() {
             // User cancelled: osascript exits non-zero with "User canceled."
             return Ok(None);
         }
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(if path.is_empty() { None } else { Some(path) });
+        Ok(if path.is_empty() { None } else { Some(path) })
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -401,10 +385,7 @@ fn read_prompt_file(path: &Path) -> Result<String, String> {
 
 fn write_prompt_file(directory: &Path, content: &str) -> Result<(), String> {
     if content.len() > GLOBAL_PROMPT_MAX_BYTES {
-        return Err(format!(
-            "ALWith.md is too large (max {} bytes)",
-            GLOBAL_PROMPT_MAX_BYTES
-        ));
+        return Err(format!("ALWith.md is too large (max {} bytes)", GLOBAL_PROMPT_MAX_BYTES));
     }
     fs::create_dir_all(directory).map_err(|error| error.to_string())?;
     fs::write(directory.join(GLOBAL_PROMPT_FILE), content).map_err(|error| error.to_string())

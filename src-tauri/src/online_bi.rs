@@ -60,10 +60,7 @@ fn mask(secret: &str) -> String {
 
 #[tauri3_specta::command]
 pub fn online_bi_credentials_save(
-    username: String,
-    secret: String,
-    token: Option<String>,
-    path: Option<String>,
+    username: String, secret: String, token: Option<String>, path: Option<String>,
 ) -> Result<OnlineBiCredentials, String> {
     let username = username.trim().to_string();
     // A token alone is enough: it is what makes the embedded frame logged in.
@@ -74,26 +71,17 @@ pub fn online_bi_credentials_save(
         secret
     };
     let token = token.unwrap_or_default().trim().to_string();
-    let token = if token.is_empty() {
-        previous.as_ref().map(|entry| entry.token.clone()).unwrap_or_default()
-    } else {
-        token
-    };
+    let token =
+        if token.is_empty() { previous.as_ref().map(|entry| entry.token.clone()).unwrap_or_default() } else { token };
     if secret.is_empty() && token.is_empty() {
         return Err("登录密钥和 API Token 至少填一个".into());
     }
     if username.is_empty() {
         return Err("用户名不能为空".into());
     }
-    let path = path
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let path = if path.is_empty() {
-        previous.as_ref().map(|entry| entry.path.clone()).unwrap_or_default()
-    } else {
-        path
-    };
+    let path = path.unwrap_or_default().trim().to_string();
+    let path =
+        if path.is_empty() { previous.as_ref().map(|entry| entry.path.clone()).unwrap_or_default() } else { path };
     let payload = serde_json::to_string(&Stored {
         username: username.clone(),
         secret: secret.clone(),
@@ -190,20 +178,13 @@ pub fn online_bi_embed_url() -> Result<String, String> {
         token: String::new(),
         path: String::new(),
     });
-    let path = if stored.path.trim().is_empty() {
-        DEFAULT_PATH.to_string()
-    } else {
-        stored.path.trim().to_string()
-    };
+    let path = if stored.path.trim().is_empty() { DEFAULT_PATH.to_string() } else { stored.path.trim().to_string() };
     let separator = if path.contains('?') { '&' } else { '?' };
     if stored.token.is_empty() {
         // Streamlit's embed switches hide its own chrome; harmless without a token too.
         return Ok(format!("{BASE}{path}{separator}embed=true&embed_options=show_padding"));
     }
-    Ok(format!(
-        "{BASE}{path}{separator}s={}&embed=true&embed_options=show_padding",
-        urlencode(&stored.token)
-    ))
+    Ok(format!("{BASE}{path}{separator}s={}&embed=true&embed_options=show_padding", urlencode(&stored.token)))
 }
 
 fn urlencode(value: &str) -> String {
@@ -221,10 +202,7 @@ fn urlencode(value: &str) -> String {
 /// injecting anything into the third-party page.
 #[tauri3_specta::command]
 pub fn online_bi_window_url(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    Ok(app
-        .get_webview_window("online-bi")
-        .and_then(|window| window.url().ok())
-        .map(|url| url.to_string()))
+    Ok(app.get_webview_window("online-bi").and_then(|window| window.url().ok()).map(|url| url.to_string()))
 }
 
 /// Fills and submits the dashboard's sign-in form in the already-open window.
@@ -252,7 +230,7 @@ pub fn online_bi_autofill(app: tauri::AppHandle, account: Option<String>) -> Res
     // in-page `if (!pass)` check correctly leaves the form for the user — not the string "null".
     let pass = match &pass {
         Some(secret) => serde_json::to_string(secret).map_err(|error| error.to_string())?,
-        None => "null".to_string()
+        None => "null".to_string(),
     };
     let script = format!(
         r#"(() => {{

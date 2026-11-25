@@ -43,9 +43,7 @@ pub async fn updater_install_and_relaunch(
 /// One check on demand. Turning the switch on in Settings calls this, so the user does not wait
 /// for the hourly tick (or the 30s startup delay) before seeing whether a release exists.
 #[tauri3_specta::command]
-pub async fn updater_check_now(
-    app: AppHandle, svc: TauriState<'_, Arc<UpdaterService>>,
-) -> Result<(), String> {
+pub async fn updater_check_now(app: AppHandle, svc: TauriState<'_, Arc<UpdaterService>>) -> Result<(), String> {
     let service = svc.inner().clone();
     check_and_autodownload(app, service).await;
     Ok(())

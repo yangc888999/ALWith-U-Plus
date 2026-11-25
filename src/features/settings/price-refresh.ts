@@ -34,7 +34,7 @@ import {
 export const PRICE_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000
 const LAST_RUN_KEY = "alwith:price-refresh/last-run"
 
-export type VendorRefreshOutcome = {
+type VendorRefreshOutcome = {
   vendor: string
   status: "ok" | "error"
   updated: number

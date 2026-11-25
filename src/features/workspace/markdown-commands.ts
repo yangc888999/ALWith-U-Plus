@@ -20,7 +20,7 @@ import {
 import { lift, setBlockType, toggleMark, wrapIn } from "@milkdown/prose/commands"
 import type { Node as ProseNode } from "@milkdown/prose/model"
 import { liftListItem, sinkListItem } from "@milkdown/prose/schema-list"
-import type { Command, EditorState } from "@milkdown/prose/state"
+import type { EditorState } from "@milkdown/prose/state"
 import { deleteColumn, deleteRow, deleteTable, isInTable, rowIsHeader, selectedRect } from "@milkdown/prose/tables"
 import { $command, $useKeymap } from "@milkdown/utils"
 
@@ -209,4 +209,3 @@ export function focusEditor(editor: Editor): void {
 }
 
 /** Re-exported for the format-state computation. */
-export type { Command }

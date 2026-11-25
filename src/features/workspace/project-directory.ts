@@ -107,7 +107,7 @@ export function projectDirectoryAttempt(key: string): Readonly<ProjectDirectoryB
   return bindingFor(key)
 }
 
-export function subscribeProjectDirectories(listener: () => void): () => void {
+function subscribeProjectDirectories(listener: () => void): () => void {
   listeners.add(listener)
   return () => {
     listeners.delete(listener)

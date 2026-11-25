@@ -369,7 +369,7 @@ fn setting_validity(key: &str, value: &Value) -> Option<bool> {
                     sizes
                         .get(*key)
                         .and_then(Value::as_f64)
-                        .map_or(true, |size| size.fract() == 0.0 && (11.0..=24.0).contains(&size))
+                        .is_none_or(|size| size.fract() == 0.0 && (11.0..=24.0).contains(&size))
                 })
         }),
         // Local profile override: a plain name, and a square data URL small enough to keep

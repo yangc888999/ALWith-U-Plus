@@ -13,15 +13,12 @@
 // tell them apart. Only the bridge sees the upstream, so amber rows and stall wording come from
 // its `model:stalled` notice; everything else is a plain timer with one gentle action.
 //
-// That action is a nudge, not a model switch. Switching changes the session's default model and
-// cancels the turn in flight, which is the opposite of what a slow-but-working step needs; it also
-// already has an entrance under the composer. A status line that rewrites configuration on a
-// stopwatch is how a healthy four-minute reasoning step gets thrown away.
 
 import type { Session } from "@alwith/api"
 import { AlertTriangleIcon, CircleHelpIcon, Loader2Icon } from "lucide-react"
 import { type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { useTranslation } from "react-i18next"
+import { useStore } from "zustand"
 import { subscribeGroupSpeaker } from "@/lib/group-runtime"
 
 import { selectedModelId } from "@/agent/native-models"
@@ -307,11 +304,7 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
   // keep its amber "at capacity" row after the reader had already chosen DeepSeek — the exact
   // "switched away and it still says overloaded" report. The pending choice is what the picker
   // shows, so it is also what the row must respect.
-  const pendingModel = useSyncExternalStore(
-    client.onPendingModelChange.bind(client),
-    () => client.pendingModelFor(session.id),
-    () => null
-  )
+  const pendingModel = useStore(client.store, (state) => state.pendingModels?.[session.id])
   const chosenModel = pendingModel ?? selectedModelId(session.configOptions)
   // In a group discussion the floor moves between roles, each on its own model. The session's
   // configured model is not what is answering, so the row names the member holding the floor.
@@ -442,18 +435,9 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
   // Locked to the model the turn started on; null falls back to the live picker.
   const liveModel = modelLabel(session)
   const model = speaker ?? (roleModel !== null ? roleModel : turn.model) ?? liveModel
-  // A mid-turn switch changes the picker immediately but only takes effect next turn. Naming both
-  // in the hover title keeps the row honest without adding another chip to a narrow strip. While an
-  // orchestrated turn is running the role already names its model, so the "next turn" hint is moot.
-  const nextModel =
-    roleModel === null && liveModel !== null && model !== null && liveModel !== model ? liveModel : null
   const baseTitle = t(stage.key, { name: stage.name, count: stage.count })
   const stateTitle =
-    rolePrefix !== null
-      ? `${baseTitle} · ${t("chat.turnProgress.roleActive", { role: rolePrefix })}`
-      : nextModel === null
-        ? baseTitle
-        : `${baseTitle} · ${t("chat.turnProgress.nextTurnModel", { model: nextModel })}`
+    rolePrefix === null ? baseTitle : `${baseTitle} · ${t("chat.turnProgress.roleActive", { role: rolePrefix })}`
   const quietFor = duration(silent)
   const eta = duration(remainingMs)
   // The explanation rides on the badge and the "?" as a native hover title. A floating toast said

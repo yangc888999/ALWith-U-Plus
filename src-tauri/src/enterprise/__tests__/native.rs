@@ -29,9 +29,8 @@ fn enterprise_native_preserves_generation_and_owner_lifecycle() {
 
         let storage = tempfile::tempdir().unwrap();
         let sessions = storage.path().join("enterprise-gateway-sessions.json");
-        let client = EnterpriseClient::open_gateway(&directory, &sessions)
-            .await
-            .expect("stage enterprise before Rust tests");
+        let client =
+            EnterpriseClient::open_gateway(&directory, &sessions).await.expect("stage enterprise before Rust tests");
         // 同一个会话文件只允许一个 owner：第二个 open 必须失败，而不是共享令牌状态。
         let second_owner = EnterpriseClient::open_gateway(&directory, &sessions).await;
         assert_eq!(second_owner.map(|_| ()).unwrap_err()["message"], "Enterprise owner is already open");

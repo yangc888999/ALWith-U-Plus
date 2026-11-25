@@ -4,7 +4,7 @@ import i18n from "@/lib/i18n"
 import { notifyConversation, notifyFreeModels } from "@/lib/notify"
 import { settingsStore } from "@/lib/settings-store"
 
-export const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 export const FREE_MODEL_WATCH_SETTING = "providers.freeModelWatch"
 const KNOWN_KEY = "alwith:free-model-watch/known"
 const CACHE_KEY = "alwith:free-model-watch/cache-v1"
@@ -40,7 +40,7 @@ function validZero(value: unknown): boolean {
 }
 
 /** Missing, empty, negative, nonnumeric and partially zero prices are not free. */
-export function parseFreeModels(text: string): CachedFreeModel[] {
+function parseFreeModels(text: string): CachedFreeModel[] {
   const parsed: unknown = JSON.parse(text)
   const data = typeof parsed === "object" && parsed !== null && "data" in parsed ? parsed.data : undefined
   if (!Array.isArray(data)) throw new Error("OpenRouter model catalog has no data array")
@@ -166,7 +166,7 @@ export function formatNewFreeModels(ids: readonly string[]): string {
   return ids.length > 3 ? `${preview} … +${ids.length - 3}` : preview
 }
 
-export function notifyNewFreeModels(ids: readonly string[]): void {
+function notifyNewFreeModels(ids: readonly string[]): void {
   if (!ids.length) return
   const title = i18n.t("provider.freeWatchNotifyTitle", { count: ids.length })
   const body = i18n.t("provider.freeWatchNotifyBody", { models: formatNewFreeModels(ids) })

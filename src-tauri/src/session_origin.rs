@@ -19,10 +19,10 @@ pub struct SessionOrigin {
 }
 
 fn codex_home() -> Result<PathBuf, String> {
-    if let Ok(value) = std::env::var("CODEX_HOME") {
-        if !value.trim().is_empty() {
-            return Ok(PathBuf::from(value));
-        }
+    if let Ok(value) = std::env::var("CODEX_HOME")
+        && !value.trim().is_empty()
+    {
+        return Ok(PathBuf::from(value));
     }
     let home = std::env::var("HOME").map_err(|_| "HOME is not set".to_string())?;
     Ok(PathBuf::from(home).join(".codex"))
@@ -40,9 +40,11 @@ fn find_rollout(directory: &Path, session_id: &str, budget: &mut usize) -> Optio
             if let Some(found) = find_rollout(&path, session_id, budget) {
                 return Some(found);
             }
-        } else if path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
-            name.starts_with("rollout-") && name.contains(session_id) && name.ends_with(".jsonl")
-        }) {
+        } else if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("rollout-") && name.contains(session_id) && name.ends_with(".jsonl"))
+        {
             return Some(path);
         }
     }
@@ -52,12 +54,11 @@ fn find_rollout(directory: &Path, session_id: &str, budget: &mut usize) -> Optio
 /// The runtime provider id for a custom provider is `custom-<hex(id)>`; the model picker knows it
 /// as the raw id (`custom_<…>`). Decode so the resume hint names something the adapter resolves.
 fn provider_name(raw: &str) -> String {
-    if let Some(encoded) = raw.strip_prefix("custom-") {
-        if let Ok(bytes) = hex::decode(encoded) {
-            if let Ok(decoded) = String::from_utf8(bytes) {
-                return decoded;
-            }
-        }
+    if let Some(encoded) = raw.strip_prefix("custom-")
+        && let Ok(bytes) = hex::decode(encoded)
+        && let Ok(decoded) = String::from_utf8(bytes)
+    {
+        return decoded;
     }
     raw.to_string()
 }
@@ -82,10 +83,8 @@ pub fn session_origin(session_id: String) -> Result<Option<SessionOrigin>, Strin
         let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else { continue };
         match value.get("type").and_then(|kind| kind.as_str()) {
             Some("session_meta") => {
-                provider = value
-                    .pointer("/payload/model_provider")
-                    .and_then(|entry| entry.as_str())
-                    .map(str::to_string);
+                provider =
+                    value.pointer("/payload/model_provider").and_then(|entry| entry.as_str()).map(str::to_string);
             }
             Some("turn_context") => {
                 if let Some(found) = value
@@ -127,12 +126,10 @@ pub fn repair_session_rollout(session_id: String) -> Result<u64, String> {
     let mut kept: Vec<&str> = Vec::new();
     let mut removed = 0u64;
     for line in contents.lines() {
-        let is_reasoning = serde_json::from_str::<serde_json::Value>(line)
-            .ok()
-            .is_some_and(|value| {
-                value.get("type").and_then(|kind| kind.as_str()) == Some("response_item")
-                    && value.pointer("/payload/type").and_then(|kind| kind.as_str()) == Some("reasoning")
-            });
+        let is_reasoning = serde_json::from_str::<serde_json::Value>(line).ok().is_some_and(|value| {
+            value.get("type").and_then(|kind| kind.as_str()) == Some("response_item")
+                && value.pointer("/payload/type").and_then(|kind| kind.as_str()) == Some("reasoning")
+        });
         if is_reasoning {
             removed += 1;
         } else {
@@ -229,10 +226,8 @@ pub fn migrate_threads_to_router() -> Result<RouterMigration, String> {
     if !db.is_file() {
         return Ok(RouterMigration { threads: 0, rollouts: 0 });
     }
-    let listing = match sqlite(
-        &db,
-        &format!("SELECT id, rollout_path FROM threads WHERE model_provider <> '{router}'"),
-    ) {
+    let listing = match sqlite(&db, &format!("SELECT id, rollout_path FROM threads WHERE model_provider <> '{router}'"))
+    {
         Ok(listing) => listing,
         Err(error) => {
             log::warn!("thread router migration skipped: {error}");
@@ -269,10 +264,7 @@ pub fn migrate_threads_to_router() -> Result<RouterMigration, String> {
         return Ok(RouterMigration { threads: 0, rollouts });
     }
     let quoted: Vec<String> = ids.iter().map(|id| format!("'{id}'")).collect();
-    sqlite(
-        &db,
-        &format!("UPDATE threads SET model_provider = '{router}' WHERE id IN ({})", quoted.join(",")),
-    )?;
+    sqlite(&db, &format!("UPDATE threads SET model_provider = '{router}' WHERE id IN ({})", quoted.join(",")))?;
     log::info!("thread router migration: {} threads, {rollouts} rollouts", ids.len());
     Ok(RouterMigration { threads: ids.len() as u64, rollouts })
 }

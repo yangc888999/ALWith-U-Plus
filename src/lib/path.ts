@@ -15,7 +15,7 @@ export function basename(p: string): string {
 }
 
 /** Path segments of a directory: separators normalised, empty segments and trailing `/` dropped. */
-export function directorySegments(path: string | null | undefined): string[] {
+function directorySegments(path: string | null | undefined): string[] {
   if (path === null || path === undefined) return []
   return normalizeSlashes(path.trim())
     .split("/")

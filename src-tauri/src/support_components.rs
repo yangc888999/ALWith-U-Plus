@@ -31,11 +31,8 @@ pub struct InstallOutcome {
 
 /// Candidate directories that may hold `node` / `npm` on this machine, in addition to PATH.
 fn candidate_dirs() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = vec![
-        PathBuf::from("/usr/local/bin"),
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/usr/bin"),
-    ];
+    let mut dirs: Vec<PathBuf> =
+        vec![PathBuf::from("/usr/local/bin"), PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/bin")];
     if let Ok(home) = std::env::var("HOME") {
         dirs.push(PathBuf::from(&home).join(".local/bin"));
         // WorkBuddy manages its own Node; surface that bin dir so a CLI installed against it is
@@ -79,10 +76,8 @@ fn search_executable(name: &str) -> Option<PathBuf> {
 /// install / update no longer invoke npm: `lark_cli` downloads the binary from the registry
 /// mirror into an app-owned directory instead.
 pub fn enriched_path() -> String {
-    let mut parts: Vec<String> = candidate_dirs()
-        .into_iter()
-        .map(|directory| directory.display().to_string())
-        .collect();
+    let mut parts: Vec<String> =
+        candidate_dirs().into_iter().map(|directory| directory.display().to_string()).collect();
     parts.push(std::env::var("PATH").unwrap_or_default());
     parts.join(":")
 }
@@ -119,12 +114,7 @@ pub async fn node_status() -> NodeStatus {
         }
     })
     .await
-    .unwrap_or(NodeStatus {
-        installed: false,
-        version: None,
-        npm_version: None,
-        path: None,
-    })
+    .unwrap_or(NodeStatus { installed: false, version: None, npm_version: None, path: None })
 }
 
 /// Download the official macOS universal Node.js `.pkg` for the latest LTS and open it with the
@@ -140,9 +130,7 @@ pub async fn node_install() -> Result<InstallOutcome, String> {
         let url = format!("https://nodejs.org/dist/{version}/node-{version}.pkg");
         let temp = std::env::temp_dir().join(format!("node-{version}.pkg"));
         let temp_string = temp.to_string_lossy().to_string();
-        let download = Command::new("curl")
-            .args(["-fL", "-o", &temp_string, &url])
-            .output();
+        let download = Command::new("curl").args(["-fL", "-o", &temp_string, &url]).output();
         match download {
             Ok(result) if result.status.success() => {}
             Ok(result) => {
@@ -150,20 +138,17 @@ pub async fn node_install() -> Result<InstallOutcome, String> {
                     "下载 Node.js 安装包失败（退出码 {:?}）：{}",
                     result.status.code(),
                     String::from_utf8_lossy(&result.stderr)
-                ))
+                ));
             }
             Err(error) => return Err(format!("无法启动 curl 下载 Node.js：{}", error)),
         }
         // Best-effort: drop Gatekeeper quarantine so the Installer opens without a warning sheet.
-        let _ = Command::new("xattr")
-            .args(["-dr", "com.apple.quarantine", &temp_string])
-            .output();
+        let _ = Command::new("xattr").args(["-dr", "com.apple.quarantine", &temp_string]).output();
         match Command::new("open").arg(&temp_string).status() {
             Ok(status) if status.success() => Ok(InstallOutcome {
                 ok: true,
-                message:
-                    "已打开 Node.js 安装器，请按提示完成安装（需要管理员密码）。装好后再点「检测」刷新状态。"
-                        .to_string(),
+                message: "已打开 Node.js 安装器，请按提示完成安装（需要管理员密码）。装好后再点「检测」刷新状态。"
+                    .to_string(),
             }),
             Ok(status) => Err(format!("打开安装器失败（退出码 {:?}）", status.code())),
             Err(error) => Err(format!("无法打开安装器：{}", error)),
@@ -187,18 +172,10 @@ pub async fn brew_status() -> BrewStatus {
     tauri::async_runtime::spawn_blocking(|| {
         let brew = search_executable("brew");
         let version = brew.as_ref().and_then(version_of);
-        BrewStatus {
-            installed: brew.is_some(),
-            version,
-            path: brew.map(|binary| binary.display().to_string()),
-        }
+        BrewStatus { installed: brew.is_some(), version, path: brew.map(|binary| binary.display().to_string()) }
     })
     .await
-    .unwrap_or(BrewStatus {
-        installed: false,
-        version: None,
-        path: None,
-    })
+    .unwrap_or(BrewStatus { installed: false, version: None, path: None })
 }
 
 /// Install Homebrew by running the official script inside Terminal. The installer needs `sudo`
@@ -211,10 +188,7 @@ pub async fn brew_install() -> Result<InstallOutcome, String> {
     }
     let command = "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"";
     tauri::async_runtime::spawn_blocking(move || {
-        let osa = format!(
-            "tell application \"Terminal\" to do script \"{}\"",
-            command.replace('"', "\\\"")
-        );
+        let osa = format!("tell application \"Terminal\" to do script \"{}\"", command.replace('"', "\\\""));
         match Command::new("osascript").args(["-e", &osa]).status() {
             Ok(status) if status.success() => Ok(InstallOutcome {
                 ok: true,
@@ -233,9 +207,7 @@ pub async fn brew_install() -> Result<InstallOutcome, String> {
 /// Query nodejs.org for the newest LTS release; returns the bare version string, e.g. `v22.11.0`.
 async fn fetch_latest_node_lts() -> Option<String> {
     let output = match tauri::async_runtime::spawn_blocking(|| {
-        Command::new("curl")
-            .args(["-fsSL", "https://nodejs.org/dist/index.json"])
-            .output()
+        Command::new("curl").args(["-fsSL", "https://nodejs.org/dist/index.json"]).output()
     })
     .await
     {
@@ -249,14 +221,10 @@ async fn fetch_latest_node_lts() -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
     let array = value.as_array()?;
     for entry in array {
-        let is_lts = entry
-            .get("lts")
-            .map(|field| !field.is_null() && !field.as_bool().unwrap_or(false))
-            .unwrap_or(false);
-        if is_lts {
-            if let Some(version) = entry.get("version").and_then(serde_json::Value::as_str) {
-                return Some(version.to_string());
-            }
+        let is_lts =
+            entry.get("lts").map(|field| !field.is_null() && !field.as_bool().unwrap_or(false)).unwrap_or(false);
+        if is_lts && let Some(version) = entry.get("version").and_then(serde_json::Value::as_str) {
+            return Some(version.to_string());
         }
     }
     None

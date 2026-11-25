@@ -30,7 +30,7 @@ function read(): string {
 }
 
 /** The custom display name, or "" when the default name should be used. */
-export function getCompanyModelDisplayName(): string {
+function getCompanyModelDisplayName(): string {
   return read()
 }
 
@@ -54,7 +54,7 @@ export function setCompanyModelDisplayName(name: string): void {
   window.dispatchEvent(new CustomEvent("alwith:company-model-display-name-changed", { detail: next }))
 }
 
-export function subscribeCompanyModelDisplayName(listener: () => void): () => void {
+function subscribeCompanyModelDisplayName(listener: () => void): () => void {
   listeners.add(listener)
   // 设置页与聊天页可能运行在不同的 Tauri webview。localStorage 的 storage 事件是
   // 跨 webview 同源同步的唯一可靠通知；之前只通知当前 webview，所以设置里改名后

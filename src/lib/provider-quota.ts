@@ -17,13 +17,13 @@
 import { invoke } from "@tauri-apps/api/core"
 
 /** `ok` is the only state whose figures are known to be live and complete. */
-export type ProviderQuotaStatus = "ok" | "unsupported" | "console" | "unauthorized" | "unreachable" | "error"
+type ProviderQuotaStatus = "ok" | "unsupported" | "console" | "unauthorized" | "unreachable" | "error"
 
 /** `usd` is money; the rest are counters the vendor publishes in its own unit. */
-export type ProviderQuotaUnit = "usd" | "credits" | "requests" | "tokens"
+type ProviderQuotaUnit = "usd" | "credits" | "requests" | "tokens"
 
 /** The counter units that are not money — the ones rendered as "remaining N <unit>". */
-export type QuotaCountUnit = Exclude<ProviderQuotaUnit, "usd">
+type QuotaCountUnit = Exclude<ProviderQuotaUnit, "usd">
 
 /**
  * One provider's quota window. Every optional field is genuinely optional: vendors differ in what
@@ -146,7 +146,7 @@ export function formatQuotaClock(ms: number): string {
 }
 
 /** The figure the row prints, already reduced to the two shapes it can draw. */
-export type QuotaFigure =
+type QuotaFigure =
   | { kind: "usd"; remaining: number; limit: number | null }
   | { kind: "count"; remaining: number; unit: QuotaCountUnit }
 

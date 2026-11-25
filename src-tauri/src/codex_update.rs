@@ -58,10 +58,7 @@ pub(crate) async fn http_download(url: &str, path: &Path) -> Result<(), String> 
 
 pub(crate) fn version_newer(latest: &str, current: &str) -> bool {
     let parse = |text: &str| -> Vec<u64> {
-        text.trim_start_matches('v')
-            .split('.')
-            .map(|part| part.parse::<u64>().unwrap_or(0))
-            .collect()
+        text.trim_start_matches('v').split('.').map(|part| part.parse::<u64>().unwrap_or(0)).collect()
     };
     parse(latest) > parse(current)
 }

@@ -15,8 +15,8 @@
 
 use std::sync::mpsc;
 
-use tauri::{AppHandle, Manager};
 use tauri::window::Color;
+use tauri::{AppHandle, Manager};
 
 /// 与前端 `appearance-mode.ts` 的三个取值一一对应。
 const LIQUID_GLASS: &str = "liquid-glass";
@@ -63,12 +63,8 @@ pub async fn appearance_effect(app: AppHandle, mode: String) -> Result<Appearanc
     // 材质要**同时**挂到所有应用窗口上。此前只处理 "main"，于是设置窗口里拖透明度时，
     // 设置页自己让出了 alpha 却没有材质（看起来像一块透底），而主窗口因为拿不到材质也
     // 看不出效果 —— 用户看到的就是「透明度只对设置页有效」。
-    let others: Vec<tauri::WebviewWindow> = app
-        .webview_windows()
-        .into_iter()
-        .filter(|(label, _)| label != "main")
-        .map(|(_, window)| window)
-        .collect();
+    let others: Vec<tauri::WebviewWindow> =
+        app.webview_windows().into_iter().filter(|(label, _)| label != "main").map(|(_, window)| window).collect();
     app.run_on_main_thread(move || {
         for window in &others {
             let _ = apply(window, &mode_for_task);
@@ -85,7 +81,7 @@ pub async fn appearance_effect(app: AppHandle, mode: String) -> Result<Appearanc
 
 #[cfg(target_os = "macos")]
 fn apply(window: &tauri::WebviewWindow, mode: &str) -> AppearanceEffect {
-    use window_vibrancy::{apply_vibrancy, clear_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+    use window_vibrancy::{NSVisualEffectMaterial, NSVisualEffectState, apply_vibrancy, clear_vibrancy};
 
     match mode {
         SOLID => {
@@ -110,16 +106,21 @@ fn apply(window: &tauri::WebviewWindow, mode: &str) -> AppearanceEffect {
             // macOS 26+: 真·Liquid Glass。
             match window_vibrancy::apply_liquid_glass(
                 window,
-                window_vibrancy::LiquidGlassOptions::default().radius(0.0)
+                window_vibrancy::LiquidGlassOptions::default().radius(0.0),
             ) {
                 Ok(()) => AppearanceEffect::done(mode, "liquidGlass", None),
                 Err(error) => {
                     // 26 以下没有玻璃层，退到同族的 vibrancy 材质；失败原因如实带回前端。
-                    match apply_vibrancy(window, NSVisualEffectMaterial::UnderWindowBackground, Some(NSVisualEffectState::Active), None) {
+                    match apply_vibrancy(
+                        window,
+                        NSVisualEffectMaterial::UnderWindowBackground,
+                        Some(NSVisualEffectState::Active),
+                        None,
+                    ) {
                         Ok(()) => AppearanceEffect::done(
                             mode,
                             "vibrancy",
-                            Some(format!("此系统没有 Liquid Glass（{error}），已退回毛玻璃材质"))
+                            Some(format!("此系统没有 Liquid Glass（{error}），已退回毛玻璃材质")),
                         ),
                         Err(fallback) => AppearanceEffect::refused(mode, format!("系统不支持窗口材质: {fallback}")),
                     }

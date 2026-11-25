@@ -102,20 +102,17 @@ pub fn init(app: &tauri::AppHandle) {
 
 /// The current table. Empty until `init` ran, so a bridge thread can never block on disk.
 pub fn list() -> Vec<ExternalAlias> {
-    cache()
-        .read()
-        .map(|guard| guard.clone().unwrap_or_default())
-        .unwrap_or_default()
+    cache().read().map(|guard| guard.clone().unwrap_or_default()).unwrap_or_default()
 }
 
 /// Reads the cache, initialising from disk on first use — the bridge may serve a request before
 /// anything else asked for the list.
 #[allow(dead_code)] // 没有 UI 命令调用它了；保留给未来重新接回设置页时直接用。
 fn list_ready(app: &tauri::AppHandle) -> Vec<ExternalAlias> {
-    if let Ok(guard) = cache().read() {
-        if let Some(aliases) = guard.as_ref() {
-            return aliases.clone();
-        }
+    if let Ok(guard) = cache().read()
+        && let Some(aliases) = guard.as_ref()
+    {
+        return aliases.clone();
     }
     init(app);
     list()
@@ -131,10 +128,7 @@ pub fn resolve(selection: &str) -> Option<String> {
 }
 
 fn resolve_in(aliases: &[ExternalAlias], selection: &str) -> Option<String> {
-    aliases
-        .iter()
-        .find(|alias| alias.id == selection)
-        .map(|alias| alias.target.clone())
+    aliases.iter().find(|alias| alias.id == selection).map(|alias| alias.target.clone())
 }
 
 /// Trims and rejects an edited table. Returns the normalized table so what is stored is exactly
@@ -159,11 +153,7 @@ fn validate(aliases: &[ExternalAlias]) -> Result<Vec<ExternalAlias>, String> {
             return Err(format!("外部模型别名「{id}」还没有选择实际调用的模型。"));
         }
         let name = alias.name.trim().to_string();
-        normalized.push(ExternalAlias {
-            name: if name.is_empty() { id.clone() } else { name },
-            id,
-            target,
-        });
+        normalized.push(ExternalAlias { name: if name.is_empty() { id.clone() } else { name }, id, target });
     }
     Ok(normalized)
 }
@@ -176,9 +166,7 @@ pub fn model_list_json() -> Vec<u8> {
 fn model_list_json_for(aliases: &[ExternalAlias]) -> Vec<u8> {
     let data: Vec<serde_json::Value> = aliases
         .iter()
-        .map(|alias| {
-            serde_json::json!({"id": alias.id, "object": "model", "owned_by": "alwith"})
-        })
+        .map(|alias| serde_json::json!({"id": alias.id, "object": "model", "owned_by": "alwith"}))
         .collect();
     let payload = serde_json::json!({"object": "list", "data": data});
     // The shape is built from plain strings, so serialisation cannot fail; the fallback keeps the
@@ -222,12 +210,13 @@ fn percent_decode(input: &str) -> String {
     let mut decoded: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut index = 0usize;
     while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let (Some(high), Some(low)) = (hex_value(bytes[index + 1]), hex_value(bytes[index + 2])) {
-                decoded.push(high * 16 + low);
-                index += 3;
-                continue;
-            }
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) = (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+        {
+            decoded.push(high * 16 + low);
+            index += 3;
+            continue;
         }
         decoded.push(bytes[index]);
         index += 1;
@@ -241,11 +230,7 @@ mod tests {
     use super::*;
 
     fn alias(id: &str, name: &str, target: &str) -> ExternalAlias {
-        ExternalAlias {
-            id: id.to_string(),
-            name: name.to_string(),
-            target: target.to_string(),
-        }
+        ExternalAlias { id: id.to_string(), name: name.to_string(), target: target.to_string() }
     }
 
     #[test]
@@ -254,14 +239,8 @@ mod tests {
             alias("fast", "Fast", "gateway:custom-abc:claude%2Fopus"),
             alias("Slow-Model", "Slow", "openrouter/anthropic/claude-sonnet-4"),
         ];
-        assert_eq!(
-            resolve_in(&table, "fast").as_deref(),
-            Some("gateway:custom-abc:claude%2Fopus")
-        );
-        assert_eq!(
-            resolve_in(&table, "Slow-Model").as_deref(),
-            Some("openrouter/anthropic/claude-sonnet-4")
-        );
+        assert_eq!(resolve_in(&table, "fast").as_deref(), Some("gateway:custom-abc:claude%2Fopus"));
+        assert_eq!(resolve_in(&table, "Slow-Model").as_deref(), Some("openrouter/anthropic/claude-sonnet-4"));
         // A real model name, a different case and a prefix must all fall through untouched.
         assert_eq!(resolve_in(&table, "slow-model"), None);
         assert_eq!(resolve_in(&table, "faster"), None);
@@ -270,10 +249,8 @@ mod tests {
 
     #[test]
     fn a_duplicate_id_is_refused_with_a_readable_reason() {
-        let refused = validate(&[
-            alias("fast", "Fast", "gateway:a:m"),
-            alias(" fast ", "Fast again", "gateway:a:other"),
-        ]);
+        let refused =
+            validate(&[alias("fast", "Fast", "gateway:a:m"), alias(" fast ", "Fast again", "gateway:a:other")]);
         let error = refused.expect_err("a repeated id must be refused");
         assert!(error.contains("fast"), "the reason names the id: {error}");
 
@@ -300,10 +277,7 @@ mod tests {
     fn a_gateway_target_becomes_the_routed_name_the_bridge_splits() {
         // The model part keeps its decoded slash: `forward_routed` splits on the *first* `/`, so
         // `custom-abc/claude/opus` is gateway `custom-abc`, model `claude/opus`.
-        assert_eq!(
-            routed_target("gateway:custom-abc:claude%2Fopus"),
-            "custom-abc/claude/opus"
-        );
+        assert_eq!(routed_target("gateway:custom-abc:claude%2Fopus"), "custom-abc/claude/opus");
         // Extra colons in the model survive because only the first two separators are cut.
         assert_eq!(
             routed_target("gateway:openrouter:inclusionai%2Fling-1t:free"),
@@ -328,18 +302,13 @@ mod tests {
 
     #[test]
     fn an_empty_table_lists_no_models() {
-        assert_eq!(
-            String::from_utf8(model_list_json_for(&[])).unwrap(),
-            r#"{"object":"list","data":[]}"#
-        );
+        assert_eq!(String::from_utf8(model_list_json_for(&[])).unwrap(), r#"{"object":"list","data":[]}"#);
     }
 
     #[test]
     fn the_model_list_exposes_alias_ids_and_never_the_target() {
-        let json = String::from_utf8(model_list_json_for(&[
-            alias("fast", "Fast", "gateway:custom-abc:claude%2Fopus"),
-        ]))
-        .unwrap();
+        let json = String::from_utf8(model_list_json_for(&[alias("fast", "Fast", "gateway:custom-abc:claude%2Fopus")]))
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["object"], "list");
         assert_eq!(parsed["data"][0]["id"], "fast");

@@ -50,7 +50,7 @@ export async function resolvePreviewResource(
  * the rail's button expands, the drawer's header button collapses. Structural selectors are used on
  * purpose: the buttons' accessible labels are localized by the module.
  */
-export function collapseCommentColumn(root: ParentNode = document): boolean {
+function collapseCommentColumn(root: ParentNode = document): boolean {
   const drawer = root.querySelector('[data-testid="comment-drawer"]')
   if (drawer === null) return false
   const collapse = drawer.querySelector(":scope > div:first-child > button:first-child")

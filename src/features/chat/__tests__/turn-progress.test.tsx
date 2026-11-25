@@ -295,7 +295,7 @@ test("picking another model mid-turn stops the stalled model's amber row", async
   const at = Date.now() - 45_000
   overload.notice = noticeFor("gpt-6.1-sol", "turn-model-pending", at)
   const { client } = await import("@/lib/client")
-  const pending = vi.spyOn(client, "pendingModelFor").mockReturnValue("deepseek-v4-pro")
+  client.store.setState({ pendingModels: { "turn-model-pending": "deepseek-v4-pro" } })
   try {
     const view = render(
       <TurnProgressBar
@@ -303,8 +303,10 @@ test("picking another model mid-turn stops the stalled model's amber row", async
       />
     )
     expect(view.container.textContent).not.toContain("过载")
+    expect(view.container.textContent).not.toContain("下一轮")
+    expect(view.container.querySelector("[data-turn-state]")?.getAttribute("title")).not.toContain("下一轮")
   } finally {
-    pending.mockRestore()
+    act(() => client.store.setState({ pendingModels: {} }))
     overload.notice = null
   }
 })
@@ -435,4 +437,3 @@ test("turning the switch off leaves the manual nudge as the only way to push a t
     act(() => setAutoNudgeEnabled(true))
   }
 })
-

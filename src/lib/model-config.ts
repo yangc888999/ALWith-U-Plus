@@ -56,10 +56,10 @@ export type ModelCatalogStatus = "ready" | "partial" | "pending" | "unavailable"
  * `unknown` is the honest answer whenever the catalog behind it cannot be trusted, and it is the
  * only status a non-authoritative surface may report.
  */
-export type ModelAvailability = "available" | "withdrawn" | "unknown" | "unsupported"
+type ModelAvailability = "available" | "withdrawn" | "unknown" | "unsupported"
 
 /** Where a surface's model list came from. Kept for diagnostics only; it no longer crops rows. */
-export type ModelConfigSourceKind = "session" | "bundled" | "saved" | "none"
+type ModelConfigSourceKind = "session" | "bundled" | "saved" | "none"
 
 /**
  * The engine's GPT group as a surface publishes it.

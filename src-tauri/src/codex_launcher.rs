@@ -55,10 +55,8 @@ fn catalog_override(path: Option<&str>) -> Option<String> {
 }
 
 fn router_overrides(base: Option<&str>, token: Option<&str>) -> Vec<String> {
-    let mut overrides = vec![
-        "model_provider=\"alwith\"".to_string(),
-        "model_providers.alwith.name=\"ALWith Router\"".to_string(),
-    ];
+    let mut overrides =
+        vec!["model_provider=\"alwith\"".to_string(), "model_providers.alwith.name=\"ALWith Router\"".to_string()];
     if let Some(base) = base {
         overrides.push(format!("model_providers.alwith.base_url=\"{}\"", escape_toml(base)));
     }
@@ -295,7 +293,10 @@ mod tests {
         // ignored. Quote the path so spaces survive TOML parsing.
         assert_eq!(
             catalog_override(Some("/Users/x/Library/Application Support/ai.alwith.u/model-catalogs/merged.json")),
-            Some("model_catalog_json=\"/Users/x/Library/Application Support/ai.alwith.u/model-catalogs/merged.json\"".into())
+            Some(
+                "model_catalog_json=\"/Users/x/Library/Application Support/ai.alwith.u/model-catalogs/merged.json\""
+                    .into()
+            )
         );
         assert_eq!(catalog_override(Some("  ")), None);
         assert_eq!(catalog_override(None), None);

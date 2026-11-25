@@ -39,10 +39,10 @@ fn load_company_model_reasoning(directory: &Path) {
     let path = directory.join("company-model.json");
     let Ok(bytes) = std::fs::read(&path) else { return };
     let Ok(value) = serde_json::from_slice::<Value>(&bytes) else { return };
-    if let Some(level) = value.get("reasoningLevel").and_then(|level| level.as_str()) {
-        if COMPANY_REASONING_LEVELS.contains(&level) {
-            *COMPANY_MODEL_REASONING.lock().unwrap() = Some(level.to_string());
-        }
+    if let Some(level) = value.get("reasoningLevel").and_then(|level| level.as_str())
+        && COMPANY_REASONING_LEVELS.contains(&level)
+    {
+        *COMPANY_MODEL_REASONING.lock().unwrap() = Some(level.to_string());
     }
 }
 
@@ -282,10 +282,10 @@ impl Providers {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Saved::default(),
             Err(error) => return Err(error.into()),
         };
-        if close_deepseek_by_default(&mut saved) {
-            if let Err(error) = persist(&path, &saved) {
-                log::warn!("Provider store: could not persist the DeepSeek default close: {error}");
-            }
+        if close_deepseek_by_default(&mut saved)
+            && let Err(error) = persist(&path, &saved)
+        {
+            log::warn!("Provider store: could not persist the DeepSeek default close: {error}");
         }
         // 引擎目录是 GPT 模型的唯一真源，先同步再谈别的：`prepare_merged_catalog` 紧随其后，
         // 它写出的 merged.json 是引擎与四处选择器共用的那份清单。顺序颠倒会让新模型晚一个
@@ -431,8 +431,7 @@ fn definition(id: &str) -> Result<Value, String> {
 /// Effective models for a built-in provider: the bundled Codex catalog enriched with any user
 /// overrides. The model picker list and the thread `model_catalog_json` both derive from this.
 fn built_in_models(
-    resource_dir: &Path,
-    overrides: &BTreeMap<String, Vec<CustomModel>>,
+    resource_dir: &Path, overrides: &BTreeMap<String, Vec<CustomModel>>,
 ) -> BTreeMap<String, Vec<CustomModel>> {
     catalog()
         .iter()
@@ -535,19 +534,10 @@ fn normalize_base_url(value: &str) -> Result<String, String> {
     // `/chat/completions/responses` and 404 on every turn. This is the last shared checkpoint for
     // built-in providers, custom providers and model discovery alike, so strip it here as well as
     // in the settings UI (which only echoes the cleaned value back into its own input).
-    const ENDPOINTS: [&str; 5] = [
-        "/chat/completions",
-        "/responses",
-        "/completions",
-        "/models",
-        "/embeddings",
-    ];
+    const ENDPOINTS: [&str; 5] = ["/chat/completions", "/responses", "/completions", "/models", "/embeddings"];
     loop {
         let lowered = path.to_ascii_lowercase();
-        let matched = ENDPOINTS
-            .iter()
-            .find(|candidate| lowered.ends_with(**candidate))
-            .copied();
+        let matched = ENDPOINTS.iter().find(|candidate| lowered.ends_with(**candidate)).copied();
         match matched {
             Some(suffix) => {
                 path.truncate(path.len() - suffix.len());
@@ -728,10 +718,7 @@ fn remove_custom(saved: &Saved, id: &str, expected_revision: u64) -> Result<Save
 }
 
 fn update_built_in_models(
-    saved: &Saved,
-    id: &str,
-    models: Vec<CustomModel>,
-    expected_revision: u64,
+    saved: &Saved, id: &str, models: Vec<CustomModel>, expected_revision: u64,
 ) -> Result<Saved, String> {
     if saved.revision != expected_revision {
         return Err("Provider settings changed in another window; reload and retry".into());
@@ -898,8 +885,7 @@ pub async fn providers_remove_custom(
 
 #[tauri3_specta::command]
 pub async fn providers_save_built_in_models(
-    app: AppHandle, state: State<'_, Providers>, provider_id: String, models: Vec<CustomModel>,
-    expected_revision: u64,
+    app: AppHandle, state: State<'_, Providers>, provider_id: String, models: Vec<CustomModel>, expected_revision: u64,
 ) -> Result<Snapshot, String> {
     let runtime = app.state::<crate::runtime::RuntimeState>();
     let _admission = runtime.admission.lock().await;
@@ -1005,10 +991,7 @@ fn desired_providers(saved: &Saved) -> BTreeMap<String, AppliedProvider> {
             (id.clone(), AppliedProvider::BuiltIn(key.clone(), saved.built_in_model_overrides.get(id).cloned()))
         })
         .chain(
-            saved
-                .custom_providers
-                .iter()
-                .map(|(id, provider)| (id.clone(), AppliedProvider::Custom(provider.clone()))),
+            saved.custom_providers.iter().map(|(id, provider)| (id.clone(), AppliedProvider::Custom(provider.clone()))),
         )
         .collect()
 }
@@ -1189,10 +1172,11 @@ async fn reconcile_target(
         Ok(())
     }.await;
     inner.error = outcome.err().or_else(|| (!failures.is_empty()).then(|| failures.join("; ")));
-    if inner.error.is_none() && !pending {
-        if let Err(error) = write_provider_config(&provider_blocks) {
-            inner.error = Some(error);
-        }
+    if inner.error.is_none()
+        && !pending
+        && let Err(error) = write_provider_config(&provider_blocks)
+    {
+        inner.error = Some(error);
     }
     if inner.error.is_none() && !pending {
         inner.applied_revision = Some(inner.saved.revision);
@@ -1252,10 +1236,10 @@ fn router_provider_block(router_base: &str) -> String {
 }
 
 fn codex_home_dir() -> std::path::PathBuf {
-    if let Ok(home) = std::env::var("CODEX_HOME") {
-        if !home.trim().is_empty() {
-            return home.into();
-        }
+    if let Ok(home) = std::env::var("CODEX_HOME")
+        && !home.trim().is_empty()
+    {
+        return home.into();
     }
     std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".codex")
 }
@@ -1331,10 +1315,7 @@ fn render_managed_config(contents: &str, blocks: &[String], router_base: Option<
             }
             seen_section || !trimmed.starts_with("model_provider")
         });
-        let at = kept
-            .iter()
-            .position(|line| line.trim_start().starts_with('['))
-            .unwrap_or(kept.len());
+        let at = kept.iter().position(|line| line.trim_start().starts_with('[')).unwrap_or(kept.len());
         kept.insert(at, format!("model_provider = \"{}\"", crate::bridge::ROUTER_ID));
     }
     if !blocks.is_empty() {
@@ -1422,11 +1403,8 @@ fn configured_context_window(saved: &Saved) -> Option<u64> {
 
 /// Pure renderer, so a rewrite can be tested without touching the user's `CODEX_HOME`.
 fn render_context_window_config(contents: &str, desired: Option<u64>) -> String {
-    let mut kept: Vec<String> = contents
-        .lines()
-        .filter(|line| !line.contains(CONTEXT_WINDOW_MARKER))
-        .map(str::to_string)
-        .collect();
+    let mut kept: Vec<String> =
+        contents.lines().filter(|line| !line.contains(CONTEXT_WINDOW_MARKER)).map(str::to_string).collect();
     if let Some(window) = desired {
         // Put it at the very top. `write_provider_config` drops everything from its own
         // `# managed by ALWith` marker to the next table, so a key inserted just above a
@@ -1446,9 +1424,7 @@ fn render_context_window_config(contents: &str, desired: Option<u64>) -> String 
 /// is sent verbatim on every native turn: the backend answers 400 `invalid_value` and Codex reports
 /// a dead conversation with no hint that the local config is at fault. Only values outside this set
 /// are removed; a legitimate choice (including a model's own extended ladder) is left alone.
-const REASONING_EFFORTS: &[&str] = &[
-    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent",
-];
+const REASONING_EFFORTS: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent"];
 
 /// Pure renderer: drop just the top-level `model_reasoning_effort` line when its value is illegal.
 /// Removing (rather than substituting) lets Codex fall back to the selected model's own default,
@@ -1464,12 +1440,7 @@ fn render_reasoning_effort_config(contents: &str) -> String {
             let Some(value) = rest.trim_start().strip_prefix('=') else {
                 return true;
             };
-            let value = value
-                .split('#')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .trim_matches(|c| c == '"' || c == '\'');
+            let value = value.split('#').next().unwrap_or("").trim().trim_matches(|c| c == '"' || c == '\'');
             REASONING_EFFORTS.contains(&value)
         })
         .map(str::to_string)
@@ -1524,17 +1495,15 @@ fn render_router_provider_config(contents: &str, router_base: Option<String>) ->
         }
         let is_key = !trimmed.starts_with('#') && trimmed.split_once('=').is_some();
         if in_router {
-            if is_key {
-                if let Some((key, _)) = trimmed.split_once('=') {
-                    router_keys.insert(key.trim().to_string());
-                }
+            if is_key && let Some((key, _)) = trimmed.split_once('=') {
+                router_keys.insert(key.trim().to_string());
             }
-            if trimmed.starts_with("base_url") {
-                if let Some(base) = router_base.as_deref() {
-                    kept.push(format!("base_url = \"{}\"", escape_toml(base)));
-                    router_end = Some(kept.len());
-                    continue;
-                }
+            if trimmed.starts_with("base_url")
+                && let Some(base) = router_base.as_deref()
+            {
+                kept.push(format!("base_url = \"{}\"", escape_toml(base)));
+                router_end = Some(kept.len());
+                continue;
             }
         }
         kept.push(line.to_string());
@@ -1623,10 +1592,7 @@ fn sync_managed_config(saved: &Saved) -> Result<(), String> {
     if repaired != contents {
         log::warn!("Config: removed an invalid model_reasoning_effort from config.toml");
     }
-    log::info!(
-        "Context window: config.toml model_context_window={:?}",
-        configured_context_window(saved)
-    );
+    log::info!("Context window: config.toml model_context_window={:?}", configured_context_window(saved));
     write_config_file(&path, &out)
 }
 
@@ -1788,10 +1754,7 @@ fn engine_model_from(model: &Value) -> Option<EngineModel> {
         label: engine_display_label(model.get("display_name").and_then(Value::as_str).unwrap_or(&slug)),
         slug,
         efforts,
-        default_effort: model
-            .get("default_reasoning_level")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        default_effort: model.get("default_reasoning_level").and_then(Value::as_str).map(str::to_string),
         context_window: model.get("context_window").and_then(Value::as_u64),
         speed_tiers: model
             .get("additional_speed_tiers")
@@ -1799,14 +1762,8 @@ fn engine_model_from(model: &Value) -> Option<EngineModel> {
             .map(|tiers| tiers.iter().filter_map(Value::as_str).map(str::to_string).collect())
             .unwrap_or_default(),
         service_tiers: model.get("service_tiers").cloned().unwrap_or(Value::Null),
-        multi_agent_effort: model
-            .get("multi_agent_reasoning_effort")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        multi_agent_version: model
-            .get("multi_agent_version")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        multi_agent_effort: model.get("multi_agent_reasoning_effort").and_then(Value::as_str).map(str::to_string),
+        multi_agent_version: model.get("multi_agent_version").and_then(Value::as_str).map(str::to_string),
     })
 }
 
@@ -1826,9 +1783,10 @@ fn refresh_engine_catalog(directory: &Path) -> Vec<EngineModel> {
         let output = std::process::Command::new(crate::runtime::bundled_codex_path())
             .args(["debug", "models", "--bundled"])
             .output();
-        let _ = sender.send(output.ok().and_then(|result| {
-            result.status.success().then(|| String::from_utf8_lossy(&result.stdout).to_string())
-        }));
+        let _ =
+            sender.send(output.ok().and_then(|result| {
+                result.status.success().then(|| String::from_utf8_lossy(&result.stdout).to_string())
+            }));
     });
     let Some(Some(raw)) = receiver.recv_timeout(Duration::from_secs(10)).ok() else {
         log::warn!("engine catalog: {} did not answer; keeping the previous snapshot", ENGINE_CATALOG_LABEL);
@@ -1842,12 +1800,11 @@ fn refresh_engine_catalog(directory: &Path) -> Vec<EngineModel> {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(bytes) = serde_json::to_vec(&parsed) {
-        if std::fs::read(&path).ok().as_deref() != Some(bytes.as_slice()) {
-            if let Err(error) = std::fs::write(&path, &bytes) {
-                log::warn!("engine catalog: could not write {}: {error}", path.display());
-            }
-        }
+    if let Ok(bytes) = serde_json::to_vec(&parsed)
+        && std::fs::read(&path).ok().as_deref() != Some(bytes.as_slice())
+        && let Err(error) = std::fs::write(&path, &bytes)
+    {
+        log::warn!("engine catalog: could not write {}: {error}", path.display());
     }
     engine_catalog(directory)
 }
@@ -2028,10 +1985,9 @@ fn custom_catalog(provider: &CustomProvider) -> Result<Value, String> {
                     .map(|(inferred, _)| inferred.iter().map(|level| level.to_string()).collect())
                     .unwrap_or_default(),
             };
-            let default_level = model
-                .default_reasoning_level
-                .clone()
-                .or_else(|| inferred_reasoning_levels(&model.api_id, &model.label).map(|(_, default)| default.to_string()));
+            let default_level = model.default_reasoning_level.clone().or_else(|| {
+                inferred_reasoning_levels(&model.api_id, &model.label).map(|(_, default)| default.to_string())
+            });
             object.insert(
                 "supported_reasoning_levels".into(),
                 json!(
@@ -2138,12 +2094,11 @@ fn tune_managed_catalog(app: &AppHandle) -> bool {
     if reasoned == 0 {
         return false;
     }
-    if let Ok(next) = serde_json::to_vec_pretty(&catalog) {
-        if next != bytes {
-            if let Err(error) = std::fs::write(&path, &next) {
-                log::warn!("managed: could not tune shared catalog: {error}");
-            }
-        }
+    if let Ok(next) = serde_json::to_vec_pretty(&catalog)
+        && next != bytes
+        && let Err(error) = std::fs::write(&path, &next)
+    {
+        log::warn!("managed: could not tune shared catalog: {error}");
     }
     true
 }
@@ -2175,12 +2130,12 @@ pub async fn set_company_model_reasoning(app: AppHandle, level: Option<String>) 
     {
         let state = app.state::<Providers>();
         let mut inner = state.inner.lock().await;
-        if let Some(cache) = inner.saved.managed.as_mut() {
-            if let Some(provider) = cache.provider.as_mut() {
-                for model in &mut provider.models {
-                    model.reasoning_levels = Some(COMPANY_REASONING_LEVELS.iter().map(|level| level.to_string()).collect());
-                    model.default_reasoning_level = Some(normalized.clone());
-                }
+        if let Some(cache) = inner.saved.managed.as_mut()
+            && let Some(provider) = cache.provider.as_mut()
+        {
+            for model in &mut provider.models {
+                model.reasoning_levels = Some(COMPANY_REASONING_LEVELS.iter().map(|level| level.to_string()).collect());
+                model.default_reasoning_level = Some(normalized.clone());
             }
         }
         let _ = inner.snapshot().emit(&app);
@@ -2328,10 +2283,8 @@ fn merged_catalog(app_data: &std::path::Path) -> Option<Value> {
     // provider state here because this function only has the app-data path, not `Providers.inner`.
     let explicit_defaults = explicit_gpt_defaults(app_data);
     for entry in entries.iter_mut() {
-        let preserve_default = entry
-            .get("slug")
-            .and_then(Value::as_str)
-            .is_some_and(|slug| explicit_defaults.contains(slug));
+        let preserve_default =
+            entry.get("slug").and_then(Value::as_str).is_some_and(|slug| explicit_defaults.contains(slug));
         apply_engine_metadata(entry, &engine, preserve_default);
         restore_native_speed_tiers(entry);
     }
@@ -2380,11 +2333,13 @@ fn apply_engine_metadata(entry: &mut Value, engine: &[EngineModel], preserve_def
     if !model.efforts.is_empty() {
         object.insert(
             "supported_reasoning_levels".into(),
-            json!(model
-                .efforts
-                .iter()
-                .map(|effort| json!({ "effort": effort, "description": effort_description(effort) }))
-                .collect::<Vec<_>>()),
+            json!(
+                model
+                    .efforts
+                    .iter()
+                    .map(|effort| json!({ "effort": effort, "description": effort_description(effort) }))
+                    .collect::<Vec<_>>()
+            ),
         );
     }
     if let Some(default) = &model.default_effort {
@@ -2416,11 +2371,11 @@ fn apply_engine_metadata(entry: &mut Value, engine: &[EngineModel], preserve_def
     } else {
         object.remove("multi_agent_version");
     }
-    if object.get("context_window").is_none() {
-        if let Some(window) = model.context_window {
-            object.insert("context_window".into(), json!(window));
-            object.insert("max_context_window".into(), json!(window));
-        }
+    if object.get("context_window").is_none()
+        && let Some(window) = model.context_window
+    {
+        object.insert("context_window".into(), json!(window));
+        object.insert("max_context_window".into(), json!(window));
     }
 }
 
@@ -2437,7 +2392,8 @@ fn append_engine_models(entries: &mut Vec<Value>, engine: &[EngineModel], seen: 
             .iter()
             .find(|entry| entry.get("slug").and_then(Value::as_str).is_some_and(|slug| slug.starts_with("gpt-")))
             .cloned();
-        let Some(template) = family.or_else(|| Some(complete_catalog_entry(None))).filter(|entry| entry.is_object()) else {
+        let Some(template) = family.or_else(|| Some(complete_catalog_entry(None))).filter(|entry| entry.is_object())
+        else {
             continue;
         };
         let mut entry = template;
@@ -2486,8 +2442,7 @@ fn restore_native_speed_tiers(entry: &mut Value) {
 ///
 /// 来源是 `src-tauri/resources/alwith-bridge/alwith-model.py` 的 `NATIVE_MODELS` 与 bridge 的
 /// `/v1/models`（两者必须一致，由 `scripts/__tests__` 覆盖）。加模型时两处一起改。
-const BRIDGE_ONLY_GPT_MODELS: &[(&str, &str, u64)] =
-    &[("gpt-6.1-terra", "GPT · 6.1 Terra", 1_050_000)];
+const BRIDGE_ONLY_GPT_MODELS: &[(&str, &str, u64)] = &[("gpt-6.1-terra", "GPT · 6.1 Terra", 1_050_000)];
 
 /// The newest catalog file per provider prefix (`builtin-deepseek-<hash>.json` →
 /// `builtin-deepseek`) in a directory. Catalogs are content-addressed, so an edit leaves the old
@@ -2541,10 +2496,7 @@ pub fn start_managed_catalog_tuner(app: &AppHandle) {
 /// catalogs. Returns the absolute path for `model_catalog_json`, so the adapter threads the
 /// overridden Effort levels, context window, display name and slug instead of the bundled ones.
 fn write_built_in_catalog(
-    directory: &Path,
-    provider_id: &str,
-    overrides: &[CustomModel],
-    resource_dir: &Path,
+    directory: &Path, provider_id: &str, overrides: &[CustomModel], resource_dir: &Path,
 ) -> Result<PathBuf, String> {
     let provider = definition(provider_id)?;
     // Native providers (e.g. OpenAI) ship no bundled catalog file — their model list comes from the
@@ -2576,11 +2528,10 @@ fn write_built_in_catalog(
     let mut ordered: Vec<&CustomModel> = overrides.iter().filter(|model| model.is_enabled()).collect();
     ordered.sort_by(|a, b| a.api_id.cmp(&b.api_id));
     for (index, model) in ordered.iter().enumerate() {
-        let mut entry = entries.get(&model.api_id).cloned().unwrap_or_else(|| {
-            complete_catalog_entry(
-                bundled["models"].as_array().and_then(|models| models.first())
-            )
-        });
+        let mut entry = entries
+            .get(&model.api_id)
+            .cloned()
+            .unwrap_or_else(|| complete_catalog_entry(bundled["models"].as_array().and_then(|models| models.first())));
         {
             let object = entry.as_object_mut().ok_or("Invalid bundled model catalog")?;
             object.insert("slug".into(), json!(model.api_id));
@@ -2594,18 +2545,14 @@ fn write_built_in_catalog(
             object.remove("default_reasoning_level");
             object.remove("context_window");
             object.remove("max_context_window");
-            let levels: Vec<String> = model
-                .reasoning_levels
-                .clone()
-                .unwrap_or_else(|| {
-                    inferred_reasoning_levels(&model.api_id, &model.label)
-                        .map(|(inferred, _)| inferred.iter().map(|level| level.to_string()).collect())
-                        .unwrap_or_default()
-                });
-            let default_level = model
-                .default_reasoning_level
-                .clone()
-                .or_else(|| inferred_reasoning_levels(&model.api_id, &model.label).map(|(_, default)| default.to_string()));
+            let levels: Vec<String> = model.reasoning_levels.clone().unwrap_or_else(|| {
+                inferred_reasoning_levels(&model.api_id, &model.label)
+                    .map(|(inferred, _)| inferred.iter().map(|level| level.to_string()).collect())
+                    .unwrap_or_default()
+            });
+            let default_level = model.default_reasoning_level.clone().or_else(|| {
+                inferred_reasoning_levels(&model.api_id, &model.label).map(|(_, default)| default.to_string())
+            });
             object.insert(
                 "supported_reasoning_levels".into(),
                 json!(
@@ -2635,10 +2582,7 @@ fn write_built_in_catalog(
         restore_native_speed_tiers(&mut entry);
         entries.insert(model.api_id.clone(), entry);
     }
-    let models: Vec<Value> = ordered
-        .iter()
-        .map(|model| entries.get(&model.api_id).cloned().unwrap())
-        .collect();
+    let models: Vec<Value> = ordered.iter().map(|model| entries.get(&model.api_id).cloned().unwrap()).collect();
     let catalog = json!({ "models": models });
     write_catalog_file(directory, &format!("builtin-{provider_id}"), &catalog)
 }
@@ -2778,10 +2722,10 @@ async fn test_connection(config: TestConfig) -> TestResult {
         if let Ok(proxy) = reqwest::Proxy::all(proxy.trim()) {
             builder = builder.proxy(proxy);
         }
-    } else if let Some(proxy) = system_proxy() {
-        if let Ok(proxy) = reqwest::Proxy::all(proxy) {
-            builder = builder.proxy(proxy);
-        }
+    } else if let Some(proxy) = system_proxy()
+        && let Ok(proxy) = reqwest::Proxy::all(proxy)
+    {
+        builder = builder.proxy(proxy);
     }
     let client = match builder.build() {
         Ok(client) => client,
@@ -3171,7 +3115,8 @@ mod tests {
 
     #[test]
     fn macos_proxy_falls_back_to_http_and_ignores_disabled_proxy() {
-        let http_only = "<dictionary> {\n  HTTPEnable : 1\n  HTTPPort : 7890\n  HTTPProxy : 127.0.0.1\n  HTTPSEnable : 0\n}\n";
+        let http_only =
+            "<dictionary> {\n  HTTPEnable : 1\n  HTTPPort : 7890\n  HTTPProxy : 127.0.0.1\n  HTTPSEnable : 0\n}\n";
         assert_eq!(system_proxy_from_scutil(http_only).as_deref(), Some("http://127.0.0.1:7890"));
         let disabled = "<dictionary> {\n  HTTPEnable : 0\n  HTTPSEnable : 0\n}\n";
         assert_eq!(system_proxy_from_scutil(disabled), None);
@@ -3273,7 +3218,13 @@ mod tests {
         let closed = update(
             &saved,
             "deepseek".into(),
-            Some(Input { protocol: None, api_key: Some("sk-test".into()), region: None, base_url: None, disabled: None }),
+            Some(Input {
+                protocol: None,
+                api_key: Some("sk-test".into()),
+                region: None,
+                base_url: None,
+                disabled: None,
+            }),
             saved.revision,
         )
         .unwrap();
@@ -3282,7 +3233,13 @@ mod tests {
         let enabled = update(
             &saved,
             "deepseek".into(),
-            Some(Input { protocol: None, api_key: Some("sk-test".into()), region: None, base_url: None, disabled: Some(false) }),
+            Some(Input {
+                protocol: None,
+                api_key: Some("sk-test".into()),
+                region: None,
+                base_url: None,
+                disabled: Some(false),
+            }),
             saved.revision,
         )
         .unwrap();
@@ -3294,7 +3251,13 @@ mod tests {
         let kept = update(
             &existing,
             "deepseek".into(),
-            Some(Input { protocol: None, api_key: Some("sk-test".into()), region: None, base_url: None, disabled: None }),
+            Some(Input {
+                protocol: None,
+                api_key: Some("sk-test".into()),
+                region: None,
+                base_url: None,
+                disabled: None,
+            }),
             existing.revision,
         )
         .unwrap();
@@ -3304,10 +3267,7 @@ mod tests {
     #[test]
     fn base_urls_are_roots_not_concrete_endpoints() {
         // OpenRouter's quickstart base URL is already correct and must survive untouched.
-        assert_eq!(
-            normalize_base_url("  https://openrouter.ai/api/v1  ").unwrap(),
-            "https://openrouter.ai/api/v1"
-        );
+        assert_eq!(normalize_base_url("  https://openrouter.ai/api/v1  ").unwrap(), "https://openrouter.ai/api/v1");
         // A curl-example URL is the mistake users actually make; saving it verbatim produced
         // `/chat/completions/responses` on every turn.
         assert_eq!(
@@ -3318,10 +3278,7 @@ mod tests {
             normalize_base_url("https://openrouter.ai/api/v1/responses/").unwrap(),
             "https://openrouter.ai/api/v1"
         );
-        assert_eq!(
-            normalize_base_url("https://api.deepseek.com/").unwrap(),
-            "https://api.deepseek.com"
-        );
+        assert_eq!(normalize_base_url("https://api.deepseek.com/").unwrap(), "https://api.deepseek.com");
         // A prefix that happens to contain the word is not an endpoint.
         assert_eq!(
             normalize_base_url("https://example.com/v1/models-router").unwrap(),
@@ -3365,13 +3322,7 @@ mod tests {
     async fn reconcile_test(inner: &mut Inner, client: &RuntimeClient) -> Result<(), String> {
         // Reconciling a built-in provider reads its bundled catalog, so the test has to hand in the
         // real resource tree instead of a made-up root: "/resources" does not exist.
-        reconcile(
-            inner,
-            client,
-            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/resources")),
-            test_catalog_dir(),
-        )
-        .await
+        reconcile(inner, client, Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/resources")), test_catalog_dir()).await
     }
 
     #[test]
@@ -3389,19 +3340,9 @@ mod tests {
         for (label, api_id, levels, default) in [
             ("Qwen 3.8 Flash", "qwen3.8-flash", vec!["none", "low", "medium", "xhigh"], "xhigh"),
             // Qwen4 preview accepts none/low/medium/high/xhigh/max (verified 200) and defaults high.
-            (
-                "4 Max Preview",
-                "qwen4-max-preview",
-                vec!["none", "low", "medium", "high", "xhigh", "max"],
-                "high",
-            ),
+            ("4 Max Preview", "qwen4-max-preview", vec!["none", "low", "medium", "high", "xhigh", "max"], "high"),
             // 3.7 and earlier publish the full ladder; `none` disables thinking for real.
-            (
-                "Qwen 3.7 Max",
-                "qwen3.7-max",
-                vec!["none", "minimal", "low", "medium", "high", "xhigh", "max"],
-                "medium",
-            ),
+            ("Qwen 3.7 Max", "qwen3.7-max", vec!["none", "minimal", "low", "medium", "high", "xhigh", "max"], "medium"),
             ("Claude Opus", "claude-opus-5-5", vec!["low", "medium", "high", "max"], "medium"),
             ("Claude Sonnet", "claude-sonnet-5-5", vec!["low", "medium", "high", "max"], "medium"),
             // DeepSeek collapses medium/xhigh/ultra on its side, so the ladder stays short; the
@@ -3459,16 +3400,34 @@ mod tests {
         let saved = update(
             &Saved::default(),
             "qwen".into(),
-            Some(Input { protocol: None, api_key: Some("private-test-secret".into()), region: Some("intl".into()), base_url: None, disabled: None }),
+            Some(Input {
+                protocol: None,
+                api_key: Some("private-test-secret".into()),
+                region: Some("intl".into()),
+                base_url: None,
+                disabled: None,
+            }),
             0,
         )
         .unwrap();
-        let saved =
-            update(&saved, "qwen".into(), Some(Input { protocol: None, api_key: None, region: Some("cn".into()), base_url: None, disabled: None }), 1)
-                .unwrap();
+        let saved = update(
+            &saved,
+            "qwen".into(),
+            Some(Input { protocol: None, api_key: None, region: Some("cn".into()), base_url: None, disabled: None }),
+            1,
+        )
+        .unwrap();
         assert_eq!(saved.credentials["qwen"].api_key, "private-test-secret");
         assert_eq!(saved.credentials["qwen"].region.as_deref(), Some("cn"));
-        let inner = Inner { saved, applied: BTreeMap::new(), applied_revision: None, error: None, managed_error: None, resource_dir: PathBuf::from("/"), managed_active: false };
+        let inner = Inner {
+            saved,
+            applied: BTreeMap::new(),
+            applied_revision: None,
+            error: None,
+            managed_error: None,
+            resource_dir: PathBuf::from("/"),
+            managed_active: false,
+        };
         let public = serde_json::to_string(&inner.snapshot()).unwrap();
         assert!(!public.contains("private-test-secret"));
         assert!(!public.contains("apiKey"));
@@ -3479,7 +3438,13 @@ mod tests {
         let saved = update(
             &Saved::default(),
             "deepseek".into(),
-            Some(Input { protocol: None, api_key: Some("kept-secret".into()), region: None, base_url: None, disabled: None }),
+            Some(Input {
+                protocol: None,
+                api_key: Some("kept-secret".into()),
+                region: None,
+                base_url: None,
+                disabled: None,
+            }),
             0,
         )
         .unwrap();
@@ -3503,8 +3468,8 @@ mod tests {
             managed_active: false,
         };
         let snapshot = inner.snapshot();
-        assert_eq!(snapshot.providers["deepseek"].configured, false);
-        assert_eq!(snapshot.providers["deepseek"].disabled, true);
+        assert!(!snapshot.providers["deepseek"].configured);
+        assert!(snapshot.providers["deepseek"].disabled);
         assert!(!desired_providers(&inner.saved).contains_key("deepseek"));
 
         // Re-enable is the same flag the other way round; the key is still there.
@@ -3527,7 +3492,13 @@ mod tests {
             update(
                 &saved,
                 "qwen".into(),
-                Some(Input { protocol: None, api_key: Some("test".into()), region: Some("invalid".into()), base_url: None, disabled: None }),
+                Some(Input {
+                    protocol: None,
+                    api_key: Some("test".into()),
+                    region: Some("invalid".into()),
+                    base_url: None,
+                    disabled: None
+                }),
                 0
             )
             .is_err()
@@ -3572,7 +3543,8 @@ mod tests {
         let saved = update(
             &Saved::default(),
             "deepseek".into(),
-            Some(Input { protocol: None,
+            Some(Input {
+                protocol: None,
                 api_key: Some("private-test-secret".into()),
                 region: None,
                 base_url: Some("https://gateway.example.test/v1/".into()),
@@ -3584,7 +3556,16 @@ mod tests {
         assert_eq!(saved.credentials["deepseek"].base_url.as_deref(), Some("https://gateway.example.test/v1"));
         assert!(
             !serde_json::to_string(
-                &Inner { saved, applied: BTreeMap::new(), applied_revision: None, error: None, managed_error: None, resource_dir: PathBuf::from("/"), managed_active: false }.snapshot()
+                &Inner {
+                    saved,
+                    applied: BTreeMap::new(),
+                    applied_revision: None,
+                    error: None,
+                    managed_error: None,
+                    resource_dir: PathBuf::from("/"),
+                    managed_active: false
+                }
+                .snapshot()
             )
             .unwrap()
             .contains("private-test-secret")
@@ -3615,7 +3596,16 @@ mod tests {
         assert_eq!(provider.models[0].api_id, "model-a");
         assert!(
             !serde_json::to_string(
-                &Inner { saved, applied: BTreeMap::new(), applied_revision: None, error: None, managed_error: None, resource_dir: PathBuf::from("/"), managed_active: false }.snapshot()
+                &Inner {
+                    saved,
+                    applied: BTreeMap::new(),
+                    applied_revision: None,
+                    error: None,
+                    managed_error: None,
+                    resource_dir: PathBuf::from("/"),
+                    managed_active: false
+                }
+                .snapshot()
             )
             .unwrap()
             .contains("private-test-secret")
@@ -3780,8 +3770,15 @@ mod tests {
     async fn unchanged_catalog_acknowledges_revision_while_another_turn_runs() {
         use std::sync::atomic::AtomicBool;
         let (client, calls) = fake_runtime(Arc::new(AtomicBool::new(true)), Arc::new(AtomicBool::new(false)));
-        let mut inner =
-            Inner { saved: Saved::default(), applied: BTreeMap::new(), applied_revision: None, error: None, managed_error: None, resource_dir: PathBuf::from("/"), managed_active: false };
+        let mut inner = Inner {
+            saved: Saved::default(),
+            applied: BTreeMap::new(),
+            applied_revision: None,
+            error: None,
+            managed_error: None,
+            resource_dir: PathBuf::from("/"),
+            managed_active: false,
+        };
         reconcile_test(&mut inner, &client).await.unwrap();
         assert_eq!(inner.snapshot().status, "applied");
         assert!(calls.lock().unwrap().is_empty());
@@ -3801,7 +3798,13 @@ mod tests {
         let saved = update(
             &Saved::default(),
             "qwen".into(),
-            Some(Input { protocol: None, api_key: Some("private-test-secret".into()), region: Some("cn".into()), base_url: None, disabled: None }),
+            Some(Input {
+                protocol: None,
+                api_key: Some("private-test-secret".into()),
+                region: Some("cn".into()),
+                base_url: None,
+                disabled: None,
+            }),
             0,
         )
         .unwrap();
@@ -4019,7 +4022,15 @@ mod tests {
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
             Arc::new(std::sync::atomic::AtomicBool::new(false)),
         );
-        let mut inner = Inner { saved, applied: BTreeMap::new(), applied_revision: None, error: None, managed_error: None, resource_dir: PathBuf::from("/"), managed_active: false };
+        let mut inner = Inner {
+            saved,
+            applied: BTreeMap::new(),
+            applied_revision: None,
+            error: None,
+            managed_error: None,
+            resource_dir: PathBuf::from("/"),
+            managed_active: false,
+        };
         reconcile_test(&mut inner, &client).await.unwrap();
         {
             let recorded = calls.lock().unwrap();
@@ -4369,8 +4380,20 @@ mod tests {
         write_engine_catalog(
             root.path(),
             json!([
-                engine_row("gpt-6.2-sol", "GPT-6.2-Sol", &["low", "medium", "high", "xhigh", "max", "ultra"], "low", "list"),
-                engine_row("gpt-6.1-sol", "GPT-6.1-Sol", &["low", "medium", "high", "xhigh", "max", "ultra"], "low", "list"),
+                engine_row(
+                    "gpt-6.2-sol",
+                    "GPT-6.2-Sol",
+                    &["low", "medium", "high", "xhigh", "max", "ultra"],
+                    "low",
+                    "list"
+                ),
+                engine_row(
+                    "gpt-6.1-sol",
+                    "GPT-6.1-Sol",
+                    &["low", "medium", "high", "xhigh", "max", "ultra"],
+                    "low",
+                    "list"
+                ),
                 engine_row("gpt-daybreak-blue-latest", "Daybreak Blue", &["low", "high"], "low", "hide"),
             ]),
         );
@@ -4742,7 +4765,9 @@ name = "Qwen"
         // The pre-fix self-heal only stripped `model_provider` lines *above* the first table, so it
         // never cleared them. This asserts the router renderer now collapses every occurrence into a
         // single canonical line wherever it appears.
-        let mut bad = String::from("model_context_window = 1000000\n\n[projects.\"/Users/shouhouyangguang/Documents/YUP/dev\"]\n");
+        let mut bad = String::from(
+            "model_context_window = 1000000\n\n[projects.\"/Users/shouhouyangguang/Documents/YUP/dev\"]\n",
+        );
         for _ in 0..32 {
             bad.push_str("model_provider = \"alwith\"\n");
         }
@@ -4861,10 +4886,7 @@ base_url = "http://127.0.0.1:54936/alwith"
         assert!(healed.contains("base_url = \"http://127.0.0.1:60636/alwith\""), "{healed}");
         assert!(healed.contains("theme = \"dark\""), "{healed}");
         // Idempotent: a second launch writes nothing.
-        assert_eq!(
-            render_managed_config(&healed, &[], Some("http://127.0.0.1:60636/alwith".into())),
-            healed
-        );
+        assert_eq!(render_managed_config(&healed, &[], Some("http://127.0.0.1:60636/alwith".into())), healed);
     }
 }
 
@@ -5073,12 +5095,8 @@ mod merged_catalog_tests {
         std::fs::write(root.join("runtime-providers.json"), providers(true)).unwrap();
         assert!(explicit_gpt_defaults(root).contains("gpt-6.2-sol"), "the explicit marker is parsed");
         let direct = super::merged_catalog(root).expect("the direct catalog is built");
-        let direct_sol = direct["models"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|model| model["slug"] == "gpt-6.2-sol")
-            .unwrap();
+        let direct_sol =
+            direct["models"].as_array().unwrap().iter().find(|model| model["slug"] == "gpt-6.2-sol").unwrap();
         assert_eq!(direct_sol["default_reasoning_level"], "medium", "the merge preserves the explicit value");
         let path = merged_catalog_path(root).expect("the catalog is written");
         let merged: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();

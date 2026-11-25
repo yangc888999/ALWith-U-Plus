@@ -49,6 +49,9 @@ mod tests {
         let missing = documents.join("removed-project");
         assert!(resolve_directory(Some(missing.clone()), documents).is_err());
         assert!(!missing.exists());
-        assert_eq!(resolve_directory(Some(documents.to_owned()), documents).unwrap(), documents.canonicalize().unwrap());
+        assert_eq!(
+            resolve_directory(Some(documents.to_owned()), documents).unwrap(),
+            documents.canonicalize().unwrap()
+        );
     }
 }

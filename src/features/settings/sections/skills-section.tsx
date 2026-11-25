@@ -45,7 +45,7 @@ function describe(error: unknown): string {
 }
 
 /** Strips the markdown decoration skill descriptions carry (`**MUST**`, backticks, headings). */
-export function cleanDescription(text: string): string {
+function cleanDescription(text: string): string {
   return text
     .replace(/\*\*/g, "")
     .replace(/[`*_>#]/g, "")

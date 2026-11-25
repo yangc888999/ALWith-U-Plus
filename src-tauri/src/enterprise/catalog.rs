@@ -53,7 +53,6 @@ pub(super) fn parse(value: Value) -> Result<Option<IssuedProvider>, String> {
     Ok(Some(provider))
 }
 
-
 /// 0.6.5 起 provider id 由原生生成（同账号稳定）。这里再拼一次账号维度，保证换账号绝不继承
 /// 上一个账号的模型选择——与 0.6.2 的行为一致。
 pub(super) fn scoped_provider_id(identity: &str, native: &str) -> String {
@@ -92,7 +91,8 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
-    fn catalog_accepts_issued_gateways_without_built_in_provider_ids() {        let value = json!([{"provider_id":"company-issued","auth_type":"enterprise_session","name":"Issued","base_url":"https://issued.test","models":[{"api_id":"issued/model","label":"Issued"}]}]);
+    fn catalog_accepts_issued_gateways_without_built_in_provider_ids() {
+        let value = json!([{"provider_id":"company-issued","auth_type":"enterprise_session","name":"Issued","base_url":"https://issued.test","models":[{"api_id":"issued/model","label":"Issued"}]}]);
         let provider = parse(value).unwrap().unwrap();
         assert_eq!(provider.base_url, "https://issued.test");
         assert_eq!(provider.models[0].api_id, "issued/model");
@@ -192,5 +192,4 @@ mod connection_tests {
         assert_eq!(connection.params["_meta"]["codex"]["id"], runtime_id(&id));
         assert_eq!(connection.params["_meta"]["alwith"]["models"][0]["id"], "issued/model");
     }
-
 }

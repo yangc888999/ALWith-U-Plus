@@ -82,7 +82,7 @@ function clampShare(key: LayoutShare, value: unknown, fallback: number): number 
  * residue is dropped onto the preview column, which is the designated buffer: it is the one
  * column allowed to be the odd one out so the other three can sit wherever the user put them.
  */
-export function normalizeShares(shares: Record<LayoutShare, number>): Record<LayoutShare, number> {
+function normalizeShares(shares: Record<LayoutShare, number>): Record<LayoutShare, number> {
   const out = { ...shares }
   const total = SHARE_KEYS.reduce((sum, key) => sum + out[key], 0)
   if (!Number.isFinite(total) || total <= 0) return readDefaults()
@@ -103,7 +103,7 @@ function readDefaults(): Record<LayoutShare, number> {
 }
 
 /** Reads the four shares out of a stored layout. */
-export function layoutShares(layout: WorkspaceLayoutPreferences): Record<LayoutShare, number> {
+function layoutShares(layout: WorkspaceLayoutPreferences): Record<LayoutShare, number> {
   return {
     navigation: layout.navigationRatio,
     chat: layout.chatRatio,

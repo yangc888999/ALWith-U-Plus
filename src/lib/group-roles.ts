@@ -7,7 +7,7 @@
  */
 
 /** Where a role's persona comes from: written in the settings, or a markdown file the user owns. */
-export type RolePersona = { kind: "inline"; text: string } | { kind: "file"; path: string }
+type RolePersona = { kind: "inline"; text: string } | { kind: "file"; path: string }
 
 export interface GroupRole {
   id: string

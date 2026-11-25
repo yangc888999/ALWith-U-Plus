@@ -213,10 +213,7 @@ fn a_maximized_window_is_never_rebuilt() {
         fullscreen: false,
         validate_size: true,
     });
-    assert_eq!(
-        absurd,
-        GeometryPlan::Rebuild { width: 1587.0, height: 1017.0 }
-    );
+    assert_eq!(absurd, GeometryPlan::Rebuild { width: 1587.0, height: 1017.0 });
 }
 
 #[test]

@@ -192,10 +192,11 @@ async function mount(text: string, firstButton: string): Promise<Session> {
 beforeEach(() => {
   // jsdom has no layout engine; ProseMirror's scrollIntoView probes these.
   const empty = (): DOMRect => ({ x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0, toJSON: () => ({}) })
-  Element.prototype.getClientRects = function getClientRects(): DOMRectList {
+  const getClientRects = (): DOMRectList => {
     return Object.assign([empty()], { item: (index: number) => (index === 0 ? empty() : null) }) as unknown as DOMRectList
   }
-  Range.prototype.getClientRects = Element.prototype.getClientRects as never
+  Element.prototype.getClientRects = getClientRects
+  Range.prototype.getClientRects = getClientRects
   Range.prototype.getBoundingClientRect = empty
 })
 

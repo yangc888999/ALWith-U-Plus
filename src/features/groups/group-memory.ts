@@ -88,7 +88,7 @@ export async function recordGroupRounds(
 }
 
 /** The capstone minutes as the reader will see them in the group's `memory.md`. */
-export function buildFinalSummaryBlock(text: string, mode: SummaryMode, topic: string): string {
+function buildFinalSummaryBlock(text: string, mode: SummaryMode, topic: string): string {
   const label = SUMMARY_MODE_LABELS[mode] ?? "逐角色陈述"
   const parts = [`## 最终总纪要（模式：${label}）`]
   if (topic.trim() !== "") parts.push(`**议题**：${topic.trim()}`)

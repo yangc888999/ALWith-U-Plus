@@ -45,13 +45,9 @@ pub struct GroupTail {
 
 /// The folder every group lives in.
 fn groups_root() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map_err(|_| "HOME is not set".to_string())?;
-    Ok(PathBuf::from(home)
-        .join("Documents")
-        .join("ALWith")
-        .join("groups"))
+    let home =
+        std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).map_err(|_| "HOME is not set".to_string())?;
+    Ok(PathBuf::from(home).join("Documents").join("ALWith").join("groups"))
 }
 
 /// A folder name that is safe to create and to show in a path.
@@ -65,11 +61,7 @@ fn slug_of(name: &str) -> String {
         }
     }
     let slug = slug.trim_matches('-').to_string();
-    if slug.is_empty() {
-        "group".to_string()
-    } else {
-        slug
-    }
+    if slug.is_empty() { "group".to_string() } else { slug }
 }
 
 /// The starter `group.md`.
@@ -98,10 +90,7 @@ fn replace_section(document: &str, heading: &str, body: &str) -> Option<String> 
     let start = document.find(&marker)?;
     let after_marker = start + marker.len();
     let rest = &document[after_marker..];
-    let end = rest
-        .find("\n## ")
-        .map(|offset| after_marker + offset)
-        .unwrap_or(document.len());
+    let end = rest.find("\n## ").map(|offset| after_marker + offset).unwrap_or(document.len());
     let mut next = String::with_capacity(document.len() + body.len());
     next.push_str(&document[..start]);
     next.push_str(&marker);
@@ -132,8 +121,7 @@ fn apply_topic_and_focus(document: &str, topic: Option<&str>, focus: Option<&str
         next = replace_section(&next, "这个群聊要解决的问题", topic).unwrap_or(next);
     }
     if let Some(focus) = focus.map(str::trim).filter(|value| !value.is_empty()) {
-        next = replace_section(&next, "分析方向", focus)
-            .unwrap_or_else(|| insert_section(&next, "分析方向", focus));
+        next = replace_section(&next, "分析方向", focus).unwrap_or_else(|| insert_section(&next, "分析方向", focus));
     }
     next
 }
@@ -145,10 +133,7 @@ fn apply_topic_and_focus(document: &str, topic: Option<&str>, focus: Option<&str
 /// meeting — never directly inside the picked folder. Omitted = the default `~/Documents/ALWith/groups`.
 #[tauri3_specta::command]
 pub fn group_directory_create(
-    name: String,
-    parent: Option<String>,
-    topic: Option<String>,
-    focus: Option<String>,
+    name: String, parent: Option<String>, topic: Option<String>, focus: Option<String>,
 ) -> Result<GroupDirectory, String> {
     let root = match parent {
         Some(path) if !path.trim().is_empty() => expand_home(path.trim()),
@@ -211,8 +196,7 @@ pub fn group_directory_heal(name: String, directory: String) -> Result<Option<Gr
     let document = child.join("group.md");
     if !document.exists() {
         // The heal path only repairs a mis-pinned folder; it has no topic/focus in hand.
-        fs::write(&document, starter_document(name.trim(), None, None))
-            .map_err(|error| error.to_string())?;
+        fs::write(&document, starter_document(name.trim(), None, None)).map_err(|error| error.to_string())?;
     }
     Ok(Some(GroupDirectory {
         directory: child.to_string_lossy().to_string(),
@@ -226,15 +210,13 @@ pub fn pick_group_directory() -> Result<Option<String>, String> {
     #[cfg(target_os = "macos")]
     {
         let script = r#"POSIX path of (choose folder with prompt "选择群聊目录")"#;
-        let output = std::process::Command::new("osascript")
-            .args(["-e", script])
-            .output()
-            .map_err(|error| error.to_string())?;
+        let output =
+            std::process::Command::new("osascript").args(["-e", script]).output().map_err(|error| error.to_string())?;
         if !output.status.success() {
             return Ok(None);
         }
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(if path.is_empty() { None } else { Some(path) });
+        Ok(if path.is_empty() { None } else { Some(path) })
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -268,14 +250,8 @@ pub fn group_copy_materials(paths: Vec<String>, group_directory: String) -> Resu
             .file_name()
             .map(|value| value.to_string_lossy().to_string())
             .unwrap_or_else(|| "资料文件".to_string());
-        let stem = source
-            .file_stem()
-            .map(|value| value.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let ext = source
-            .extension()
-            .map(|value| value.to_string_lossy().to_string())
-            .unwrap_or_default();
+        let stem = source.file_stem().map(|value| value.to_string_lossy().to_string()).unwrap_or_default();
+        let ext = source.extension().map(|value| value.to_string_lossy().to_string()).unwrap_or_default();
         let mut target = materials.join(&name);
         let mut index = 1;
         while target.exists() {
@@ -316,11 +292,8 @@ fn collect_index_files(root: &Path, cap: usize) -> Result<(Vec<String>, usize), 
                 stack.push(path);
                 continue;
             }
-            let suffix = path
-                .extension()
-                .and_then(|value| value.to_str())
-                .map(|value| value.to_lowercase())
-                .unwrap_or_default();
+            let suffix =
+                path.extension().and_then(|value| value.to_str()).map(|value| value.to_lowercase()).unwrap_or_default();
             if !TEXT_SUFFIXES.contains(&suffix.as_str()) {
                 continue;
             }
@@ -328,11 +301,7 @@ fn collect_index_files(root: &Path, cap: usize) -> Result<(Vec<String>, usize), 
                 continue;
             }
             if found.len() < cap {
-                let relative = path
-                    .strip_prefix(root)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .replace('\\', "/");
+                let relative = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().replace('\\', "/");
                 found.push(relative);
             } else {
                 overflow += 1;
@@ -364,13 +333,8 @@ pub fn group_material_index(path: String) -> Result<GroupMaterialSection, String
         .unwrap_or_else(|| directory.to_string_lossy().to_string());
     let mut lines: Vec<String> = vec![format!("### {}", label)];
     if files.is_empty() {
-        lines.push(format!(
-            "（{} 下没有可读的文本文件（支持 md/txt）。）",
-            directory.to_string_lossy()
-        ));
-        return Ok(GroupMaterialSection {
-            markdown: lines.join("\n"),
-        });
+        lines.push(format!("（{} 下没有可读的文本文件（支持 md/txt）。）", directory.to_string_lossy()));
+        return Ok(GroupMaterialSection { markdown: lines.join("\n") });
     }
     for file in &files {
         // The size guides reading order: a 4KB note is safe to read in full, a 250KB log is not.
@@ -405,10 +369,7 @@ pub fn group_material_index(path: String) -> Result<GroupMaterialSection, String
             for file in &kept {
                 retried.push(format!("- {}", file));
             }
-            retried.push(format!(
-                "- …另有 {} 个文件未列出",
-                files.len() - kept.len() + overflow
-            ));
+            retried.push(format!("- …另有 {} 个文件未列出", files.len() - kept.len() + overflow));
             retried.push(format!(
                 "\n（共 {} 个文件。引用材料时写明 `/{}/相对路径`。）",
                 files.len(),
@@ -454,10 +415,7 @@ pub fn group_tail_text(path: String, max_chars: usize) -> Result<GroupTail, Stri
     let characters: Vec<char> = text.chars().collect();
     let truncated = start > 0 || characters.len() > budget;
     let kept: String = characters[characters.len().saturating_sub(budget)..].iter().collect();
-    Ok(GroupTail {
-        text: kept,
-        truncated,
-    })
+    Ok(GroupTail { text: kept, truncated })
 }
 
 /// A save that fires before the read has finished used to flush an empty string over the real
@@ -496,15 +454,13 @@ pub fn pick_role_document() -> Result<Option<String>, String> {
     #[cfg(target_os = "macos")]
     {
         let script = r#"POSIX path of (choose file with prompt "选择角色定义文件" of type {"net.daringfireball.markdown", "public.plain-text", "public.text"})"#;
-        let output = std::process::Command::new("osascript")
-            .args(["-e", script])
-            .output()
-            .map_err(|error| error.to_string())?;
+        let output =
+            std::process::Command::new("osascript").args(["-e", script]).output().map_err(|error| error.to_string())?;
         if !output.status.success() {
             return Ok(None);
         }
         let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(if path.is_empty() { None } else { Some(path) });
+        Ok(if path.is_empty() { None } else { Some(path) })
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -520,21 +476,18 @@ pub fn read_text_file(path: String) -> Result<String, String> {
 
 /// `~/…` in a stored role path, so a seeded default survives a home folder that differs.
 pub fn expand_home(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
-            return PathBuf::from(home).join(rest);
-        }
+    if let Some(rest) = path.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))
+    {
+        return PathBuf::from(home).join(rest);
     }
     PathBuf::from(path)
 }
 
 fn read_text_file_at(path: &str) -> Result<String, String> {
     let path = &expand_home(path);
-    let suffix = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_lowercase())
-        .unwrap_or_default();
+    let suffix =
+        path.extension().and_then(|value| value.to_str()).map(|value| value.to_lowercase()).unwrap_or_default();
     if !TEXT_SUFFIXES.contains(&suffix.as_str()) {
         return Err("只支持读取 markdown 或文本文件".into());
     }
@@ -550,28 +503,26 @@ fn read_text_file_at(path: &str) -> Result<String, String> {
 
 /// The skills folder a role can point at: `$CODEX_HOME/skills`.
 pub fn skills_root() -> Result<PathBuf, String> {
-    if let Ok(value) = std::env::var("CODEX_HOME") {
-        if !value.trim().is_empty() {
-            return Ok(PathBuf::from(value).join("skills"));
-        }
+    if let Ok(value) = std::env::var("CODEX_HOME")
+        && !value.trim().is_empty()
+    {
+        return Ok(PathBuf::from(value).join("skills"));
     }
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map_err(|_| "HOME is not set".to_string())?;
+    let home =
+        std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).map_err(|_| "HOME is not set".to_string())?;
     Ok(PathBuf::from(home).join(".codex").join("skills"))
 }
 
 /// The folder the app releases its bundled operator personas into: `$CODEX_HOME/rob_models`.
 /// Same base as the skills folder, so a role and a skill live side by side.
 pub fn rob_models_root() -> Result<PathBuf, String> {
-    if let Ok(value) = std::env::var("CODEX_HOME") {
-        if !value.trim().is_empty() {
-            return Ok(PathBuf::from(value).join("rob_models"));
-        }
+    if let Ok(value) = std::env::var("CODEX_HOME")
+        && !value.trim().is_empty()
+    {
+        return Ok(PathBuf::from(value).join("rob_models"));
     }
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map_err(|_| "HOME is not set".to_string())?;
+    let home =
+        std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).map_err(|_| "HOME is not set".to_string())?;
     Ok(PathBuf::from(home).join(".codex").join("rob_models"))
 }
 
@@ -600,11 +551,7 @@ fn copy_missing(source: &Path, target: &Path, released: &mut usize) -> Result<()
 /// files were written.
 pub fn release_rob_models(app: &tauri::AppHandle) -> Result<usize, String> {
     use tauri::Manager;
-    let source = app
-        .path()
-        .resource_dir()
-        .map_err(|error| error.to_string())?
-        .join("rob_models");
+    let source = app.path().resource_dir().map_err(|error| error.to_string())?.join("rob_models");
     if !source.is_dir() {
         return Ok(0);
     }
@@ -621,24 +568,15 @@ pub fn rob_models_open_folder() -> Result<String, String> {
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
-            .arg(&directory)
-            .spawn()
-            .map_err(|error| error.to_string())?;
+        std::process::Command::new("open").arg(&directory).spawn().map_err(|error| error.to_string())?;
     }
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer")
-            .arg(&directory)
-            .spawn()
-            .map_err(|error| error.to_string())?;
+        std::process::Command::new("explorer").arg(&directory).spawn().map_err(|error| error.to_string())?;
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        std::process::Command::new("xdg-open")
-            .arg(&directory)
-            .spawn()
-            .map_err(|error| error.to_string())?;
+        std::process::Command::new("xdg-open").arg(&directory).spawn().map_err(|error| error.to_string())?;
     }
     Ok(directory.to_string_lossy().to_string())
 }
@@ -694,11 +632,7 @@ pub fn rob_models_list() -> Result<Vec<RobModelEntry>, String> {
             continue;
         }
         let config = fs::read_to_string(path.join("config.json")).ok();
-        bots.push(RobModelEntry {
-            bot,
-            persona: persona.to_string_lossy().to_string(),
-            config,
-        });
+        bots.push(RobModelEntry { bot, persona: persona.to_string_lossy().to_string(), config });
     }
     bots.sort_by(|left, right| left.bot.cmp(&right.bot));
     Ok(bots)
@@ -741,26 +675,18 @@ mod tests {
     #[test]
     fn directory_create_lands_in_a_named_subfolder_of_the_chosen_parent() {
         let parent = std::env::temp_dir().join(format!("alwith-group-parent-{}", std::process::id()));
-        let created = group_directory_create(
-            "交易北极星指标".into(),
-            Some(parent.to_string_lossy().to_string()),
-            None,
-            None,
-        )
-        .unwrap();
+        let created =
+            group_directory_create("交易北极星指标".into(), Some(parent.to_string_lossy().to_string()), None, None)
+                .unwrap();
         let directory = PathBuf::from(&created.directory);
         assert_eq!(directory.parent().unwrap(), parent.as_path());
         assert_eq!(directory.file_name().unwrap().to_string_lossy(), "交易北极星指标");
         assert!(directory.join("group.md").is_file());
         assert!(directory.join("资料").is_dir());
         // Re-creating with the same name reuses the folder instead of erroring or suffixing.
-        let again = group_directory_create(
-            "交易北极星指标".into(),
-            Some(parent.to_string_lossy().to_string()),
-            None,
-            None,
-        )
-        .unwrap();
+        let again =
+            group_directory_create("交易北极星指标".into(), Some(parent.to_string_lossy().to_string()), None, None)
+                .unwrap();
         assert_eq!(again.directory, created.directory);
         let _ = fs::remove_dir_all(&parent);
     }
@@ -791,13 +717,8 @@ mod tests {
     #[test]
     fn re_creating_with_a_new_topic_updates_the_existing_document() {
         let parent = std::env::temp_dir().join(format!("alwith-group-retopic-{}", std::process::id()));
-        group_directory_create(
-            "续会".into(),
-            Some(parent.to_string_lossy().to_string()),
-            Some("旧议题".into()),
-            None,
-        )
-        .unwrap();
+        group_directory_create("续会".into(), Some(parent.to_string_lossy().to_string()), Some("旧议题".into()), None)
+            .unwrap();
         let again = group_directory_create(
             "续会".into(),
             Some(parent.to_string_lossy().to_string()),
@@ -837,15 +758,11 @@ mod tests {
         let parent = std::env::temp_dir().join(format!("alwith-group-heal-none-{}", std::process::id()));
         fs::create_dir_all(&parent).unwrap();
         // No `<parent>/<slug>` on disk: nothing to heal into.
-        assert!(group_directory_heal("没有目录的会".into(), parent.to_string_lossy().to_string())
-            .unwrap()
-            .is_none());
+        assert!(group_directory_heal("没有目录的会".into(), parent.to_string_lossy().to_string()).unwrap().is_none());
         // A record already pointing at its own folder is not "healed" into a nested copy.
         let own = parent.join("自己的会");
         fs::create_dir_all(&own).unwrap();
-        assert!(group_directory_heal("自己的会".into(), own.to_string_lossy().to_string())
-            .unwrap()
-            .is_none());
+        assert!(group_directory_heal("自己的会".into(), own.to_string_lossy().to_string()).unwrap().is_none());
         // Missing / relative directories are a no-op, not an error.
         assert!(group_directory_heal("会".into(), "/no/such/folder-at-all".into()).unwrap().is_none());
         assert!(group_directory_heal("会".into(), "relative/path".into()).unwrap().is_none());

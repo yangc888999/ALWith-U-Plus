@@ -124,7 +124,7 @@ export interface ModelOption {
 }
 
 /** 供应商分组。 */
-export interface ModelOptionGroup {
+interface ModelOptionGroup {
   id: string
   name: string
   icon: ModelIconKind

@@ -4,7 +4,7 @@
  * Kept apart from the persisted group definition: who is speaking right now is a property of this
  * moment, not something a restart should restore.
  */
-export type GroupPhase = "idle" | "discussing" | "closing" | "done" | "stopped" | "error"
+type GroupPhase = "idle" | "discussing" | "closing" | "done" | "stopped" | "error"
 
 export interface GroupDiscussionState {
   phase: GroupPhase
@@ -21,20 +21,13 @@ const IDLE: GroupDiscussionState = { phase: "idle", speaker: null, round: 0, mem
 const listeners = new Set<() => void>()
 let state: Record<string, GroupDiscussionState> = {}
 
-export function groupDiscussionFor(sessionId: string): GroupDiscussionState {
+function groupDiscussionFor(sessionId: string): GroupDiscussionState {
   return state[sessionId] ?? IDLE
 }
 
 export function patchGroupDiscussion(sessionId: string, patch: Partial<GroupDiscussionState>): void {
   const current = state[sessionId] ?? IDLE
   state = { ...state, [sessionId]: { ...current, ...patch } }
-  for (const listener of listeners) listener()
-}
-
-export function clearGroupDiscussion(sessionId: string): void {
-  if (state[sessionId] === undefined) return
-  const { [sessionId]: _dropped, ...rest } = state
-  state = rest
   for (const listener of listeners) listener()
 }
 

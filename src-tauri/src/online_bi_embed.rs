@@ -111,13 +111,7 @@ fn inject_bi_skin() -> String {
 /// Creates the window on first call, then only moves/resizes it.
 #[tauri3_specta::command]
 pub async fn online_bi_embed_mount(
-    app: AppHandle,
-    url: String,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-    email: Option<String>,
+    app: AppHandle, url: String, x: f64, y: f64, width: f64, height: f64, email: Option<String>,
 ) -> Result<(), String> {
     if let Some(view) = existing(&app) {
         place(&app, &view, x, y, width, height)?;
@@ -145,8 +139,7 @@ pub async fn online_bi_embed_mount(
         init_script.push_str(&format!("\n{}", prefill_login_email(&email)));
     }
     builder = builder.initialization_script(init_script);
-    let view = builder.build()
-        .map_err(|error| error.to_string())?;
+    let view = builder.build().map_err(|error| error.to_string())?;
     place(&app, &view, x, y, width, height)?;
     view.show().map_err(|error| error.to_string())?;
     Ok(())

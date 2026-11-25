@@ -186,7 +186,6 @@ pub async fn codex_version() -> Result<String, String> {
         .ok_or_else(|| "Unexpected Codex version output".into())
 }
 
-
 /// The integrated GPT catalog straight from the bundled binary (`codex debug models --bundled`).
 ///
 /// The settings window's default-model picker normally reads it from a live session's config
@@ -221,11 +220,7 @@ pub async fn codex_bundled_models() -> Result<Vec<BundledModelEntry>, String> {
             if slug.is_empty() {
                 continue;
             }
-            let name = model
-                .get("display_name")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or(&slug)
-                .to_string();
+            let name = model.get("display_name").and_then(serde_json::Value::as_str).unwrap_or(&slug).to_string();
             let efforts = model
                 .get("supported_reasoning_levels")
                 .and_then(serde_json::Value::as_array)
@@ -236,10 +231,8 @@ pub async fn codex_bundled_models() -> Result<Vec<BundledModelEntry>, String> {
                         .collect()
                 })
                 .unwrap_or_default();
-            let default_effort = model
-                .get("default_reasoning_level")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string);
+            let default_effort =
+                model.get("default_reasoning_level").and_then(serde_json::Value::as_str).map(str::to_string);
             entries.push(BundledModelEntry { slug, name, efforts, default_effort });
         }
     }

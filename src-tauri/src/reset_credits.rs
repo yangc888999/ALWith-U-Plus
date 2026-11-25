@@ -31,9 +31,7 @@ use tauri::Manager;
 pub(crate) const ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
 /// 兑换端点。不可逆：一张卡换一次限额刷新。
-pub(crate) const CONSUME_ENDPOINT: &str =
-    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
-
+pub(crate) const CONSUME_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
 
 /// 快照缓存，落在 `app.path().app_data_dir()` 下。
 const CACHE_FILE: &str = "chatgpt-reset-credits.json";
@@ -168,10 +166,7 @@ pub async fn chatgpt_reset_credit(credit_id: Option<String>) -> Result<RedeemRes
 /// 未登录时给前端的固定文案。前端据此区分「要重新登录」和「这次没换成」。
 pub(crate) const SIGNED_OUT_REASON: &str = "未登录 ChatGPT，无法重置额度。";
 
-fn consume(
-    credentials: &crate::chatgpt_auth::Credentials,
-    credit_id: Option<&str>,
-) -> Result<RedeemResult, String> {
+fn consume(credentials: &crate::chatgpt_auth::Credentials, credit_id: Option<&str>) -> Result<RedeemResult, String> {
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
@@ -202,11 +197,7 @@ fn consume(
     Ok(RedeemResult {
         code: json.get("code").and_then(Value::as_str).unwrap_or("unknown").to_string(),
         windows_reset: json.get("windows_reset").and_then(Value::as_u64).map(|value| value as u32),
-        credit_id: json
-            .get("credit")
-            .and_then(|credit| credit.get("id"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        credit_id: json.get("credit").and_then(|credit| credit.get("id")).and_then(Value::as_str).map(str::to_string),
     })
 }
 

@@ -8,7 +8,6 @@
  * source checks are the actual security boundary.
  */
 import {
-  HTML_EDIT_FRAME_SOURCE,
   HTML_EDIT_HOST_SOURCE,
   isHtmlEditMessage,
   type HtmlEditMessage,
@@ -59,5 +58,3 @@ export function hostMessage(message: HtmlHostMessageBody): HtmlHostMessage {
 export function postToFrame(frame: HTMLIFrameElement | null, message: HtmlHostMessage): void {
   frame?.contentWindow?.postMessage(message, "*")
 }
-
-export { HTML_EDIT_FRAME_SOURCE, HTML_EDIT_HOST_SOURCE }

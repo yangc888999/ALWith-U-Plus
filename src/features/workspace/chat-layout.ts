@@ -29,7 +29,7 @@ function clamp(value: unknown, fallback: number): number {
   return Math.min(1, Math.max(0, value))
 }
 
-export function loadChatLayout(storage: Storage = localStorage): ChatLayoutPreferences {
+function loadChatLayout(storage: Storage = localStorage): ChatLayoutPreferences {
   try {
     const raw = storage.getItem(STORAGE_KEY)
     if (raw === null) return { ...chatLayoutDefaults }
@@ -55,7 +55,7 @@ function current(): ChatLayoutPreferences {
   return value
 }
 
-export function subscribeChatLayout(listener: () => void): () => void {
+function subscribeChatLayout(listener: () => void): () => void {
   listeners.add(listener)
   return () => listeners.delete(listener)
 }

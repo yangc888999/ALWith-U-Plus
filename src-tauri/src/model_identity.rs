@@ -20,7 +20,8 @@ fn percent_decode(value: &str) -> String {
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len()
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
             && let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2]))
         {
             decoded.push(high * 16 + low);
@@ -57,11 +58,7 @@ impl ModelIdentity {
             }
             let gateway_id = percent_decode(gateway);
             let model_id = percent_decode(model);
-            return Self::Gateway {
-                route: format!("{gateway_id}/{model_id}"),
-                gateway_id,
-                model_id,
-            };
+            return Self::Gateway { route: format!("{gateway_id}/{model_id}"), gateway_id, model_id };
         }
         if let Some((gateway, model)) = value.split_once('/')
             && !gateway.is_empty()
@@ -107,30 +104,18 @@ mod tests {
                 route: "deepseek/deepseek-V4.1-flash".into(),
             }
         );
-        assert_eq!(
-            ModelIdentity::parse("gpt-6.2-sol"),
-            ModelIdentity::Native { model: "gpt-6.2-sol".into() }
-        );
+        assert_eq!(ModelIdentity::parse("gpt-6.2-sol"), ModelIdentity::Native { model: "gpt-6.2-sol".into() });
     }
 
     #[test]
     fn decodes_picker_components_and_keeps_slashes_in_the_model() {
         let identity = ModelIdentity::parse("gateway:custom-abc:deepseek%2FV4.1%3Aflash");
-        assert_eq!(
-            identity.route_target(),
-            Some(("custom-abc", "deepseek/V4.1:flash"))
-        );
+        assert_eq!(identity.route_target(), Some(("custom-abc", "deepseek/V4.1:flash")));
     }
 
     #[test]
     fn malformed_gateway_values_are_invalid_not_native() {
-        assert_eq!(
-            ModelIdentity::parse("gateway:deepseek"),
-            ModelIdentity::Invalid("gateway:deepseek".into())
-        );
-        assert_eq!(
-            ModelIdentity::parse("gateway::model"),
-            ModelIdentity::Invalid("gateway::model".into())
-        );
+        assert_eq!(ModelIdentity::parse("gateway:deepseek"), ModelIdentity::Invalid("gateway:deepseek".into()));
+        assert_eq!(ModelIdentity::parse("gateway::model"), ModelIdentity::Invalid("gateway::model".into()));
     }
 }

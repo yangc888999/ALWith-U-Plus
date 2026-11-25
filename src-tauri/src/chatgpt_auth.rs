@@ -17,10 +17,10 @@ pub(crate) struct Credentials {
 }
 
 fn codex_home() -> Option<PathBuf> {
-    if let Ok(value) = std::env::var("CODEX_HOME") {
-        if !value.trim().is_empty() {
-            return Some(PathBuf::from(value));
-        }
+    if let Ok(value) = std::env::var("CODEX_HOME")
+        && !value.trim().is_empty()
+    {
+        return Some(PathBuf::from(value));
     }
     std::env::var("HOME").ok().map(|home| PathBuf::from(home).join(".codex"))
 }
@@ -37,15 +37,13 @@ pub(crate) fn read() -> Option<Credentials> {
     let path = codex_home()?.join("auth.json");
     let modified = std::fs::metadata(&path).and_then(|meta| meta.modified()).ok()?;
     let mut guard = cache().lock().ok()?;
-    if let Some((cached_at, cached)) = guard.as_ref() {
-        if *cached_at == modified {
-            return cached.clone();
-        }
+    if let Some((cached_at, cached)) = guard.as_ref()
+        && *cached_at == modified
+    {
+        return cached.clone();
     }
-    let parsed = std::fs::read(&path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .and_then(|json| {
+    let parsed =
+        std::fs::read(&path).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok()).and_then(|json| {
             let tokens = json.get("tokens")?;
             let access_token = tokens.get("access_token").and_then(Value::as_str)?.to_string();
             let account_id = tokens.get("account_id").and_then(Value::as_str)?.to_string();

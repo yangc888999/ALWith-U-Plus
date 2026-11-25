@@ -36,15 +36,8 @@ pub const PORT: u16 = 18765;
 
 /// Files released into the bridge directory. `bridge-config.json` is absent on purpose: it is user
 /// state, not payload. `manifest.json` is written separately, after everything else landed.
-const FILES: &[&str] = &[
-    "alwith-proxy.py",
-    "alwith-model.py",
-    "release.sh",
-    "sync.sh",
-    "embed.sh",
-    "install.sh",
-    "README.md",
-];
+const FILES: &[&str] =
+    &["alwith-proxy.py", "alwith-model.py", "release.sh", "sync.sh", "embed.sh", "install.sh", "README.md"];
 
 /// Template copied into place when the user has no `bridge-config.json` yet.
 const DEFAULT_CONFIG: &str = "bridge-config.default.json";
@@ -56,10 +49,10 @@ const BACKUPS: usize = 3;
 
 /// `$ALWITH_BRIDGE_DIR`, else `~/.codex/bridge` — the same resolution `release.sh` performs.
 pub fn bridge_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("ALWITH_BRIDGE_DIR") {
-        if !dir.is_empty() {
-            return PathBuf::from(dir);
-        }
+    if let Some(dir) = std::env::var_os("ALWITH_BRIDGE_DIR")
+        && !dir.is_empty()
+    {
+        return PathBuf::from(dir);
     }
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
     match home {
@@ -146,10 +139,7 @@ fn proxy_edited(target: &Path) -> bool {
     let Ok(value) = serde_json::from_str::<Value>(&text) else {
         return false;
     };
-    let Some(recorded) = value
-        .get("files")
-        .and_then(|files| files.get("alwith-proxy.py"))
-        .and_then(Value::as_str)
+    let Some(recorded) = value.get("files").and_then(|files| files.get("alwith-proxy.py")).and_then(Value::as_str)
     else {
         return false;
     };
@@ -160,20 +150,13 @@ fn proxy_edited(target: &Path) -> bool {
 /// temp file, then rename over the target, which is atomic within one directory.
 fn copy_atomic(from: &Path, to: &Path) -> Result<(), String> {
     let bytes = std::fs::read(from).map_err(|error| format!("读取 {from:?} 失败：{error}"))?;
-    let temporary = to.with_extension(format!(
-        "{}.tmp",
-        to.extension().and_then(|value| value.to_str()).unwrap_or("")
-    ));
+    let temporary = to.with_extension(format!("{}.tmp", to.extension().and_then(|value| value.to_str()).unwrap_or("")));
     std::fs::write(&temporary, &bytes).map_err(|error| format!("写入 {temporary:?} 失败：{error}"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         // Scripts must stay executable; data files keep the default mode.
-        let mode = if to.extension().and_then(|value| value.to_str()) == Some("sh") {
-            0o755
-        } else {
-            0o644
-        };
+        let mode = if to.extension().and_then(|value| value.to_str()) == Some("sh") { 0o755 } else { 0o644 };
         let _ = std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(mode));
     }
     std::fs::rename(&temporary, to).map_err(|error| format!("替换 {to:?} 失败：{error}"))
@@ -197,9 +180,7 @@ fn backup_proxy(target: &Path) {
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("alwith-proxy.py.bak-"))
+            path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("alwith-proxy.py.bak-"))
         })
         .collect();
     backups.sort();
@@ -222,10 +203,7 @@ pub fn release_from(source: &Path, target: &Path) -> Result<Released, String> {
     let proxy_installed = target.join("alwith-proxy.py").is_file();
     let edited = proxy_installed && proxy_edited(target);
     if edited {
-        log::warn!(
-            "bridge: {:?} 的脚本在安装后被改过，本次只补缺失文件，不覆盖",
-            target.join("alwith-proxy.py")
-        );
+        log::warn!("bridge: {:?} 的脚本在安装后被改过，本次只补缺失文件，不覆盖", target.join("alwith-proxy.py"));
     }
     let update = !edited
         && match (&bundled, &installed) {
@@ -265,8 +243,7 @@ pub fn release_from(source: &Path, target: &Path) -> Result<Released, String> {
     // The user's allow-list is created once and never touched again.
     let config = target.join(CONFIG);
     if !config.exists() && target.join(DEFAULT_CONFIG).is_file() {
-        std::fs::copy(target.join(DEFAULT_CONFIG), &config)
-            .map_err(|error| format!("无法生成 {config:?}：{error}"))?;
+        std::fs::copy(target.join(DEFAULT_CONFIG), &config).map_err(|error| format!("无法生成 {config:?}：{error}"))?;
         log::info!("bridge: generated {CONFIG} from the bundled template");
     }
 
@@ -275,31 +252,24 @@ pub fn release_from(source: &Path, target: &Path) -> Result<Released, String> {
     // after backing off an edited proxy would make the app believe it is up to date forever.
     // `files` is recomputed from what is on disk rather than copied from the payload, because it is
     // what [`proxy_edited`] will compare against: it must describe the installed copy.
-    if update {
-        if let Ok(text) = std::fs::read_to_string(source.join(MANIFEST)) {
-            if let Ok(mut value) = serde_json::from_str::<Value>(&text) {
-                if let Some(object) = value.as_object_mut() {
-                    object.insert("released_at".into(), Value::String(now_iso8601()));
-                    let mut hashes = serde_json::Map::new();
-                    for name in FILES.iter().copied().chain(std::iter::once(DEFAULT_CONFIG)) {
-                        if let Some(hash) = digest(&target.join(name)) {
-                            hashes.insert(name.to_string(), Value::String(hash));
-                        }
-                    }
-                    object.insert("files".into(), Value::Object(hashes));
+    if update
+        && let Ok(text) = std::fs::read_to_string(source.join(MANIFEST))
+        && let Ok(mut value) = serde_json::from_str::<Value>(&text)
+    {
+        if let Some(object) = value.as_object_mut() {
+            object.insert("released_at".into(), Value::String(now_iso8601()));
+            let mut hashes = serde_json::Map::new();
+            for name in FILES.iter().copied().chain(std::iter::once(DEFAULT_CONFIG)) {
+                if let Some(hash) = digest(&target.join(name)) {
+                    hashes.insert(name.to_string(), Value::String(hash));
                 }
-                let _ = std::fs::write(
-                    target.join(MANIFEST),
-                    serde_json::to_vec_pretty(&value).unwrap_or_default(),
-                );
             }
+            object.insert("files".into(), Value::Object(hashes));
         }
+        let _ = std::fs::write(target.join(MANIFEST), serde_json::to_vec_pretty(&value).unwrap_or_default());
     }
 
-    Ok(Released {
-        version: bundled,
-        files,
-    })
+    Ok(Released { version: bundled, files })
 }
 
 /// A local ISO-8601 timestamp with the current offset. Only used in the manifest, which is read by
@@ -329,11 +299,7 @@ fn launchd_label() -> &'static str {
 
 fn launchd_plist() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
-    Some(
-        PathBuf::from(home)
-            .join("Library/LaunchAgents")
-            .join(format!("{}.plist", launchd_label())),
-    )
+    Some(PathBuf::from(home).join("Library/LaunchAgents").join(format!("{}.plist", launchd_label())))
 }
 
 fn kickstart() -> bool {
@@ -499,11 +465,8 @@ mod tests {
         std::fs::write(directory.join("alwith-model.py"), "# model\n").unwrap();
         std::fs::write(directory.join("install.sh"), "#!/bin/bash\n").unwrap();
         std::fs::write(directory.join(DEFAULT_CONFIG), "{\"models\":[]}\n").unwrap();
-        std::fs::write(
-            directory.join(MANIFEST),
-            format!("{{\"version\":\"{version}\",\"app_version\":\"0.0.1\"}}"),
-        )
-        .unwrap();
+        std::fs::write(directory.join(MANIFEST), format!("{{\"version\":\"{version}\",\"app_version\":\"0.0.1\"}}"))
+            .unwrap();
     }
 
     #[test]
@@ -522,8 +485,7 @@ mod tests {
         let config = std::fs::read_to_string(target.join(CONFIG)).unwrap();
         assert_eq!(config.trim(), "{\"models\":[]}");
         // The manifest marks the directory as ours, with a release timestamp.
-        let manifest: Value =
-            serde_json::from_str(&std::fs::read_to_string(target.join(MANIFEST)).unwrap()).unwrap();
+        let manifest: Value = serde_json::from_str(&std::fs::read_to_string(target.join(MANIFEST)).unwrap()).unwrap();
         assert_eq!(manifest["version"], "1.0+abc");
         assert!(manifest["released_at"].is_string());
         let _ = std::fs::remove_dir_all(source);
@@ -541,10 +503,7 @@ mod tests {
         // A second pass with the same manifest must not copy a single file.
         let again = release_from(&source, &target).unwrap();
         assert!(!again.updated(), "nothing to do at the same version: {again:?}");
-        assert_eq!(
-            std::fs::read_to_string(target.join(CONFIG)).unwrap().trim(),
-            "{\"models\":[{\"id\":\"mine\"}]}"
-        );
+        assert_eq!(std::fs::read_to_string(target.join(CONFIG)).unwrap().trim(), "{\"models\":[{\"id\":\"mine\"}]}");
         let _ = std::fs::remove_dir_all(source);
         let _ = std::fs::remove_dir_all(target);
     }
@@ -559,10 +518,7 @@ mod tests {
         payload(&source, "1.1+def");
         let released = release_from(&source, &target).unwrap();
         assert!(released.updated());
-        assert_eq!(
-            std::fs::read_to_string(target.join("alwith-proxy.py")).unwrap().trim(),
-            "# proxy 1.1+def"
-        );
+        assert_eq!(std::fs::read_to_string(target.join("alwith-proxy.py")).unwrap().trim(), "# proxy 1.1+def");
         let backups: Vec<_> = std::fs::read_dir(&target)
             .unwrap()
             .flatten()
@@ -608,10 +564,7 @@ mod tests {
         let released = release_from(&source, &target).unwrap();
 
         assert!(!released.updated(), "an edited script is not ours to overwrite: {released:?}");
-        assert_eq!(
-            std::fs::read_to_string(target.join("alwith-proxy.py")).unwrap().trim(),
-            "# my own fix"
-        );
+        assert_eq!(std::fs::read_to_string(target.join("alwith-proxy.py")).unwrap().trim(), "# my own fix");
         // The version marker is left alone too, so the next launch still notices the difference —
         // and still backs off while the edit is there.
         let manifest = manifest_version(&target.join(MANIFEST));

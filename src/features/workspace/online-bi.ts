@@ -13,9 +13,9 @@ export const ONLINE_BI_VIEW_ID = "alwith:online-bi"
 // which is exactly what the embedded frame needs. The root / is a separate portal and ignores it.
 export const ONLINE_BI_URL = "https://bi.finture.id/personal_dashboard?embed=true&embed_options=show_padding"
 /** Which page the preview column opens: `/personal_dashboard` unless the reader changed it. */
-export const ONLINE_BI_PATH_KEY = "alwith:online-bi-path"
+const ONLINE_BI_PATH_KEY = "alwith:online-bi-path"
 
-export function storedOnlineBiPath(): string {
+function storedOnlineBiPath(): string {
   const value = localStorage.getItem(ONLINE_BI_PATH_KEY)?.trim() ?? ""
   return value === "" ? "/personal_dashboard" : value
 }
@@ -36,7 +36,7 @@ export async function closeOnlineBiWindow(): Promise<void> {
  * embedded frame (and future launches) open already signed in. Returns the token, or null when no
  * window is open, it has not signed in, or its URL carries no token.
  */
-export async function extractOnlineBiToken(): Promise<string | null> {
+async function extractOnlineBiToken(): Promise<string | null> {
   const { invoke } = await import("@tauri-apps/api/core")
   let url: string | null = null
   try {

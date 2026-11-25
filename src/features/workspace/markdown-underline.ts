@@ -85,7 +85,7 @@ export function regroupUnderline(tree: unknown): void {
 }
 
 /** remark plugin (raw form for `$remark`): rewrite the tree in place, no options. */
-export function remarkUnderline(this: unknown): void {
+function remarkUnderline(this: unknown): void {
   // The transformer receives (tree, file); only the tree matters here.
   return ((tree: unknown) => {
     regroupUnderline(tree)

@@ -66,11 +66,7 @@ async fn download(url: reqwest::Url, limit: u64) -> Result<Option<Vec<u8>>, Stri
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("下载扩展代码失败：{e}"))?;
+    let response = client.get(url).send().await.map_err(|e| format!("下载扩展代码失败：{e}"))?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
@@ -93,9 +89,7 @@ async fn download(url: reqwest::Url, limit: u64) -> Result<Option<Vec<u8>>, Stri
     Ok(Some(bytes))
 }
 async fn download_source(url: reqwest::Url) -> Result<Vec<u8>, String> {
-    download(url, MAX_SOURCE)
-        .await?
-        .ok_or_else(|| String::from("下载扩展代码失败：HTTP 404"))
+    download(url, MAX_SOURCE).await?.ok_or_else(|| String::from("下载扩展代码失败：HTTP 404"))
 }
 
 fn digest(bytes: &[u8]) -> String {
@@ -407,13 +401,9 @@ pub async fn extension_install_from_url(
     if manifest_url.scheme() != "https" {
         return Err("扩展地址必须使用 HTTPS".into());
     }
-    let base = manifest_url
-        .path()
-        .strip_suffix("manifest.json")
-        .ok_or("扩展地址必须以 manifest.json 结尾")?
-        .to_string();
-    let manifest_bytes =
-        download(manifest_url.clone(), 128 * 1024).await?.ok_or("扩展清单不存在（HTTP 404）")?;
+    let base =
+        manifest_url.path().strip_suffix("manifest.json").ok_or("扩展地址必须以 manifest.json 结尾")?.to_string();
+    let manifest_bytes = download(manifest_url.clone(), 128 * 1024).await?.ok_or("扩展清单不存在（HTTP 404）")?;
     let manifest: Value =
         serde_json::from_slice(&manifest_bytes).map_err(|e| format!("Invalid extension manifest: {e}"))?;
     let id = manifest.get("id").and_then(Value::as_str).ok_or("Extension manifest has no id")?.to_string();

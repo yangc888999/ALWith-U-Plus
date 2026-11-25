@@ -18,7 +18,7 @@ import { useSyncExternalStore } from "react"
 
 import { commands, type AppearanceEffect } from "@/bindings"
 
-export const APPEARANCE_MODES = ["solid", "aero"] as const
+const APPEARANCE_MODES = ["solid", "aero"] as const
 export type AppearanceMode = (typeof APPEARANCE_MODES)[number]
 
 const STORAGE_KEY = "alwith:appearance-mode"
@@ -173,21 +173,21 @@ export function startAppearanceMode(): () => void {
   return () => undefined
 }
 
-export function appearanceModeSnapshot(): AppearanceMode {
+function appearanceModeSnapshot(): AppearanceMode {
   return mode
 }
 
 /** 最近一次原生结果，未尝试时为 null。 */
-export function appearanceEffectSnapshot(): AppearanceEffect | null {
+function appearanceEffectSnapshot(): AppearanceEffect | null {
   return effect
 }
 
 /** 原生切换本身报错时的文案（不是「系统不支持」那种降级）。 */
-export function appearanceFailureSnapshot(): string | null {
+function appearanceFailureSnapshot(): string | null {
   return failure
 }
 
-export function subscribeAppearanceMode(listener: () => void): () => void {
+function subscribeAppearanceMode(listener: () => void): () => void {
   listeners.add(listener)
   return () => {
     listeners.delete(listener)

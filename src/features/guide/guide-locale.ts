@@ -1,5 +1,3 @@
-export type GuideLanguage = "en" | "zh"
-
 export type GuideCopy = {
   windowTitle: string
   welcomeTitle: string

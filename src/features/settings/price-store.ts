@@ -18,7 +18,7 @@ import { persist } from "zustand/middleware"
 export type Currency = "USD" | "CNY"
 
 /** The three billable token classes. */
-export type PriceTier = {
+type PriceTier = {
   /** Price per 1M tokens, uncached input. */
   input: number
   /** Price per 1M tokens, cache read. */
@@ -409,7 +409,7 @@ export function modelPriceKey(model: string): string {
 }
 
 /** A row that actually carries a usable price (explicitly free counts as priced). */
-export function hasPrice(price: ModelPrice): boolean {
+function hasPrice(price: ModelPrice): boolean {
   if (price.free === true) return true
   return (
     price.input > 0 ||
@@ -816,7 +816,7 @@ function withinWindow(minute: number, [start, end]: [number, number]): boolean {
 }
 
 /** Local wall-clock hour and weekday for a UTC (date, hour) bucket. */
-export function localClock(date: string, hour: number, utcOffset: number): { date: string; hour: number; weekday: number } {
+function localClock(date: string, hour: number, utcOffset: number): { date: string; hour: number; weekday: number } {
   const stamp = Date.parse(`${date}T00:00:00Z`)
   if (!Number.isFinite(stamp)) return { date, hour, weekday: 1 }
   const shifted = new Date(stamp + (hour + utcOffset) * 3_600_000)

@@ -27,22 +27,25 @@ export function recentProjectsFrom(
   limit = 4,
   isExcluded: (cwd: string) => boolean = () => false
 ): RecentProject[] {
-  const seen = new Set<string>()
-  const projects: RecentProject[] = []
-  for (const row of [...rows].sort((left, right) =>
-    (right.updatedAt ?? "").localeCompare(left.updatedAt ?? "")
-  )) {
+  const newest = new Map<string, { row: SessionRow; index: number }>()
+  rows.forEach((row, index) => {
     const cwd = row.cwd.trim()
-    if (cwd === "" || seen.has(cwd) || isExcluded(cwd)) continue
-    seen.add(cwd)
-    projects.push({
+    if (!cwd) return
+    const previous = newest.get(cwd)
+    if (!previous || (row.updatedAt ?? "").localeCompare(previous.row.updatedAt ?? "") > 0)
+      newest.set(cwd, { row, index })
+  })
+  return [...newest]
+    .filter(([cwd]) => !isExcluded(cwd))
+    .sort(([, left], [, right]) =>
+      (right.row.updatedAt ?? "").localeCompare(left.row.updatedAt ?? "") || left.index - right.index
+    )
+    .slice(0, Math.max(0, limit))
+    .map(([cwd, { row }]) => ({
       sessionId: row.sessionId ?? null,
       cwd,
       name: projectNameFromPath(cwd),
       title: row.title?.trim() || null,
       updatedAt: row.updatedAt
-    })
-    if (projects.length >= limit) break
-  }
-  return projects
+    }))
 }

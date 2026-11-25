@@ -9,7 +9,7 @@
 //! from the outgoing request body and forwards everything else — status codes, headers and the
 //! SSE byte stream — unchanged.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -54,7 +54,9 @@ pub(crate) fn register_router_route(gateway_id: &str, base_url: &str, bearer_tok
     register_protocol_route(gateway_id, base_url, bearer_token, sanitize, crate::providers::Protocol::Responses);
 }
 
-pub(crate) fn register_protocol_route(gateway_id: &str, base_url: &str, bearer_token: &str, sanitize: bool, protocol: crate::providers::Protocol) {
+pub(crate) fn register_protocol_route(
+    gateway_id: &str, base_url: &str, bearer_token: &str, sanitize: bool, protocol: crate::providers::Protocol,
+) {
     let protocol = if gateway_id == "openrouter" { protocol } else { crate::providers::Protocol::Responses };
     if let Ok(mut map) = router_routes().write() {
         map.insert(
@@ -74,7 +76,10 @@ pub(crate) fn unregister_router_route(gateway_id: &str) {
 
 #[cfg(test)]
 pub(crate) fn router_route_matches(gateway_id: &str, base_url: &str, bearer_token: &str) -> bool {
-    router_routes().read().unwrap().get(gateway_id)
+    router_routes()
+        .read()
+        .unwrap()
+        .get(gateway_id)
         .is_some_and(|route| route.base_url == base_url && route.bearer_token == bearer_token && !route.sanitize)
 }
 
@@ -195,16 +200,18 @@ pub fn start(app: tauri::AppHandle) -> Result<u16, String> {
     // user can realistically have a few concurrent chats plus model-list refreshes.
     for _ in 0..6 {
         let server = Arc::clone(&server);
-        std::thread::spawn(move || loop {
-            match server.recv() {
-                Ok(request) => {
-                    if let Err(error) = handle(request) {
-                        log::warn!("bridge: request failed: {error}");
+        std::thread::spawn(move || {
+            loop {
+                match server.recv() {
+                    Ok(request) => {
+                        if let Err(error) = handle(request) {
+                            log::warn!("bridge: request failed: {error}");
+                        }
                     }
-                }
-                Err(error) => {
-                    log::warn!("bridge: server closed: {error}");
-                    return;
+                    Err(error) => {
+                        log::warn!("bridge: server closed: {error}");
+                        return;
+                    }
                 }
             }
         });
@@ -255,11 +262,12 @@ fn handle(request: tiny_http::Request) -> Result<(), String> {
 
     match (method.as_str(), action) {
         ("post", "responses") => forward_responses(request, &upstream_base, authorization.as_deref()),
-        ("get", "models") => forward_plain(request, &upstream_endpoint(&upstream_base, "models"), "GET", authorization.as_deref()),
+        ("get", "models") => {
+            forward_plain(request, &upstream_endpoint(&upstream_base, "models"), "GET", authorization.as_deref())
+        }
         _ => respond(request, 404, "application/json", br#"{"error":{"message":"bridge: unsupported path"}}"#),
     }
 }
-
 
 /// The ChatGPT backend validates every `input` item's `id` against that item's `type` and answers
 /// `Invalid 'input[74].id': 'msg_…'. Expected an ID that begins with 'rs'.` when a thread crosses
@@ -286,15 +294,10 @@ fn normalize_item_ids(parsed: &mut Value) -> usize {
         let Some((_, prefix)) = ID_PREFIX_BY_TYPE.iter().find(|(kind_name, _)| *kind_name == kind) else {
             continue;
         };
-        let mismatched = item
-            .get("id")
-            .and_then(Value::as_str)
-            .is_some_and(|id| !id.starts_with(prefix));
-        if mismatched {
-            if let Some(object) = item.as_object_mut() {
-                object.remove("id");
-                dropped += 1;
-            }
+        let mismatched = item.get("id").and_then(Value::as_str).is_some_and(|id| !id.starts_with(prefix));
+        if mismatched && let Some(object) = item.as_object_mut() {
+            object.remove("id");
+            dropped += 1;
         }
     }
     dropped
@@ -464,7 +467,9 @@ fn trim_history(body: &[u8], max_items: usize, budget: usize) -> Option<Vec<u8>>
     let outputs = call_ids("function_call_output");
     kept.retain(|item| match item.get("type").and_then(Value::as_str) {
         Some("function_call") => item.get("call_id").and_then(Value::as_str).is_some_and(|id| outputs.contains(id)),
-        Some("function_call_output") => item.get("call_id").and_then(Value::as_str).is_some_and(|id| calls.contains(id)),
+        Some("function_call_output") => {
+            item.get("call_id").and_then(Value::as_str).is_some_and(|id| calls.contains(id))
+        }
         _ => true,
     });
     let dropped = total - start;
@@ -499,13 +504,11 @@ fn describe_payload(payload: &[u8]) -> String {
         entry.0 += 1;
         entry.1 += size;
     }
-    let mut ranked: Vec<(&str, usize, usize)> = by_type.into_iter().map(|(kind, (count, bytes))| (kind, count, bytes)).collect();
-    ranked.sort_by(|a, b| b.2.cmp(&a.2));
-    let top: Vec<String> = ranked
-        .iter()
-        .take(3)
-        .map(|(kind, count, bytes)| format!("{kind}={count} items/{bytes}B"))
-        .collect();
+    let mut ranked: Vec<(&str, usize, usize)> =
+        by_type.into_iter().map(|(kind, (count, bytes))| (kind, count, bytes)).collect();
+    ranked.sort_by_key(|entry| std::cmp::Reverse(entry.2));
+    let top: Vec<String> =
+        ranked.iter().take(3).map(|(kind, count, bytes)| format!("{kind}={count} items/{bytes}B")).collect();
     format!("payload={} bytes, items={}, top: {}", payload.len(), input.len(), top.join(", "))
 }
 
@@ -516,10 +519,10 @@ fn portable_history(body: &[u8]) -> Option<Vec<u8>> {
     input.retain(|item| item.get("type").and_then(Value::as_str) != Some("reasoning"));
     let mut removed = before - input.len();
     for item in input.iter_mut() {
-        if let Some(object) = item.as_object_mut() {
-            if object.remove("id").is_some() {
-                removed += 1;
-            }
+        if let Some(object) = item.as_object_mut()
+            && object.remove("id").is_some()
+        {
+            removed += 1;
         }
     }
     if removed == 0 {
@@ -539,20 +542,15 @@ fn strip_web_search_tools(parsed: &mut Value) -> usize {
     let mut left = 0usize;
     if let Some(tools) = parsed.get_mut("tools").and_then(Value::as_array_mut) {
         let before = tools.len();
-        tools.retain(|tool| {
-            !tool
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .starts_with("web_search")
-        });
+        tools.retain(|tool| !tool.get("type").and_then(Value::as_str).unwrap_or_default().starts_with("web_search"));
         dropped = before - tools.len();
         left = tools.len();
     }
-    if dropped > 0 && left == 0 {
-        if let Some(object) = parsed.as_object_mut() {
-            object.remove("tools");
-        }
+    if dropped > 0
+        && left == 0
+        && let Some(object) = parsed.as_object_mut()
+    {
+        object.remove("tools");
     }
     dropped
 }
@@ -603,15 +601,14 @@ fn expand_refs(node: &mut Value, defs: &serde_json::Map<String, Value>, depth: u
     }
     match node {
         Value::Object(object) => {
-            if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
-                if let Some(name) = reference.strip_prefix("#/$defs/") {
-                    if let Some(definition) = defs.get(name) {
-                        let mut replacement = definition.clone();
-                        let expanded = 1 + expand_refs(&mut replacement, defs, depth + 1);
-                        *node = replacement;
-                        return expanded;
-                    }
-                }
+            if let Some(reference) = object.get("$ref").and_then(Value::as_str)
+                && let Some(name) = reference.strip_prefix("#/$defs/")
+                && let Some(definition) = defs.get(name)
+            {
+                let mut replacement = definition.clone();
+                let expanded = 1 + expand_refs(&mut replacement, defs, depth + 1);
+                *node = replacement;
+                return expanded;
             }
             object.values_mut().map(|child| expand_refs(child, defs, depth + 1)).sum()
         }
@@ -625,12 +622,11 @@ fn upstream_endpoint(base_url: &str, path: &str) -> String {
     format!("{}/{}", base_url.trim_end_matches('/'), path.trim_start_matches('/'))
 }
 
-fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, authorization: Option<&str>) -> Result<(), String> {
+fn forward_responses(
+    mut request: tiny_http::Request, upstream_base: &str, authorization: Option<&str>,
+) -> Result<(), String> {
     let mut body = Vec::new();
-    request
-        .as_reader()
-        .read_to_end(&mut body)
-        .map_err(|error| format!("read body: {error}"))?;
+    request.as_reader().read_to_end(&mut body).map_err(|error| format!("read body: {error}"))?;
     let mut parsed: Value = match serde_json::from_slice(&body) {
         Ok(value) => value,
         Err(_) => {
@@ -649,7 +645,7 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
                 true,
                 // A legacy per-provider route, not the shared gateway router.
                 false,
-            )
+            );
         }
     };
     if strip_web_search_tools(&mut parsed) > 0 {
@@ -699,11 +695,18 @@ fn responses_to_chat(parsed: &Value) -> Value {
                 let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
                 let content = item.get("content").cloned().unwrap_or(Value::String(String::new()));
                 let content = if let Some(parts) = content.as_array() {
-                    Value::Array(parts.iter().filter_map(|part| {
-                        let text = part.get("text").and_then(Value::as_str)?;
-                        Some(json!({"type":"text", "text":text}))
-                    }).collect())
-                } else { content };
+                    Value::Array(
+                        parts
+                            .iter()
+                            .filter_map(|part| {
+                                let text = part.get("text").and_then(Value::as_str)?;
+                                Some(json!({"type":"text", "text":text}))
+                            })
+                            .collect(),
+                    )
+                } else {
+                    content
+                };
                 messages.push(json!({"role":role, "content":content}));
             }
             "function_call" => messages.push(json!({
@@ -719,12 +722,19 @@ fn responses_to_chat(parsed: &Value) -> Value {
     }
     chat.insert("messages".to_string(), Value::Array(messages));
     if let Some(tools) = parsed.get("tools").and_then(Value::as_array) {
-        let tools: Vec<Value> = tools.iter().filter_map(|tool| {
-            if tool.get("type").and_then(Value::as_str) != Some("function") { return None; }
-            Some(json!({"type":"function", "function":{"name":tool.get("name"),
+        let tools: Vec<Value> = tools
+            .iter()
+            .filter_map(|tool| {
+                if tool.get("type").and_then(Value::as_str) != Some("function") {
+                    return None;
+                }
+                Some(json!({"type":"function", "function":{"name":tool.get("name"),
                 "description":tool.get("description"), "parameters":tool.get("parameters")}}))
-        }).collect();
-        if !tools.is_empty() { chat.insert("tools".to_string(), Value::Array(tools)); }
+            })
+            .collect();
+        if !tools.is_empty() {
+            chat.insert("tools".to_string(), Value::Array(tools));
+        }
     }
     Value::Object(chat)
 }
@@ -866,7 +876,7 @@ impl ChatResponsesStream {
     }
 
     fn close_calls(&mut self, out: &mut Vec<u8>) {
-        let mut open: Vec<(usize, (usize, String, String, String, String))> = self.calls.drain().collect();
+        let mut open: Vec<_> = self.calls.drain().collect();
         open.sort_by_key(|(chat_index, _)| *chat_index);
         for (_, (index, item_id, call_id, name, arguments)) in open {
             out.extend(self.event(
@@ -907,10 +917,9 @@ impl ChatResponsesStream {
             if let Some(id) = value.get("id").and_then(Value::as_str) {
                 self.id = id.to_string();
             }
-            out.extend(self.event(
-                "response.created",
-                json!({"response":chat_response_shell(&self.id, "in_progress")}),
-            ));
+            out.extend(
+                self.event("response.created", json!({"response":chat_response_shell(&self.id, "in_progress")})),
+            );
         }
         if let Some(usage) = value.get("usage").filter(|usage| usage.is_object()) {
             self.usage = chat_usage(usage);
@@ -998,10 +1007,13 @@ impl ChatResponsesStream {
             let Ok(value) = serde_json::from_str::<Value>(data) else { continue };
             // An in-band error frame must reach Codex as an error, not as an empty completed turn.
             if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
-                out.extend(self.event("response.failed", json!({"response":{
+                out.extend(self.event(
+                    "response.failed",
+                    json!({"response":{
                     "id":self.id, "object":"response", "status":"failed",
                     "error":{"code":error.get("code").cloned().unwrap_or(json!("upstream_error")),
-                        "message":error.get("message").cloned().unwrap_or(json!("upstream error"))}}})));
+                        "message":error.get("message").cloned().unwrap_or(json!("upstream error"))}}}),
+                ));
                 self.done = true;
                 continue;
             }
@@ -1099,9 +1111,8 @@ fn stream_prelude(bytes: &[u8], chat: bool) -> Prelude {
 /// not the problem. Everything else keeps the old 404 wording, which the engine already shows for
 /// an unknown vendor.
 fn missing_gateway_response(gateway: &str, requested: &str) -> (u16, String) {
-    let enterprise = gateway.contains("enterprise")
-        || requested.contains("enterprise/")
-        || requested.contains("enterprise:");
+    let enterprise =
+        gateway.contains("enterprise") || requested.contains("enterprise/") || requested.contains("enterprise:");
     if enterprise {
         let body = serde_json::json!({"error":{
             "message":"enterprise_model_not_ready: 企业模型未就绪，请先在「设置 → 账号」登录企业账号，然后重试。",
@@ -1115,10 +1126,7 @@ fn missing_gateway_response(gateway: &str, requested: &str) -> (u16, String) {
 /// POST /<router>/responses: pick the vendor from the model name, then forward as that vendor.
 fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
     let mut body = Vec::new();
-    request
-        .as_reader()
-        .read_to_end(&mut body)
-        .map_err(|error| format!("read body: {error}"))?;
+    request.as_reader().read_to_end(&mut body).map_err(|error| format!("read body: {error}"))?;
     let Ok(mut parsed) = serde_json::from_slice::<Value>(&body) else {
         return respond(request, 400, "application/json", br#"{"error":{"message":"router: body is not JSON"}}"#);
     };
@@ -1300,8 +1308,7 @@ fn forward_chatgpt(request: tiny_http::Request, parsed: &Value) -> Result<(), St
 /// The body arrives as `{"error":{"message":"The encrypted content rs_… could not be verified…"}}`
 /// or with `"code": "invalid_encrypted_content"`.
 fn is_invalid_encrypted_content(body: &str) -> bool {
-    body.contains("invalid_encrypted_content")
-        || (body.contains("encrypted content") && body.contains("could not be"))
+    body.contains("invalid_encrypted_content") || (body.contains("encrypted content") && body.contains("could not be"))
 }
 
 /// Drops every `reasoning` item from the request `input`.
@@ -1353,19 +1360,13 @@ const NO_ACK_TIMEOUT: Duration = Duration::from_secs(120);
 /// `error.code` is the marker before reporting anything.
 fn overload_error_line(tail: &[u8]) -> Option<&[u8]> {
     for line in tail.split(|byte| *byte == b'\n') {
-        if !line
-            .windows(OVERLOAD_MARKER.len())
-            .any(|window| window == OVERLOAD_MARKER)
-        {
+        if !line.windows(OVERLOAD_MARKER.len()).any(|window| window == OVERLOAD_MARKER) {
             continue;
         }
         let Ok(text) = std::str::from_utf8(line) else { continue };
         let Some(body) = text.trim().strip_prefix("data:") else { continue };
         let Ok(value) = serde_json::from_str::<Value>(body.trim()) else { continue };
-        let code = value
-            .get("error")
-            .and_then(|error| error.get("code"))
-            .and_then(Value::as_str);
+        let code = value.get("error").and_then(|error| error.get("code")).and_then(Value::as_str);
         if code == Some("server_is_overloaded") {
             return Some(line);
         }
@@ -1510,7 +1511,9 @@ fn note_retry(silent_retries: &mut u32, alerted: &mut bool, model: &str, request
 }
 
 fn publish_stall(model: &str, reason: &str, retry_after: Option<u64>, attempt: u32, request_id: &str) {
-    log::warn!("bridge: turn stalled model={model} reason={reason} retry-after={retry_after:?}s attempt={attempt} request={request_id}");
+    log::warn!(
+        "bridge: turn stalled model={model} reason={reason} retry-after={retry_after:?}s attempt={attempt} request={request_id}"
+    );
     if let Some(app) = APP_HANDLE.get() {
         let _ = app.emit("model:stalled", stall_payload(model, reason, retry_after, attempt, request_id));
     }
@@ -1521,6 +1524,27 @@ enum StreamChunk {
     Data(Vec<u8>),
     End,
     Failed(String),
+}
+
+fn stream_io_kind(error: &std::io::Error) -> Option<std::io::ErrorKind> {
+    use std::error::Error;
+    use std::io::ErrorKind;
+
+    let mut cause: Option<&(dyn Error + 'static)> = Some(error);
+    while let Some(current) = cause {
+        if let Some(io) = current.downcast_ref::<std::io::Error>() {
+            if io.kind() != ErrorKind::Other {
+                return Some(io.kind());
+            }
+            cause = io.get_ref().map(|inner| inner as &dyn Error);
+        } else {
+            if current.downcast_ref::<reqwest::Error>().is_some_and(reqwest::Error::is_timeout) {
+                return Some(ErrorKind::TimedOut);
+            }
+            cause = current.source();
+        }
+    }
+    None
 }
 
 /// Feeds `tiny_http` from a dedicated upstream reader thread.
@@ -1543,10 +1567,7 @@ struct StreamReader {
 
 impl StreamReader {
     fn new(
-        rx: std::sync::mpsc::Receiver<StreamChunk>,
-        idle: Duration,
-        hard: Duration,
-        client_gone: Arc<AtomicBool>,
+        rx: std::sync::mpsc::Receiver<StreamChunk>, idle: Duration, hard: Duration, client_gone: Arc<AtomicBool>,
     ) -> Self {
         Self {
             rx,
@@ -1627,9 +1648,7 @@ impl Read for StreamReader {
                     return Ok(0);
                 }
                 Ok(StreamChunk::Failed(reason)) => self.fail(&format!("上游读取失败：{reason}")),
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    self.fail("上游超过 20 分钟没有输出")
-                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => self.fail("上游超过 20 分钟没有输出"),
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                     // The reader thread went away without even an `End` marker: the socket was
                     // lost underneath us. A silent EOF here reads as a truncated answer; name it.
@@ -1757,21 +1776,23 @@ fn gateway_idle_payload(model: &str, request_id: &str) -> Value {
 /// gateway that resumes after the report keeps streaming into the same turn.
 fn watch_gateway_idle(model: &str, activity: Arc<GatewayActivity>, closed: Arc<AtomicBool>, request_id: String) {
     let model = model.to_string();
-    std::thread::spawn(move || loop {
-        if closed.load(Ordering::Relaxed) {
-            return;
-        }
-        if gateway_idle_expired(activity.idle(), false) {
-            log::warn!(
-                "bridge: gateway stream went quiet for {}s model={model} request={request_id}",
-                GATEWAY_IDLE_TIMEOUT.as_secs()
-            );
-            if let Some(app) = APP_HANDLE.get() {
-                let _ = app.emit("model:stalled", gateway_idle_payload(&model, &request_id));
+    std::thread::spawn(move || {
+        loop {
+            if closed.load(Ordering::Relaxed) {
+                return;
             }
-            return;
+            if gateway_idle_expired(activity.idle(), false) {
+                log::warn!(
+                    "bridge: gateway stream went quiet for {}s model={model} request={request_id}",
+                    GATEWAY_IDLE_TIMEOUT.as_secs()
+                );
+                if let Some(app) = APP_HANDLE.get() {
+                    let _ = app.emit("model:stalled", gateway_idle_payload(&model, &request_id));
+                }
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(500));
         }
-        std::thread::sleep(Duration::from_millis(500));
     });
 }
 
@@ -1907,11 +1928,7 @@ fn gateway_attempts(retry_enabled: bool) -> Option<u32> {
 /// ChatGPT route keeps the single retry it has always had, and the legacy per-provider routes with
 /// it.
 fn route_attempts(gateway: bool, retry_enabled: bool) -> Option<u32> {
-    if gateway {
-        gateway_attempts(retry_enabled)
-    } else {
-        Some(2)
-    }
+    if gateway { gateway_attempts(retry_enabled) } else { Some(2) }
 }
 
 /// Whether one more transport attempt is allowed. `transport_retries` is how many retries this
@@ -1959,7 +1976,6 @@ fn replay_5xx_gap(replays: u32) -> Duration {
     let factor = 1u32 << replays.min(6);
     REPLAY_GAP.saturating_mul(factor).min(MAX_RETRY_GAP)
 }
-
 
 /// Whether today's OpenRouter **free** budget has any bearing on this request.
 ///
@@ -2024,22 +2040,15 @@ fn quota_window_spent(text: &str) -> bool {
 /// Anything that is not the vendor's `{"error":{"message":…}}` shape passes through untouched: a
 /// rewritten body would be a worse lie than an unattributed one.
 fn name_upstream(body: &[u8], url: &str) -> Vec<u8> {
-    let host = url
-        .split("://")
-        .nth(1)
-        .and_then(|rest| rest.split('/').next())
-        .unwrap_or("");
+    let host = url.split("://").nth(1).and_then(|rest| rest.split('/').next()).unwrap_or("");
     if host.is_empty() {
         return body.to_vec();
     }
     let Ok(mut parsed) = serde_json::from_slice::<Value>(body) else {
         return body.to_vec();
     };
-    let Some(message) = parsed
-        .get("error")
-        .and_then(|error| error.get("message"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    let Some(message) =
+        parsed.get("error").and_then(|error| error.get("message")).and_then(Value::as_str).map(str::to_string)
     else {
         return body.to_vec();
     };
@@ -2114,10 +2123,7 @@ fn header_pairs(response: &reqwest::blocking::Response) -> Vec<(String, String)>
 /// cannot honour `retry-after` and sleep. A non-2xx replay is reported as a failure instead of
 /// being spliced into the SSE stream.
 fn replay_upstream(
-    client: &reqwest::blocking::Client,
-    url: &str,
-    authorization: Option<&str>,
-    headers: &[(String, String)],
+    client: &reqwest::blocking::Client, url: &str, authorization: Option<&str>, headers: &[(String, String)],
     payload: &[u8],
 ) -> Result<reqwest::blocking::Response, String> {
     let mut builder = client.post(url).header("Content-Type", "application/json");
@@ -2127,10 +2133,7 @@ fn replay_upstream(
     for (name, value) in headers {
         builder = builder.header(name.as_str(), value.as_str());
     }
-    let response = builder
-        .body(payload.to_vec())
-        .send()
-        .map_err(|error| format!("http client: {error}"))?;
+    let response = builder.body(payload.to_vec()).send().map_err(|error| format!("http client: {error}"))?;
     if !(200..=299).contains(&response.status().as_u16()) {
         return Err(format!("upstream answered {}", response.status()));
     }
@@ -2147,16 +2150,8 @@ fn replay_upstream(
 /// passes false and keeps the behaviour it always had.
 #[allow(clippy::too_many_arguments)]
 fn relay(
-    request: tiny_http::Request,
-    model: &str,
-    url: &str,
-    authorization: Option<&str>,
-    headers: &[(&str, &str)],
-    payload: Vec<u8>,
-    watch_stall: bool,
-    watch_openrouter_errors: bool,
-    chat_protocol: bool,
-    portable_fallback: bool,
+    request: tiny_http::Request, model: &str, url: &str, authorization: Option<&str>, headers: &[(&str, &str)],
+    payload: Vec<u8>, watch_stall: bool, watch_openrouter_errors: bool, chat_protocol: bool, portable_fallback: bool,
     gateway: bool,
 ) -> Result<(), String> {
     // `forward_routed` computes this exactly once, for the one gateway that documents the
@@ -2264,10 +2259,7 @@ fn relay(
             // Only the header phase is cut; a stream that already started keeps its 20min idle /
             // 60min hard clocks.
             HeaderWait::Timeout => {
-                log::warn!(
-                    "bridge: upstream response headers timed out after {}s",
-                    HEADER_TIMEOUT.as_secs()
-                );
+                log::warn!("bridge: upstream response headers timed out after {}s", HEADER_TIMEOUT.as_secs());
                 return respond(
                     request,
                     504,
@@ -2322,27 +2314,28 @@ fn relay(
         // One recovery attempt only: if the retry fails for the same reason there is nothing left
         // to strip and the caller must see the real error. The blob is only reusable by the
         // organization that produced it, so this repair has no alternative shape to try.
-        if !attempted_reasoning_drop && is_invalid_encrypted_content(&text) {
-            if let Some(stripped) = drop_reasoning_items(&payload) {
-                attempted_reasoning_drop = true;
-                recovery_steps += 1;
-                payload = stripped;
-                log::warn!("bridge: retrying after invalid_encrypted_content ({status})");
-                continue;
-            }
+        if !attempted_reasoning_drop
+            && is_invalid_encrypted_content(&text)
+            && let Some(stripped) = drop_reasoning_items(&payload)
+        {
+            attempted_reasoning_drop = true;
+            recovery_steps += 1;
+            payload = stripped;
+            log::warn!("bridge: retrying after invalid_encrypted_content ({status})");
+            continue;
         }
         // Fallback for an item type `normalize_item_ids` has no rule for: drop exactly the id the
         // backend named and try once. Anything else is passed through untouched.
-        if !attempted_id_drop && is_id_prefix_mismatch(&text) {
-            if let Some(index) = refused_input_index(&text) {
-                if let Some(fixed) = drop_item_id(&payload, index) {
-                    attempted_id_drop = true;
-                    recovery_steps += 1;
-                    payload = fixed;
-                    log::warn!("bridge: retrying after an id-prefix refusal on input[{index}]");
-                    continue;
-                }
-            }
+        if !attempted_id_drop
+            && is_id_prefix_mismatch(&text)
+            && let Some(index) = refused_input_index(&text)
+            && let Some(fixed) = drop_item_id(&payload, index)
+        {
+            attempted_id_drop = true;
+            recovery_steps += 1;
+            payload = fixed;
+            log::warn!("bridge: retrying after an id-prefix refusal on input[{index}]");
+            continue;
         }
         // A thread written by another vendor replays ids and encrypted reasoning that only that
         // vendor can interpret. Some upstreams refuse the whole request without naming a field —
@@ -2356,14 +2349,13 @@ fn relay(
             && !attempted_portable
             && recovery_steps < RECOVERY_MAX_STEPS
             && (matches!(status, 400 | 422) || may_probe)
+            && let Some(stripped) = portable_history(&payload)
         {
-            if let Some(stripped) = portable_history(&payload) {
-                attempted_portable = true;
-                recovery_steps += 1;
-                payload = stripped;
-                log::warn!("bridge: retrying after {status} with a portable history");
-                continue;
-            }
+            attempted_portable = true;
+            recovery_steps += 1;
+            payload = stripped;
+            log::warn!("bridge: retrying after {status} with a portable history");
+            continue;
         }
         // 包大到一定程度，条目数和体积本身就会成为拒绝理由 —— 而这类拒绝常常连一句解释都没有
         // （空 body 的 404/413）。这是唯一能真正把包缩小的补救：保留最近的回合，丢掉最老的历史。
@@ -2372,17 +2364,13 @@ fn relay(
             && recovery_steps < RECOVERY_MAX_STEPS
             && may_probe
             && payload.len() >= TRIM_MIN_PAYLOAD
+            && let Some(trimmed) = trim_history(&payload, TRIM_MAX_ITEMS, TRIM_BUDGET_BYTES)
         {
-            if let Some(trimmed) = trim_history(&payload, TRIM_MAX_ITEMS, TRIM_BUDGET_BYTES) {
-                attempted_trim = true;
-                recovery_steps += 1;
-                payload = trimmed;
-                log::warn!(
-                    "bridge: retrying after {status} with the oldest history trimmed ({} bytes)",
-                    payload.len()
-                );
-                continue;
-            }
+            attempted_trim = true;
+            recovery_steps += 1;
+            payload = trimmed;
+            log::warn!("bridge: retrying after {status} with the oldest history trimmed ({} bytes)", payload.len());
+            continue;
         }
         // OpenRouter answers a burst with HTTP 429 instead of the structured `server_is_overloaded`
         // SSE event ChatGPT emits. When the user has switched the OpenRouter「模型异常提醒」off,
@@ -2409,8 +2397,8 @@ fn relay(
             // The ceiling only ever applies to a free model (see `free_quota_applies`): a paid model
             // refused by a short burst window must fall through to the normal replay below, never be
             // answered with「免费额度已用完」.
-            let quota_blocked = free_quota_applies(gateway, openrouter, model)
-                && crate::provider_quota::free_quota_blocked();
+            let quota_blocked =
+                free_quota_applies(gateway, openrouter, model) && crate::provider_quota::free_quota_blocked();
             if free_quota_refusal(muted, quota_blocked) {
                 // Note what this instant is *not*: it is when the budget comes back, which
                 // `provider_quota` may have derived from the daily counter's UTC rollover rather
@@ -2438,14 +2426,8 @@ fn relay(
         // company gateway's "Enterprise gateway request failed" 502 used to surface as a dead
         // turn the user had to retype. What happens next is the switch's call: on means keep going
         // until the retry window closes, off means the vendor's error reaches the reader at once.
-        if matches!(status, 502 | 503 | 504)
-            && may_replay_5xx(
-                gateway,
-                gateway_retry_enabled(),
-                replays_gateway,
-                retry_deadline,
-                Instant::now(),
-            )
+        if matches!(status, 502..=504)
+            && may_replay_5xx(gateway, gateway_retry_enabled(), replays_gateway, retry_deadline, Instant::now())
         {
             let delay = replay_5xx_gap(replays_gateway);
             replays_gateway += 1;
@@ -2505,10 +2487,8 @@ fn relay(
     let replay_client = client.clone();
     let replay_url = url.to_string();
     let replay_authorization = authorization.map(str::to_string);
-    let replay_headers: Vec<(String, String)> = headers
-        .iter()
-        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
-        .collect();
+    let replay_headers: Vec<(String, String)> =
+        headers.iter().map(|(name, value)| ((*name).to_string(), (*value).to_string())).collect();
     let replay_payload = payload.clone();
     // Two independent mute switches, both read per request so a settings change applies without
     // restarting the engine. The overload mute only arms on the native ChatGPT route; the 429
@@ -2524,6 +2504,7 @@ fn relay(
     let retry_model = model.to_owned();
     let retry_request_id = request_id.clone();
     std::thread::spawn(move || {
+        let stream_started = Instant::now();
         let mut upstream = response;
         let mut chunk = [0u8; 8192];
         // Hold the first SSE event until it is complete. Only then can a capacity refusal be
@@ -2542,8 +2523,8 @@ fn relay(
         let mut translator = if chat_protocol { Some(ChatResponsesStream::new()) } else { None };
         // `data` is what the mute/replay inspection sees; `outgoing` is what actually goes downstream.
         let emit = |tx: &std::sync::mpsc::SyncSender<StreamChunk>,
-                        translator: &mut Option<ChatResponsesStream>,
-                        data: Vec<u8>|
+                    translator: &mut Option<ChatResponsesStream>,
+                    data: Vec<u8>|
          -> bool {
             let Some(translator) = translator.as_mut() else {
                 return tx.send(StreamChunk::Data(data)).is_ok();
@@ -2577,7 +2558,9 @@ fn relay(
                 // uncounted gateway budget as the connect/header paths. `stream_prelude` returns
                 // `Forward` for a rate-limit/quota event, so a real server-side limit never
                 // reaches this branch and is surfaced instead of retried.
-                if gateway_retry_enabled() && may_retry_transport(transport_retries, attempts, retry_deadline, Instant::now()) {
+                if gateway_retry_enabled()
+                    && may_retry_transport(transport_retries, attempts, retry_deadline, Instant::now())
+                {
                     let gap = retry_gap(transport_retries);
                     transport_retries += 1;
                     note_retry(&mut silent_retries, &mut alerted_retrying, &retry_model, &retry_request_id);
@@ -2627,8 +2610,7 @@ fn relay(
                 Ok(count) => {
                     if !sent_any && (replay_mute || replay_429) {
                         head.extend_from_slice(&chunk[..count]);
-                        let complete =
-                            head.windows(2).any(|pair| pair == b"\n\n") || head.len() >= FIRST_EVENT_CAP;
+                        let complete = head.windows(2).any(|pair| pair == b"\n\n") || head.len() >= FIRST_EVENT_CAP;
                         if !complete {
                             continue;
                         }
@@ -2664,25 +2646,24 @@ fn relay(
                                 }
                                 Err(error) => {
                                     log::warn!("bridge: muted replay failed: {error}");
-                                    let _ =
-                                        tx.send(StreamChunk::Failed(format!("bridge replay: {error}")));
+                                    let _ = tx.send(StreamChunk::Failed(format!("bridge replay: {error}")));
                                     break;
                                 }
                             }
                         }
                     }
-                    let data = if head.is_empty() {
-                        chunk[..count].to_vec()
-                    } else {
-                        std::mem::take(&mut head)
-                    };
+                    let data = if head.is_empty() { chunk[..count].to_vec() } else { std::mem::take(&mut head) };
                     if !emit(&tx, &mut translator, data) {
                         break;
                     }
                     sent_any = true;
                 }
                 Err(error) => {
-                    log::warn!("bridge: upstream stream read failed: {error}");
+                    log::warn!(
+                        "bridge: upstream stream read failed: {error}; request={retry_request_id} model={retry_model} stream_ms={} forwarded={sent_any} io_kind={:?}",
+                        stream_started.elapsed().as_millis(),
+                        stream_io_kind(&error)
+                    );
                     let _ = tx.send(StreamChunk::Failed(error.to_string()));
                     break;
                 }
@@ -2726,12 +2707,15 @@ fn relay(
 }
 
 /// GET passthrough (model discovery through the gateway).
-fn forward_plain(request: tiny_http::Request, url: &str, method: &str, authorization: Option<&str>) -> Result<(), String> {
+fn forward_plain(
+    request: tiny_http::Request, url: &str, method: &str, authorization: Option<&str>,
+) -> Result<(), String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|error| format!("http client: {error}"))?;
-    let mut builder = client.request(reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET), url);
+    let mut builder =
+        client.request(reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET), url);
     if let Some(authorization) = authorization {
         builder = builder.header("Authorization", authorization);
     }
@@ -2792,11 +2776,11 @@ fn sanitize(body: &[u8]) -> Vec<u8> {
         if !is_reasoning {
             continue;
         }
-        if let Some(object) = item.as_object_mut() {
-            if object.contains_key("content") {
-                object.insert("content".to_string(), Value::Array(Vec::new()));
-                stripped += 1;
-            }
+        if let Some(object) = item.as_object_mut()
+            && object.contains_key("content")
+        {
+            object.insert("content".to_string(), Value::Array(Vec::new()));
+            stripped += 1;
         }
     }
     if stripped > 0 {
@@ -2819,7 +2803,10 @@ mod tests {
         let relay = std::thread::spawn(move || {
             let mut request = upstream.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
             assert_eq!(request.url(), "/v1/responses");
-            assert!(request.headers().iter().any(|header| header.field.equiv("Authorization") && header.value.as_str() == "Bearer native-relay-secret"));
+            assert!(
+                request.headers().iter().any(|header| header.field.equiv("Authorization")
+                    && header.value.as_str() == "Bearer native-relay-secret")
+            );
             let mut body = String::new();
             request.as_reader().read_to_string(&mut body).unwrap();
             let body: Value = serde_json::from_str(&body).unwrap();
@@ -2834,8 +2821,9 @@ mod tests {
         });
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let address = server.server_addr().to_ip().unwrap();
-        let client = std::thread::spawn(move || {
-            reqwest::blocking::Client::new().post(format!("http://{address}/alwith/responses"))
+        let client =
+            std::thread::spawn(move || {
+                reqwest::blocking::Client::new().post(format!("http://{address}/alwith/responses"))
                 .bearer_auth("alwith-router")
                 .header("x-openai-internal-codex-responses-lite", "1")
                 .json(&serde_json::json!({"model":format!("{gateway}/issued/model"),"input":[
@@ -2843,7 +2831,7 @@ mod tests {
                     {"type":"reasoning","content":[{"text":"kept"}]}
                 ]}))
                 .send().unwrap()
-        });
+            });
         handle(server.recv_timeout(Duration::from_secs(5)).unwrap().unwrap()).unwrap();
         let response = client.join().unwrap();
         assert_eq!(response.status().as_u16(), 202);
@@ -2853,9 +2841,13 @@ mod tests {
         assert!(!router_routes().read().unwrap().contains_key(gateway));
         assert!(routes().read().unwrap().contains_key(gateway));
         let rejected = std::thread::spawn(move || {
-            reqwest::blocking::Client::new().post(format!("http://{address}/alwith/responses"))
+            reqwest::blocking::Client::new()
+                .post(format!("http://{address}/alwith/responses"))
                 .json(&serde_json::json!({"model":format!("{gateway}/issued/model")}))
-                .send().unwrap().status().as_u16()
+                .send()
+                .unwrap()
+                .status()
+                .as_u16()
         });
         handle(server.recv_timeout(Duration::from_secs(5)).unwrap().unwrap()).unwrap();
         assert_eq!(rejected.join().unwrap(), 404, "legacy registration must not bypass shared-route revocation");
@@ -2932,7 +2924,8 @@ mod tests {
 
     #[test]
     fn an_all_web_search_tool_list_is_removed_entirely() {
-        let mut body: Value = serde_json::from_slice(br#"{"model":"m","input":[],"tools":[{"type":"web_search"}]}"#).unwrap();
+        let mut body: Value =
+            serde_json::from_slice(br#"{"model":"m","input":[],"tools":[{"type":"web_search"}]}"#).unwrap();
         assert_eq!(strip_web_search_tools(&mut body), 1);
         assert!(body.get("tools").is_none(), "an empty tools array is not sent");
     }
@@ -3191,7 +3184,7 @@ data: [DONE]
         out.extend(stream.finish());
         let names = event_names(&out);
         let text_done = names.iter().position(|name| name == "response.output_item.done").unwrap();
-        let call_added = names.iter().position(|name| name == "response.output_item.added" ).unwrap();
+        let call_added = names.iter().position(|name| name == "response.output_item.added").unwrap();
         assert!(text_done > call_added, "the message item closes before the call item opens");
         let payloads = event_payloads(&out);
         let arguments: String = payloads
@@ -3200,11 +3193,7 @@ data: [DONE]
             .map(|value| value["delta"].as_str().unwrap())
             .collect();
         assert_eq!(arguments, "{\"cmd\":\"ls\"}");
-        let call_done = payloads
-            .iter()
-            .filter(|value| value["type"] == "response.output_item.done")
-            .last()
-            .unwrap();
+        let call_done = payloads.iter().rfind(|value| value["type"] == "response.output_item.done").unwrap();
         assert_eq!(call_done["item"]["type"], "function_call");
         assert_eq!(call_done["item"]["call_id"], "call_1");
         assert_eq!(call_done["item"]["arguments"], "{\"cmd\":\"ls\"}");
@@ -3251,12 +3240,7 @@ data: [DONE]
             Prelude::Reconnect
         );
         // A server-side limit is a final answer, not a transport failure: never reconnect into it.
-        for limit in [
-            "rate_limit_exceeded",
-            "insufficient_quota",
-            "usage_limit_reached",
-            "quota_exceeded",
-        ] {
+        for limit in ["rate_limit_exceeded", "insufficient_quota", "usage_limit_reached", "quota_exceeded"] {
             let frame = format!(
                 "data: {{\"type\":\"response.failed\",\"response\":{{\"error\":{{\"code\":\"{limit}\"}}}}}}\n\n"
             );
@@ -3409,9 +3393,7 @@ data: [DONE]
     }
 
     fn stream_reader(
-        chunks: Vec<StreamChunk>,
-        idle: Duration,
-        hard: Duration,
+        chunks: Vec<StreamChunk>, idle: Duration, hard: Duration,
     ) -> (StreamReader, std::sync::mpsc::SyncSender<StreamChunk>) {
         let (tx, rx) = std::sync::mpsc::sync_channel::<StreamChunk>(64);
         for chunk in chunks {
@@ -3480,6 +3462,15 @@ data: [DONE]
         let text = String::from_utf8(drain_stream(&mut reader)).unwrap();
         assert!(text.contains("event: response.failed"), "{}", text);
         assert!(text.contains("上游连接被关闭"), "{}", text);
+    }
+
+    #[test]
+    fn stream_io_diagnostics_only_identify_known_transport_causes() {
+        use std::io::{Error, ErrorKind};
+
+        let wrapped = Error::other(Error::from(ErrorKind::ConnectionReset));
+        assert_eq!(super::stream_io_kind(&wrapped), Some(ErrorKind::ConnectionReset));
+        assert_eq!(super::stream_io_kind(&Error::other("request or response body error")), None);
     }
 
     #[test]
@@ -3674,11 +3665,11 @@ data: [DONE]
         // (today's behaviour: an overload reaches the user as a notice) and survives a toggle.
         let previous = overload_mute();
         set_overload_mute(false);
-        assert_eq!(overload_mute(), false, "default keeps today's notice behaviour");
+        assert!(!overload_mute(), "default keeps today's notice behaviour");
         set_overload_mute(true);
-        assert_eq!(overload_mute(), true, "a muted switch is read back immediately");
+        assert!(overload_mute(), "a muted switch is read back immediately");
         set_overload_mute(false);
-        assert_eq!(overload_mute(), false, "the switch clears cleanly");
+        assert!(!overload_mute(), "the switch clears cleanly");
         set_overload_mute(previous);
     }
 
@@ -3732,7 +3723,10 @@ data: [DONE]
         let outcome = send_with_header_timeout(builder, Duration::from_millis(200));
         let elapsed = start.elapsed();
         assert!(matches!(outcome, HeaderWait::Timeout), "a silent upstream must time out");
-        assert!(elapsed < Duration::from_secs(2), "worker must be freed by the header timeout, not the 5s client timeout: {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "worker must be freed by the header timeout, not the 5s client timeout: {elapsed:?}"
+        );
         // Release the silent listener; the detached `.send()` then errors out and exits.
         let _ = stop_tx.send(());
         let _ = holder.join();
@@ -3815,10 +3809,7 @@ data: [DONE]
 
         assert!(result.is_ok(), "relay failed: {result:?}");
         assert_eq!(hits.load(Ordering::Relaxed), 1, "a non-overload event must never be replayed");
-        assert!(
-            body.contains("response.output_text.delta"),
-            "the buffered event must reach the engine intact: {body}"
-        );
+        assert!(body.contains("response.output_text.delta"), "the buffered event must reach the engine intact: {body}");
         assert!(body.contains("hello"), "the complete first event must be forwarded: {body}");
     }
 
@@ -3994,7 +3985,9 @@ data: [DONE]
         // 真实形状：压缩摘要 + 成对的工具调用 + 助手发言 + 用户提问，共 40 回合。
         let mut input: Vec<Value> = Vec::new();
         for round in 0..40 {
-            input.push(json!({"type":"message","role":"user","content":[{"type":"input_text","text":format!("q{round}")}]}));
+            input.push(
+                json!({"type":"message","role":"user","content":[{"type":"input_text","text":format!("q{round}")}]}),
+            );
             input.push(json!({"type":"reasoning","id":format!("rs_{round}"),"summary":[]}));
             input.push(json!({"type":"function_call","call_id":format!("c{round}"),"name":"shell","arguments":"{}"}));
             input.push(json!({"type":"function_call_output","call_id":format!("c{round}"),"output":"ok"}));
@@ -4013,8 +4006,10 @@ data: [DONE]
         // 末条一字不动 —— 那是读者正在等的那一轮。
         assert_eq!(kept.last().unwrap()["content"][0]["text"], "a39");
         // 边界上的半个工具链必须成对消失，否则下一轮会以另一种方式失败。
-        let calls: Vec<&str> = kept.iter().filter(|i| i["type"] == "function_call").filter_map(|i| i["call_id"].as_str()).collect();
-        let outputs: Vec<&str> = kept.iter().filter(|i| i["type"] == "function_call_output").filter_map(|i| i["call_id"].as_str()).collect();
+        let calls: Vec<&str> =
+            kept.iter().filter(|i| i["type"] == "function_call").filter_map(|i| i["call_id"].as_str()).collect();
+        let outputs: Vec<&str> =
+            kept.iter().filter(|i| i["type"] == "function_call_output").filter_map(|i| i["call_id"].as_str()).collect();
         assert_eq!(calls, outputs, "every kept call has its output and vice versa");
         // 原文没被改动。
         assert_eq!(parsed["model"], "gpt-6.2-sol");
@@ -4028,7 +4023,9 @@ data: [DONE]
 
         let mut long: Vec<Value> = Vec::new();
         for round in 0..3 {
-            long.push(json!({"type":"message","role":"user","content":[{"type":"input_text","text":format!("q{round}")}]}));
+            long.push(
+                json!({"type":"message","role":"user","content":[{"type":"input_text","text":format!("q{round}")}]}),
+            );
             long.push(json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":format!("a{round}")}]}));
         }
         let body = serde_json::to_vec(&json!({"model":"m","input":long})).unwrap();
@@ -4102,8 +4099,13 @@ data: [DONE]
             assert!(input.len() < RETRIED_ITEM_COUNT, "the retry must be smaller, got {}", input.len());
             assert_eq!(input[0]["type"], "message");
             assert_eq!(input[0]["role"], "user", "a trimmed window cannot start mid-turn");
-            let calls: Vec<&str> = input.iter().filter(|i| i["type"] == "function_call").filter_map(|i| i["call_id"].as_str()).collect();
-            let outputs: Vec<&str> = input.iter().filter(|i| i["type"] == "function_call_output").filter_map(|i| i["call_id"].as_str()).collect();
+            let calls: Vec<&str> =
+                input.iter().filter(|i| i["type"] == "function_call").filter_map(|i| i["call_id"].as_str()).collect();
+            let outputs: Vec<&str> = input
+                .iter()
+                .filter(|i| i["type"] == "function_call_output")
+                .filter_map(|i| i["call_id"].as_str())
+                .collect();
             assert_eq!(calls, outputs, "no orphan tool call may survive the cut");
             second
                 .respond(tiny_http::Response::from_string("event: response.created\n\n").with_header(
@@ -4178,10 +4180,7 @@ data: [DONE]
                 let (mut stream, _) = upstream.accept().unwrap();
                 let mut scratch = [0u8; 8192];
                 let count = stream.read(&mut scratch).unwrap_or(0);
-                bodies_in_thread
-                    .lock()
-                    .unwrap()
-                    .push(String::from_utf8_lossy(&scratch[..count]).to_string());
+                bodies_in_thread.lock().unwrap().push(String::from_utf8_lossy(&scratch[..count]).to_string());
                 let hit = hits_in_thread.fetch_add(1, Ordering::Relaxed) + 1;
                 if hit == 1 {
                     let _ = write!(
@@ -4256,11 +4255,7 @@ data: [DONE]
     /// stays down must surface its own error. What "absorbed" means is `retry_on`'s call: on is
     /// uncounted, off is immediate.
     fn gateway_502_replays_then_surfaces(
-        start: u16,
-        fail_times: usize,
-        expected_hits: usize,
-        expect_success: bool,
-        retry_on: bool,
+        start: u16, fail_times: usize, expected_hits: usize, expect_success: bool, retry_on: bool,
     ) {
         use std::io::Write;
         use std::net::{TcpListener, TcpStream};
@@ -4348,7 +4343,10 @@ data: [DONE]
             assert!(body.contains("response.completed"), "the replay must reach the engine: {body}");
             assert!(!body.contains("Enterprise gateway request failed"), "the 502 must not reach the engine: {body}");
         } else {
-            assert!(body.contains("Enterprise gateway request failed"), "a dead gateway must surface its error: {body}");
+            assert!(
+                body.contains("Enterprise gateway request failed"),
+                "a dead gateway must surface its error: {body}"
+            );
         }
     }
 
@@ -4619,11 +4617,9 @@ data: [DONE]
     #[test]
     fn a_spent_window_refusal_names_the_upstream_that_sent_it() {
         let spent = r#"{"error":{"code":"rate_limit_exceeded","message":"已达到速率上限：3小时内最多250次请求，当前已使用258次，预计133分钟后（10:11）恢复","type":"new_api_error"}}"#;
-        let named: Value = serde_json::from_slice(&name_upstream(
-            spent.as_bytes(),
-            "https://vip.aipro.love/v1/responses",
-        ))
-        .expect("the vendor's JSON survives the annotation");
+        let named: Value =
+            serde_json::from_slice(&name_upstream(spent.as_bytes(), "https://vip.aipro.love/v1/responses"))
+                .expect("the vendor's JSON survives the annotation");
         let message = named["error"]["message"].as_str().expect("message stays a string");
         // The vendor's own wording and reset time must reach the reader untouched.
         assert!(message.starts_with("已达到速率上限：3小时内最多250次请求"));
@@ -4633,7 +4629,10 @@ data: [DONE]
 
         // Anything that is not the vendor's shape must pass through byte-for-byte: a half-rewritten
         // body would be a worse lie than an unattributed one.
-        assert_eq!(name_upstream(b"<html>502 Bad Gateway</html>", "https://x.test/v1"), b"<html>502 Bad Gateway</html>");
+        assert_eq!(
+            name_upstream(b"<html>502 Bad Gateway</html>", "https://x.test/v1"),
+            b"<html>502 Bad Gateway</html>"
+        );
         assert_eq!(name_upstream(br#"{"message":"nope"}"#, "https://x.test/v1"), br#"{"message":"nope"}"#);
         assert_eq!(name_upstream(spent.as_bytes(), ""), spent.as_bytes(), "no host means nothing to name");
     }

@@ -639,10 +639,7 @@ mod tests {
 
         emitted.lock().unwrap().clear();
         svc.check_for_updates(&MockChecker(Err("net down".into())));
-        assert!(matches!(
-            svc.state(),
-            State::CheckFailed { reason: CheckFailureReason::Unknown }
-        ));
+        assert!(matches!(svc.state(), State::CheckFailed { reason: CheckFailureReason::Unknown }));
         assert!(emitted.lock().unwrap().iter().any(|s| matches!(s, State::CheckFailed { .. })));
 
         svc.set_state(State::Downloading { update: sample_update("0.2.0"), downloaded_bytes: None, total_bytes: None });
@@ -672,10 +669,7 @@ mod tests {
             classify_check_error("Could not fetch a valid release JSON from the remote"),
             CheckFailureReason::Unavailable
         );
-        assert_eq!(
-            classify_check_error("HTTP status client error (404 Not Found)"),
-            CheckFailureReason::Unavailable
-        );
+        assert_eq!(classify_check_error("HTTP status client error (404 Not Found)"), CheckFailureReason::Unavailable);
         assert_eq!(
             classify_check_error("cannot extract filename from download URL"),
             CheckFailureReason::InvalidRelease

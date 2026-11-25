@@ -19,7 +19,7 @@ const KEY = "workspace.treeVisible"
 const subscribe = (notify: () => void) => settingsStore.subscribe(notify)
 const read = () => settingsStore.get<boolean>(KEY) ?? true
 
-export function setTreeVisiblePreference(visible: boolean): Promise<void> {
+function setTreeVisiblePreference(visible: boolean): Promise<void> {
   // A redundant choice never reaches the store; comparisons use the stored value, not the caller's.
   if (visible === read()) return Promise.resolve()
   return updateSettings({ [KEY]: visible })

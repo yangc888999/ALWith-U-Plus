@@ -6,7 +6,7 @@ const AVATAR_SIZE = 256
 const JPEG_QUALITY = 0.86
 const MAX_SOURCE_BYTES = 20 * 1024 * 1024
 
-export const AVATAR_ERROR_CODES = ["not-an-image", "too-large", "unreadable"] as const
+const AVATAR_ERROR_CODES = ["not-an-image", "too-large", "unreadable"] as const
 export type AvatarErrorCode = (typeof AVATAR_ERROR_CODES)[number]
 
 export class AvatarImageError extends Error {

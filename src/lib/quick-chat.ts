@@ -47,7 +47,7 @@ export function isChatOwnDirectory(cwd: string | null | undefined): boolean {
 }
 
 /** `2026-11-08 22-54-03` — sortable, filesystem-safe, and readable in a folder list. */
-export function chatStamp(date: Date = new Date()): string {
+function chatStamp(date: Date = new Date()): string {
   const pad = (value: number) => String(value).padStart(2, "0")
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`
 }

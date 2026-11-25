@@ -24,5 +24,5 @@
     "@nyssance/ts7-lint"
   ],
   // rustc supplies the host target triple; fmt is built into Bun rather than installed from npm.
-  "ignoreBinaries": ["rustc", "fmt"]
+  "ignoreBinaries": ["rustc"]
 }

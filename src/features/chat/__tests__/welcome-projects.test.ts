@@ -31,4 +31,16 @@ describe("recent projects", () => {
   test("a trailing separator does not become the project name", () => {
     expect(projectNameFromPath("/work/alpha/")).toBe("alpha")
   })
+
+  test("ties keep the order of the winning sessions, including undated projects", () => {
+    const row = (cwd: string, title: string, updatedAt: string | null) => ({ cwd, title, updatedAt })
+    const rows = [
+      row("/a", "old", null),
+      row("/b", "first", "2026-11-25"),
+      row("/a", "second", "2026-11-25"),
+      row("/a", "later tie", "2026-11-25"),
+      row("/c", "undated", null)
+    ]
+    expect(recentProjectsFrom(rows).map((project) => project.title)).toEqual(["first", "second", "undated"])
+  })
 })

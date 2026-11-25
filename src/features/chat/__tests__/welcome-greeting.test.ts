@@ -38,4 +38,3 @@ describe("welcome greeting", () => {
     expect(welcomeSubtitleKey("evening")).toBe("welcome.subtitle")
   })
 })
-

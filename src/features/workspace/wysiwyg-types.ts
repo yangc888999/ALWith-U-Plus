@@ -112,7 +112,7 @@ export const HTML_EDIT_FRAME_SOURCE = "alwith-html-edit"
 /** host → iframe. */
 export const HTML_EDIT_HOST_SOURCE = "alwith-html-edit-host"
 
-export interface HtmlEditReadyMessage {
+interface HtmlEditReadyMessage {
   source: typeof HTML_EDIT_FRAME_SOURCE
   type: "ready"
   /** Whether the document has a <body> that can become contentEditable. */
@@ -123,25 +123,25 @@ export interface HtmlEditReadyMessage {
    */
   nonce?: string | null
 }
-export interface HtmlEditModeMessage {
+interface HtmlEditModeMessage {
   source: typeof HTML_EDIT_FRAME_SOURCE
   type: "mode"
   nonce: string
   editing: boolean
 }
-export interface HtmlEditStateMessage {
+interface HtmlEditStateMessage {
   source: typeof HTML_EDIT_FRAME_SOURCE
   type: "state"
   nonce: string
   state: FormatState
 }
-export interface HtmlEditDirtyMessage {
+interface HtmlEditDirtyMessage {
   source: typeof HTML_EDIT_FRAME_SOURCE
   type: "dirty"
   nonce: string
   html: string
 }
-export interface HtmlEditErrorMessage {
+interface HtmlEditErrorMessage {
   source: typeof HTML_EDIT_FRAME_SOURCE
   type: "error"
   nonce: string

@@ -59,7 +59,7 @@ const MAX_DOCUMENT_CHARS = 6000
 export const GROUP_TURN_PREFIX = "〔"
 
 /** The moderator's summary when the user has not written a template of their own. */
-export const DEFAULT_ROUND_SUMMARY_TEMPLATE = `结论：
+const DEFAULT_ROUND_SUMMARY_TEMPLATE = `结论：
 - 
 
 待办：
