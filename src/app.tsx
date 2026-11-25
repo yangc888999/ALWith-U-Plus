@@ -576,6 +576,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     id: string
     generation: number
   } | null>(null)
+  const [pendingDraftGeneration, setPendingDraftGeneration] = useState<number | null>(null)
   const newChatInDirectory = useCallback(
     (cwd?: string | null, collectionId?: string, groupId: string | null = null) => {
       void operation
@@ -585,6 +586,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
               cwd === undefined ? (extensionSession.current?.cwd ?? lastDirectory) : cwd
             )
             client.releaseDraftSlot("main")
+            setPendingDraftGeneration(groupId === null ? surfaceGeneration + 1 : null)
             setDraftCollection(
               collectionId === undefined ? null : { id: collectionId, generation: surfaceGeneration + 1 }
             )
@@ -675,6 +677,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   )
 
   const draftCreated = useCallback((id: string) => {
+    setPendingDraftGeneration(null)
     setSelectedId(id)
   }, [])
 
@@ -1360,6 +1363,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           onCwdChange={chooseDraftFolder}
           onOpenProject={openRecentProject}
           onCreated={draftCreated}
+          onPrepareFailed={() => setPendingDraftGeneration(null)}
           onSendingChange={(id, sending) =>
             setSubmittingDraftId((current) => (sending ? id : current === id ? null : current))
           }
@@ -1407,6 +1411,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           sidebar={
             leading ? null : (
               <SessionSidebar
+                pendingDirectory={view === "chat" && selectedId === null && pendingDraftGeneration === surfaceGeneration ? lastDirectory : undefined}
                 screen={leading ? "leading" : "main"}
                 leadingPage={leadingPage}
                 selectedId={view === "chat" && mainVisible ? selectedId : null}

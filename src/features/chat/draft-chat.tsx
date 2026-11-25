@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core"
 import { ArrowUpRightIcon, FolderIcon } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
+import { toast } from "sonner"
 
 import type { DraftOwner } from "@/agent/client"
 import {
@@ -31,7 +32,7 @@ import { cn } from "@/lib/utils"
 
 import { ChatActionsMenu } from "./chat-actions-menu"
 import { focusComposer, SelectionMenu } from "./selection-menu"
-import { ChatEdgeActions } from "./chat-edge-actions"
+import { ChatMemoryButton } from "./chat-edge-actions"
 import { ChatHeader } from "./chat-header"
 import { ChatHostProvider } from "./chat-host"
 import { ChatComposer } from "./composer"
@@ -72,6 +73,7 @@ export function DraftChat({
   cwd,
   onCwdChange,
   onCreated,
+  onPrepareFailed,
   collectionId,
   onSendingChange,
   onVoiceHandoff,
@@ -92,6 +94,7 @@ export function DraftChat({
   onCwdChange: (cwd: string) => void
   /** Bind the precreated session to this surface without materializing a history entry. */
   onCreated: (sessionId: string) => void
+  onPrepareFailed?: () => void
   collectionId?: string
   /** Hold this composer only while its own first send is waiting for acceptance. */
   onSendingChange: (sessionId: string, sending: boolean) => void
@@ -154,8 +157,8 @@ export function DraftChat({
     inheritedEffort.current = inherited?.effort ?? null
     return inherited?.model ?? null
   })
-  const callbacks = useRef({ onCwdChange, onCreated })
-  callbacks.current = { onCwdChange, onCreated }
+  const callbacks = useRef({ onCwdChange, onCreated, onPrepareFailed })
+  callbacks.current = { onCwdChange, onCreated, onPrepareFailed }
   const currentId = useRef(id)
   currentId.current = id
   const mounted = useRef(false)
@@ -265,6 +268,7 @@ export function DraftChat({
           return
         }
         setError(failure)
+        callbacks.current.onPrepareFailed?.()
         setPreparing(false)
       }
     )
@@ -313,8 +317,8 @@ export function DraftChat({
       // conversation — only now does the session exist to receive it.
       if (inheritedEffort.current !== null) {
         const effort = inheritedEffort.current
+        await client.setConfig(target, "effort", effort)
         inheritedEffort.current = null
-        await client.setConfig(target, "effort", effort).catch(() => {})
       }
       if (accept === undefined) await client.prompt(target, prompt)
       else accept(await client.prompt(target, prompt))
@@ -335,6 +339,17 @@ export function DraftChat({
           onChange={onCwdChange}
           preparing={preparing}
         />
+        {!temporaryChat && (
+          <ChatMemoryButton
+            className="ms-auto"
+            sessionId={id ?? DRAFT_SESSION_ID}
+            onSend={
+              error === null && connection === "ready"
+                ? (text) => send([{ type: "text", text }])
+                : undefined
+            }
+          />
+        )}
       </div>
     </div>
   )
@@ -441,7 +456,11 @@ export function DraftChat({
                           client.state.runStates[session.id]?.state === "running" ||
                           client.state.draftSessions[session.id] === undefined)
                       if (started) {
-                        void client.setConfig(session.id, "model", value).catch(() => {})
+                        void client.setConfig(session.id, "model", value).catch((failure: unknown) => toast.error(describeError(failure)))
+                        return
+                      }
+                      if (value === model) {
+                        if (error !== null) setAttempt((previous) => previous + 1)
                         return
                       }
                       setPreparing(true)
@@ -541,24 +560,6 @@ export function DraftChat({
             )}
           </div>
         </div>
-        {/* A draft is still a conversation in this project: clearing the context lands here, and
-            the project memory must stay reachable without first sending a message (it used to be
-            missing exactly after 清除上下文 + reopening). Compress/clear have nothing to act on
-            yet — compress listens on a live session, clearing is what produced this draft. */}
-        {!temporaryChat && !chatSurface && (
-          <ChatEdgeActions
-            sessionId={id ?? DRAFT_SESSION_ID}
-            onSend={
-              // `send()` already waits for the preparation promise. Gating this on `id !== null &&
-              // !preparing` lost clicks in the one-frame gap between the draft materialising and
-              // React re-rendering: the memory prompt was silently parked in the composer instead
-              // of being sent. Only a real connection/startup failure should fall back to parking.
-              error === null && connection === "ready"
-                ? (text) => send([{ type: "text", text }])
-                : undefined
-            }
-          />
-        )}
         <SelectionMenu containerRef={selectionRoot} sessionId={DRAFT_SESSION_ID} scope="transcript" />
         <FilePreviewModal />
         <AlertDialog open={projectReminderOpen} onOpenChange={setProjectReminderOpen}>

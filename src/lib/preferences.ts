@@ -6,6 +6,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow"
 
 import type { NavigationInstrument, NavigationSoundMode } from "@/features/chat/codex/navigation-instruments"
 
+import { FONT_SIZE_DEFAULTS, resolveFontSizes, type FontSizes } from "./font-size"
 import { setProjectAppPreference } from "./project-app-preference"
 import { settingsStore, updateSettings } from "./settings-store"
 import { DEFAULT_UI_FONT, resolveUiFont, type UiFont } from "./ui-font"
@@ -21,6 +22,8 @@ export type Preferences = {
   zoomLevel: number | null
   /** Installed system family used by the application chrome. */
   uiFont: UiFont
+  /** Per-location text sizes; the defaults are the recommended 14/14/13px. */
+  fontSizes: FontSizes
   /** Explicit model choices are independent for the main and floating chat slots. */
   modelSelections: { main: string | null; chat: string | null }
   /** Sounds the user-message navigation rail plays (ALwith Desktop's navigation melody). */
@@ -43,6 +46,7 @@ const preferenceKeys: Record<keyof Preferences, string> = {
   language: "general.language",
   zoomLevel: "appearance.zoomLevel",
   uiFont: "appearance.uiFont",
+  fontSizes: "appearance.fontSizes",
   modelSelections: "chat.modelSelections",
   navigationSoundMode: "chat.navigationSoundMode",
   navigationInstrument: "chat.navigationInstrument",
@@ -70,6 +74,7 @@ export function defaultPreferences(): Preferences {
     language: null,
     zoomLevel: null,
     uiFont: DEFAULT_UI_FONT,
+    fontSizes: { ...FONT_SIZE_DEFAULTS },
     modelSelections: { main: null, chat: null },
     navigationSoundMode: "scale",
     navigationInstrument: "acoustic_grand_piano",
@@ -92,7 +97,8 @@ export async function loadPreferences(): Promise<Preferences> {
     navigationInstrument,
     externalEditor,
     sidebarPinned,
-    uiFont
+    uiFont,
+    fontSizes
   ] = await Promise.all([
     store.get<string>("lastProjectDirectory"),
     store.get<"chat" | "work">("defaultStartSurface"),
@@ -103,7 +109,8 @@ export async function loadPreferences(): Promise<Preferences> {
     store.get<NavigationInstrument>("navigationInstrument"),
     store.get<string>("externalEditor"),
     store.get<boolean>("sidebarPinned"),
-    store.get<string>("uiFont")
+    store.get<string>("uiFont"),
+    store.get<unknown>("fontSizes")
   ])
   let restoredDirectory = lastProjectDirectory ?? null
   if (restoredDirectory !== null) {
@@ -128,6 +135,7 @@ export async function loadPreferences(): Promise<Preferences> {
     language: language ?? null,
     zoomLevel: zoomLevel ?? null,
     uiFont: resolveUiFont(uiFont),
+    fontSizes: resolveFontSizes(fontSizes),
     modelSelections: modelSelections ?? { main: null, chat: null },
     navigationSoundMode: navigationSoundMode ?? "scale",
     navigationInstrument: navigationInstrument ?? "acoustic_grand_piano",

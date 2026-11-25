@@ -991,6 +991,8 @@ interface ModelRow {
   contextWindow: string
   reasoningLevels: string
   defaultReasoningLevel: string
+  /** True only after the reader changed the default; seeds follow the engine recommendation. */
+  defaultReasoningLevelExplicit: boolean
   /** Switched off models stay saved but never reach the picker. */
   enabled: boolean
 }
@@ -1009,6 +1011,7 @@ function toModelRow(model: CustomModel): ModelRow {
     contextWindow: model.contextWindow == null ? "" : String(model.contextWindow),
     reasoningLevels: (model.reasoningLevels ?? []).join(", "),
     defaultReasoningLevel: model.defaultReasoningLevel ?? "",
+    defaultReasoningLevelExplicit: model.defaultReasoningLevelExplicit === true,
     enabled: model.enabled ?? true
   }
 }
@@ -1043,6 +1046,7 @@ function parseModelRows(
       ...(contextWindow === undefined ? {} : { contextWindow: Math.round(contextWindow) }),
       ...(levels.length === 0 ? {} : { reasoningLevels: levels }),
       ...(fallback === "" ? {} : { defaultReasoningLevel: fallback }),
+      ...(row.defaultReasoningLevelExplicit && fallback !== "" ? { defaultReasoningLevelExplicit: true } : {}),
       // The switch state must survive the save: dropping it reset every row to enabled after
       // each "Save models", which read as the user's toggles never sticking.
       ...(row.enabled ? {} : { enabled: false })
@@ -1294,6 +1298,11 @@ export function ProviderRow({
     setModelsError(null)
   }
 
+  const editDefaultEffort = (key: string, value: string): void => {
+    const level = value === "auto" ? "" : value
+    editRow(key, { defaultReasoningLevel: level, defaultReasoningLevelExplicit: level.trim() !== "" })
+  }
+
   const [syncingModels, setSyncingModels] = useState(false)
   // Native OpenAI: the model list needs an endpoint and a token, but neither is used for chat —
   // the conversation runs on the Codex sign-in. Both are kept only for `GET /models`.
@@ -1442,6 +1451,7 @@ export function ProviderRow({
         contextWindow: "",
         reasoningLevels: "",
         defaultReasoningLevel: "",
+        defaultReasoningLevelExplicit: false,
         enabled: true
       }
     ])
@@ -2233,9 +2243,7 @@ export function ProviderRow({
                   <Select
                     value={String(row.defaultReasoningLevel ?? "").trim() || "auto"}
                     onValueChange={(value: string | null) =>
-                      editRow(row.key, {
-                        defaultReasoningLevel: value === null || value === "auto" ? "" : value
-                      })
+                      editDefaultEffort(row.key, value ?? "auto")
                     }
                   >
                     <SelectTrigger
@@ -2402,7 +2410,7 @@ export function ProviderRow({
                   <ModelEffortSelect
                     levels={row.reasoningLevels}
                     value={row.defaultReasoningLevel}
-                    onChange={(next) => editRow(row.key, { defaultReasoningLevel: next })}
+                    onChange={(next) => editDefaultEffort(row.key, next)}
                     ariaLabel={`${t("provider.modelDefaultEffort")} ${index + 1}`}
                   />
                 </label>
@@ -2684,7 +2692,11 @@ export function CustomProviderEditor({
       if (model.api_id !== apiId) return model
       if (change.enabled !== undefined) return { ...model, enabled: change.enabled }
       const level = change.defaultReasoningLevel ?? ""
-      return { ...model, defaultReasoningLevel: level === "" ? undefined : level }
+      return {
+        ...model,
+        defaultReasoningLevel: level === "" ? undefined : level,
+        defaultReasoningLevelExplicit: level !== ""
+      }
     })
     setPreviewModels(next)
     setModelsJson(JSON.stringify(next, null, 2))

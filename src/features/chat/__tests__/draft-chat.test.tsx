@@ -100,6 +100,7 @@ const windowPreferences: Preferences = {
   profileOwner: null,
   zoomLevel: null,
   uiFont: "pingfang",
+  fontSizes: { chat: 14, composer: 14, sidebar: 13, settings: 14 },
   modelSelections: { main: null, chat: null },
   navigationSoundMode: "none",
   navigationInstrument: "acoustic_grand_piano",
@@ -383,8 +384,8 @@ test("the new-task tabs keep Chat to one composer and open the newest recent con
 
 test("a draft keeps the project-memory action reachable", async () => {
   // Clearing the context archives the conversation and lands on a draft. The memory action lives on
-  // the chat column's edge, not in a session menu, so it has to survive that swap — it used to be
-  // missing exactly then, and after a reload too.
+  // the composer header beside the project chip, not in a session menu, so it has to survive that
+  // swap — it used to be missing exactly then, and after a reload too.
   const { restore } = await environment()
   const prompt = vi.spyOn(client, "prompt")
   const props = {
@@ -400,6 +401,7 @@ test("a draft keeps the project-memory action reachable", async () => {
   try {
     const read = await view.findByRole("button", { name: "Read project memory" })
     expect(read.getAttribute("title")).toBe("Read project memory")
+    expect(read.closest("[data-composer]")).not.toBeNull()
     // The edge action sends straight away only once the draft has materialised; before that it has
     // to park the text in the composer instead.
     await waitFor(() => expect(Object.keys(client.state.draftSessions)).toHaveLength(1))

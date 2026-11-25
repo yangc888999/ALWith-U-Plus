@@ -1,17 +1,17 @@
 // Interface fonts are installed system families, never bundled webfonts. A saved id is
 // validated before it reaches CSS so a stale preference cannot inject an arbitrary family.
-export const DEFAULT_UI_FONT = "pingfang"
+export const DEFAULT_UI_FONT = "system"
 
 export const UI_FONT_OPTIONS = [
-  {
-    id: "pingfang",
-    labelKey: "settings.uiFonts.pingfang",
-    family: '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Inter Variable", sans-serif'
-  },
   {
     id: "system",
     labelKey: "settings.uiFonts.system",
     family: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
+  },
+  {
+    id: "pingfang",
+    labelKey: "settings.uiFonts.pingfang",
+    family: '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Inter Variable", sans-serif'
   },
   {
     id: "hiragino",

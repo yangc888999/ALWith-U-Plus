@@ -87,6 +87,8 @@ beforeEach(async () => {
       if (command === "draft_directory") return args.cwd
       if (command === "pick_group_directory") return pickedGroupDirectory
       if (command === "workspace_open") return authorize === null ? args.path : authorize(required(args.path))
+      if (command === "html_preview_open") return { token: "preview", path: required(args.path) }
+      if (command === "html_preview_close") return null
       if (command === "workspace_watch" || command === "workspace_dirty" || command === "workspace_exit") return null
       if (command !== "workspace_file" || !args.request) throw new Error(`Unexpected native command: ${command}`)
       const r = args.request
@@ -116,6 +118,30 @@ beforeEach(async () => {
       }
     }
   )
+})
+
+test("only an annotatable HTML selection offers comments, never the next Markdown tab", async () => {
+  adapter = createMemoryAdapter({ "/a/report.html": "<body>HTML</body>", "/a/notes.MD": "# Notes" })
+  render(<Surface cwd="/a" defaultOpen />)
+  fireEvent.doubleClick(await screen.findByRole("treeitem", { name: /report.html/ }))
+  const frame = await waitFor(() => required(document.querySelector<HTMLIFrameElement>(".file-workspace-editor iframe")))
+  const target = required(frame.contentWindow)
+  const select = (canComment: boolean): void => {
+    fireEvent(window, new MessageEvent("message", { source: target, data: {
+      source: "alwith-preview", type: "selection", text: "HTML", rect: { left: 2, bottom: 10, width: 30 }, canComment
+    } }))
+  }
+  select(false)
+  expect(screen.getAllByRole("menuitem")).toHaveLength(2)
+  select(true)
+  const send = vi.spyOn(target, "postMessage")
+  fireEvent.click(screen.getByRole("menuitem", { name: "Comment" }))
+  expect(send).toHaveBeenCalledWith({ source: "alwith-preview-host", type: "comment" }, "*")
+  select(true)
+  fireEvent.doubleClick(await screen.findByRole("treeitem", { name: /notes.MD/ }))
+  await waitFor(() => expect(screen.queryByTestId("header-comments-toggle")).toBeNull())
+  select(true)
+  expect(screen.queryByRole("menuitem", { name: "Comment" })).toBeNull()
 })
 
 test("remount restores pinned files, active file and expanded folders without draft persistence", async () => {

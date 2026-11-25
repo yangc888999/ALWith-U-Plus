@@ -360,6 +360,18 @@ fn setting_validity(key: &str, value: &Value) -> Option<bool> {
             value.as_str(),
             Some("pingfang" | "system" | "hiragino" | "songti" | "kaiti" | "yahei" | "simsun")
         ),
+        "appearance.fontSizes" => value.as_object().is_some_and(|sizes| {
+            (3..=4).contains(&sizes.len())
+                && sizes
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "chat" | "composer" | "sidebar" | "settings"))
+                && ["chat", "composer", "sidebar", "settings"].iter().all(|key| {
+                    sizes
+                        .get(*key)
+                        .and_then(Value::as_f64)
+                        .map_or(true, |size| size.fract() == 0.0 && (11.0..=24.0).contains(&size))
+                })
+        }),
         // Local profile override: a plain name, and a square data URL small enough to keep
         // every settings snapshot cheap (the picker writes ~30 KB at 256px).
         "profile.nickname" => value.as_str().is_some_and(|s| s.chars().count() <= 64),

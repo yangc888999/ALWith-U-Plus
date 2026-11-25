@@ -22,6 +22,7 @@ import { describeError } from "@/lib/error-text"
 import { initI18n } from "@/lib/i18n"
 import { startPreferenceSync } from "@/lib/preference-sync"
 import { loadPreferences, type Preferences } from "@/lib/preferences"
+import { applyFontSizes } from "@/lib/font-size"
 import { installScrollActivity } from "@/lib/scroll-activity"
 import { bootstrapSettings } from "@/lib/settings-store"
 import { installToastErrorLocalization } from "@/lib/toast-error"
@@ -60,6 +61,7 @@ export function bootstrapAuxWindow(opts: {
     })
     const preferences = await loadPreferences()
     applyUiFont(preferences.uiFont)
+    applyFontSizes(preferences.fontSizes)
     predictionPreference.setState({ enabled: preferences.composerPredictions ?? true })
     hydrateProfileOverrides({
       owner: preferences.profileOwner,

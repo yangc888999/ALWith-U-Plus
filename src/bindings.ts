@@ -1472,6 +1472,11 @@ export type CustomModel_Deserialize = {
   reasoningLevels?: string[] | null
   defaultReasoningLevel?: string | null
   /**
+   *  True when the reader changed this model's default effort. Only an explicit choice may
+   *  survive a later change to the engine's recommended default; an initial seed must not.
+   */
+  defaultReasoningLevelExplicit?: boolean
+  /**
    *  Whether the model is offered in the picker. Omitted (and `true`) means enabled; a switched
    *  off model stays in the settings list so it can be turned back on, but never reaches Codex.
    */
@@ -1489,6 +1494,11 @@ export type CustomModel_Serialize = {
    */
   reasoningLevels?: string[]
   defaultReasoningLevel?: string
+  /**
+   *  True when the reader changed this model's default effort. Only an explicit choice may
+   *  survive a later change to the engine's recommended default; an initial seed must not.
+   */
+  defaultReasoningLevelExplicit?: boolean
   /**
    *  Whether the model is offered in the picker. Omitted (and `true`) means enabled; a switched
    *  off model stays in the settings list so it can be turned back on, but never reaches Codex.

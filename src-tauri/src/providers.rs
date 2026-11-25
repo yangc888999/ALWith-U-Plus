@@ -85,10 +85,18 @@ pub struct CustomModel {
     reasoning_levels: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     default_reasoning_level: Option<String>,
+    /// True when the reader changed this model's default effort. Only an explicit choice may
+    /// survive a later change to the engine's recommended default; an initial seed must not.
+    #[serde(default, skip_serializing_if = "is_false")]
+    default_reasoning_level_explicit: bool,
     /// Whether the model is offered in the picker. Omitted (and `true`) means enabled; a switched
     /// off model stays in the settings list so it can be turned back on, but never reaches Codex.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     enabled: Option<bool>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl CustomModel {
@@ -451,6 +459,7 @@ fn built_in_models(
                         levels.iter().filter_map(|level| level["effort"].as_str().map(str::to_string)).collect()
                     }),
                     default_reasoning_level: entry["default_reasoning_level"].as_str().map(str::to_string),
+                    default_reasoning_level_explicit: false,
                     enabled: None,
                 })
                 .collect();
@@ -1892,9 +1901,17 @@ fn sync_engine_models(directory: &Path, saved: &mut Saved) -> bool {
         match rows.iter_mut().find(|row| row.api_id == model.slug) {
             Some(row) => {
                 // 档位清单必须跟着引擎走：选一个上游已撤掉的档位，整轮请求会被 400 拒。
-                // 默认档是用户的偏好，不覆盖——引擎改推荐值不等于用户要换档。
+                // 默认档只有在用户明确改过时才保留；初始种子必须跟随引擎，否则引擎换了
+                // 推荐值还一直跑旧值，用户看到的就是“默认档对不上”。
                 if row.reasoning_levels.as_deref() != Some(model.efforts.as_slice()) {
                     row.reasoning_levels = Some(model.efforts.clone());
+                    changed = true;
+                }
+                if !row.default_reasoning_level_explicit
+                    && model.default_effort.is_some()
+                    && row.default_reasoning_level != model.default_effort
+                {
+                    row.default_reasoning_level = model.default_effort.clone();
                     changed = true;
                 }
                 if row.context_window.is_none() && model.context_window.is_some() {
@@ -1911,6 +1928,7 @@ fn sync_engine_models(directory: &Path, saved: &mut Saved) -> bool {
                     description: None,
                     reasoning_levels: Some(model.efforts.clone()),
                     default_reasoning_level: model.default_effort.clone(),
+                    default_reasoning_level_explicit: false,
                     enabled: None,
                 });
                 changed = true;
@@ -2306,8 +2324,15 @@ fn merged_catalog(app_data: &std::path::Path) -> Option<Value> {
     // 引擎目录先落一遍：型号上下线、effort 档位、加速档位都以引擎为准。写在这里而不是各条
     // 目录源里，是因为克隆模板（qwen4-max-preview）不带这些字段，任何一级上游都可能缺。
     let engine = engine_catalog(app_data);
+    // GPT defaults are engine-owned unless the reader explicitly changed them. Read the saved
+    // provider state here because this function only has the app-data path, not `Providers.inner`.
+    let explicit_defaults = explicit_gpt_defaults(app_data);
     for entry in entries.iter_mut() {
-        apply_engine_metadata(entry, &engine);
+        let preserve_default = entry
+            .get("slug")
+            .and_then(Value::as_str)
+            .is_some_and(|slug| explicit_defaults.contains(slug));
+        apply_engine_metadata(entry, &engine, preserve_default);
         restore_native_speed_tiers(entry);
     }
     // 引擎有、目录里没有的型号：直接补进来。`sync_engine_models` 已经把清单补齐，但那次写入的
@@ -2320,11 +2345,32 @@ fn merged_catalog(app_data: &std::path::Path) -> Option<Value> {
     Some(json!({ "models": entries }))
 }
 
+/// GPT model ids whose default effort the reader changed explicitly.
+///
+/// `runtime-providers.json` is the same store `Providers::load` reads; a missing or older file
+/// simply means "nothing explicit", which lets the engine recommendation apply.
+fn explicit_gpt_defaults(app_data: &std::path::Path) -> BTreeSet<String> {
+    let Ok(bytes) = std::fs::read(app_data.join("runtime-providers.json")) else {
+        return BTreeSet::new();
+    };
+    let Ok(saved) = serde_json::from_slice::<Saved>(&bytes) else {
+        return BTreeSet::new();
+    };
+    saved
+        .built_in_model_overrides
+        .get("openai")
+        .into_iter()
+        .flatten()
+        .filter(|model| model.default_reasoning_level_explicit)
+        .map(|model| model.api_id.clone())
+        .collect()
+}
+
 /// 用引擎的声明覆盖一个目录条目的能力字段。
 ///
 /// 只认 `gpt-` 开头的 slug：引擎目录里没有网关型号，按 slug 匹配天然不会碰它们。缺字段时
 /// 什么都不做，免得把一份好条目改坏——`restore_native_speed_tiers` 仍是最后的兜底。
-fn apply_engine_metadata(entry: &mut Value, engine: &[EngineModel]) {
+fn apply_engine_metadata(entry: &mut Value, engine: &[EngineModel], preserve_default: bool) {
     let Some(object) = entry.as_object_mut() else { return };
     let slug = object.get("slug").and_then(Value::as_str).unwrap_or_default().to_string();
     if !slug.starts_with("gpt-") {
@@ -2341,9 +2387,12 @@ fn apply_engine_metadata(entry: &mut Value, engine: &[EngineModel]) {
                 .collect::<Vec<_>>()),
         );
     }
-    if model.default_effort.is_some() && object.get("default_reasoning_level").is_none() {
-        // 只补缺，不覆盖：默认档是用户的偏好，引擎改推荐值不等于用户要换档。
-        object.insert("default_reasoning_level".into(), json!(model.default_effort));
+    if let Some(default) = &model.default_effort {
+        // An explicit user choice wins. A row that only carries the initial seed follows the
+        // engine, otherwise the app keeps running an old recommendation after the engine moves.
+        if !preserve_default || object.get("default_reasoning_level").is_none() {
+            object.insert("default_reasoning_level".into(), json!(default));
+        }
     }
     if !model.speed_tiers.is_empty() {
         object.insert("additional_speed_tiers".into(), json!(model.speed_tiers));
@@ -2356,9 +2405,16 @@ fn apply_engine_metadata(entry: &mut Value, engine: &[EngineModel]) {
     // Never synthesise these from an Effort name — `ultra` is a UI choice, not an outbound value.
     if let Some(effort) = &model.multi_agent_effort {
         object.insert("multi_agent_reasoning_effort".into(), json!(effort));
+    } else {
+        // A provider catalog cloned this entry may still carry the pair from an older engine.
+        // The engine's current definition is authoritative: if it no longer declares a sub-agent
+        // effort, keeping the stale value silently changes what `ultra` sends.
+        object.remove("multi_agent_reasoning_effort");
     }
     if let Some(version) = &model.multi_agent_version {
         object.insert("multi_agent_version".into(), json!(version));
+    } else {
+        object.remove("multi_agent_version");
     }
     if object.get("context_window").is_none() {
         if let Some(window) = model.context_window {
@@ -2394,7 +2450,7 @@ fn append_engine_models(entries: &mut Vec<Value>, engine: &[EngineModel], seen: 
                 object.insert("max_context_window".into(), json!(window));
             }
         }
-        apply_engine_metadata(&mut entry, engine);
+        apply_engine_metadata(&mut entry, engine, false);
         restore_native_speed_tiers(&mut entry);
         // 模板来自同族，身份段会写着那个型号——必须换成它自己。
         retarget_identity(&mut entry);
@@ -3006,6 +3062,7 @@ fn discovered_model(value: &Value) -> Option<CustomModel> {
         description,
         reasoning_levels: (!levels.is_empty()).then(|| levels.iter().map(|level| (*level).to_string()).collect()),
         default_reasoning_level: default,
+        default_reasoning_level_explicit: false,
         enabled: None,
     };
     if model.reasoning_levels.is_some() {
@@ -3326,6 +3383,7 @@ mod tests {
             description: None,
             reasoning_levels: None,
             default_reasoning_level: None,
+            default_reasoning_level_explicit: false,
             enabled: None,
         };
         for (label, api_id, levels, default) in [
@@ -3379,6 +3437,7 @@ mod tests {
             description: None,
             reasoning_levels: Some(vec![" Low ".into(), "HIGH".into()]),
             default_reasoning_level: Some(" HIGH ".into()),
+            default_reasoning_level_explicit: false,
             enabled: None,
         };
         normalize_reasoning(&mut model).unwrap();
@@ -3546,6 +3605,7 @@ mod tests {
                 description: Some("Fast".into()),
                 reasoning_levels: None,
                 default_reasoning_level: None,
+                default_reasoning_level_explicit: false,
                 enabled: None,
             }],
         };
@@ -3574,6 +3634,7 @@ mod tests {
                     description: None,
                     reasoning_levels: None,
                     default_reasoning_level: None,
+                    default_reasoning_level_explicit: false,
                     enabled: None,
                 },
                 CustomModel {
@@ -3583,6 +3644,7 @@ mod tests {
                     description: None,
                     reasoning_levels: None,
                     default_reasoning_level: None,
+                    default_reasoning_level_explicit: false,
                     enabled: None,
                 },
             ],
@@ -3620,6 +3682,7 @@ mod tests {
                     description: None,
                     reasoning_levels: None,
                     default_reasoning_level: None,
+                    default_reasoning_level_explicit: false,
                     enabled: None,
                 }],
             },
@@ -3664,6 +3727,7 @@ mod tests {
                 description: None,
                 reasoning_levels: None,
                 default_reasoning_level: None,
+                default_reasoning_level_explicit: false,
                 enabled: None,
             }],
         };
@@ -3944,6 +4008,7 @@ mod tests {
                     description: Some("Fast".into()),
                     reasoning_levels: Some(vec!["low".into(), "high".into()]),
                     default_reasoning_level: Some("high".into()),
+                    default_reasoning_level_explicit: false,
                     enabled: None,
                 }],
             },
@@ -4053,6 +4118,7 @@ mod tests {
             description: None,
             reasoning_levels: None,
             default_reasoning_level: None,
+            default_reasoning_level_explicit: false,
             enabled: None,
         }];
         let path = write_built_in_catalog(directory.path(), "openai", &overrides, resources).unwrap();
@@ -4187,6 +4253,7 @@ mod tests {
                     description: None,
                     reasoning_levels: None,
                     default_reasoning_level: None,
+                    default_reasoning_level_explicit: false,
                     enabled: None,
                 }],
             },
@@ -4240,6 +4307,7 @@ mod tests {
             description: None,
             reasoning_levels: None,
             default_reasoning_level: None,
+            default_reasoning_level_explicit: false,
             enabled: Some(true),
         };
         let mut overrides = BTreeMap::new();
@@ -4317,6 +4385,7 @@ mod tests {
                         description: None,
                         reasoning_levels: Some(vec!["low".into(), "medium".into(), "high".into()]),
                         default_reasoning_level: Some("medium".into()),
+                        default_reasoning_level_explicit: true,
                         enabled: None,
                     },
                     CustomModel {
@@ -4326,6 +4395,7 @@ mod tests {
                         description: None,
                         reasoning_levels: None,
                         default_reasoning_level: None,
+                        default_reasoning_level_explicit: false,
                         enabled: None,
                     },
                 ],
@@ -4363,6 +4433,53 @@ mod tests {
     }
 
     #[test]
+    fn an_unmarked_default_follows_the_engine_but_an_explicit_one_stays() {
+        let root = tempfile::tempdir().unwrap();
+        write_engine_catalog(
+            root.path(),
+            json!([
+                engine_row("gpt-6.2-sol", "GPT-6.2-Sol", &["low", "medium", "high"], "low", "list"),
+                engine_row("gpt-6.1-sol", "GPT-6.1-Sol", &["low", "medium", "high"], "low", "list"),
+            ]),
+        );
+        let mut saved = Saved {
+            built_in_model_overrides: BTreeMap::from([(
+                "openai".to_string(),
+                vec![
+                    CustomModel {
+                        label: "6.2 Sol".into(),
+                        api_id: "gpt-6.2-sol".into(),
+                        context_window: None,
+                        description: None,
+                        reasoning_levels: Some(vec!["low".into(), "medium".into(), "high".into()]),
+                        default_reasoning_level: Some("medium".into()),
+                        default_reasoning_level_explicit: false,
+                        enabled: None,
+                    },
+                    CustomModel {
+                        label: "6.1 Sol".into(),
+                        api_id: "gpt-6.1-sol".into(),
+                        context_window: None,
+                        description: None,
+                        reasoning_levels: Some(vec!["low".into(), "medium".into(), "high".into()]),
+                        default_reasoning_level: Some("medium".into()),
+                        default_reasoning_level_explicit: true,
+                        enabled: None,
+                    },
+                ],
+            )]),
+            ..Saved::default()
+        };
+
+        assert!(sync_engine_models(root.path(), &mut saved));
+        let rows = &saved.built_in_model_overrides["openai"];
+        let untouched = rows.iter().find(|row| row.api_id == "gpt-6.2-sol").unwrap();
+        let explicit = rows.iter().find(|row| row.api_id == "gpt-6.1-sol").unwrap();
+        assert_eq!(untouched.default_reasoning_level.as_deref(), Some("low"));
+        assert_eq!(explicit.default_reasoning_level.as_deref(), Some("medium"));
+    }
+
+    #[test]
     fn a_cloned_catalog_entry_takes_its_ladder_and_speed_from_the_engine() {
         // 目录条目的骨架来自 qwen 模板：三档 effort、没有加速档位。引擎对这些型号说得很清楚，
         // 该由引擎覆盖；网关型号不在引擎目录里，一个字段都不该被碰。
@@ -4382,18 +4499,22 @@ mod tests {
             "supported_reasoning_levels": [{"effort": "low"}, {"effort": "medium"}, {"effort": "high"}],
             "default_reasoning_level": "medium",
         });
-        apply_engine_metadata(&mut entry, &engine);
+        apply_engine_metadata(&mut entry, &engine, false);
         assert_eq!(entry["supported_reasoning_levels"].as_array().unwrap().len(), 6);
         assert_eq!(entry["additional_speed_tiers"], json!(["fast"]));
         // A model whose engine entry does not publish the sub-agent pair gets no invented value:
         // `ultra` in the ladder is a UI choice and must never be turned into an outbound effort.
         assert!(entry.get("multi_agent_reasoning_effort").is_none());
         assert!(entry.get("multi_agent_version").is_none());
-        assert_eq!(entry["default_reasoning_level"], "medium", "only a missing default is filled in");
+        assert_eq!(entry["default_reasoning_level"], "low", "an unmarked default follows the engine");
+        let mut explicit = entry.clone();
+        explicit["default_reasoning_level"] = json!("medium");
+        apply_engine_metadata(&mut explicit, &engine, true);
+        assert_eq!(explicit["default_reasoning_level"], "medium", "an explicit default survives");
         assert_eq!(entry["context_window"], 272_000);
 
         let mut gateway = json!({ "slug": "qwen3.8-max", "supported_reasoning_levels": [{"effort": "none"}] });
-        apply_engine_metadata(&mut gateway, &engine);
+        apply_engine_metadata(&mut gateway, &engine, false);
         assert_eq!(gateway["supported_reasoning_levels"], json!([{"effort": "none"}]));
         assert!(gateway.get("additional_speed_tiers").is_none());
     }
@@ -4438,6 +4559,7 @@ mod tests {
             description: None,
             reasoning_levels: None,
             default_reasoning_level: None,
+            default_reasoning_level_explicit: false,
             enabled,
         }
     }
@@ -4828,7 +4950,12 @@ mod merged_catalog_tests {
         std::fs::create_dir_all(root.join("model-catalogs/alwith")).unwrap();
         std::fs::write(
             root.join("model-catalogs/alwith/models.json"),
-            json!({"models":[{"slug":"gpt-6.2-sol","display_name":"6.2 Sol"}]}).to_string(),
+            json!({"models":[{
+                "slug":"gpt-6.2-sol",
+                "display_name":"6.2 Sol",
+                "default_reasoning_level":"medium"
+            }]})
+            .to_string(),
         )
         .unwrap();
         // Snapshot written by `codex debug models --bundled`.
@@ -4863,5 +4990,105 @@ mod merged_catalog_tests {
             .filter_map(|level| level["effort"].as_str())
             .collect();
         assert!(efforts.contains(&"ultra"));
+    }
+
+    /// The inverse of the test above: a provider catalog cloned the old sub-agent pair, while the
+    /// engine's current definition no longer declares one. Keeping the stale effort changed what
+    /// `ultra` sent (`xhigh` instead of the engine's `max`).
+    #[test]
+    fn a_model_that_no_longer_declares_a_sub_agent_effort_drops_the_stale_field() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::create_dir_all(root.join("model-catalogs/alwith")).unwrap();
+        std::fs::write(
+            root.join("model-catalogs/alwith/models.json"),
+            json!({"models":[{
+                "slug":"gpt-6-sol",
+                "display_name":"6 Sol",
+                "multi_agent_reasoning_effort":"xhigh",
+                "multi_agent_version":"v2"
+            }]})
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            engine_catalog_path(root),
+            json!({"models":[{
+                "slug":"gpt-6-sol",
+                "display_name":"GPT-6-Sol",
+                "supported_reasoning_levels":[{"effort":"low"},{"effort":"max"},{"effort":"ultra"}],
+                "multi_agent_version":"v2"
+            }]})
+            .to_string(),
+        )
+        .unwrap();
+
+        let path = merged_catalog_path(root).expect("the catalog is written");
+        let merged: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let sol = merged["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["slug"] == "gpt-6-sol")
+            .expect("6 Sol stays in the catalog");
+        assert!(sol.get("multi_agent_reasoning_effort").is_none());
+        assert_eq!(sol["multi_agent_version"], "v2");
+    }
+
+    #[test]
+    fn an_explicit_default_survives_the_engine_recommendation() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        std::fs::create_dir_all(root.join("model-catalogs/alwith")).unwrap();
+        std::fs::write(
+            root.join("model-catalogs/alwith/models.json"),
+            json!({"models":[{
+                "slug":"gpt-6.2-sol",
+                "display_name":"6.2 Sol",
+                "default_reasoning_level":"medium"
+            }]})
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            engine_catalog_path(root),
+            json!({"models":[{
+                "slug":"gpt-6.2-sol",
+                "display_name":"GPT-6.2-Sol",
+                "supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"}],
+                "default_reasoning_level":"low"
+            }]})
+            .to_string(),
+        )
+        .unwrap();
+        let providers = |explicit: bool| {
+            json!({"revision":1,"built_in_model_overrides":{"openai":[{
+                "label":"6.2 Sol",
+                "api_id":"gpt-6.2-sol",
+                "defaultReasoningLevel":"medium",
+                "defaultReasoningLevelExplicit":explicit
+            }]}})
+            .to_string()
+        };
+        std::fs::write(root.join("runtime-providers.json"), providers(true)).unwrap();
+        assert!(explicit_gpt_defaults(root).contains("gpt-6.2-sol"), "the explicit marker is parsed");
+        let direct = super::merged_catalog(root).expect("the direct catalog is built");
+        let direct_sol = direct["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["slug"] == "gpt-6.2-sol")
+            .unwrap();
+        assert_eq!(direct_sol["default_reasoning_level"], "medium", "the merge preserves the explicit value");
+        let path = merged_catalog_path(root).expect("the catalog is written");
+        let merged: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let sol = merged["models"].as_array().unwrap().iter().find(|model| model["slug"] == "gpt-6.2-sol").unwrap();
+        assert_eq!(sol["default_reasoning_level"], "medium", "explicit user choice wins");
+
+        std::fs::write(root.join("runtime-providers.json"), providers(false)).unwrap();
+        let path = merged_catalog_path(root).expect("the catalog is rewritten");
+        let merged: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let sol = merged["models"].as_array().unwrap().iter().find(|model| model["slug"] == "gpt-6.2-sol").unwrap();
+        assert_eq!(sol["default_reasoning_level"], "low", "an unmarked seed follows the engine");
     }
 }

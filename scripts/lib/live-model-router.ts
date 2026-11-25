@@ -1,15 +1,18 @@
 export function startModelProbe() {
-  const seen = new Map<string, string[]>()
+  type WireTurn = { model: string; reasoning?: { effort?: string }; service_tier?: string; delegation: boolean }
+  const seen = new Map<string, WireTurn[]>()
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     async fetch(request) {
       if (request.method !== "POST" || !new URL(request.url).pathname.endsWith("/responses"))
         return new Response(null, { status: 404 })
-      const payload = await request.json() as { model: string; input: unknown }
+      const payload = await request.json() as Omit<WireTurn, "delegation"> & { input: { type?: string; tools?: unknown[] }[]; tools?: unknown[] }
       const marker = [...JSON.stringify(payload.input).matchAll(/Reply with exactly (ROUTE_[a-f0-9]+)/g)].at(-1)?.[1]
       if (!marker) return new Response("Expected model probe prompt", { status: 400 })
-      seen.set(marker, [...(seen.get(marker) ?? []), payload.model])
+      const definitions = payload.tools ?? payload.input.filter((item) => item.type === "additional_tools").flatMap((item) => item.tools ?? [])
+      const delegation = /"name":"(?:[\w.]+[.:]+)?spawn_agent"/.test(JSON.stringify(definitions))
+      seen.set(marker, [...(seen.get(marker) ?? []), { model: payload.model, reasoning: payload.reasoning, service_tier: payload.service_tier, delegation }])
       const item = { type: "message", id: `msg_${marker}`, role: "assistant", content: [] }
       const content = { type: "output_text", text: marker, annotations: [] }
       const answer = { ...item, status: "completed", content: [content] }
@@ -29,10 +32,13 @@ export function startModelProbe() {
   })
   return {
     url: new URL("v1", server.url).href,
-    assertModel(marker: string, expected: string) {
-      const models = seen.get(marker)
-      if (!models?.length || models.some((model) => model !== expected))
-        throw new Error(`Expected upstream model ${expected}, received ${JSON.stringify(models ?? [])}`)
+    assertModel(marker: string, expected: string, effort?: string, fast?: boolean, ultra = false) {
+      const turns = seen.get(marker)
+      if (!turns?.length || turns.some((turn) => turn.model !== expected ||
+        (effort !== undefined && turn.reasoning?.effort !== effort) || (ultra && !turn.delegation) ||
+        (fast !== undefined && (turn.service_tier === "priority" || turn.service_tier === "fast") !== fast)))
+        throw new Error(`Expected ${expected} effort=${effort} fast=${fast}, received ${JSON.stringify(turns ?? [])}`)
+      console.log("wire:", JSON.stringify(turns.at(-1)))
     },
     close: () => server.stop(true)
   }

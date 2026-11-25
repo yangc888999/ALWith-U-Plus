@@ -149,6 +149,7 @@ pub(super) fn parse_catalog(body: &str) -> Result<Option<CustomProvider>, String
                 description: model.description,
                 reasoning_levels: Some(vec!["low".into(), "high".into(), "max".into()]),
                 default_reasoning_level: level.clone(),
+                default_reasoning_level_explicit: false,
                 enabled: None,
             })
         })

@@ -374,6 +374,21 @@ test("a model that publishes no Fast option keeps its saved switch", async () =>
   }
 })
 
+test("a scheduled run explicitly disables Fast inherited from the session", async () => {
+  const option: BooleanOption = { configId: "fast-mode", category: "model_config", name: "Fast", type: "boolean", currentValue: false }
+  const { client } = await make((fake) => {
+    fake.sessionOptions.current = () => [{ ...option }]
+    fake.configResponse.current = (request) => {
+      option.currentValue = request.value as boolean
+      return { configOptions: [{ ...option }] }
+    }
+  })
+  const id = await client.newSession("/tmp/scheduled-fast")
+  await client.setConfig(id, "fast-mode", true)
+  await client.applyRunOverrides(id, "", false)
+  expect(option.currentValue).toBe(false)
+})
+
 test("a reopened session restores its last model, effort and Fast state", async () => {
   const model: SelectOption = {
     configId: "model",
@@ -1917,12 +1932,52 @@ test("a per-model effort override wins over the catalog default", async () => {
   Object.defineProperty(globalThis, "localStorage", { value: storage, configurable: true })
   storage.setItem(
     "alwith:native-model-overrides",
-    JSON.stringify([{ api_id: "gpt-6.1-sol", label: "6.1 Sol", enabled: true, defaultReasoningLevel: "max" }])
+    JSON.stringify([
+      {
+        api_id: "gpt-6.1-sol",
+        label: "6.1 Sol",
+        enabled: true,
+        defaultReasoningLevel: "max",
+        defaultReasoningLevelExplicit: true
+      }
+    ])
   )
   try {
     const id = await client.newSession("/tmp/override-effort")
     await until(() => client.effortOf(id) === "max")
     expect(client.effortOf(id)).toBe("max")
+  } finally {
+    store.clear()
+    Reflect.deleteProperty(globalThis, "localStorage")
+  }
+})
+
+test("a per-model default without the explicit marker follows the catalog default", async () => {
+  const models: ReasoningModelFixture[] = [
+    { id: "gpt-6.1-sol", groupId: "chatgpt", efforts: ["low", "medium", "high", "max"], defaultEffort: "low" }
+  ]
+  const { client } = await make((fake) => {
+    configureReasoningModels(fake, models, "gpt-6.1-sol", "low")
+  })
+  const store = new Map<string, string>()
+  const storage = {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => void store.set(key, value),
+    removeItem: (key: string) => void store.delete(key),
+    clear: () => store.clear(),
+    key: () => null,
+    length: 0
+  } as Storage
+  Object.defineProperty(globalThis, "localStorage", { value: storage, configurable: true })
+  // This is the historical seed, not a reader choice: the engine's current default must win.
+  storage.setItem(
+    "alwith:native-model-overrides",
+    JSON.stringify([{ api_id: "gpt-6.1-sol", label: "6.1 Sol", enabled: true, defaultReasoningLevel: "max" }])
+  )
+  try {
+    const id = await client.newSession("/tmp/seed-effort")
+    await until(() => client.effortOf(id) === "low")
+    expect(client.effortOf(id)).toBe("low")
   } finally {
     store.clear()
     Reflect.deleteProperty(globalThis, "localStorage")
@@ -1988,8 +2043,20 @@ test("switching models in a running chat lands on the new model's configured eff
   storage.setItem(
     "alwith:native-model-overrides",
     JSON.stringify([
-      { api_id: "gpt-6.1-sol", label: "6.1 Sol", enabled: true, defaultReasoningLevel: "max" },
-      { api_id: "gpt-6-luna", label: "6 Luna", enabled: true, defaultReasoningLevel: "medium" }
+      {
+        api_id: "gpt-6.1-sol",
+        label: "6.1 Sol",
+        enabled: true,
+        defaultReasoningLevel: "max",
+        defaultReasoningLevelExplicit: true
+      },
+      {
+        api_id: "gpt-6-luna",
+        label: "6 Luna",
+        enabled: true,
+        defaultReasoningLevel: "medium",
+        defaultReasoningLevelExplicit: true
+      }
     ])
   )
   try {

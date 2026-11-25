@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, within } from "@testing-library/react"
 import { afterEach, beforeEach, expect, test } from "vitest"
 
 import { getQueueSendMode, setQueueSendMode } from "@/lib/chat-display-preferences"
@@ -27,4 +27,23 @@ test("the header switch defaults to interject and writes the queued mode", () =>
   expect(getQueueSendMode()).toBe("queued")
   expect(queue).toHaveAttribute("aria-pressed", "true")
   expect(interject).toHaveAttribute("aria-pressed", "false")
+})
+
+test("changing the preference keeps the visible cue and accessible selection in sync without moving focus", () => {
+  const view = render(<SendModeSwitch />)
+  const modes = within(view.getByRole("group", { name: "Sending during a running turn" }))
+  const interject = modes.getByRole("button", { name: "Interject", pressed: true })
+  const queue = modes.getByRole("button", { name: "Queue", pressed: false })
+
+  expect(interject).toHaveClass("bg-send-interject", "underline")
+  expect(queue).not.toHaveClass("underline")
+  expect(interject.tabIndex).toBe(0)
+  expect(queue.tabIndex).toBe(0)
+  interject.focus()
+  expect(interject).toHaveFocus()
+  act(() => setQueueSendMode("queued"))
+  expect(modes.getByRole("button", { pressed: true })).toBe(queue)
+  expect(queue).toHaveClass("bg-send-queue", "underline")
+  expect(interject).not.toHaveClass("underline")
+  expect(interject).toHaveFocus()
 })

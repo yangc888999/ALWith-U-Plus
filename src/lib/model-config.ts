@@ -222,11 +222,15 @@ function mergeSaved(
   model: CustomModel,
   entry: { label?: string | null; efforts?: readonly string[]; defaultEffort?: string | null } | undefined
 ): NativeRow {
+  const explicitDefault =
+    model.defaultReasoningLevelExplicit === true && model.defaultReasoningLevel !== undefined
+      ? model.defaultReasoningLevel
+      : undefined
   return {
     id: model.api_id,
     label: model.label.trim() !== "" ? model.label : (entry?.label ?? model.api_id),
     efforts: model.reasoningLevels ?? [...(entry?.efforts ?? [])],
-    defaultEffort: model.defaultReasoningLevel ?? entry?.defaultEffort ?? null,
+    defaultEffort: explicitDefault ?? entry?.defaultEffort ?? model.defaultReasoningLevel ?? null,
     contextWindow: model.contextWindow ?? null
   }
 }
@@ -240,7 +244,10 @@ function catalogRows(catalog: NativeCatalog["models"], saved: CustomModel[]): Na
       id: entry.id,
       label: model !== undefined && model.label.trim() !== "" ? model.label : (entry.label ?? entry.id),
       efforts: model?.reasoningLevels ?? [...(entry.efforts ?? [])],
-      defaultEffort: model?.defaultReasoningLevel ?? entry.defaultEffort ?? null,
+      defaultEffort:
+        model?.defaultReasoningLevelExplicit === true && model.defaultReasoningLevel !== undefined
+          ? model.defaultReasoningLevel
+          : (entry.defaultEffort ?? model?.defaultReasoningLevel ?? null),
       contextWindow
     }
   })

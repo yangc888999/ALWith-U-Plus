@@ -1,10 +1,14 @@
 import { drafts, importDraft } from "@alwith/module-chat/conversation"
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest"
+import { toast } from "sonner"
+import { writeText } from "@tauri-apps/plugin-clipboard-manager"
 
 import { initI18n } from "@/lib/i18n"
 
 import { SelectionMenu, appendQuote, composeQuoteText, quoteForComposer } from "../selection-menu"
+
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText: vi.fn(async () => {}) }))
 
 await initI18n("en")
 
@@ -274,72 +278,24 @@ describe("comment integration", () => {
     }
   })
 
-  test("an HTML-enabled host absorbs the viewer trigger into 评论 and clicks it", async () => {
-    const viewerClick = vi.fn()
-    const trigger = document.createElement("button")
-    trigger.dataset.testid = "comment-selection-button"
-    trigger.addEventListener("click", viewerClick)
-    document.body.append(trigger)
-    try {
-      render(
-        <div>
-          <div className="file-workspace-editor">
-            <div className="ProseMirror" data-alwith-markdown-editing="false">
-              <span data-testid="doc-text-html">文档正文</span>
-            </div>
-          </div>
-          <SelectionMenu containerRef={{ current: null }} sessionId="s" allowComment />
-        </div>
-      )
-      const node = screen.getByTestId("doc-text-html")
-      const range = document.createRange()
-      range.selectNodeContents(node)
-      const selection = window.getSelection()
-      selection?.removeAllRanges()
-      selection?.addRange(range)
-      act(() => {
-        document.dispatchEvent(new Event("selectionchange"))
-      })
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 250))
-      })
-      const comment = screen.getByRole("menuitem", { name: /评论|Comment/ })
-      fireEvent.click(comment)
-      expect(viewerClick).toHaveBeenCalledOnce()
-    } finally {
-      trigger.remove()
-    }
-  })
-
-  test("a host-owned comment composer opens from 点评 without a DOM trigger", () => {
-    const openComment = vi.fn()
-    render(
-      <SelectionMenu
-        containerRef={{ current: null }}
-        sessionId="session-1"
-        external={{ left: 40, top: 40, text: "报告里选中的文字" }}
-        onComment={openComment}
-      />
-    )
-    fireEvent.click(screen.getByRole("menuitem", { name: /评论|Comment/ }))
-    expect(openComment).toHaveBeenCalledOnce()
-  })
 })
 
 describe("preview selection", () => {
   const placement = { left: 40, top: 40, text: "预览里选中的文字" }
 
-  test("a forwarded iframe selection can be quoted into the conversation", () => {
-    render(
-      <SelectionMenu
-        containerRef={{ current: null }}
-        sessionId="session-1"
-        external={placement}
-        allowComment
-      />
-    )
-    // Copy + add-to-chat + comment stay in one preview action bar.
-    expect(screen.getAllByRole("menuitem")).toHaveLength(3)
+  test("a forwarded iframe selection can be copied and quoted without success notices", async () => {
+    const notice = vi.spyOn(toast, "success")
+    try {
+      render(<SelectionMenu containerRef={{ current: null }} sessionId="session-1" external={placement} />)
+      expect(screen.getAllByRole("menuitem")).toHaveLength(2)
+      await act(async () => { fireEvent.click(screen.getByRole("menuitem", { name: /copy/i })) })
+      expect(writeText).toHaveBeenCalledWith(placement.text)
+      fireEvent.click(screen.getByRole("menuitem", { name: /add/i }))
+      expect(drafts.get("session-1")?.text).toContain(placement.text)
+      expect(notice).not.toHaveBeenCalled()
+    } finally {
+      notice.mockRestore()
+    }
   })
 
   test("explicit dismissal clears the placement held by the preview host", () => {
@@ -387,13 +343,13 @@ describe("comment scope", () => {
     })
   }
 
-  test("the preview-scoped bar never answers a transcript selection, even with comments enabled", async () => {
+  test("the preview-scoped bar never answers a transcript selection, from a document host", async () => {
     render(
       <div>
         <div data-chat-content>
           <span data-testid="scope-transcript-text">对话正文</span>
         </div>
-        <SelectionMenu containerRef={{ current: null }} sessionId="s" scope="preview" allowComment />
+        <SelectionMenu containerRef={{ current: null }} sessionId="s" scope="preview" />
       </div>
     )
     await selectAndWait("scope-transcript-text")
@@ -421,7 +377,7 @@ describe("comment scope", () => {
     }
   })
 
-  test("the preview-scoped bar offers 评论 inside the preview only", async () => {
+  test("the preview-scoped bar never offers 评论 inside the preview", async () => {
     const trigger = document.createElement("button")
     trigger.dataset.testid = "comment-selection-button"
     document.body.append(trigger)
@@ -431,11 +387,11 @@ describe("comment scope", () => {
           <div className="file-workspace-editor">
             <span data-testid="scope-preview-text">预览正文</span>
           </div>
-          <SelectionMenu containerRef={{ current: null }} sessionId="s" scope="preview" allowComment />
+          <SelectionMenu containerRef={{ current: null }} sessionId="s" scope="preview" />
         </div>
       )
       await selectAndWait("scope-preview-text")
-      expect(screen.queryByRole("menuitem", { name: /评论|Comment/ })).not.toBeNull()
+      expect(screen.queryByRole("menuitem", { name: /评论|Comment/ })).toBeNull()
     } finally {
       trigger.remove()
     }

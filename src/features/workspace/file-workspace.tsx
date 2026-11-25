@@ -510,6 +510,8 @@ export function FileWorkspace({
     workspace ? workspace.tabs.getSnapshot : emptyEditorSnapshot
   )
   const activeDocument = editorSnapshot?.documents.find((document) => document.id === tabSnapshot?.activeId)
+  const activePath = activeDocument?.path ?? null
+  const markdownPreview = /\.(md|markdown|mdown|mdx)(\.yupcloud)?$/i.test(activePath ?? "")
   // Publish the previewed document so the chat can scope the user's next message to it. Only an
   // actually visible preview counts: a closed pane (or an empty editor) must not carry context.
   useEffect(() => {
@@ -598,25 +600,18 @@ export function FileWorkspace({
   const [previewMenu, setPreviewMenu] = useState<ContextMenuTarget | null>(null)
   // Text selected inside the previewed HTML frame (forwarded by the bridge): the frame's own
   // selection never reaches this document, so the host renders the copy pill itself.
-  const [previewSelection, setPreviewSelection] = useState<{ left: number; top: number; text: string } | null>(null)
-  // The frame that reported the current preview selection. 点评 is forwarded to that frame so
-  // the report's own annotation editor opens on the exact range the reader selected.
-  const previewCommentWindow = useRef<Window | null>(null)
-  const [previewCommentsAvailable, setPreviewCommentsAvailable] = useState(false)
+  const [previewSelection, setPreviewSelection] = useState<{
+    left: number
+    top: number
+    text: string
+    path: string
+    onComment?: () => void
+  } | null>(null)
   const noSelectionRoot = useRef<HTMLDivElement | null>(null)
   // The composer on screen belongs to the selected conversation; before the first message the
   // draft chat owns it. Both the floating pill and the right-click menu quote into that composer.
   const composerSessionId = sessionId ?? DRAFT_SESSION_ID
   const dismissPreviewSelection = useCallback(() => setPreviewSelection(null), [])
-  const openPreviewComment = useCallback(() => {
-    const target = previewCommentWindow.current
-    if (target === null) return
-    try {
-      target.postMessage({ source: "alwith-preview-host", type: "comment" }, "*")
-    } catch {
-      // The preview was replaced between selection and click; the next selection re-binds it.
-    }
-  }, [])
   const addSelectionToChat = useCallback(
     (text: string): void => {
       if (!appendQuote(composerSessionId, text)) {
@@ -624,7 +619,6 @@ export function FileWorkspace({
         return
       }
       focusComposer()
-      toast.success(t("chat.selectionAdded"))
     },
     [composerSessionId, t]
   )
@@ -652,40 +646,47 @@ export function FileWorkspace({
         x?: unknown
         y?: unknown
         rect?: unknown
-        available?: unknown
+        canComment?: unknown
       } | null
       if (data === null || data.source !== "alwith-preview") return
-      if (data.type === "comments-available") {
-        setPreviewCommentsAvailable(data.available === true)
-        return
-      }
       if (data.type === "selection") {
         const text = typeof data.text === "string" ? data.text.trim() : ""
-        const frame = Array.from(document.querySelectorAll("iframe")).find(
+        if (!visible || previewExtension !== null || activePath === null || !/\.(html?|xhtml)$/i.test(activePath)) return
+        const frame = Array.from(document.querySelectorAll<HTMLIFrameElement>(".file-workspace-editor iframe")).find(
           (element) => element.contentWindow === event.source
         )
-        const box = frame?.getBoundingClientRect()
+        if (!frame) return
+        const box = frame.getBoundingClientRect()
         const rect = data.rect as { left?: number; top?: number; bottom?: number; width?: number } | null
-        if (text === "" || box === undefined || rect == null) {
+        if (text === "" || rect == null) {
           setPreviewSelection(null)
           return
         }
         // In WYSIWYG edit mode the iframe body is contenteditable; suppress the copy/quote pill so
         // it doesn't overlap the editing surface — native cut/copy/paste is available instead.
-        if (frame?.getAttribute(HTML_EDITING_ATTRIBUTE) === "true") {
+        if (frame.getAttribute(HTML_EDITING_ATTRIBUTE) === "true") {
           setPreviewSelection(null)
           return
         }
-        previewCommentWindow.current = event.source as Window
         // Account for iframe zoom: rect is in the iframe's own coordinate space, so scale by the
         // ratio of the on-screen box width to the frame's intrinsic offsetWidth.
-        const a = box.width / (frame ? frame.offsetWidth || box.width : box.width)
+        const a = box.width / (frame.offsetWidth || box.width)
         const left = Math.max(
           8,
           Math.min(box.left + (Number(rect.left ?? 0) + Number(rect.width ?? 0) / 2) * a - 98, window.innerWidth - 204)
         )
         const top = box.top + Number(rect.bottom ?? 0) * a + 8
-        setPreviewSelection({ left, top, text: text.slice(0, 20_000) })
+        setPreviewSelection({
+          left,
+          top,
+          text: text.slice(0, 20_000),
+          path: activePath,
+          onComment: data.canComment === true
+            ? () => {
+                if (frame.isConnected) frame.contentWindow?.postMessage({ source: "alwith-preview-host", type: "comment" }, "*")
+              }
+            : undefined
+        })
         return
       }
       if (data.type !== "context-menu") return
@@ -715,8 +716,11 @@ export function FileWorkspace({
       })
     }
     window.addEventListener("message", handler)
-    return () => window.removeEventListener("message", handler)
-  }, [])
+    return () => {
+      window.removeEventListener("message", handler)
+      setPreviewSelection(null)
+    }
+  }, [activePath, visible, previewExtension])
   // Previews rendered in this document (Markdown, PDF, images, spreadsheets, Word) are not frames,
   // so their right-click never reaches the bridge above. Scope the menu to the preview surface
   // by excluding the parts that own functional menus: the editor canvas, the tab strip and text
@@ -1589,9 +1593,7 @@ export function FileWorkspace({
       <SelectionMenu
         containerRef={noSelectionRoot}
         sessionId={composerSessionId}
-        external={previewSelection}
-        allowComment={previewCommentsAvailable}
-        onComment={previewCommentsAvailable ? openPreviewComment : undefined}
+        external={visible && previewExtension === null && previewSelection?.path === activePath ? previewSelection : null}
         onDismiss={dismissPreviewSelection}
         scope="preview"
       />
@@ -1606,7 +1608,7 @@ export function FileWorkspace({
                 title next to it reads as a bug. */}
             {/* Chat-only controls need a real project. 四方格 and 文件栏 stay visible even without
                 one: they are the buttons that explain/repair a missing directory. */}
-            {hasProjectDirectory && (
+            {hasProjectDirectory && !(visible && previewExtension === null && markdownPreview) && (
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -1905,7 +1907,7 @@ export function FileWorkspace({
                     </div>
                   </div>
                 ) : (
-                  <DriveDocumentSurface host={previewHost} path={activeDocument?.path ?? null}>
+                  <DriveDocumentSurface host={previewHost} path={markdownPreview ? null : activePath}>
                     <ChatDirectoryContext.Provider value={workspace.root}>
                       <div className="contents" onContextMenu={previewContextMenu}>
                         <WorkspaceEditor

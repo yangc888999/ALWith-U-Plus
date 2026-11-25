@@ -77,7 +77,7 @@ pre,
 
 @theme inline {
   --font-heading: var(--font-sans);
-  --font-sans: var(--app-font-family, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Inter Variable", sans-serif);
+  --font-sans: var(--app-font-family, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -92,6 +92,8 @@ pre,
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
   --color-ring: var(--ring);
+  --color-send-interject: var(--send-interject);
+  --color-send-queue: var(--send-queue);
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
@@ -133,6 +135,8 @@ pre,
   --popover-foreground: oklch(0.145 0 0);
   --primary: oklch(0.205 0 0);
   --link: oklch(0.42 0.17 264);
+  --send-interject: oklch(0.48 0.15 255);
+  --send-queue: oklch(0.48 0.10 70);
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
@@ -182,6 +186,8 @@ pre,
   --popover-foreground: #d2d2d2;
   --primary: #d6d6d6;
   --link: oklch(0.64 0.13 255);
+  --send-interject: oklch(0.77 0.12 255);
+  --send-queue: oklch(0.80 0.12 78);
   --primary-foreground: #1f1f1f;
   --secondary: #2c2c2c;
   --secondary-foreground: #d2d2d2;
@@ -221,7 +227,7 @@ pre,
   }
   html {
     @apply font-sans;
-    font-family: var(--app-font-family, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Inter Variable", sans-serif);
+    font-family: var(--app-font-family, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
   }
   /* The window is opaque (no vibrancy), so the page paints the theme background itself.
      Keeping a real color also prevents a white flash in dark mode and black ghost frames. */
@@ -492,6 +498,9 @@ html {
   inset-inline-start: 0;
   width: var(--sidebar-width);
   color: var(--sidebar-foreground);
+  /* Base fallback for sidebar text that carries no utility class (module group headers, empty
+     states). The explicit .text-sm/.text-xs rules below cover session rows, counts and labels. */
+  font-size: var(--sidebar-font-size, 13px);
 }
 /* module-chat wraps group headers in a hard-coded `dark:text-white`. On a work surface that
    reads as a pure-white label above every recent section; route it back through the softer
@@ -845,6 +854,8 @@ html {
 }
 :root {
   --chat-font-size: 14px;
+  --composer-font-size: 14px;
+  --sidebar-font-size: 13px;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
@@ -1110,8 +1121,32 @@ pre::-webkit-scrollbar-thumb {
 .main-sidebar-panel .text-sm,
 [data-sidebar-menu-row],
 [data-slot="sidebar"] [data-slot="navigation-session-item"] {
-  font-size: 13px;
-  line-height: 18px;
+  font-size: var(--sidebar-font-size, 13px);
+  line-height: calc(var(--sidebar-font-size, 13px) + 5px);
+}
+/* Sidebar chrome keeps a fixed small step at every root size. The rem-based `text-xs` grew
+   past the 13px row names on wide, high-density windows (14.85px at 2560px), making group
+   headers look more important than the chats they contain. */
+.main-sidebar-panel .text-xs {
+  font-size: max(11px, calc(var(--sidebar-font-size, 13px) - 1px));
+  line-height: calc(var(--sidebar-font-size, 13px) + 3px);
+}
+/* module-chat's collapsible group label is `text-sm opacity-70`; keep 聊天/项目 headers one
+   step below their session rows even when the sidebar size changes. */
+.main-sidebar-panel .text-sm.opacity-70 {
+  font-size: max(11px, calc(var(--sidebar-font-size, 13px) - 1px));
+  line-height: calc(var(--sidebar-font-size, 13px) + 3px);
+}
+/* Sidebar-owned portals: project hover cards, session hover cards and the account menu. They
+   live under <body>, so the .main-sidebar-panel rules cannot reach them; this scope carries the
+   same text-size variables and base size into each popup. */
+[data-sidebar-popover],
+[data-slot="codex-hover-card"] {
+  --text-xs: max(11px, calc(var(--sidebar-font-size, 13px) - 1px));
+  --text-xs--line-height: calc(var(--sidebar-font-size, 13px) + 3px);
+  --text-sm: var(--sidebar-font-size, 13px);
+  --text-sm--line-height: calc(var(--sidebar-font-size, 13px) + 5px);
+  font-size: var(--sidebar-font-size, 13px);
 }
 
 /* Pane keeps its track outside the viewport, with stable content clearance even when hidden. */
@@ -1760,11 +1795,8 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   background-image: none;
   box-shadow: 0 18px 44px -34px color-mix(in oklab, #000 60%, transparent);
 }
-/* While the selection bar is up, the document viewer's own floating 评论 button is redundant:
-   the action lives in the bar. Hidden, not removed — the bar clicks it to open the composer. */
-html[data-selection-menu] [data-testid="comment-selection-button"] {
-  opacity: 0 !important;
-  pointer-events: none !important;
+body:has([data-report-comment]) [data-testid="comment-selection-button"] {
+  display: none !important;
 }
 /* 输入区交出填充与描边，只保留自己的滚动裁剪；顶部圆角让给父级，底部自己收口。 */
 [data-composer] .codex-composer-surface {
@@ -1929,6 +1961,8 @@ html[data-selection-menu] [data-testid="comment-selection-button"] {
   min-height: var(--composer-input-min, 7.5rem);
   max-height: min(var(--composer-input-height, 12rem), 12rem);
   overflow-y: auto;
+  font-size: var(--composer-font-size, var(--chat-font-size, 14px));
+  line-height: calc(var(--composer-font-size, var(--chat-font-size, 14px)) + 6px);
   /* The shared textarea primitive carries a visible form border. The composer already has its
      rounded shell; a second rectangle inside it is the large black frame seen in screenshots. */
   border: 0 !important;

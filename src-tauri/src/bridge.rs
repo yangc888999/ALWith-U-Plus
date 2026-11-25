@@ -681,10 +681,13 @@ fn forward_responses(mut request: tiny_http::Request, upstream_base: &str, autho
 /// The local wire stays Responses; only the selected OpenRouter upstream uses this translation.
 fn responses_to_chat(parsed: &Value) -> Value {
     let mut chat = serde_json::Map::new();
-    for key in ["model", "temperature", "top_p", "max_output_tokens", "stream", "parallel_tool_calls"] {
+    for key in ["model", "temperature", "top_p", "max_output_tokens", "stream", "parallel_tool_calls", "service_tier"] {
         if let Some(value) = parsed.get(key) {
             chat.insert(if key == "max_output_tokens" { "max_tokens" } else { key }.to_string(), value.clone());
         }
+    }
+    if let Some(effort) = parsed.pointer("/reasoning/effort").and_then(Value::as_str) {
+        chat.insert("reasoning_effort".into(), json!(effort));
     }
     let mut messages = Vec::new();
     if let Some(instructions) = parsed.get("instructions").and_then(Value::as_str) {
@@ -983,8 +986,8 @@ impl ChatResponsesStream {
     fn translate(&mut self, bytes: &[u8]) -> Vec<u8> {
         self.buffer.extend_from_slice(bytes);
         let mut out = Vec::new();
-        while let Some(end) = self.buffer.windows(2).position(|pair| pair == b"\n\n") {
-            let frame = self.buffer.drain(..end + 2).collect::<Vec<_>>();
+        while let Some(end) = sse_frame_length(&self.buffer) {
+            let frame = self.buffer.drain(..end).collect::<Vec<_>>();
             let text = String::from_utf8_lossy(&frame);
             let Some(data) = text.lines().find_map(|line| line.trim().strip_prefix("data:")) else { continue };
             let data = data.trim();
@@ -1011,9 +1014,81 @@ impl ChatResponsesStream {
     /// leaving Codex waiting on an item that never finishes.
     fn finish(&mut self) -> Vec<u8> {
         let mut out = Vec::new();
-        self.complete(&mut out);
+        if self.finish_reason.is_some() {
+            self.complete(&mut out);
+        } else if !self.done {
+            self.done = true;
+            out.extend(self.event("response.failed", json!({"response":{
+                "id":self.id, "status":"failed", "error":{"code":"stream_disconnected", "message":"upstream disconnected before completion"}
+            }})));
+        }
         out
     }
+}
+
+fn sse_frame_length(bytes: &[u8]) -> Option<usize> {
+    bytes.iter().enumerate().find_map(|(index, byte)| {
+        if *byte != b'\n' {
+            return None;
+        }
+        let tail = &bytes[index + 1..];
+        if tail.starts_with(b"\n") {
+            Some(index + 2)
+        } else if tail.starts_with(b"\r\n") {
+            Some(index + 3)
+        } else {
+            None
+        }
+    })
+}
+
+#[derive(Debug, PartialEq)]
+enum Prelude {
+    Wait,
+    Forward,
+    Reconnect,
+}
+
+fn stream_prelude(bytes: &[u8], chat: bool) -> Prelude {
+    if bytes.len() >= FIRST_EVENT_CAP {
+        return Prelude::Forward;
+    }
+    let mut rest = bytes;
+    while let Some(end) = sse_frame_length(rest) {
+        for line in rest[..end].split(|byte| *byte == b'\n') {
+            let Some(data) = line.strip_prefix(b"data:") else { continue };
+            let Ok(value) = serde_json::from_slice::<Value>(data) else { return Prelude::Forward };
+            let failure = value.get("error").or_else(|| value.pointer("/response/error"));
+            if failure.is_some_and(|error| {
+                matches!(
+                    error["code"].as_str(),
+                    Some("stream_disconnected" | "connection_reset" | "upstream_connection_error")
+                )
+            }) {
+                return Prelude::Reconnect;
+            }
+            if chat {
+                let Some(choices) = value["choices"].as_array() else { return Prelude::Forward };
+                if value.get("error").is_some()
+                    || !choices.iter().all(|choice| {
+                        choice["finish_reason"].is_null()
+                            && choice["delta"].as_object().is_some_and(|delta| {
+                                delta.iter().all(|(key, value)| {
+                                    key == "role"
+                                        || (key == "content" && (value.is_null() || value.as_str() == Some("")))
+                                })
+                            })
+                    })
+                {
+                    return Prelude::Forward;
+                }
+            } else if !matches!(value["type"].as_str(), Some("response.created" | "response.in_progress" | "ping")) {
+                return Prelude::Forward;
+            }
+        }
+        rest = &rest[end..];
+    }
+    Prelude::Wait
 }
 
 /// The answer for a routed model whose gateway is not configured.
@@ -1088,6 +1163,13 @@ fn forward_routed(mut request: tiny_http::Request) -> Result<(), String> {
         return respond(request, status, "application/json", body.as_bytes());
     };
     parsed["model"] = Value::String(upstream_model.to_string());
+    if parsed.get("tools").is_none()
+        && let Some(input) = parsed.get_mut("input").and_then(Value::as_array_mut)
+        && input.first().is_some_and(|item| item["type"] == "additional_tools" && item["tools"].is_array())
+    {
+        let mut declaration = input.remove(0);
+        parsed["tools"] = declaration["tools"].take();
+    }
     let dropped = strip_web_search_tools(&mut parsed);
     if dropped > 0 {
         log::info!("bridge: dropped {dropped} web_search tool declaration(s) the gateway cannot run");
@@ -1175,12 +1257,20 @@ fn forward_chatgpt(request: tiny_http::Request, parsed: &Value) -> Result<(), St
     // Same reason as the routed hop: the destination has to be on the record, because a bare model
     // name is the one case where "which vendor answered" is not obvious from the model string.
     log::info!("bridge: native model={model} upstream=chatgpt.com");
-    let headers = [
+    let mut headers = vec![
         ("chatgpt-account-id", credentials.account_id.as_str()),
         ("OpenAI-Beta", "responses=experimental"),
         ("originator", "codex_cli_rs"),
         ("Accept", "text/event-stream"),
     ];
+    let lite = request
+        .headers()
+        .iter()
+        .find(|header| header.field.equiv("x-openai-internal-codex-responses-lite"))
+        .map(|header| header.value.as_str().to_owned());
+    if let Some(value) = lite.as_deref() {
+        headers.push(("x-openai-internal-codex-responses-lite", value));
+    }
     relay(
         request,
         parsed.get("model").and_then(Value::as_str).unwrap_or(""),
@@ -2313,7 +2403,9 @@ fn relay(
                 log::warn!("bridge: 429 with the request window spent, answering instead of replaying");
                 return respond(request, status, "application/json", &name_upstream(&body, url));
             }
-            let muted = overload_429_mute();
+            // The 429 replay belongs to OpenRouter's documented `error.code:10000` contract. A
+            // Hakimi 429 is a real server-side limit and must be surfaced, never replayed.
+            let muted = openrouter && overload_429_mute();
             // The ceiling only ever applies to a free model (see `free_quota_applies`): a paid model
             // refused by a short burst window must fall through to the normal replay below, never be
             // answered with「免费额度已用完」.
@@ -2424,6 +2516,13 @@ fn relay(
     // contract the setting names. Other provider errors pass through untouched.
     let replay_mute = watch_stall && overload_mute();
     let replay_429 = watch_openrouter_errors && overload_429_mute();
+    let retry_prelude = gateway
+        && gateway_retry_enabled()
+        && content_type.split(';').next().is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/event-stream"))
+        && matches!(ModelIdentity::parse(model),
+        ModelIdentity::Gateway { gateway_id, .. } if gateway_id == "hakimi");
+    let retry_model = model.to_owned();
+    let retry_request_id = request_id.clone();
     std::thread::spawn(move || {
         let mut upstream = response;
         let mut chunk = [0u8; 8192];
@@ -2459,7 +2558,59 @@ fn relay(
             if upstream_stop.load(Ordering::Relaxed) {
                 break;
             }
-            match upstream.read(&mut chunk) {
+            let mut read = upstream.read(&mut chunk);
+            if retry_prelude
+                && !sent_any
+                && let Ok(count) = read
+                && count > 0
+            {
+                head.extend_from_slice(&chunk[..count]);
+                match stream_prelude(&head, chat_protocol) {
+                    Prelude::Wait => continue,
+                    Prelude::Forward => {}
+                    Prelude::Reconnect => read = Err(std::io::Error::from(std::io::ErrorKind::ConnectionReset)),
+                }
+            }
+            if retry_prelude && !sent_any && (read.is_err() || matches!(read, Ok(0))) {
+                // The switch promises "keep reconnecting"; this stream path used to stop after
+                // three attempts, which is shorter than a normal Hakimi outage. Reuse the same
+                // uncounted gateway budget as the connect/header paths. `stream_prelude` returns
+                // `Forward` for a rate-limit/quota event, so a real server-side limit never
+                // reaches this branch and is surfaced instead of retried.
+                if gateway_retry_enabled() && may_retry_transport(transport_retries, attempts, retry_deadline, Instant::now()) {
+                    let gap = retry_gap(transport_retries);
+                    transport_retries += 1;
+                    note_retry(&mut silent_retries, &mut alerted_retrying, &retry_model, &retry_request_id);
+                    log::info!("bridge: retrying Hakimi stream before first output (attempt {transport_retries})");
+                    if tx.send(StreamChunk::Data(b": reconnecting\n\n".to_vec())).is_err() {
+                        break;
+                    }
+                    std::thread::sleep(gap);
+                    if upstream_stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    match replay_upstream(
+                        &replay_client,
+                        &replay_url,
+                        replay_authorization.as_deref(),
+                        &replay_headers,
+                        &replay_payload,
+                    ) {
+                        Ok(next) => {
+                            upstream = next;
+                            head.clear();
+                            continue;
+                        }
+                        Err(error) => {
+                            let _ = tx.send(StreamChunk::Failed(error));
+                            break;
+                        }
+                    }
+                }
+                let _ = tx.send(StreamChunk::Failed("Hakimi disconnected before first output".into()));
+                break;
+            }
+            match read {
                 Ok(0) => {
                     if !head.is_empty() && !emit(&tx, &mut translator, std::mem::take(&mut head)) {
                         break;
@@ -2674,6 +2825,11 @@ mod tests {
             let body: Value = serde_json::from_str(&body).unwrap();
             assert_eq!(body["model"], "issued/model");
             assert_eq!(body["input"][0]["content"][0]["text"], "kept");
+            assert_eq!(body["tools"][0]["name"], "local_tool");
+            assert_eq!(body["tools"].as_array().unwrap().len(), 1);
+            assert!(
+                !request.headers().iter().any(|header| header.field.equiv("x-openai-internal-codex-responses-lite"))
+            );
             request.respond(tiny_http::Response::from_string("relay-ok").with_status_code(202)).unwrap();
         });
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
@@ -2681,7 +2837,11 @@ mod tests {
         let client = std::thread::spawn(move || {
             reqwest::blocking::Client::new().post(format!("http://{address}/alwith/responses"))
                 .bearer_auth("alwith-router")
-                .json(&serde_json::json!({"model":format!("{gateway}/issued/model"),"input":[{"type":"reasoning","content":[{"text":"kept"}]}]}))
+                .header("x-openai-internal-codex-responses-lite", "1")
+                .json(&serde_json::json!({"model":format!("{gateway}/issued/model"),"input":[
+                    {"type":"additional_tools","tools":[{"type":"function","name":"local_tool"},{"type":"web_search"}]},
+                    {"type":"reasoning","content":[{"text":"kept"}]}
+                ]}))
                 .send().unwrap()
         });
         handle(server.recv_timeout(Duration::from_secs(5)).unwrap().unwrap()).unwrap();
@@ -2878,6 +3038,8 @@ mod tests {
         let request = json!({
             "model": "vendor/model:free",
             "instructions": "be brief",
+            "reasoning": {"effort":"high"},
+            "service_tier":"priority",
             "max_output_tokens": 256,
             "stream": true,
             "input": [
@@ -2890,6 +3052,8 @@ mod tests {
                       {"type":"web_search"}]
         });
         let chat = responses_to_chat(&request);
+        assert_eq!(chat["reasoning_effort"], "high");
+        assert_eq!(chat["service_tier"], "priority");
         assert_eq!(chat["model"], "vendor/model:free");
         assert_eq!(chat["max_tokens"], 256, "the token cap is renamed, not dropped");
         assert!(chat.get("max_output_tokens").is_none());
@@ -2996,6 +3160,7 @@ data: [DONE]
         let first = stream.translate(&frame.as_bytes()[..24]);
         assert!(first.is_empty(), "a partial frame must not emit a half event");
         let mut out = stream.translate(&frame.as_bytes()[24..]);
+        out.extend(stream.translate(b"data: [DONE]\n\n"));
         out.extend(stream.finish());
         let payloads = event_payloads(&out);
         let text: String = payloads
@@ -3053,13 +3218,102 @@ data: [DONE]
     }
 
     #[test]
-    fn an_upstream_that_never_sends_done_still_terminates_the_turn() {
+    fn a_truncated_chat_stream_is_not_reported_as_a_completed_turn() {
         let mut stream = ChatResponsesStream::new();
         let mut out = stream.translate(b"data: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n");
         out.extend(stream.finish());
-        assert_eq!(event_names(&out).last().unwrap(), "response.completed");
+        assert_eq!(event_names(&out).last().unwrap(), "response.failed");
         // A second finish must not emit a duplicate terminal event.
         assert!(stream.finish().is_empty());
+    }
+
+    #[test]
+    fn metadata_and_heartbeats_are_safe_to_replay_but_errors_and_output_are_not() {
+        assert_eq!(
+            stream_prelude(b": ping\r\n\r\ndata: {\"type\":\"response.created\"}\r\n\r\ndata: {\"typ", false),
+            Prelude::Wait
+        );
+        assert_eq!(
+            stream_prelude(b"data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n", true),
+            Prelude::Wait
+        );
+        assert_eq!(stream_prelude(b"data: {\"type\":\"response.output_item.added\"}\r\n\r\n", false), Prelude::Forward);
+        assert_eq!(stream_prelude(b"data: {\"error\":{\"code\":401}}\n\n", true), Prelude::Forward);
+        assert_eq!(
+            stream_prelude(b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{}]}}]}\n\n", true),
+            Prelude::Forward
+        );
+        assert_eq!(
+            stream_prelude(
+                b"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"stream_disconnected\"}}}\n\n",
+                false
+            ),
+            Prelude::Reconnect
+        );
+        // A server-side limit is a final answer, not a transport failure: never reconnect into it.
+        for limit in [
+            "rate_limit_exceeded",
+            "insufficient_quota",
+            "usage_limit_reached",
+            "quota_exceeded",
+        ] {
+            let frame = format!(
+                "data: {{\"type\":\"response.failed\",\"response\":{{\"error\":{{\"code\":\"{limit}\"}}}}}}\n\n"
+            );
+            assert_eq!(stream_prelude(frame.as_bytes(), false), Prelude::Forward, "{limit}");
+        }
+        let mut stream = ChatResponsesStream::new();
+        stream.translate(b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\r\n\r\n");
+        assert_eq!(event_names(&stream.finish()).last().unwrap(), "response.completed");
+    }
+
+    #[test]
+    fn hakimi_recovers_after_a_metadata_only_disconnect_without_leaking_the_abandoned_response() {
+        let _lock = GATEWAY_SWITCH_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let _restore = SwitchRestore(gateway_retry_enabled());
+        set_gateway_retry(true);
+        let upstream = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/responses", upstream.server_addr());
+        let vendor = std::thread::spawn(move || {
+            for body in [
+                "data: {\"type\":\"response.created\",\"id\":\"abandoned\"}\r\n\r\n",
+                "data: {\"type\":\"response.completed\"}\n\n",
+            ] {
+                let mut request = upstream.recv_timeout(Duration::from_secs(5)).unwrap().expect("expected request");
+                let mut payload = String::new();
+                request.as_reader().read_to_string(&mut payload).unwrap();
+                assert_eq!(payload, "{\"model\":\"m\"}");
+                request
+                    .respond(
+                        tiny_http::Response::from_string(body)
+                            .with_header("Content-Type: text/event-stream".parse::<tiny_http::Header>().unwrap()),
+                    )
+                    .unwrap();
+            }
+        });
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let local = format!("http://{}/responses", server.server_addr());
+        let consumer = std::thread::spawn(move || {
+            reqwest::blocking::Client::new().post(local).timeout(Duration::from_secs(7)).send().unwrap().text().unwrap()
+        });
+        relay(
+            server.recv().unwrap(),
+            "hakimi/m",
+            &endpoint,
+            None,
+            &[],
+            br#"{"model":"m"}"#.to_vec(),
+            false,
+            false,
+            false,
+            false,
+            true,
+        )
+        .unwrap();
+        vendor.join().unwrap();
+        let stream = consumer.join().unwrap();
+        assert!(stream.contains("response.completed"));
+        assert!(!stream.contains("abandoned"));
     }
 
     #[test]

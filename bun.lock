@@ -13,7 +13,7 @@
         "@alwith/module-chat": "^0.5.3",
         "@alwith/module-collection": "^0.0.3",
         "@alwith/module-computer": "^0.1.8",
-        "@alwith/module-drive": "0.6.6",
+        "@alwith/module-drive": "0.6.8",
         "@alwith/module-editor": "^0.1.0-rc.15",
         "@alwith/module-extension": "^0.1.0-rc.19",
         "@alwith/module-file-tree": "^0.1.0-rc.23",
@@ -173,7 +173,7 @@
 
     "@alwith/module-computer": ["@alwith/module-computer@0.1.8", "", { "dependencies": { "@alwith/native-kit": "0.1.1" } }, "sha512-Ywp60E6Cx2kqIDIWpmguou0owUNNIIB/rLt3HuYNAnRvNk2r80Kvwl4KwfJ+lsasaJDc31s4zyeKVJgPbV3GHw=="],
 
-    "@alwith/module-drive": ["@alwith/module-drive@0.6.6", "", { "peerDependencies": { "@alwith/module-editor": "^0.6.4", "@milkdown/core": "^7.22.2", "@milkdown/ctx": "^7.22.2", "@milkdown/plugin-collab": "^7.22.2", "@milkdown/prose": "^7.22.2", "@milkdown/utils": "^7.22.2", "@tauri-apps/api": "^3.0.0-alpha.3", "lucide-react": "^1.61.0", "react": "^19.3.1", "react-dom": "^19.3.1", "y-prosemirror": "^1.3.7", "y-protocols": "^1.0.7", "y-websocket": "^3.1.0", "yjs": "^13.6.33" }, "optionalPeers": ["@alwith/module-editor", "@milkdown/core", "@milkdown/ctx", "@milkdown/plugin-collab", "@milkdown/prose", "@milkdown/utils", "lucide-react", "y-prosemirror", "y-protocols", "y-websocket", "yjs"] }, "sha512-YAtvA6xBssroXFRKaJCBF+HOwcNEQd2exC3cq1NVGk57yrwyOAYIKYQuhmssEdRU6GYJM+ASoELOJhoPE5FY6w=="],
+    "@alwith/module-drive": ["@alwith/module-drive@0.6.8", "", { "peerDependencies": { "@alwith/module-editor": "^0.6.4", "@milkdown/core": "^7.22.2", "@milkdown/ctx": "^7.22.2", "@milkdown/plugin-collab": "^7.22.2", "@milkdown/prose": "^7.22.2", "@milkdown/utils": "^7.22.2", "@tauri-apps/api": "^3.0.0-alpha.3", "lucide-react": "^1.61.0", "react": "^19.3.1", "react-dom": "^19.3.1", "y-prosemirror": "^1.3.7", "y-protocols": "^1.0.7", "y-websocket": "^3.1.0", "yjs": "^13.6.33" }, "optionalPeers": ["@alwith/module-editor", "@milkdown/core", "@milkdown/ctx", "@milkdown/plugin-collab", "@milkdown/prose", "@milkdown/utils", "lucide-react", "y-prosemirror", "y-protocols", "y-websocket", "yjs"] }, "sha512-HfA3NibB8lMncq7hLNoLzfoFziELu1aWuYQ1rlj8I7adG9Ji0dvImVJ9dxFM3YCpwVnknD1EYvTKFtV6NyoxDQ=="],
 
     "@alwith/module-editor": ["@alwith/module-editor@0.1.0-rc.15", "", { "dependencies": { "@alwith/module-fs": "^0.1.0-rc.10", "@base-ui/react": "^1.9.0" }, "peerDependencies": { "@alwith/module-chat": "^0.1.29", "@milkdown/core": "^7.22.2", "@milkdown/plugin-history": "^7.22.2", "@milkdown/plugin-math": "^7.5.9", "@milkdown/preset-commonmark": "^7.22.2", "@milkdown/preset-gfm": "^7.22.2", "@milkdown/prose": "^7.22.2", "@milkdown/utils": "^7.22.2", "audiomotion-analyzer": "^4.5.4", "docx-preview": "^0.4.1", "dompurify": "^3.4.17", "katex": "^0.19.1", "lucide-react": "^1.61.0", "marked": "^18.1.1", "monaco-editor": "^0.57.0", "pdfjs-dist": "^6.4.299", "react": "^19.3.1", "react-dom": "^19.3.1", "react-player": "^3.4.0", "shiki": "^4.5.0", "utif": "^3.1.0", "x-data-spreadsheet": "^1.1.9", "xlsx": "^0.20.3" }, "optionalPeers": ["@alwith/module-chat", "@milkdown/core", "@milkdown/plugin-history", "@milkdown/plugin-math", "@milkdown/preset-commonmark", "@milkdown/preset-gfm", "@milkdown/prose", "@milkdown/utils", "audiomotion-analyzer", "docx-preview", "dompurify", "katex", "marked", "monaco-editor", "pdfjs-dist", "react-player", "shiki", "utif", "x-data-spreadsheet", "xlsx"] }, "sha512-+7MTx1ecaJ3g9VdhvlHteIgwNDivTLsMDTXK96eLmSU/jHfL78eIlrplGRGM6BXuFcx70w1g0b302Ykp4SPwwQ=="],
 

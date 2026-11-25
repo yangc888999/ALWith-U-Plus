@@ -217,15 +217,29 @@ export function checkFreeModels(options: FreeModelCheckOptions = {}): Promise<st
   return task
 }
 
-/** No hourly timer: retry failed checks on the next foreground, even on the same date. */
 export function startFreeModelWatch(): () => void {
   const check = (): void => { void checkFreeModels().catch(() => undefined) }
   const onVisible = (): void => { if (document.visibilityState === "visible") check() }
-  window.addEventListener("focus", check)
-  document.addEventListener("visibilitychange", onVisible)
-  check()
+  // The catalogue only needs one successful read per local calendar day, and the user wants that
+  // read after the first launch of the day has settled. Wait one minute before the first check;
+  // `checkFreeModels` deduplicates later launches and retries by `successDate`, so focus/online/
+  // visibility can recover a failed check without turning into periodic polling. Staying open
+  // past midnight does not schedule another read; the next launch is the next day's first open.
+  let launched = false
+  const timer = window.setTimeout(() => {
+    launched = true
+    check()
+  }, 60_000)
+  const onFocus = (): void => { if (launched) check() }
+  const onOnline = (): void => { if (launched) check() }
+  const onVisibleAfterLaunch = (): void => { if (launched) onVisible() }
+  window.addEventListener("focus", onFocus)
+  window.addEventListener("online", onOnline)
+  document.addEventListener("visibilitychange", onVisibleAfterLaunch)
   return () => {
-    window.removeEventListener("focus", check)
-    document.removeEventListener("visibilitychange", onVisible)
+    window.clearTimeout(timer)
+    window.removeEventListener("focus", onFocus)
+    window.removeEventListener("online", onOnline)
+    document.removeEventListener("visibilitychange", onVisibleAfterLaunch)
   }
 }

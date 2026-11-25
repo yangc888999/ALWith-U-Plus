@@ -12,6 +12,7 @@ import {
   QUICK_CHATS_GROUP,
   SessionList,
   type SessionListExpansion,
+  projectName,
   SessionRow
 } from "@alwith/module-chat/session-list"
 import { ScrollArea } from "@base-ui/react/scroll-area"
@@ -68,6 +69,7 @@ import { ONLINE_BI_VIEW_ID } from "@/features/workspace/online-bi"
 import { usePreviewExtension } from "@/features/workspace/preview-extension"
 import { automationSessionRows, automationTitleOf, subscribeAutomationSessionRows } from "@/lib/automation-sessions"
 import { useApp } from "@/lib/client"
+import { isTemporaryChatDir } from "@/lib/quick-chat"
 import { isGroupDirectory } from "@/lib/groups"
 import { cn } from "@/lib/utils"
 import { openSettingsWindow, toggleSettingsWindow } from "@/lib/window-manager"
@@ -269,6 +271,7 @@ function SidebarRailButton({ label, icon: Icon, active, muted, hint, onSelect, d
 }
 
 type SessionSidebarProps = {
+  pendingDirectory?: string | null
   screen: MainScreen
   leadingPage: "plugins" | "extensions" | "archives" | "automation" | "usage" | "skills"
   selectedId: string | null
@@ -304,6 +307,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
 }
 
 function SidebarPanels({
+  pendingDirectory,
   screen,
   leadingPage,
   selectedId,
@@ -333,6 +337,24 @@ function SidebarPanels({
   const view = useSessionsUiStore((s) => s.view)
   const setView = useSessionsUiStore((s) => s.setView)
   const listedSessions = useApp((state) => state.sessionList)
+  const listReady = useApp((state) => state.sessionListLoaded)
+  const pendingGroup = pendingDirectory === undefined ? undefined : isTemporaryChatDir(pendingDirectory) ? null : pendingDirectory
+  const draftOwners = useApp((state) => state.draftSessions)
+  const showPending = pendingGroup !== undefined && !listedSessions.some((row) =>
+    draftOwners[row.sessionId] === "main" && (pendingGroup === null ? isTemporaryChatDir(row.cwd) : row.cwd === pendingGroup)
+  )
+  const pendingRow = showPending ? (
+    <div role="status" className="flex items-center gap-2 px-4 py-1 text-sm text-muted-foreground">
+      <span aria-hidden="true" className="size-3 animate-spin rounded-full border border-current border-t-transparent motion-reduce:animate-none" />
+      {t("sidebar.untitled")}
+    </div>
+  ) : null
+  useEffect(() => {
+    if (pendingGroup === undefined) return
+    const key = pendingGroup ?? QUICK_CHATS_GROUP
+    const store = useSessionsUiStore.getState()
+    if (store.projectOpen.get(key) !== true) store.setProjectOpen(new Map(store.projectOpen).set(key, true))
+  }, [pendingGroup])
   // A meeting belongs to 群聊, never to 项目. The client diverts those rows when the list is built;
   // this filter is the same test applied to rows that were already cached (a restored history, a
   // healed folder, a record still pointing at the Groups root) so an old row cannot resurface here
@@ -730,6 +752,12 @@ function SidebarPanels({
               <Pane className="session-list-scroll" viewportRef={setViewport} viewportClassName="ps-2 pe-0 pb-1">
                 {/* Observe content height as groups expand, collapse or reveal more rows. */}
                 <ScrollArea.Content render={<NavigationStack />} style={{ minWidth: 0 }}>
+                  {showPending && pendingGroup !== undefined && (!listReady || (pendingGroup !== null && !sessions.some((row) => row.cwd === pendingGroup))) && (
+                    <div>
+                      <div className="px-2 py-1 text-sm font-medium">{pendingGroup === null ? t("sidebar.quickChats") : projectName(pendingGroup)}</div>
+                      {pendingRow}
+                    </div>
+                  )}
                   <SessionList
                     selectedId={selectedId}
                     onSelect={onSelect}
@@ -758,6 +786,7 @@ function SidebarPanels({
                             onSelect={onSelect}
                             onNewChat={() => onNewProjectChat(cwd)}
                           />
+                          {cwd === pendingGroup && pendingRow}
                         </>
                       )
                     }}

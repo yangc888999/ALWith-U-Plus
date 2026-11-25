@@ -12,18 +12,21 @@ import { useSessionsUiStore } from "../store"
 await initI18n("en")
 
 const originalState = client.state
+const originalUi = useSessionsUiStore.getState()
 afterEach(async () => {
   await act(async () => {
     cleanup()
+    useSessionsUiStore.setState(originalUi, true)
     client.store.setState(originalState, true)
     await new Promise((resolve) => setTimeout(resolve, 0))
   })
 })
 
-function showSidebar() {
+function showSidebar(pendingDirectory?: string | null) {
   return render(
     <SidebarProvider>
       <SessionSidebar
+        pendingDirectory={pendingDirectory}
         screen="main"
         leadingPage="plugins"
         selectedId={null}
@@ -40,6 +43,13 @@ function showSidebar() {
     </SidebarProvider>
   )
 }
+
+test.each([[null, true], [null, false], ["/new-project", true], ["/new-project", false]] as const)("shows the pending row for %s, list loaded=%s", (cwd, loaded) => {
+  client.store.setState({ sessionListLoaded: loaded, sessionList: [] })
+  const view = showSidebar(cwd)
+  expect(view.getByRole("status", { name: "" })).toHaveTextContent("New chat")
+  expect(client.state.sessionList).toEqual([])
+})
 
 test("empty quick chats stays first and collapsed with a project hover card", () => {
   client.store.setState({ sessionListLoaded: true, sessionList: [] })

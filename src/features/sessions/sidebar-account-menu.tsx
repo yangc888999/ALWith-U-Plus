@@ -77,7 +77,13 @@ export function SidebarAccountMenu({
         {avatar}
         <span className="min-w-0 truncate">{displayName}</span>
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="start" sideOffset={8} className="w-[calc(var(--anchor-width)+36px)]">
+      <DropdownMenuContent
+        data-sidebar-popover=""
+        side="top"
+        align="start"
+        sideOffset={8}
+        className="w-[calc(var(--anchor-width)+36px)]"
+      >
         <DropdownMenuGroup>
           <DropdownMenuLabel className="flex items-center gap-2 px-2 py-2 text-sm font-medium text-popover-foreground">
             {avatar}
@@ -105,7 +111,7 @@ export function SidebarAccountMenu({
               <GlobeIcon className="text-muted-foreground" />
               {t("settings.language")}
             </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent>
+            <DropdownMenuSubContent data-sidebar-popover="">
               <DropdownMenuRadioGroup
                 value={i18n.language}
                 onValueChange={(value) => {

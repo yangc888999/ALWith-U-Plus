@@ -200,7 +200,8 @@ export function parseCustomModels(source: string): CustomModel[] {
       ...(model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow as number | null }),
       ...(model.description === undefined ? {} : { description: model.description }),
       ...(reasoningLevels === undefined ? {} : { reasoningLevels }),
-      ...(defaultReasoningLevel === undefined ? {} : { defaultReasoningLevel })
+      ...(defaultReasoningLevel === undefined ? {} : { defaultReasoningLevel }),
+      ...(model.defaultReasoningLevelExplicit === true ? { defaultReasoningLevelExplicit: true } : {})
     }
   })
 }
@@ -623,6 +624,16 @@ export function mergeDiscoveredModels(current: CustomModel[], discovered: Custom
       merged.defaultReasoningLevel = incoming.defaultReasoningLevel
       changed = true
     }
+    if (incoming.defaultReasoningLevelExplicit === true) {
+      if (merged.defaultReasoningLevel !== incoming.defaultReasoningLevel) {
+        merged.defaultReasoningLevel = incoming.defaultReasoningLevel
+        changed = true
+      }
+      if (merged.defaultReasoningLevelExplicit !== true) {
+        merged.defaultReasoningLevelExplicit = true
+        changed = true
+      }
+    }
     if (changed) {
       models[index] = merged
       updated += 1
@@ -839,6 +850,7 @@ export function saveBuiltInModels(
     if (model.description != null) entry.description = model.description
     if (model.reasoningLevels != null) entry.reasoningLevels = model.reasoningLevels
     if (model.defaultReasoningLevel != null) entry.defaultReasoningLevel = model.defaultReasoningLevel
+    if (model.defaultReasoningLevelExplicit === true) entry.defaultReasoningLevelExplicit = true
     // Keep the switch state: omitting it made every persisted row read as enabled, so a
     // switched-off model came back on after each save.
     if (model.enabled != null) entry.enabled = model.enabled

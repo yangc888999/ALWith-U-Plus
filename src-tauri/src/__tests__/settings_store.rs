@@ -98,6 +98,33 @@ fn interface_font_is_a_registered_persisted_choice() {
 }
 
 #[test]
+fn per_location_font_sizes_are_registered_and_validated() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = SettingsStore::load(dir.path().into()).unwrap();
+    store
+        .update(
+            changes(json!({
+                "appearance.fontSizes": {"chat": 16, "composer": 15, "sidebar": 14}
+            })),
+            None,
+        )
+        .unwrap();
+    assert_eq!(store.values["appearance.fontSizes"]["composer"], 15);
+    assert!(store
+        .update(
+            changes(json!({"appearance.fontSizes": {"chat": 99, "composer": 15, "sidebar": 14}})),
+            None
+        )
+        .is_err());
+    assert!(store
+        .update(
+            changes(json!({"appearance.fontSizes": {"chat": 14, "composer": 14}})),
+            None
+        )
+        .is_err());
+}
+
+#[test]
 fn appearance_column_switches_are_registered_and_projected() {
     // The Appearance pane writes these two keys. When they were missing from the registry the
     // client rejected the write ("这个设置项未被识别") and, because partition_settings dropped

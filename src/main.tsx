@@ -33,6 +33,7 @@ import { initI18n } from "@/lib/i18n"
 import { startOverload429MuteSync } from "@/lib/overload-429-settings"
 import { startPreferenceSync } from "@/lib/preference-sync"
 import { defaultPreferences, loadPreferences } from "@/lib/preferences"
+import { applyFontSizes } from "@/lib/font-size"
 import { isQueueCancelled } from "@/lib/queued-prompt"
 import { bootstrapSettings } from "@/lib/settings-store"
 import { armStartupWindow } from "@/lib/startup-window"
@@ -192,6 +193,7 @@ async function bootstrap(): Promise<void> {
   })
   const [, preferences] = await Promise.all([settingsReady, preferencesReady])
   applyUiFont(preferences.uiFont)
+  applyFontSizes(preferences.fontSizes)
   predictionPreference.setState({ enabled: preferences.composerPredictions ?? true })
   hydrateProfileOverrides({
     owner: preferences.profileOwner,

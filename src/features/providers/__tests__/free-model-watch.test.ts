@@ -151,20 +151,51 @@ test("migrates known history, preserves metadata and pending until displayed, an
   stop()
 })
 
-test("startup fetch is independent of notification preference and scheduler has no timer", async () => {
-  localStorage.clear()
-  const { commands } = await import("@/bindings")
-  const fetcher = vi.spyOn(commands, "fetchText").mockResolvedValue(catalog("a:free"))
-  const timer = vi.spyOn(globalThis, "setTimeout")
-  const stop = startFreeModelWatch()
-  await vi.waitFor(() => expect(getCachedFreeModels()).toHaveLength(1))
-  const timerCalls = timer.mock.calls.length
-  window.dispatchEvent(new Event("focus"))
-  await Promise.resolve()
-  expect(fetcher).toHaveBeenCalledOnce()
-  expect(timer.mock.calls.length).toBe(timerCalls)
-  stop()
-  localStorage.clear()
+test("the first open checks after one minute and a successful same-day focus does not repeat it", async () => {
+  vi.useFakeTimers()
+  try {
+    localStorage.clear()
+    vi.setSystemTime(new Date(2026, 10, 25, 9, 0))
+    const { commands } = await import("@/bindings")
+    const fetcher = vi.spyOn(commands, "fetchText").mockResolvedValue(catalog("a:free"))
+    const stop = startFreeModelWatch()
+    await vi.advanceTimersByTimeAsync(59_000)
+    expect(fetcher).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    window.dispatchEvent(new Event("focus"))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    stop()
+  } finally {
+    vi.useRealTimers()
+    localStorage.clear()
+  }
+})
+
+test("staying open past midnight does not check again; the next day's launch does", async () => {
+  vi.useFakeTimers()
+  try {
+    localStorage.clear()
+    vi.setSystemTime(new Date(2026, 10, 24, 23, 30))
+    const { commands } = await import("@/bindings")
+    const fetcher = vi.spyOn(commands, "fetchText").mockResolvedValue(catalog("a:free"))
+    const first = startFreeModelWatch()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    // No midnight timer: the already-open window keeps only its one startup read.
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    first()
+    vi.setSystemTime(new Date(2026, 10, 25, 9, 0))
+    const second = startFreeModelWatch()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    second()
+  } finally {
+    vi.useRealTimers()
+    localStorage.clear()
+  }
 })
 
 test("notification bodies preview three ids and summarize the rest", () => {

@@ -137,7 +137,7 @@ export function SidebarMenuRow({
         aria-controls={hasDestinations && rect !== null ? menuId : undefined}
         aria-disabled={muted || undefined}
         title={hint}
-        className={cn(MENU_HIGHLIGHT, "h-8 gap-2 px-2 text-[13px]", muted && "opacity-55")}
+        className={cn(MENU_HIGHLIGHT, "h-8 gap-2 px-2 text-[length:var(--sidebar-font-size,13px)]", muted && "opacity-55")}
         onClick={() => {
           close(true)
           onPrimary()
@@ -170,7 +170,7 @@ export function SidebarMenuRow({
                   close(true)
                   onSelect()
                 }}
-                className="flex h-8 w-full items-center gap-2 rounded-[8px] px-2 text-start text-[13px] text-foreground/85 outline-hidden hover:bg-foreground/5 hover:text-foreground focus-visible:bg-foreground/5 aria-[current=page]:bg-foreground/5 aria-[current=page]:text-foreground"
+                className="flex h-8 w-full items-center gap-2 rounded-[8px] px-2 text-start text-[length:var(--sidebar-font-size,13px)] text-foreground/85 outline-hidden hover:bg-foreground/5 hover:text-foreground focus-visible:bg-foreground/5 aria-[current=page]:bg-foreground/5 aria-[current=page]:text-foreground"
               >
                 <ItemIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 truncate">{itemLabel}</span>

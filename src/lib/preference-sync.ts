@@ -7,6 +7,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow"
 import { navigationSoundStore } from "@/features/chat/codex/navigation-sound-store"
 import { predictionPreference } from "@/features/chat/composer/prediction-preference"
 import i18n, { isLanguageCode } from "@/lib/i18n"
+import { applyFontSizes } from "@/lib/font-size"
 import { type PreferenceChange, PREFERENCES_CHANGED } from "@/lib/preferences"
 import { applyUiFont } from "@/lib/ui-font"
 import { syncZoomLevel } from "@/lib/zoom"
@@ -42,6 +43,10 @@ export function startPreferenceSync(): Promise<() => void> {
           case "uiFont": {
             if (typeof change.value !== "string") throw new Error("Invalid interface font preference")
             applyUiFont(change.value)
+            return
+          }
+          case "fontSizes": {
+            applyFontSizes(change.value)
             return
           }
           case "navigationSoundMode":

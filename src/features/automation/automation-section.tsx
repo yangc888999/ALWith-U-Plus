@@ -365,21 +365,21 @@ function TaskCard({
             {schedule}
           </div>
           <div className="mt-0.5 text-[11px] text-muted-foreground">{nextRun}</div>
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-muted-foreground/80">
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground/80">
             <span className="truncate" title={modelText}>
               {t("automation.summaryModel", { value: modelText })}
             </span>
             <span>{t("automation.summaryEffort", { value: effortText })}</span>
             <span>{t("automation.summaryFast", { value: t(fastOn ? "automation.fastOn" : "automation.fastOff") })}</span>
           </div>
-          <div className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground/70" title={workspaceText}>
+          <div className="mt-0.5 truncate font-mono text-xs text-muted-foreground/70" title={workspaceText}>
             {workspaceText !== ""
               ? t("automation.summaryWorkspace", { value: workspaceText })
               : t("automation.workspaceDefault")}
           </div>
           {/* 运行时的额外配置：档位 / 加速 / 飞书推送，一眼能看出这个任务不是纯默认跑的 */}
           {(task.effort !== "" || task.fastMode || (task.larkNotify && task.larkTargets.length > 0)) && (
-            <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px]">
+            <div className="mt-1 flex flex-wrap items-center gap-1 text-xs">
               {task.effort !== "" && (
                 <span className="rounded bg-foreground/[0.07] px-1 py-0.5 text-muted-foreground">
                   {t("automation.badgeEffort", { value: task.effort })}

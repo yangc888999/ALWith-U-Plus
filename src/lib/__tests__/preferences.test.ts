@@ -101,12 +101,19 @@ test.each([undefined, "chat", "work"] as const)("default start surface restores 
 })
 
 test.each([undefined, "pingfang", "songti", "invalid-font"] as const)(
-  "interface font restores %p with PingFang as the default",
+  "interface font restores %p without overriding an explicit family",
   async (saved) => {
     settingsFixture(saved === undefined ? {} : { "appearance.uiFont": saved })
-    expect((await loadPreferences()).uiFont).toBe(saved === "songti" ? "songti" : "pingfang")
+    expect((await loadPreferences()).uiFont).toBe(saved === "songti" || saved === "pingfang" ? saved : "system")
   }
 )
+
+test("per-location font sizes restore with recommended defaults", async () => {
+  settingsFixture({ "appearance.fontSizes": { chat: 16, composer: 15, sidebar: 14, settings: 15 } })
+  expect((await loadPreferences()).fontSizes).toEqual({ chat: 16, composer: 15, sidebar: 14, settings: 15 })
+  settingsFixture({})
+  expect((await loadPreferences()).fontSizes).toEqual({ chat: 14, composer: 14, sidebar: 13, settings: 14 })
+})
 
 test("input suggestions default to enabled and preserve an explicit saved choice", async () => {
   const values = savedProject(undefined)

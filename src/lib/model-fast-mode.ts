@@ -6,8 +6,7 @@
  *
  * Three states are distinct and must stay that way:
  *   * key present, `true`  — explicitly on  → the turn sends `service_tier=priority`
- *   * key present, `false` — explicitly off → the turn must send the normal-speed value rather
- *                            than omitting the field (omitting it is not the same request)
+ *   * key present, `false` — explicitly disable Fast in the session; Codex omits the priority tier
  *   * key absent           — never specified → leave the engine's own default alone
  *
  * Dropping the key on "off" collapsed the last two into one, so "I turned acceleration off" and

@@ -422,7 +422,7 @@ export function CreateMeetingDialog({
 
           <div className="min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto pe-1">
             <label className="block space-y-1">
-              <span className="text-[11px] text-muted-foreground">{t("groups.createNameLabel")}</span>
+              <span className="text-sm font-medium text-foreground">{t("groups.createNameLabel")}</span>
               <input
                 className={`h-9 text-sm ${FIELD_CLASS}`}
                 value={name}
@@ -432,11 +432,11 @@ export function CreateMeetingDialog({
                   setCollision(null)
                 }}
               />
-              <span className="block text-[11px] text-muted-foreground">{t("groups.createNameHint")}</span>
+              <span className="block text-xs text-muted-foreground">{t("groups.createNameHint")}</span>
               {/* Only while a name exists but leaves nothing after the slug filter (pure emoji or
                   punctuation): the empty field already has its own disabled submit + hint. */}
               {trimmedName !== "" && !nameHasSlug && (
-                <span className="block text-[11px] text-destructive" data-name-slug-error>
+                <span className="block text-xs text-destructive" data-name-slug-error>
                   {t("groups.createNameNoSlug")}
                 </span>
               )}
@@ -539,7 +539,7 @@ export function CreateMeetingDialog({
                       {entry.status === "missing" && (
                         <button
                           type="button"
-                          className="text-[10px] underline"
+                          className="text-xs underline"
                           onClick={() => patchMaterial(entry.path, { status: "checking" })}
                         >
                           {t("groups.createMaterialRetry")}

@@ -52,6 +52,13 @@ import {
   subscribeChatDisplayPreferences
 } from "@/lib/chat-display-preferences"
 import { loadPreferences, savePreference } from "@/lib/preferences"
+import {
+  applyFontSizes,
+  FONT_SIZE_DEFAULTS,
+  FONT_SIZE_OPTIONS,
+  resolveFontSizes,
+  type FontSizes
+} from "@/lib/font-size"
 import { applyUiFont, DEFAULT_UI_FONT, isUiFont, UI_FONT_OPTIONS, type UiFont } from "@/lib/ui-font"
 import { cn } from "@/lib/utils"
 import { setZoomLevel, ZOOM_LEVELS, zoomStore } from "@/lib/zoom"
@@ -210,15 +217,29 @@ export function AppearanceSection() {
   const { t } = useTranslation()
   const layout = useWorkspaceLayout()
   const [uiFont, setUiFont] = useState<UiFont>(DEFAULT_UI_FONT)
+  const [fontSizes, setFontSizes] = useState<FontSizes>({ ...FONT_SIZE_DEFAULTS })
   useEffect(() => {
     let active = true
     void loadPreferences().then((preferences) => {
-      if (active) setUiFont(preferences.uiFont)
+      if (active) {
+        setUiFont(preferences.uiFont)
+        // Older preference snapshots (and tests that only supply the fields a section needs) may
+        // not carry the new object; resolve it to the recommended defaults instead of undefined.
+        setFontSizes(resolveFontSizes(preferences.fontSizes))
+      }
     })
     return () => {
       active = false
     }
   }, [])
+  const changeFontSize = (key: keyof FontSizes, size: number): void => {
+    const next = { ...fontSizes, [key]: size }
+    setFontSizes(next)
+    applyFontSizes(next)
+    void savePreference("fontSizes", next).catch((error: unknown) =>
+      toast.error(error instanceof Error ? error.message : String(error))
+    )
+  }
   // Each column answers to its own visibility toggle; there is no master four-columns switch.
   const [treeVisible] = useTreeVisiblePreference()
   const [previewVisible] = usePreviewVisiblePreference()
@@ -276,7 +297,7 @@ export function AppearanceSection() {
   return (
     <>
       {/* 外观：把「主题色」与「主题与显示」合并为一个模块（用户要求），红框提示 accentHint 已删除。 */}
-      <SettingsCard title={t("settings.appearance")}>
+      <SettingsCard title={t("settings.appearanceCard")}>
         <div className="px-4 pb-3">
           <div className="grid grid-cols-4 gap-1 sm:grid-cols-7 sm:gap-2">
             {ACCENT_PRESETS.map((preset) => {
@@ -408,6 +429,47 @@ export function AppearanceSection() {
             </SelectContent>
           </Select>
         </SettingRow>
+      </SettingsCard>
+
+      <SettingsCard title={t("settings.fontSizes")} desc={t("settings.fontSizesDesc")}>
+        {(
+          [
+            ["chat", "settings.fontSizeChat"],
+            ["composer", "settings.fontSizeComposer"],
+            ["sidebar", "settings.fontSizeSidebar"],
+            ["settings", "settings.fontSizeSettings"]
+          ] as const
+        ).map(([key, label]) => (
+          <SettingRow key={key} compact title={t(label)}>
+            <Select
+              value={String(fontSizes[key])}
+              onValueChange={(value) => {
+                if (value !== null) changeFontSize(key, Number(value))
+              }}
+              items={FONT_SIZE_OPTIONS.map((size) => ({
+                value: String(size),
+                label:
+                  size === FONT_SIZE_DEFAULTS[key]
+                    ? `${size}px · ${t("settings.fontSizeRecommended")}`
+                    : `${size}px`
+              }))}
+            >
+              <SelectTrigger className="w-[150px]" aria-label={t(label)}>
+                <SelectValue>{`${fontSizes[key]}px`}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {FONT_SIZE_OPTIONS.map((size) => (
+                    <SelectItem key={size} value={String(size)}>
+                      {size}px
+                      {size === FONT_SIZE_DEFAULTS[key] ? ` · ${t("settings.fontSizeRecommended")}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </SettingRow>
+        ))}
       </SettingsCard>
 
       <SettingsCard

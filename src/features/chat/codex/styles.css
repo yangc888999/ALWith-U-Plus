@@ -145,7 +145,7 @@
 
 /* Chat input geometry and colours are shared by draft and conversation surfaces. */
 :root {
-  --chat-input-line-height: calc(var(--chat-font-size) + 6px);
+  --chat-input-line-height: calc(var(--composer-font-size, var(--chat-font-size, 14px)) + 6px);
   --chat-input-max-height: 18rem;
   --chat-input-bg-color: var(--background);
   --chat-input-placeholder-color: color-mix(in oklab, var(--foreground) 30%, var(--background));

@@ -205,7 +205,7 @@ export const HTML_EDIT_BRIDGE_SOURCE = String.raw`
       for (var i = 0; i < nodes.length; i++) nodes[i].remove();
     };
     remove('script[data-alwith-bridge="edit"], #__alwith-edit-bridge, #__alwith-edit-style');
-    remove('script[src$="__alwith-menu.js"]');
+    remove('script[src$="__alwith-menu.js"], #alwith-preview-comment-style');
     var scripts = clone.querySelectorAll("script");
     for (var s = 0; s < scripts.length; s++) {
       if ((scripts[s].textContent || "").indexOf("__alwithPreviewMenu") >= 0) scripts[s].remove();

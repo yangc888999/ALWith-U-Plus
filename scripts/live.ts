@@ -104,10 +104,12 @@ async function verifyModelSwitch(
     const options = client.session(id).configOptions
     const current = selectedModelId(options)
     const models = nativeGroupModels(options)?.models.map((entry) => entry.id).filter((id) => /^gpt-/i.test(id)) ?? []
-    const first = current !== null && models.includes(current) ? current : models[0]
+    const first = probe && models.includes("gpt-6.2-sol") ? "gpt-6.2-sol" : current !== null && models.includes(current) ? current : models[0]
     const second = models.find((model) => model !== first)
     if (!first || !second) throw new Error(`Model switch needs two advertised GPT models; found ${models.length}`)
     const turns = [[first, first], [second, second]] as [string, string][]
+    const catalog: { models: { slug: string; multi_agent_reasoning_effort?: string }[] } | undefined = probe
+      ? JSON.parse(Bun.spawnSync([staged("codex"), "debug", "models", "--bundled"]).stdout.toString()) : undefined
     if (probe) {
       const gatewayTurns: [string, string][] = []
       for (const gateway of ["probe-a", "probe-b"]) {
@@ -119,10 +121,16 @@ async function verifyModelSwitch(
       }
       turns.unshift(...gatewayTurns)
     }
-    const verifyTurn = async (sessionId: string, target: string, upstream: string) => {
+    const verifyTurn = async (sessionId: string, target: string, upstream: string, fastChoice = true) => {
       const marker = `ROUTE_${crypto.randomUUID().slice(0, 8)}`
       await client.setConfig(sessionId, "model", target)
       if (selectedModelId(client.session(sessionId).configOptions) !== target) throw new Error(`Switch did not land: ${target}`)
+      const config = client.session(sessionId).configOptions
+      const levels = nativeGroupModels(config)?.models.find((entry) => entry.id === target)?.efforts
+      const effort = probe && levels?.length ? (fastChoice ? levels.at(-1) : levels[0]) : undefined
+      const fast = probe && !target.startsWith("gateway:") && config.some((option) => option.configId === "fast-mode" && isBooleanOption(option)) ? fastChoice : undefined
+      if (effort !== undefined) await client.setConfig(sessionId, "effort", effort)
+      if (fast !== undefined) await client.setConfig(sessionId, "fast-mode", fast)
       const receipt = await client.prompt(sessionId, [{ type: "text", text: `Reply with exactly ${marker} and nothing else.` }])
       await until(() => {
         const session = client.session(sessionId)
@@ -131,11 +139,14 @@ async function verifyModelSwitch(
         if (!assistantText(session).includes(marker)) throw new Error(`Turn on ${target} did not return its marker`)
         return true
       }, 90_000, `reply on ${target}`)
-      probe?.assertModel(marker, upstream)
+      const wireEffort = effort === "ultra" ? catalog?.models.find((row) => row.slug === target)?.multi_agent_reasoning_effort : effort
+      if (effort === "ultra" && !wireEffort) throw new Error(`Missing Ultra orchestration effort for ${target}`)
+      probe?.assertModel(marker, upstream, wireEffort, fast, effort === "ultra")
       console.log(`model switch: received the turn marker on selected model ${target}`)
     }
     for (const [target, upstream] of turns) await verifyTurn(id, target, upstream)
     if (probe) {
+      await verifyTurn(id, first, first, false)
       const sibling = await client.newSession(directory)
       try {
         await Promise.all([

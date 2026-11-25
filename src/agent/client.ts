@@ -12,6 +12,7 @@ import { canonicalModelSelection, modelDisplayId, modelVendorId, sameModelIdenti
 function readNativeEffortOverrides(): Array<{
   api_id: string
   defaultReasoningLevel?: string | null
+  defaultReasoningLevelExplicit?: boolean
   enabled?: boolean
 }> {
   try {
@@ -22,6 +23,7 @@ function readNativeEffortOverrides(): Array<{
       ? (parsed as Array<{
           api_id: string
           defaultReasoningLevel?: string | null
+          defaultReasoningLevelExplicit?: boolean
           enabled?: boolean
         }>)
       : []
@@ -713,9 +715,11 @@ export class CodexClient extends CodexAcpClient<AppState> {
 
   /** The default effort one specific model publishes, whether or not the chat is on it yet. */
   private defaultEffortForModel(session: Session, model: string): string | null {
-    // Per-model override wins (settings -> model row -> default effort).
+    // A per-model override wins only when the reader actually changed it. An initial seed carries
+    // no explicit marker, so the engine's current recommendation still reaches untouched rows.
     const overridden = readNativeEffortOverrides().find((entry) => entry.api_id === model && entry.enabled !== false)
-    const fromOverride = overridden?.defaultReasoningLevel
+    const fromOverride =
+      overridden?.defaultReasoningLevelExplicit === true ? overridden.defaultReasoningLevel : undefined
     if (typeof fromOverride === "string" && fromOverride !== "") return fromOverride
     // The account-managed (enterprise) model's default thinking level is configured on the 大模型
     // page and stored in `companyModelConfig`. It is the conversation's authoritative default,
@@ -832,12 +836,11 @@ export class CodexClient extends CodexAcpClient<AppState> {
         this.logInfo?.(`[automation] effort ${effort} is not served by this model; keeping its default`)
       }
     }
-    if (!fastMode) return
     const option = this.session(id).configOptions.find((entry) => entry.configId === "fast-mode")
     // A non-GPT model has no such option: the task simply runs at normal speed.
-    if (option === undefined || !isBooleanOption(option) || option.currentValue === true) return
+    if (option === undefined || !isBooleanOption(option) || option.currentValue === fastMode) return
     try {
-      await this.setConfig(id, "fast-mode", true)
+      await this.setConfig(id, "fast-mode", fastMode)
     } catch (error) {
       this.logInfo?.(`[automation] fast mode rejected for ${id}: ${String(error).slice(0, 200)}`)
     }
@@ -1165,7 +1168,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     if (option === undefined || !isBooleanOption(option)) return
     if (option.currentValue === desired) return
     try {
-      await this.setConfig(id, "fast-mode", true)
+      await this.setConfig(id, "fast-mode", desired)
     } catch {
       // A model that rejects the flag keeps its normal speed; the conversation still opens.
     }

@@ -195,6 +195,7 @@ function ProjectPopover({
       )}
       <PopoverContent
         ref={popupRef}
+        data-sidebar-popover={trigger === undefined ? undefined : ""}
         side={trigger === undefined ? "bottom" : "inline-end"}
         align="start"
         aria-label={label}
