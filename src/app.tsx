@@ -48,6 +48,8 @@ import { reportExtensionError } from "@/features/extensions/runtime"
 import { useExtensions } from "@/features/extensions/use-extensions"
 import { ClientVersionPopover } from "@/features/layout/components/client-version-popover"
 import { LeadingNavigation } from "@/features/layout/components/leading-navigation"
+import type { WorkbenchFeatureId, WorkbenchPage } from "@/features/layout/components/workbench-features"
+import { WorkbenchOverview } from "@/features/layout/components/workbench-overview"
 import { MainSidebarLayout } from "@/features/layout/components/main-sidebar-layout"
 import { TrailingBoard } from "@/features/layout/components/trailing-board"
 import { CommandPalette } from "@/features/palette/command-palette"
@@ -141,6 +143,9 @@ const ExtensionsSection = lazy(() =>
 const AutomationPage = lazy(() =>
   import("@/features/automation/automation-page").then((module) => ({ default: module.AutomationPage }))
 )
+const MeetingsPage = lazy(() =>
+  import("@/features/groups/meetings-page").then((module) => ({ default: module.MeetingsPage }))
+)
 const UsagePage = lazy(() => import("@/features/usage/usage-page").then((module) => ({ default: module.UsagePage })))
 const SkillsPage = lazy(() =>
   import("@/features/plugins/skills-page").then((module) => ({ default: module.SkillsPage }))
@@ -209,20 +214,24 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   const [hotkeysOpen, setHotkeysOpen] = useState(false)
   // Management pages share the leading screen; the offscreen chat stays mounted.
   const [view, setView] = useState<
-    "chat" | "plugins" | "extensions" | "archives" | "story" | "extension" | "automation" | "usage" | "skills"
+    | "chat"
+    | "story"
+    | "extension"
+    | WorkbenchPage
   >("chat")
-  const [leadingPage, setLeadingPage] = useState<
-    "plugins" | "extensions" | "archives" | "automation" | "usage" | "skills"
-  >("plugins")
+  const [leadingPage, setLeadingPage] = useState<WorkbenchPage>("overview")
   const leading =
+    view === "extension" ||
+    view === "overview" ||
     view === "plugins" ||
     view === "extensions" ||
-    view === "extension" ||
-    view === "archives" ||
+    view === "skills" ||
+    view === "groups" ||
     view === "automation" ||
-    view === "usage" ||
-    view === "skills"
+    view === "archives" ||
+    view === "usage"
   const [extensionView, setExtensionView] = useState<string | null>(null)
+  const [meetingRolesFocus, setMeetingRolesFocus] = useState(0)
   const openExtension = useCallback(
     (id: string): void => {
       const contribution = extensionRuntime.host.snapshot().views.find((item) => item.id === id)
@@ -239,6 +248,10 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   const openArchives = useCallback(() => {
     setLeadingPage("archives")
     setView("archives")
+  }, [])
+  const openOverview = useCallback(() => {
+    setLeadingPage("overview")
+    setView("overview")
   }, [])
   const [pluginsVisited, setPluginsVisited] = useState(false)
   const openPlugins = useCallback(() => {
@@ -259,22 +272,29 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     setLeadingPage("automation")
     setView("automation")
   }, [])
+  const openGroups = useCallback((focusRoles = false) => {
+    setLeadingPage("groups")
+    setView("groups")
+    if (focusRoles) setMeetingRolesFocus((value) => value + 1)
+  }, [])
   const openUsage = useCallback(() => {
     setLeadingPage("usage")
     setView("usage")
   }, [])
-  /** 扩展 lives in Settings' 应用扩展 page; the leading screen stays for extension surfaces. */
-  const openExtensionSettings = useCallback(() => {
-    void openSettingsWindow("extensions").catch((error: unknown) => toast.error(describeError(error)))
-  }, [])
-  const openLeading = useCallback((): void => {
-    if (leadingPage === "extensions") openExtensions()
-    else if (leadingPage === "archives") openArchives()
-    else if (leadingPage === "automation") openAutomation()
-    else if (leadingPage === "usage") openUsage()
-    else if (leadingPage === "skills") openSkills()
-    else openPlugins()
-  }, [leadingPage, openExtensions, openArchives, openAutomation, openUsage, openSkills, openPlugins])
+  /** Generic entry lands on the workbench overview; direct shortcuts still open their own page. */
+  const openLeading = useCallback((): void => openOverview(), [openOverview])
+  const openWorkbenchPage = useCallback(
+    (page: WorkbenchFeatureId): void => {
+      if (page === "plugins") openPlugins()
+      else if (page === "extensions") openExtensions()
+      else if (page === "skills") openSkills()
+      else if (page === "groups") openGroups(false)
+      else if (page === "automation") openAutomation()
+      else if (page === "archives") openArchives()
+      else openUsage()
+    },
+    [openPlugins, openExtensions, openSkills, openGroups, openAutomation, openArchives, openUsage]
+  )
   // The online BI surface is a child webview of the main window, so it stays glued on top when the
   // canvas slides to the leading screen (the main content is only `inert`, never unmounted). Close
   // both the preview extension and the standalone BI window the moment we leave the main screen, so
@@ -1507,8 +1527,10 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                 onEditProfile={() => void openSettingsWindow("account")}
                 onOpenPlugins={openPlugins}
                 onOpenSkills={openSkills}
-                onOpenExtensions={openExtensionSettings}
+                onOpenExtensions={openExtensions}
                 onOpenAutomation={openAutomation}
+                onOpenOverview={openOverview}
+                onOpenGroups={openGroups}
                 drivePanel={<div ref={setDriveSidebar} className="min-h-0 flex-1 overflow-auto" />}
                 onSwitchScreen={() => {
                   if (leading) setView("chat")
@@ -1520,11 +1542,13 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           leading={
             <>
               <LeadingNavigation
-                // 定时任务 不在这一列（插件 / 扩展 / 归档）里，所以它打开时整列都不高亮。
-                activePage={view === "extension" || leadingPage === "automation" ? null : leadingPage}
+                activePage={view === "extension" ? null : leadingPage}
+                onOpenOverview={openOverview}
                 onOpenArchives={openArchives}
                 onOpenPlugins={openPlugins}
                 onOpenExtensions={openExtensions}
+                onOpenGroups={() => openGroups(false)}
+                onOpenAutomation={openAutomation}
                 onOpenUsage={openUsage}
                 onOpenSkills={openSkills}
               >
@@ -1537,7 +1561,9 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                 />
               </LeadingNavigation>
               <SidebarInset className="main-chat-surface flex min-h-0 flex-col">
-                {view === "archives" && (
+                {leadingPage === "overview" ? (
+                  <WorkbenchOverview onOpen={openWorkbenchPage} />
+                ) : view === "archives" && (
                   <Suspense fallback={null}>
                     <ArchivedChatsPage />
                   </Suspense>
@@ -1554,7 +1580,18 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                 ) : leadingPage === "automation" ? (
                   <div className="min-h-0 flex-1 overflow-auto">
                     <Suspense fallback={null}>
-                      <AutomationPage />
+                      <AutomationPage onOpenExtensions={openExtensions} />
+                    </Suspense>
+                  </div>
+                ) : leadingPage === "groups" ? (
+                  <div className="min-h-0 flex-1 overflow-auto">
+                    <Suspense fallback={null}>
+                      <MeetingsPage
+                        onSelect={select}
+                        onNewChat={(cwd, groupId) => newChatInDirectory(cwd, undefined, groupId ?? null)}
+                        onViewFiles={openMeetingFiles}
+                        focusRolesRevision={meetingRolesFocus}
+                      />
                     </Suspense>
                   </div>
                 ) : leadingPage === "extensions" ? (
@@ -1664,6 +1701,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
             onNewChat={newChat}
             onOpenSettings={() => void openSettingsWindow()}
             onOpenPlugins={openPlugins}
+            onOpenExtensions={openExtensions}
             onOpenHotkeys={() => setHotkeysOpen(true)}
             onOpenExtension={openExtension}
             onSelect={select}

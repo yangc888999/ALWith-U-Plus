@@ -442,19 +442,161 @@ html {
   display: flex;
   flex: none;
   flex-direction: column;
-  align-items: center;
-  gap: 8px;
+  align-items: stretch;
+  gap: 10px;
   width: 48px;
-  padding-block: 12px;
+  padding: 10px 6px;
   /* Balance the canvas's outer 4px gutter against the adjacent content surface. */
   padding-inline-end: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+  transition: width 160ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.leading-navigation::-webkit-scrollbar {
+  display: none;
+}
+.leading-navigation[data-expanded] {
+  width: 176px;
+  padding-inline: 10px;
+}
+.workbench-nav-header {
+  display: flex;
+  width: 100%;
+  height: 32px;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding-inline: 4px;
+}
+.leading-navigation:not([data-expanded]) .workbench-nav-header {
+  justify-content: center;
+  padding-inline: 0;
+}
+.leading-navigation:not([data-expanded]) .workbench-nav-header > button {
+  margin-inline-start: 0;
+}
+.workbench-nav-title {
+  display: none;
+  min-width: 0;
   overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.leading-navigation-item[data-active] {
+.leading-navigation[data-expanded] .workbench-nav-title {
+  display: block;
+}
+.workbench-nav-primary {
+  display: flex;
+  width: 100%;
+  flex: none;
+  flex-direction: column;
+  gap: 12px;
+}
+.workbench-nav-group {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 2px;
+}
+.workbench-nav-group-label {
+  display: none;
+  padding: 2px 8px 3px;
+  color: color-mix(in oklab, var(--muted-foreground) 72%, var(--foreground));
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 14px;
+}
+.leading-navigation[data-expanded] .workbench-nav-group-label {
+  display: block;
+}
+.workbench-nav-item {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 32px;
+  min-height: 32px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 8px;
+  background: transparent;
+  color: color-mix(in oklab, var(--muted-foreground) 62%, var(--foreground));
+  font-size: 13px;
+  line-height: 18px;
+  text-align: start;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+.workbench-nav-item:hover {
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+  color: var(--foreground);
+}
+.workbench-nav-item:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--ring) 45%, transparent);
+  outline-offset: -1px;
+}
+.leading-navigation:not([data-expanded]) .workbench-nav-item {
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  flex: none;
+  justify-content: center;
+  margin-inline: auto;
+  padding: 0;
+}
+.workbench-nav-icon {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  place-items: center;
+}
+.workbench-nav-label {
+  display: none;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.leading-navigation[data-expanded] .workbench-nav-label {
+  display: block;
+}
+.workbench-nav-separator {
+  display: flex;
+  width: 100%;
+  flex: none;
+  align-items: center;
+}
+.leading-navigation:not([data-expanded]) .workbench-nav-separator {
+  width: 24px;
+  margin-inline: auto;
+}
+.workbench-nav-extension-list {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+.workbench-nav-extension-list::-webkit-scrollbar {
+  display: none;
+}
+.workbench-nav-item[data-active] {
   background: color-mix(in oklab, var(--foreground) 5%, transparent);
+  color: var(--foreground);
 }
-/* The active destination is a long rule, not another filled icon tile. */
-.leading-navigation-item[data-active]::after {
+/* Collapsed destinations keep a short underline; expanded navigation uses a quiet inset rule. */
+.workbench-nav-item[data-active]::after {
   content: "";
   position: absolute;
   inset-inline: 6px;
@@ -462,6 +604,20 @@ html {
   height: 2px;
   border-radius: 9999px;
   background: currentColor;
+}
+.leading-navigation[data-expanded] .workbench-nav-item[data-active]::after {
+  inset-inline-start: -4px;
+  inset-inline-end: auto;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  height: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .leading-navigation,
+  .workbench-nav-item {
+    transition: none;
+  }
 }
 /* Vendored pages centre their 5xl content measure. The tool pages are a left-aligned workspace,
    matching Plugins and Extensions instead of leaving a large dead gutter on the leading edge. */

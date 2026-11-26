@@ -62,6 +62,7 @@ import {
   SidebarRailContext,
   SidebarToggleContext
 } from "@/features/layout/components/main-sidebar-layout"
+import type { WorkbenchPage } from "@/features/layout/components/workbench-features"
 import { useDisplayProfile } from "@/features/profile/use-display-profile"
 import { UpdateStatusButton } from "@/features/updater/components/update-status-button"
 import { ONLINE_BI_VIEW_ID } from "@/features/workspace/online-bi"
@@ -277,7 +278,7 @@ type SessionSidebarProps = {
   pendingChat?: PendingChatRow | null
   onSelectPending?: () => void
   screen: MainScreen
-  leadingPage: "plugins" | "extensions" | "archives" | "automation" | "usage" | "skills"
+  leadingPage: WorkbenchPage
   selectedId: string | null
   onSelect: (sessionRow: SessionSummary) => void
   onNewChat: () => void
@@ -293,12 +294,16 @@ type SessionSidebarProps = {
   onOpenPlugins: () => void
   /** Opens Settings on the Skills page. */
   onOpenSkills?: () => void
-  /** Opens the BI Metrics company app: its installed surface, or 应用扩展 when absent. */
+  /** Opens the BI Metrics company app: its installed surface, or the workbench Extensions page when absent. */
   extensionNavigation?: ReactNode
   drivePanel?: ReactNode
   onOpenExtensions: () => void
   /** 定时任务 renders as a page inside the main window, not the settings window. */
   onOpenAutomation: () => void
+  /** Generic workbench entry. Opens the overview rather than a remembered detail page. */
+  onOpenOverview?: () => void
+  /** 拉会's role library lives on the leading screen now, not in Settings. */
+  onOpenGroups?: (focusRoles?: boolean) => void
   onSwitchScreen: () => void
 }
 
@@ -328,6 +333,8 @@ function SidebarPanels({
   onOpenSkills,
   onOpenExtensions,
   onOpenAutomation,
+  onOpenOverview,
+  onOpenGroups,
   extensionNavigation,
   drivePanel,
   onSwitchScreen
@@ -486,9 +493,9 @@ function SidebarPanels({
       id: "toolbox",
       label: t("sidebar.toolbox"),
       icon: BoxesIcon,
-      // Skills is the default destination: the icon click lands there directly; the hover
-      // card lists 插件 / 扩展 / 技能 for the other two.
-      onSelect: onOpenSkills ?? onOpenPlugins,
+      // The icon opens the workbench overview; the hover card still jumps directly to
+      // 插件 / 扩展 / 技能 when the reader already knows the destination.
+      onSelect: onOpenOverview ?? onOpenSkills ?? onOpenPlugins,
       destinations: [
         {
           id: "plugins",
@@ -642,8 +649,8 @@ function SidebarPanels({
             <SidebarMenuRow
               label={t("sidebar.toolbox")}
               icon={BoxesIcon}
-              active={screen === "leading" && (leadingPage === "plugins" || leadingPage === "extensions")}
-              onPrimary={onOpenSkills ?? onOpenPlugins}
+              active={screen === "leading"}
+              onPrimary={onOpenOverview ?? onOpenSkills ?? onOpenPlugins}
               destinations={[
                 {
                   id: "plugins",
@@ -743,6 +750,7 @@ function SidebarPanels({
                 onSelect={onSelect}
                 onNewChat={(cwd, groupId) => onNewProjectChat(cwd, undefined, groupId ?? null)}
                 onViewFiles={onViewFiles}
+                onManageRoles={() => onOpenGroups?.(true)}
               />
             ) : view === "collections" ? (
               <CollectionPanel

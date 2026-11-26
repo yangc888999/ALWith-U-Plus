@@ -374,6 +374,71 @@ test("a real concurrent body change keeps both versions and never overwrites", a
   expect(h.context.onError).not.toHaveBeenCalled()
 })
 
+test("the conflict dialog can load the disk version and leave the local draft behind", async () => {
+  const h = await setup()
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }))
+  h.send("mode", { editing: true })
+  const disk = "<!DOCTYPE html><html><head><title>Report</title></head><body><p>Agent version</p></body></html>"
+  const local = "<!DOCTYPE html><html><head><title>Report</title></head><body><p>Local version</p></body></html>"
+  await h.fs.writeFile(h.document.path, new TextEncoder().encode(disk), { mode: "replace" })
+  h.send("dirty", { html: local })
+  await screen.findByTestId("html-save-conflict")
+
+  fireEvent.click(screen.getByRole("button", { name: "Load file version" }))
+
+  await waitFor(() => expect(screen.queryByTestId("html-save-conflict")).toBeNull())
+  await waitFor(() => {
+    expect(h.controller.getSnapshot().documents[0]?.savedText).toBe(disk)
+  })
+  expect(new TextDecoder().decode(await h.fs.readFile(h.document.path))).toBe(disk)
+  expect(h.context.onError).not.toHaveBeenCalled()
+})
+
+test("the conflict dialog can explicitly overwrite the file with the local draft", async () => {
+  const h = await setup()
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }))
+  h.send("mode", { editing: true })
+  const disk = "<!DOCTYPE html><html><head><title>Report</title></head><body><p>Agent version</p></body></html>"
+  const local = "<!DOCTYPE html><html><head><title>Report</title></head><body><p>Local version</p></body></html>"
+  await h.fs.writeFile(h.document.path, new TextEncoder().encode(disk), { mode: "replace" })
+  h.send("dirty", { html: local })
+  await screen.findByTestId("html-save-conflict")
+
+  fireEvent.click(screen.getByRole("button", { name: "Overwrite with draft" }))
+
+  await waitFor(() => expect(screen.queryByTestId("html-save-conflict")).toBeNull())
+  await waitFor(async () => expect(new TextDecoder().decode(await h.fs.readFile(h.document.path))).toBe(local))
+  expect(h.controller.getSnapshot().documents[0]?.savedText).toBe(local)
+  expect(h.context.onError).not.toHaveBeenCalled()
+})
+
+test("a writer that keeps rotating versions becomes a comparison conflict, not an error toast", async () => {
+  const h = await setup()
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }))
+  h.send("mode", { editing: true })
+  const disk = "<!DOCTYPE html><html><head><title>Report</title></head><body><p>Agent rewrite</p></body></html>"
+  const local = "<!DOCTYPE html><html><head><title>Report</title></head><body><p>My local edit</p></body></html>"
+  await h.fs.writeFile(h.document.path, new TextEncoder().encode(disk), { mode: "replace" })
+  const originalStat = h.fs.stat.bind(h.fs)
+  let pathStats = 0
+  vi.spyOn(h.fs, "stat").mockImplementation(async (path) => {
+    const result = await originalStat(path)
+    if (path !== h.document.path) return result
+    pathStats += 1
+    // Every stable-read attempt keeps rotating; the file settles only for the comparison read.
+    return { ...result!, version: pathStats <= 16 ? `churn-${pathStats}` : "settled-version" }
+  })
+  const writeSpy = vi.spyOn(h.fs, "writeFile")
+
+  h.send("dirty", { html: local })
+
+  const conflict = await screen.findByTestId("html-save-conflict", undefined, { timeout: 5_000 })
+  expect(within(conflict).getByText(local)).toBeInTheDocument()
+  expect(within(conflict).getByText(disk)).toBeInTheDocument()
+  expect(writeSpy).not.toHaveBeenCalled()
+  expect(h.context.onError).not.toHaveBeenCalled()
+})
+
 test("a preview refresh race after a successful write does not surface as a save error", async () => {
   const h = await setup()
   fireEvent.click(screen.getByRole("button", { name: "Edit" }))

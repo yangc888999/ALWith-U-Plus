@@ -78,6 +78,23 @@ test("submit is blocked until a name exists; opening prefills the suggested rost
   expect(screen.getByText("groups.roleSummarizerBadge")).toBeTruthy()
 })
 
+test("the empty roster action opens the leading-screen role library instead of Settings", () => {
+  const onManageRoles = vi.fn()
+  const onClose = vi.fn()
+  render(
+    <CreateMeetingDialog
+      open
+      group={null}
+      onClose={onClose}
+      onCreated={() => undefined}
+      onManageRoles={onManageRoles}
+    />
+  )
+  fireEvent.click(screen.getByText("groups.createGoRoles").closest("button")!)
+  expect(onManageRoles).toHaveBeenCalledTimes(1)
+  expect(onClose).toHaveBeenCalledTimes(1)
+})
+
 // Regression: a pure-emoji / pure-punctuation name trims to non-empty but the folder slug is
 // empty, which used to still pass canSubmit and degrade the path preview. The slug — not the raw
 // string — decides whether the submit is legal, and the field says why it is blocked.

@@ -148,11 +148,11 @@ test("a stale hidden settings window is recreated instead of silently staying cl
   host.existing = true
   host.show.mockRejectedValueOnce(new Error("window not found"))
 
-  await openSettingsWindow("extensions")
+  await openSettingsWindow("general")
 
   expect(host.destroy).toHaveBeenCalledOnce()
   expect(host.create).toHaveBeenCalledWith(
     "settings",
-    expect.objectContaining({ url: "/settings.html?tab=extensions" })
+    expect.objectContaining({ url: "/settings.html?tab=general" })
   )
 })

@@ -86,7 +86,7 @@ function nextRunLabel(task: ScheduledTask, t: Translate): string {
   return t("automation.runInHours", { hours: Math.ceil(diff / 3_600_000) })
 }
 
-export function AutomationSection() {
+export function AutomationSection({ onOpenExtensions }: { onOpenExtensions: () => void }) {
   const { t } = useTranslation()
   useSyncExternalStore(subscribeAutomation, getAutomationSnapshot, getAutomationSnapshot)
   useAutomationSync()
@@ -281,7 +281,13 @@ export function AutomationSection() {
         </>
       )}
 
-      <NewTaskDialog open={dialogOpen} onOpenChange={setDialogOpen} task={editing} onSubmit={submit} />
+      <NewTaskDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        task={editing}
+        onSubmit={submit}
+        onOpenExtensions={onOpenExtensions}
+      />
     </div>
   )
 }

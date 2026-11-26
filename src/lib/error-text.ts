@@ -377,6 +377,12 @@ const RULES: Rule[] = [
     key: "error.threadNotLoaded"
   },
   {
+    // The editor already waited for a short external-write burst. Reaching this line means the file
+    // is still moving, not that the user did anything wrong; the draft is preserved for a retry.
+    match: /File is still being updated;? retry the save/i,
+    key: "error.fileStillUpdating"
+  },
+  {
     // The engine re-reads a file between preparing a patch and writing it. Inside a cloud-synced
     // folder (YUP Drive, iCloud, OneDrive) the sync daemon rewrites the file in that window, so the
     // engine refuses the edit instead of clobbering a concurrent change. Nothing is broken — the

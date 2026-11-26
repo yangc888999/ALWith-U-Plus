@@ -71,12 +71,12 @@ test("plugins are selected only on the leading screen, and new chat returns to m
   }
   const view = render(<Harness />)
   // 插件 / 扩展 / 技能 share one row whose flyout lists them; a plain click opens the first one.
-  const plugins = sidebarButton(view, { name: "Plugins · Extensions · Skills" })
+  const plugins = sidebarButton(view, { name: "Workbench" })
   const updateCard = sidebarButton(view, { name: /Downloaded — click to update/ })
   const phone = sidebarButton(view, { name: "Connect phone" })
   expect(updateCard.closest('[data-slot="sidebar-footer"]')).toBe(phone.closest('[data-slot="sidebar-footer"]'))
-  expect(view.queryByRole("button", { name: "Open -1 screen" })).toBeNull()
-  expect(view.queryByRole("button", { name: "Back to main screen" })).toBeNull()
+  expect(view.queryByRole("button", { name: "Open workbench" })).toBeNull()
+  expect(view.queryByRole("button", { name: "Back to chats" })).toBeNull()
   expect(plugins.hasAttribute("aria-current")).toBe(false)
   await act(() => Promise.try(() => fireEvent.click(plugins)))
   expect(plugins.getAttribute("aria-current")).toBe("page")
@@ -136,10 +136,10 @@ test("extensions sit below plugins, select their own leading page and remain ava
     )
   }
   const view = render(<Harness />)
-  const toolbox = sidebarButton(view, { name: "Plugins · Extensions · Skills" })
+  const toolbox = sidebarButton(view, { name: "Workbench" })
   const openFlyout = async () => {
     fireEvent.pointerEnter(toolbox)
-    return await waitFor(() => view.getByRole("menu", { name: "Plugins · Extensions · Skills" }))
+    return await waitFor(() => view.getByRole("menu", { name: "Workbench" }))
   }
   expect(toolbox.hasAttribute("aria-current")).toBe(false)
 
@@ -348,10 +348,10 @@ test("Extensions sits below plugins and selects its own leading page without an 
     )
   }
   const view = render(<Harness />)
-  const toolbox = sidebarButton(view, { name: "Plugins · Extensions · Skills" })
+  const toolbox = sidebarButton(view, { name: "Workbench" })
   expect(toolbox.closest('[data-slot="sidebar-header"]')).not.toBeNull()
   fireEvent.pointerEnter(toolbox)
-  const flyout = await waitFor(() => view.getByRole("menu", { name: "Plugins · Extensions · Skills" }))
+  const flyout = await waitFor(() => view.getByRole("menu", { name: "Workbench" }))
   await act(() => Promise.try(() => fireEvent.click(within(flyout).getByRole("menuitem", { name: "Extensions" }))))
   expect(toolbox.getAttribute("aria-current")).toBe("page")
   expect(view.container.querySelector('[data-screen-panel="main"]')?.getAttribute("aria-hidden")).toBe("true")

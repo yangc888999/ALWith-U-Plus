@@ -1,6 +1,6 @@
 // The groups panel: the dedicated entry to the discussions. A group is a project of its own, so
 // the panel offers what a group needs — reopen the latest session of it, or open a fresh one that
-// carries the previous session's summary — and leaves the roles to 设置 → 拉会.
+// carries the previous session's summary — while the role library lives on the leading screen.
 //
 // The ＋ at the top of the section is now the primary way to create a meeting: the sidebar is
 // where the user is when the idea arrives, and the create dialog (shared with edit mode) keeps
@@ -55,12 +55,15 @@ import { GroupDocumentDialog } from "./group-document-dialog"
 export function GroupPanel({
   onSelect,
   onNewChat,
-  onViewFiles
+  onViewFiles,
+  onManageRoles
 }: {
   onSelect: (row: SessionSummary) => void
   onNewChat: (cwd: string, groupId?: string | null) => void
   /** Opens the meeting's folder in the workspace without creating a conversation. */
   onViewFiles?: (directory: string, groupId: string) => void
+  /** Opens the leading-screen role library when the create dialog has no roles to pick. */
+  onManageRoles?: () => void
 }) {
   const { t } = useTranslation()
   const list = useSyncExternalStore(subscribeGroups, groups, groups)
@@ -384,12 +387,14 @@ export function GroupPanel({
         group={null}
         onClose={() => setCreating(false)}
         onCreated={(created, directory) => enter(directory, created.id)}
+        onManageRoles={onManageRoles}
       />
       <CreateMeetingDialog
         open={editing !== null}
         group={editing}
         onClose={() => setEditing(null)}
         onCreated={() => undefined}
+        onManageRoles={onManageRoles}
       />
       <GroupDocumentDialog group={documentGroup} open={documentGroup !== null} onClose={() => setDocumentGroup(null)} />
       <Dialog open={removing !== null} onOpenChange={(value) => !value && setRemoving(null)}>

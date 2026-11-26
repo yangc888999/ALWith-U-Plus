@@ -6,8 +6,6 @@ import { MENU_HIGHLIGHT, NavigationItemButton, NavigationStack } from "@alwith/m
 import { listen } from "@tauri-apps/api/event"
 import { getCurrentWindow } from "@tauri-apps/api/window"
 import {
-  BlocksIcon,
-  CalendarClockIcon,
   CloudIcon,
   Code2Icon,
   ContrastIcon,
@@ -15,7 +13,6 @@ import {
   InfoIcon,
   MicIcon,
   MonitorIcon,
-  UsersIcon,
   SlidersHorizontalIcon,
   SmartphoneIcon,
   TouchpadIcon,
@@ -27,20 +24,17 @@ import { toast } from "sonner"
 
 import { AuxWindowShell } from "@/components/alwith-ui/aux-window-shell"
 import { Pane } from "@/components/alwith-ui/pane"
-import { AutomationSection } from "@/features/automation/automation-section"
 import { DriveSettings } from "@/features/drive/drive"
 import { useDriveVisible } from "@/features/drive/use-drive-visible"
 import { useDriveEnabledPreference } from "@/lib/drive-visible-preference"
 import { ExtensionSettingsContent, ExtensionSettingsNavigation } from "@/features/extensions/extension-outlets"
 import { ExtensionMount } from "@/features/extensions/extension-view"
-import { ExtensionsSection } from "@/features/extensions/extensions-section"
 import { useExtensions } from "@/features/extensions/use-extensions"
 import { MobileSection } from "@/features/mobile/mobile-section"
 import { EditorSettingsSection } from "@/features/workspace/editor-settings-dialog"
 import { SETTINGS_CHANGE_TAB, SETTINGS_RESET_SCROLL, type SettingsNavigation, type SettingsSection } from "@/lib/window-manager"
 
 import { AboutSection } from "./sections/about-section"
-import { GroupSection } from "./sections/group-section"
 import { AccountSection } from "./sections/account-section"
 import { AppearanceSection } from "./sections/appearance-section"
 import { ComputerSection } from "./sections/computer-section"
@@ -63,9 +57,6 @@ const ICONS: Record<SettingsSection, typeof InfoIcon> = {
   appearance: ContrastIcon,
   provider: CpuIcon,
   voice: MicIcon,
-  extensions: BlocksIcon,
-  groups: UsersIcon,
-  automation: CalendarClockIcon,
   about: InfoIcon
 }
 
@@ -74,7 +65,7 @@ const ICONS: Record<SettingsSection, typeof InfoIcon> = {
 const SECTION_GROUPS: Array<{ label: string; sections: SettingsSection[] }> = [
   { label: "settings.groupAccount", sections: ["account", "mobile"] },
   { label: "settings.groupPreferences", sections: ["general", "appearance", "editor", "voice", "trackpad", "computer"] },
-  { label: "settings.groupCapabilities", sections: ["provider", "drive", "extensions", "automation", "groups"] },
+  { label: "settings.groupCapabilities", sections: ["provider", "drive"] },
   { label: "settings.groupSystem", sections: ["about"] }
 ]
 
@@ -84,12 +75,14 @@ function isSection(value: string | null): value is SettingsSection {
   return value !== null && (KNOWN_SECTIONS as string[]).includes(value)
 }
 
-/** 旧「支持组件」页已并入应用扩展：老的 ?tab=support / 切页通知要落到新位置，
- *  否则 reopen 会掉回「通用」或渲染出空白页。 */
+/** 旧「支持组件」和「应用扩展」已迁到负一屏：旧深链接落到通用页，避免 reopen 空白。 */
 function normalizeSection(value: string | null): SettingsSection | null {
-  if (value === "support") return "extensions"
+  if (value === "support" || value === "extensions") return "general"
   if (value === "usage") return "general"
   if (value === "skills") return "general"
+  // 定时任务 and 拉会 moved to the leading screen. Old settings deep links must still land on a
+  // real page instead of a blank content area.
+  if (value === "automation" || value === "groups") return "general"
   return isSection(value) ? value : null
 }
 
@@ -189,12 +182,6 @@ export function SettingsPage() {
             return <ProviderSection key={providerTarget.revision} initialProviderId={providerTarget.id} />
           case "about":
             return <AboutSection />
-          case "extensions":
-            return <ExtensionsSection />
-          case "automation":
-            return <AutomationSection />
-          case "groups":
-            return <GroupSection />
         }
       })()
     )

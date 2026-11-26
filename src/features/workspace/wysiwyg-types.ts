@@ -105,6 +105,9 @@ export interface WysiwygLabels {
   htmlLocalDraft?: string
   htmlDiskVersion?: string
   htmlKeepDraft?: string
+  htmlUseDiskVersion?: string
+  htmlOverwriteDraft?: string
+  htmlSaveStillUpdating?: string
 }
 
 /** iframe → host. `nonce` is minted per handshake; stale frames are ignored. */

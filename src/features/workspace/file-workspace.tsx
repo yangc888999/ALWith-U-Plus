@@ -864,7 +864,10 @@ export function FileWorkspace({
       htmlSaveConflictDescription: translateRef.current("workspace.htmlSaveConflictDescription"),
       htmlLocalDraft: translateRef.current("workspace.htmlLocalDraft"),
       htmlDiskVersion: translateRef.current("workspace.htmlDiskVersion"),
-      htmlKeepDraft: translateRef.current("workspace.htmlKeepDraft")
+      htmlKeepDraft: translateRef.current("workspace.htmlKeepDraft"),
+      htmlUseDiskVersion: translateRef.current("workspace.htmlUseDiskVersion"),
+      htmlOverwriteDraft: translateRef.current("workspace.htmlOverwriteDraft"),
+      htmlSaveStillUpdating: translateRef.current("workspace.htmlSaveStillUpdating")
     }
     // Drive occupies both integration extension points only for drive documents; the WYSIWYG
     // wrappers layer on top and forward every base hook, so collaboration/comments keep working.

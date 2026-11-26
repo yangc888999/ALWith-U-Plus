@@ -76,11 +76,14 @@ const meta = {
           <>
             <LeadingNavigation
               activePage="archives"
+              onOpenOverview={() => {}}
               onOpenSkills={() => {}}
               onOpenUsage={() => {}}
               onOpenPlugins={() => {}}
               onOpenExtensions={() => {}}
               onOpenArchives={() => {}}
+              onOpenAutomation={() => {}}
+              onOpenGroups={() => {}}
             />
             <SidebarInset className="main-chat-surface flex min-h-0 flex-col">
               <ArchivedChatsPage />

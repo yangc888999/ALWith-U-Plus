@@ -70,11 +70,14 @@ export const LeadingApps: Story = {
             <>
               <LeadingNavigation
                 activePage={active ? null : "extensions"}
+                onOpenOverview={() => setActive(null)}
                 onOpenSkills={() => setActive(null)}
                 onOpenUsage={() => setActive(null)}
                 onOpenPlugins={() => setActive(null)}
                 onOpenArchives={() => setActive(null)}
                 onOpenExtensions={() => setActive(null)}
+                onOpenAutomation={() => setActive(null)}
+                onOpenGroups={() => setActive(null)}
               >
                 <ExtensionNavigation
                   host={extensionHost}
@@ -96,7 +99,7 @@ export const LeadingApps: Story = {
     )
   },
   play: async ({ canvas, userEvent }) => {
-    const fixed = canvas.getByRole("button", { name: "Features" })
+    const fixed = await canvas.findByRole("button", { name: "Extensions" })
     const top = fixed.getBoundingClientRect().top
     const list = canvas.getByRole("region", { name: "Extension navigation" })
     await expect(list.scrollHeight).toBeGreaterThan(list.clientHeight)
@@ -113,7 +116,9 @@ export const LeadingFeatures: Story = {
   args: { screen: "leading" },
   globals: { locale: "zh-CN" },
   render: function Render(args) {
-    const [page, setPage] = useState<"plugins" | "extensions" | "archives" | "skills" | "usage">("plugins")
+    const [page, setPage] = useState<"overview" | "plugins" | "extensions" | "archives" | "automation" | "groups" | "skills" | "usage">(
+      "overview"
+    )
     return (
       <div className="h-[640px] bg-sidebar">
         <MainSidebarLayout
@@ -122,11 +127,14 @@ export const LeadingFeatures: Story = {
             <>
               <LeadingNavigation
                 activePage={page}
+                onOpenOverview={() => setPage("overview")}
                 onOpenSkills={() => setPage("skills")}
                 onOpenUsage={() => setPage("usage")}
                 onOpenPlugins={() => setPage("plugins")}
                 onOpenExtensions={() => setPage("extensions")}
                 onOpenArchives={() => setPage("archives")}
+                onOpenAutomation={() => setPage("automation")}
+                onOpenGroups={() => setPage("groups")}
               />
               <SidebarInset className="main-chat-surface p-8">
                 <h1>{page}</h1>
@@ -141,6 +149,10 @@ export const LeadingFeatures: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "插件" }))
     await expect(canvas.getByRole("heading")).toHaveTextContent("plugins")
     await expect(canvas.getByRole("button", { name: "插件" })).toHaveAttribute("aria-current", "page")
+    await userEvent.click(canvas.getByRole("button", { name: "会议" }))
+    await expect(canvas.getByRole("heading")).toHaveTextContent("groups")
+    await userEvent.click(canvas.getByRole("button", { name: "定时任务" }))
+    await expect(canvas.getByRole("heading")).toHaveTextContent("automation")
   }
 }
 

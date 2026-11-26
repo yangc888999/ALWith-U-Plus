@@ -75,8 +75,9 @@ const DELETION_COMMANDS: ReadonlySet<WysiwygCommand> = new Set(["deleteRow", "de
 const FLUSH_TIMEOUT = 2_000
 /** A sync may rotate a file version between the two stats of a read. Retry a few times, but
  *  never accept a torn read as the base for an overwrite. */
-const STABLE_READ_ATTEMPTS = 5
-const STABLE_READ_DELAY = 40
+const STABLE_READ_DELAYS = [40, 80, 120, 180, 240, 320, 420, 540] as const
+const STABLE_READ_DELAY = STABLE_READ_DELAYS[0]
+const FILE_STILL_UPDATING = "File is still being updated; retry the save"
 /** Our write already succeeded when this reload starts. A race in the preview refresh must not
  *  turn into a false save failure. */
 const PREVIEW_REFRESH_ATTEMPTS = 3
@@ -89,11 +90,13 @@ interface StableHtmlSnapshot {
 class HtmlSaveConflictError extends Error {
   readonly localText: string
   readonly currentText: string
-  constructor(localText: string, currentText: string) {
+  readonly currentVersion: string
+  constructor(localText: string, currentText: string, currentVersion: string) {
     super("HTML changed on disk while the local draft was being saved")
     this.name = "HtmlSaveConflictError"
     this.localText = localText
     this.currentText = currentText
+    this.currentVersion = currentVersion
   }
 }
 
@@ -107,7 +110,7 @@ function decodeHtml(bytes: Uint8Array): string {
 /** Read bytes and version only when both stats agree. A version that moved while reading is a
  *  sync race, not a content decision; retry instead of using the half-observed pair. */
 async function readStableHtml(fs: FileSystem, path: string): Promise<StableHtmlSnapshot> {
-  for (let attempt = 0; attempt < STABLE_READ_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < STABLE_READ_DELAYS.length; attempt += 1) {
     const before = await fs.stat(path)
     if (before === null) throw new Error("File is no longer available")
     const bytes = await fs.readFile(path)
@@ -115,9 +118,18 @@ async function readStableHtml(fs: FileSystem, path: string): Promise<StableHtmlS
     if (after !== null && after.version === before.version) {
       return { text: decodeHtml(bytes), version: after.version }
     }
-    if (attempt + 1 < STABLE_READ_ATTEMPTS) await delay(STABLE_READ_DELAY)
+    if (attempt + 1 < STABLE_READ_DELAYS.length) await delay(STABLE_READ_DELAYS[attempt] ?? 540)
   }
-  throw new Error("File changed while opening; reopen it")
+  throw new Error(FILE_STILL_UPDATING)
+}
+
+/** Last readable bytes for the comparison dialog after an external writer keeps rotating versions. */
+async function readLatestHtml(fs: FileSystem, path: string): Promise<StableHtmlSnapshot> {
+  const before = await fs.stat(path)
+  if (before === null) throw new Error("File is no longer available")
+  const bytes = await fs.readFile(path)
+  const after = await fs.stat(path)
+  return { text: decodeHtml(bytes), version: after?.version ?? before.version }
 }
 
 function isVersionConflict(error: unknown): boolean {
@@ -127,7 +139,7 @@ function isVersionConflict(error: unknown): boolean {
 
 function isTransientReadRace(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
-  return /changed while opening|changed on disk/i.test(message)
+  return /changed while opening|changed on disk|still being updated/i.test(message)
 }
 
 function saveLog(line: string): void {
@@ -280,7 +292,9 @@ function HtmlToolbar({
   const store = useRef<SnapshotStore<FormatState>>(createSnapshotStore(EMPTY_FORMAT_STATE, formatStateEqual))
   const [ready, setReady] = useState(false)
   const [editable, setEditable] = useState(false)
-  const [conflict, setConflict] = useState<{ local: string; current: string } | null>(null)
+  const [conflict, setConflict] = useState<{ local: string; current: string; version: string } | null>(null)
+  const [conflictError, setConflictError] = useState<string | null>(null)
+  const [conflictBusy, setConflictBusy] = useState(false)
   const nonceRef = useRef<string | null>(null)
   const editingRef = useRef(false)
   const dirtyRef = useRef(false)
@@ -316,6 +330,7 @@ function HtmlToolbar({
 
   useEffect(() => {
     setConflict(null)
+    setConflictError(null)
   }, [documentId])
 
   /** Refresh the editor snapshot after the local write. This is a separate phase: a sync racing
@@ -366,7 +381,7 @@ function HtmlToolbar({
         await refreshPreview(current.document.id, path)
         return
       }
-      if (snapshot.text !== base) throw new HtmlSaveConflictError(html, snapshot.text)
+      if (snapshot.text !== base) throw new HtmlSaveConflictError(html, snapshot.text, snapshot.version)
       let written = false
       for (let attempt = 0; attempt < 2 && !written; attempt += 1) {
         try {
@@ -385,7 +400,7 @@ function HtmlToolbar({
             written = true
             break
           }
-          if (snapshot.text !== base) throw new HtmlSaveConflictError(html, snapshot.text)
+          if (snapshot.text !== base) throw new HtmlSaveConflictError(html, snapshot.text, snapshot.version)
         }
       }
       if (!written) throw new Error("File changed on disk; the local draft was not saved")
@@ -395,7 +410,21 @@ function HtmlToolbar({
     } catch (error) {
       if (error instanceof HtmlSaveConflictError) {
         conflicted = true
-        setConflict({ local: error.localText, current: error.currentText })
+        setConflict({ local: error.localText, current: error.currentText, version: error.currentVersion })
+        setConflictError(null)
+      } else if (isTransientReadRace(error)) {
+        // AI/cloud writers can rotate the version through a short burst. We waited them out; if
+        // they are still moving, keep the draft and compare it with the latest readable bytes.
+        // This is a conflict decision, not the old "cloud folders commonly do this" error card.
+        const latest = await readLatestHtml(options.fs, current.document.path).catch(() => null)
+        if (latest !== null) {
+          conflicted = true
+          setConflict({ local: html, current: latest.text, version: latest.version })
+          setConflictError(null)
+          saveLog(`external-write-race path=${current.document.path} version=${latest.version}`)
+        } else {
+          current.context.onError(new Error(FILE_STILL_UPDATING))
+        }
       } else {
         current.context.onError(error)
       }
@@ -539,6 +568,50 @@ function HtmlToolbar({
     postToFrame(frame(), hostMessage({ type: "undo", nonce: nonceRef.current }))
   }
 
+  const loadDiskVersion = async (): Promise<void> => {
+    const current = sessionRef.current
+    if (current === null || nonceRef.current === null) return
+    setConflict(null)
+    setConflictError(null)
+    postToFrame(frame(), hostMessage({ type: "set-mode", nonce: nonceRef.current, editing: false }))
+    current.setEditing(false)
+    try {
+      await options.controller.reload(current.document.id)
+      saveLog(`conflict-load-disk path=${current.document.path}`)
+    } catch (error) {
+      current.context.onError(error)
+    }
+  }
+
+  const overwriteWithDraft = async (): Promise<void> => {
+    const current = sessionRef.current
+    if (current === null || conflict === null || conflictBusy) return
+    setConflictBusy(true)
+    setConflictError(null)
+    try {
+      const latest = await readLatestHtml(options.fs, current.document.path)
+      options.previewControl.markSelfWrite(current.document.path)
+      await options.fs.writeFile(current.document.path, new TextEncoder().encode(conflict.local), {
+        mode: "replace",
+        expectedVersion: latest.version
+      })
+      lastSaved.current = conflict.local
+      setConflict(null)
+      saveLog(`conflict-overwrite path=${current.document.path} version=${latest.version}`)
+      await refreshPreview(current.document.id, current.document.path)
+    } catch (error) {
+      if (isVersionConflict(error) || isTransientReadRace(error)) {
+        const latest = await readLatestHtml(options.fs, current.document.path).catch(() => null)
+        if (latest !== null) setConflict({ ...conflict, current: latest.text, version: latest.version })
+        setConflictError(labels.htmlSaveStillUpdating ?? "The file is still being updated. Try again.")
+      } else {
+        current.context.onError(error)
+      }
+    } finally {
+      setConflictBusy(false)
+    }
+  }
+
   const editDisabled = blocked && !editing
   const editLabel = editing ? labels.finishEditHtml : labels.editHtml
   const items: ToolbarItem[] = [
@@ -601,8 +674,17 @@ function HtmlToolbar({
               </pre>
             </section>
           </div>
-          <DialogFooter>
-            <Button type="button" onClick={() => setConflict(null)}>
+          <DialogFooter className="flex-wrap">
+            <div className="me-auto min-h-4 text-xs text-destructive" role="status">
+              {conflictError}
+            </div>
+            <Button type="button" variant="outline" disabled={conflictBusy} onClick={() => void loadDiskVersion()}>
+              {labels.htmlUseDiskVersion ?? "Load file version"}
+            </Button>
+            <Button type="button" variant="outline" disabled={conflictBusy} onClick={() => void overwriteWithDraft()}>
+              {labels.htmlOverwriteDraft ?? "Overwrite with draft"}
+            </Button>
+            <Button type="button" disabled={conflictBusy} onClick={() => setConflict(null)}>
               {labels.htmlKeepDraft ?? "Keep editing draft"}
             </Button>
           </DialogFooter>

@@ -6,12 +6,13 @@ import { initI18n } from "@/lib/i18n"
 
 import { LeadingNavigation } from "../leading-navigation"
 import { MainSidebarLayout } from "../main-sidebar-layout"
+import type { WorkbenchPage } from "../workbench-features"
 
 await initI18n("en")
 
 test("leading navigation switches pages and is inaccessible on the main screen", () => {
   function Screen() {
-    const [page, setPage] = useState<"plugins" | "extensions" | "archives" | "usage" | "skills">("plugins")
+    const [page, setPage] = useState<WorkbenchPage>("plugins")
     const [screen, setScreen] = useState<"leading" | "main">("leading")
     return (
       <MainSidebarLayout
@@ -27,9 +28,12 @@ test("leading navigation switches pages and is inaccessible on the main screen",
           <>
             <LeadingNavigation
               activePage={page}
+              onOpenOverview={() => setPage("overview")}
               onOpenPlugins={() => setPage("plugins")}
               onOpenExtensions={() => setPage("extensions")}
               onOpenArchives={() => setPage("archives")}
+              onOpenAutomation={() => setPage("automation")}
+              onOpenGroups={() => setPage("groups")}
               onOpenUsage={() => setPage("usage")}
               onOpenSkills={() => setPage("skills")}
             />
@@ -43,10 +47,13 @@ test("leading navigation switches pages and is inaccessible on the main screen",
   const view = render(<Screen />)
   expect(view.getByRole("button", { name: "Plugins" })).toHaveAttribute("aria-current", "page")
   for (const [name, page] of [
-    ["Features", "extensions"],
+    ["Overview", "overview"],
+    ["Extensions", "extensions"],
     ["Plugins", "plugins"],
     ["Skills", "skills"],
-    ["Archived chats", "archives"],
+    ["Meetings", "groups"],
+    ["Scheduled tasks", "automation"],
+    ["Archive", "archives"],
     ["Usage", "usage"]
   ] as const) {
     fireEvent.click(view.getByRole("button", { name }))

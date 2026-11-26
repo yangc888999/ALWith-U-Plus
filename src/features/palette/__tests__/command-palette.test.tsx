@@ -39,6 +39,7 @@ test("search opens with its command context and closes after selecting the expli
           onNewChat={() => {}}
           onOpenSettings={() => {}}
           onOpenPlugins={() => {}}
+          onOpenExtensions={() => {}}
           onOpenHotkeys={() => {}}
           onOpenExtension={() => {}}
           onSelect={(value) => selected.push(value)}
@@ -78,6 +79,7 @@ function openPalette(sessionList: SessionSummary[]) {
           onNewChat={() => {}}
           onOpenSettings={() => {}}
           onOpenPlugins={() => {}}
+          onOpenExtensions={() => {}}
           onOpenHotkeys={() => {}}
           onOpenExtension={() => {}}
           onSelect={(sessionRow) => selected.push(sessionRow)}

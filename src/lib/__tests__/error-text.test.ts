@@ -280,7 +280,8 @@ test("engine file-edit and Drive failures never reach the reader in English", as
   // project folder. Both come from the engine's file checks and used to pass through verbatim,
   // because `describeError` falls back to the raw message when no rule matches.
   const cases: [raw: string, hint: string][] = [
-    ["File changed while opening; reopen it", "重新打开"],
+    ["File changed while opening; reopen it", "重试"],
+    ["File is still being updated; retry the save", "稍后重试"],
     ["This file is read-only or being collaboratively edited", "只读"],
     // Drive's own sentences, which `label()` does not cover because they are thrown, not rendered.
     ["The selected Drive entry no longer exists", "云盘"],

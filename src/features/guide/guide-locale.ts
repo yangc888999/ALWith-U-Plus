@@ -230,7 +230,7 @@ const zh: GuideCopy = {
       takeaway: "允许修改文件前先确认项目文件夹。"
     },
     {
-      summary: "理解技能、Codex 插件与应用扩展。",
+      summary: "理解技能、Codex 插件与扩展。",
       group: "个性化与扩展",
       takeaway: "启用前确认集成做什么、需要哪些权限。"
     },

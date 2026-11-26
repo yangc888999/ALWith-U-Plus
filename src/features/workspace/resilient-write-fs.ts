@@ -6,8 +6,8 @@
 
 import type { FileStat, FileSystem, FsTransaction, WriteOptions } from "@alwith/module-fs/core"
 
-const STABLE_READ_ATTEMPTS = 5
-const STABLE_READ_DELAY = 35
+const STABLE_READ_DELAYS = [40, 80, 120, 180, 240, 320, 420, 540] as const
+const FILE_STILL_UPDATING = "File is still being updated; retry the save"
 const READ_CACHE_LIMIT = 128
 
 interface StableRead {
@@ -30,15 +30,15 @@ function isVersionConflict(error: unknown): boolean {
 }
 
 async function readStable(fs: FsTransaction, path: string): Promise<StableRead> {
-  for (let attempt = 0; attempt < STABLE_READ_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < STABLE_READ_DELAYS.length; attempt += 1) {
     const before = await fs.stat(path)
     if (before === null) throw new Error("File is no longer available")
     const bytes = await fs.readFile(path)
     const after = await fs.stat(path)
     if (after !== null && after.version === before.version) return { bytes, version: after.version }
-    if (attempt + 1 < STABLE_READ_ATTEMPTS) await delay(STABLE_READ_DELAY)
+    if (attempt + 1 < STABLE_READ_DELAYS.length) await delay(STABLE_READ_DELAYS[attempt] ?? 540)
   }
-  throw new Error("File changed while opening; reopen it")
+  throw new Error(FILE_STILL_UPDATING)
 }
 
 /**

@@ -28,13 +28,14 @@ export function ExtensionNavigation({
   if (!apps.length) return null
   return (
     <>
-      <div className="w-6 shrink-0">
+      <div className="workbench-nav-separator">
         <Separator className="h-px bg-[var(--chrome-hover-background)]" />
       </div>
       <section
         aria-label={t("extensions.outlets.navigation")}
-        className="flex min-h-0 w-full flex-1 flex-col items-center gap-2 overflow-y-auto pb-1"
+        className="workbench-nav-group workbench-nav-extension-list"
       >
+        <div className="workbench-nav-group-label">{t("workbench.groups.extensions")}</div>
         {apps.map(({ action, name }) => {
           const target = resolveActionTarget(host, action)
           const active = host.views.some((view) => view.id === activeView && view.extensionId === action.extensionId)
@@ -49,7 +50,8 @@ export function ExtensionNavigation({
                     aria-label={name}
                     aria-current={active ? "page" : undefined}
                     disabled={!target}
-                    className="size-9 rounded-[10px] text-muted-foreground hover:text-foreground aria-[current=page]:bg-foreground/5 aria-[current=page]:text-foreground motion-reduce:transition-none"
+                    data-active={active ? "" : undefined}
+                    className="workbench-nav-item leading-navigation-item disabled:opacity-40"
                     onClick={() => {
                       void Promise.resolve()
                         .then(() => {
@@ -60,7 +62,10 @@ export function ExtensionNavigation({
                         .catch(onError)
                     }}
                   >
-                    <Icon aria-hidden="true" className="size-[18px]" />
+                    <span className="workbench-nav-icon">
+                      <Icon aria-hidden="true" className="size-[18px]" />
+                    </span>
+                    <span className="workbench-nav-label">{name}</span>
                   </Button>
                 }
               />

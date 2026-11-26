@@ -80,6 +80,32 @@ test("usage and skills are no longer settings destinations and old deep links la
   }
 })
 
+test("scheduled tasks and meetings moved to the leading screen, including their old deep links", () => {
+  for (const tab of ["automation", "groups"]) {
+    window.history.replaceState({}, "", `/settings.html?tab=${tab}`)
+    try {
+      const view = render(<SettingsPage />)
+      expect(screen.getByRole("heading", { level: 1, name: "General" })).toBeVisible()
+      expect(screen.queryByRole("button", { name: "Scheduled Tasks" })).toBeNull()
+      expect(screen.queryByRole("button", { name: "Meetings" })).toBeNull()
+      view.unmount()
+    } finally {
+      window.history.replaceState({}, "", "/")
+    }
+  }
+})
+
+test("app extensions moved to the leading screen and its settings deep link lands on General", () => {
+  window.history.replaceState({}, "", "/settings.html?tab=extensions")
+  try {
+    render(<SettingsPage />)
+    expect(screen.getByRole("heading", { level: 1, name: "General" })).toBeVisible()
+    expect(screen.queryByRole("button", { name: "Extensions" })).toBeNull()
+  } finally {
+    window.history.replaceState({}, "", "/")
+  }
+})
+
 test("a retired ?tab=external deep link lands on 通用 instead of a blank page", () => {
   // 外部调用页已下线：老链接（收藏、窗口 URL）不能掉进空白页，规范化后回落到「通用」。
   window.history.replaceState({}, "", "/settings.html?tab=external")

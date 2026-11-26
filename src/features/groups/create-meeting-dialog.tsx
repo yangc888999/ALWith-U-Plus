@@ -35,7 +35,6 @@ import { groupRoles } from "@/lib/group-roles"
 import { groups as listGroups, newGroupId, setGroup, type GroupConfig } from "@/lib/groups"
 import { groupPreferences } from "@/lib/group-preferences"
 import { basename } from "@/lib/path"
-import { openSettingsWindow } from "@/lib/window-manager"
 
 import { RosterEditor } from "./roster-editor"
 
@@ -86,7 +85,8 @@ export function CreateMeetingDialog({
   open,
   group,
   onClose,
-  onCreated
+  onCreated,
+  onManageRoles
 }: {
   open: boolean
   /** Present = edit mode (roster/direction/materials of an existing meeting). */
@@ -94,6 +94,8 @@ export function CreateMeetingDialog({
   onClose: () => void
   /** Called with the stored config and the directory to open. */
   onCreated: (created: GroupConfig, directory: string) => void
+  /** The role library lives on the leading screen now, not in Settings. */
+  onManageRoles?: () => void
 }) {
   const { t } = useTranslation()
   const editing = group !== null
@@ -447,7 +449,14 @@ export function CreateMeetingDialog({
               {knownRoles.length === 0 ? (
                 <div className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-2.5 py-2">
                   <span className="text-[11px] text-muted-foreground">{t("groups.createNoRoles")}</span>
-                  <Button variant="outline" size="sm" onClick={() => void openSettingsWindow("groups")}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      onManageRoles?.()
+                      close()
+                    }}
+                  >
                     {t("groups.createGoRoles")}
                   </Button>
                 </div>

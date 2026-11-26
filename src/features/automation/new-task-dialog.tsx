@@ -27,7 +27,6 @@ import { describeError } from "@/lib/error-text"
 import type { ModelOption } from "@/lib/model-options"
 import { useModelOptions } from "@/lib/use-model-options"
 import { cn } from "@/lib/utils"
-import { openSettingsWindow } from "@/lib/window-manager"
 
 import { LarkTargetPicker } from "./lark-target-picker"
 import {
@@ -125,13 +124,15 @@ export function NewTaskDialog({
   open,
   onOpenChange,
   task,
-  onSubmit
+  onSubmit,
+  onOpenExtensions
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** null = 新建；否则为编辑。 */
   task: ScheduledTask | null
   onSubmit: (draft: TaskDraft) => void
+  onOpenExtensions?: () => void
 }) {
   const { t } = useTranslation()
   // 与 ① ② ③ ④ 同一个出口：候选集、分组名、显示名（已清洗星号别名 / 「可能不可用」）、
@@ -572,7 +573,7 @@ export function NewTaskDialog({
                     variant="outline"
                     size="sm"
                     className="h-6 shrink-0 bg-background px-2 text-[11px]"
-                    onClick={() => void openSettingsWindow("extensions").catch(() => undefined)}
+                    onClick={() => onOpenExtensions?.()}
                   >
                     {t("automation.larkCliInstall")}
                   </Button>
@@ -593,7 +594,7 @@ export function NewTaskDialog({
                         variant="outline"
                         size="sm"
                         className="h-6 shrink-0 px-2 text-[11px]"
-                        onClick={() => void openSettingsWindow("extensions").catch(() => undefined)}
+                        onClick={() => onOpenExtensions?.()}
                       >
                         {t("automation.larkOpenComponent")}
                       </Button>

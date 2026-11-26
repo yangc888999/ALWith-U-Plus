@@ -1,4 +1,12 @@
-import { KeyboardIcon, MessageSquareIcon, PlusIcon, PuzzleIcon, SettingsIcon, SunMoonIcon } from "lucide-react"
+import {
+  BlocksIcon,
+  KeyboardIcon,
+  MessageSquareIcon,
+  PlusIcon,
+  PuzzleIcon,
+  SettingsIcon,
+  SunMoonIcon
+} from "lucide-react"
 import { type ReactNode, useMemo, useRef, useState } from "react"
 import { flushSync } from "react-dom"
 import { useTranslation } from "react-i18next"
@@ -23,7 +31,6 @@ import { useExtensions } from "@/features/extensions/use-extensions"
 import { useApp } from "@/lib/client"
 import { basename } from "@/lib/path"
 import { displayShortcut } from "@/lib/shortcut-formatter"
-import { openSettingsWindow } from "@/lib/window-manager"
 
 import { type PaletteSearchGroup, searchPalette } from "./search"
 
@@ -35,6 +42,7 @@ interface Props {
   onNewChat: () => void
   onOpenSettings: () => void
   onOpenPlugins: () => void
+  onOpenExtensions: () => void
   onOpenHotkeys: () => void
   onOpenExtension: (id: string) => void
   onSelect: (sessionRow: SessionSummary) => void
@@ -69,6 +77,7 @@ function PaletteContent({
   onNewChat,
   onOpenSettings,
   onOpenPlugins,
+  onOpenExtensions,
   onOpenHotkeys,
   onOpenExtension,
   onSelect
@@ -120,9 +129,7 @@ function PaletteContent({
         id: "extensions",
         heading: t("settings.extensions"),
         entries: [
-          action("action:extensions", t("extensions.manage"), <SettingsIcon />, () => {
-            void openSettingsWindow("extensions").catch(reportExtensionError)
-          }),
+          action("action:extensions", t("extensions.manage"), <BlocksIcon />, onOpenExtensions),
           ...extensions.commands.map((command) => ({
             id: `extension-command:${command.id}`,
             search: `extension-command ${command.id} ${command.title}`,
