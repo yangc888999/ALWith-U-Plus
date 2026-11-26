@@ -278,7 +278,7 @@ test("a changed project list invalidates its closed popup before reopening", asy
   }
 })
 
-test("session-card title and path scroll only on hover and the path opens its own cwd", async () => {
+test("session-card title and folder action scroll only on hover and the action opens its own cwd", async () => {
   const open = vi.spyOn(opener, "openPath").mockResolvedValue()
   try {
     const sessionRow = {
@@ -291,7 +291,7 @@ test("session-card title and path scroll only on hover and the path opens its ow
         <SessionInfoCard sessionRow={sessionRow} />
       </SessionListHostProvider>
     )
-    for (const text of [sessionRow.title, sessionRow.cwd]) {
+    for (const text of [sessionRow.title, "Open project folder"]) {
       const content = view.getByText(text)
       Object.defineProperties(content, { scrollWidth: { value: 360 }, clientWidth: { value: 100 } })
       const viewport = must(content.parentElement, "the scroll viewport")

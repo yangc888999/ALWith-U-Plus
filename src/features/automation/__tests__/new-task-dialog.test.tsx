@@ -1,11 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeAll, beforeEach, expect, test, vi } from "vitest"
 
 import { initI18n } from "@/lib/i18n"
 
 const { openFolder, larkApi } = vi.hoisted(() => ({
   openFolder: vi.fn(),
-  larkApi: { status: vi.fn(), auth: vi.fn(), targets: vi.fn() }
+  larkApi: { status: vi.fn(), auth: vi.fn(), targets: vi.fn(), login: vi.fn(), complete: vi.fn() }
 }))
 
 vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
@@ -25,6 +25,8 @@ vi.mock("@/bindings", () => ({
     get: (_target, key) => {
       if (key === "larkCliStatus") return () => larkApi.status()
       if (key === "larkCliAuthStatus") return () => larkApi.auth()
+      if (key === "larkCliAuthLogin") return (args: unknown) => larkApi.login(args)
+      if (key === "larkCliAuthComplete") return (args: unknown) => larkApi.complete(args)
       if (key === "larkCliTargets") return () => larkApi.targets()
       return () => new Promise(() => {})
     }
@@ -122,6 +124,8 @@ beforeEach(() => {
   larkApi.status.mockReset().mockImplementation(() => new Promise(() => {}))
   larkApi.auth.mockReset().mockImplementation(() => new Promise(() => {}))
   larkApi.targets.mockReset().mockImplementation(() => new Promise(() => {}))
+  larkApi.login.mockReset().mockImplementation(() => new Promise(() => {}))
+  larkApi.complete.mockReset().mockImplementation(() => new Promise(() => {}))
 })
 
 const CLI_READY = { available: true, cliPath: "/usr/local/bin/lark-cli", version: "1.0.0", hint: "" }
@@ -272,7 +276,7 @@ test("with no resolved Lark account yet, delivery stays off until it is switched
   const { onSubmit } = renderDialog()
   fillRequiredFields()
 
-  fireEvent.click(screen.getByLabelText("Send the result to Lark (default)"))
+  fireEvent.click(screen.getByLabelText("Bot broadcast"))
   await act(async () => undefined)
 
   // Turning it on reveals the identity choice; targets are loaded lazily from the CLI.
@@ -297,7 +301,7 @@ test("a new task pushes to Lark by default, addressed to the signed-in user", as
 
   // 默认开：不用点任何东西，收件人就是授权人本人。
   await waitFor(() =>
-    expect(screen.getByRole("switch", { name: "Send the result to Lark (default)" }).getAttribute("aria-checked")).toBe(
+    expect(screen.getByRole("switch", { name: "Bot broadcast" }).getAttribute("aria-checked")).toBe(
       "true"
     )
   )
@@ -327,12 +331,77 @@ test("without the Lark CLI the toggle is disabled and points at the component in
   renderDialog()
 
   await waitFor(() => expect(screen.getByText(/not installed on this machine/i)).toBeTruthy())
-  const toggle = screen.getByRole("switch", { name: "Send the result to Lark (default)" })
+  const toggle = screen.getByRole("switch", { name: "Bot broadcast" })
   // Base UI 把禁用态放在 data-disabled 上，不是原生 disabled 属性。
   expect(toggle.hasAttribute("disabled") || toggle.hasAttribute("data-disabled")).toBe(true)
   expect(screen.getByRole("button", { name: "Install" })).toBeTruthy()
   // 没装 CLI 就不该默认开：否则每个新任务都带一个必然发不出去的动作。
   expect(toggle.getAttribute("aria-checked")).toBe("false")
+})
+
+test("switching to user identity starts the send_as_user authorization flow", async () => {
+  larkApi.status.mockResolvedValue(CLI_READY)
+  larkApi.auth.mockResolvedValue(SIGNED_IN)
+  larkApi.login.mockResolvedValue({
+    verificationUrl: "https://example.com/lark-auth",
+    deviceCode: "device-1",
+    userCode: "CODE-1",
+    expiresIn: 600
+  })
+  larkApi.complete.mockResolvedValue({ ok: true, message: "" })
+  renderDialog()
+
+  await waitFor(() =>
+    expect(screen.getByRole("switch", { name: "Bot broadcast" }).getAttribute("aria-checked")).toBe("true")
+  )
+  fireEvent.click(screen.getByRole("switch", { name: "Use user identity" }))
+
+  await waitFor(() =>
+    expect(larkApi.login).toHaveBeenCalledWith({ scopes: ["im:message.send_as_user"] })
+  )
+  await waitFor(() =>
+    expect(screen.getByRole("switch", { name: "Use user identity" }).getAttribute("aria-checked")).toBe("true")
+  )
+  expect(screen.getByRole("switch", { name: "Use agent identity" }).getAttribute("aria-checked")).toBe("false")
+})
+
+test("closing the user-identity authorization dialog leaves the agent identity checked", async () => {
+  larkApi.status.mockResolvedValue(CLI_READY)
+  larkApi.auth.mockResolvedValue(SIGNED_IN)
+  // Leave the device flow pending so the dialog stays open until the user closes it.
+  larkApi.login.mockImplementation(() => new Promise(() => {}))
+  renderDialog()
+
+  await waitFor(() =>
+    expect(screen.getByRole("switch", { name: "Bot broadcast" }).getAttribute("aria-checked")).toBe("true")
+  )
+  fireEvent.click(screen.getByRole("switch", { name: "Use user identity" }))
+  const dialog = await screen.findByTestId("lark-user-permission")
+  expect(within(dialog).getByText("Authorize user identity")).toBeTruthy()
+  fireEvent.click(within(dialog).getAllByRole("button", { name: "Close" })[0]!)
+
+  expect(screen.getByRole("switch", { name: "Use user identity" }).getAttribute("aria-checked")).toBe("false")
+  expect(screen.getByRole("switch", { name: "Use agent identity" }).getAttribute("aria-checked")).toBe("true")
+})
+
+test("user identity switches immediately when the send_as_user scope is already granted", async () => {
+  larkApi.status.mockResolvedValue(CLI_READY)
+  larkApi.auth.mockResolvedValue({
+    ...SIGNED_IN,
+    identities: SIGNED_IN.identities.map((identity) =>
+      identity.kind === "user" ? { ...identity, scopes: ["im:message.send_as_user"] } : identity
+    )
+  })
+  renderDialog()
+
+  await waitFor(() =>
+    expect(screen.getByRole("switch", { name: "Bot broadcast" }).getAttribute("aria-checked")).toBe("true")
+  )
+  fireEvent.click(screen.getByRole("switch", { name: "Use user identity" }))
+  await waitFor(() =>
+    expect(screen.getByRole("switch", { name: "Use user identity" }).getAttribute("aria-checked")).toBe("true")
+  )
+  expect(larkApi.login).not.toHaveBeenCalled()
 })
 
 test("new tasks no longer offer or persist a private empty-report notice", async () => {
@@ -341,7 +410,7 @@ test("new tasks no longer offer or persist a private empty-report notice", async
   const { onSubmit } = renderDialog()
   fillRequiredFields()
   await waitFor(() =>
-    expect(screen.getByRole("switch", { name: "Send the result to Lark (default)" }).getAttribute("aria-checked")).toBe(
+    expect(screen.getByRole("switch", { name: "Bot broadcast" }).getAttribute("aria-checked")).toBe(
       "true"
     )
   )
@@ -360,7 +429,7 @@ test("advanced settings are always visible, with one home for model / effort / f
 
   // No collapsible wrapper and no section title (the flat redesign dropped it): the Lark switch is
   // in the DOM before any click, and every run control is editable right away.
-  expect(screen.getByLabelText("Send the result to Lark (default)")).toBeTruthy()
+  expect(screen.getByLabelText("Bot broadcast")).toBeTruthy()
   // Effort / fast used to be duplicated inside the collapsed section. One editable control each.
   expect(screen.getAllByLabelText("Model")).toHaveLength(1)
   expect(screen.getAllByLabelText("Reasoning effort")).toHaveLength(1)
@@ -379,7 +448,7 @@ test("editing an existing task opens advanced settings without an extra click", 
   }
   renderDialog(vi.fn(), task)
 
-  expect(screen.getByLabelText("Send the result to Lark (default)")).toBeTruthy()
+  expect(screen.getByLabelText("Bot broadcast")).toBeTruthy()
   // Turning it on for an existing task reveals the delivery fields without touching a collapse.
   expect(screen.getByLabelText("Send as")).toBeTruthy()
   expect(screen.getByText("Recipients")).toBeTruthy()
@@ -392,7 +461,7 @@ test("the recipient list stays folded until 添加对象 is clicked, and each op
   renderDialog()
 
   await waitFor(() =>
-    expect(screen.getByRole("switch", { name: "Send the result to Lark (default)" }).getAttribute("aria-checked")).toBe(
+    expect(screen.getByRole("switch", { name: "Bot broadcast" }).getAttribute("aria-checked")).toBe(
       "true"
     )
   )

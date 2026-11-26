@@ -2429,6 +2429,41 @@ test("an explicit effort selected immediately after a model wins over that model
   ])
 })
 
+test("an effort picked during a running turn is parked and applied when it settles", async () => {
+  const { client, fake } = await make((agent) => configureReasoningModels(agent, switchModels, "first", "low"))
+  const id = await client.newSession("/tmp/effort-parked", { draft: false })
+  fake.events.length = 0
+
+  await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "running" })
+  await client.setConfig(id, "effort", "high")
+  expect(fake.events.filter((event) => event.type === "config")).toEqual([])
+  expect(client.store.getState().pendingEfforts[id]).toEqual({ model: "first", effort: "high" })
+
+  await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "idle" })
+  await vi.waitFor(() => expect(orchestrationOrder(fake)).toContain("config:reasoning_effort=high"))
+  await vi.waitFor(() => expect(client.store.getState().pendingEfforts[id]).toBeUndefined())
+})
+
+test("an effort picked for a parked model lands with that model, not its default", async () => {
+  const { client, fake } = await make((agent) => configureReasoningModels(agent, switchModels, "first", "low"))
+  const id = await client.newSession("/tmp/effort-parked-model", { draft: false })
+  fake.events.length = 0
+
+  await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "running" })
+  await client.setConfig(id, "model", "second")
+  expect(client.store.getState().pendingModels[id]).toBe("second")
+  await client.setConfig(id, "effort", "high")
+  expect(client.store.getState().pendingEfforts[id]).toEqual({ model: "second", effort: "high" })
+
+  await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "idle" })
+  await vi.waitFor(() => expect(orchestrationOrder(fake)).toContain("config:model=second"))
+  await vi.waitFor(() => expect(orchestrationOrder(fake)).toContain("config:reasoning_effort=high"))
+  await vi.waitFor(() => expect(client.store.getState().pendingEfforts[id]).toBeUndefined())
+  expect(client.session(id).configOptions.find((option) => option.configId === "reasoning_effort")?.currentValue).toBe(
+    "high"
+  )
+})
+
 test("a still-refused parked model never dispatches the next prompt on the old route", async () => {
   const { client, fake } = await make((agent) => configureReasoningModels(agent, switchModels, "first", "low"))
   const id = await client.newSession("/tmp/model-parked-refused")

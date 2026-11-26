@@ -74,7 +74,7 @@ test("a failed Codex version check reports the error and still displays the app 
   }
 })
 
-test("a failed update check explains itself in plain words and offers a manual download", async () => {
+test("a failed update check shows one retry-later status without a manual download", async () => {
   const native = vi.spyOn(core, "isTauri").mockReturnValue(true)
   const init = vi.spyOn(useUpdaterStore.getState(), "init").mockResolvedValue()
   const originalState = useUpdaterStore.getState()
@@ -87,12 +87,12 @@ test("a failed update check explains itself in plain words and offers a manual d
   const view = render(<AboutSection />)
   try {
     await waitFor(() => {
-      expect(view.getByText("Can't reach the update service")).toBeDefined()
+      expect(view.getByText("The update service is temporarily unavailable. Try again later.")).toBeDefined()
     })
     expect(view.queryByText("Up to date")).toBeNull()
     // The plugin's own wording (URLs, "release JSON") is diagnostics, never UI copy.
     expect(view.queryByText(/release JSON/)).toBeNull()
-    expect(view.getByRole("button", { name: "Download" })).toBeDefined()
+    expect(view.queryByRole("button", { name: "Download" })).toBeNull()
   } finally {
     view.unmount()
     useUpdaterStore.setState(originalState, true)
@@ -171,7 +171,11 @@ test.each<[string, UpdaterState, string]>([
   ["availableForDownload", { type: "availableForDownload", update }, "Downloaded 0%"],
   ["ready", { type: "ready", update }, "Downloaded — click to update"],
   ["restarting", { type: "restarting", update }, INSTALLING],
-  ["checkFailed", { type: "checkFailed", reason: "unavailable" }, "The update service is unavailable"]
+  [
+    "checkFailed",
+    { type: "checkFailed", reason: "unavailable" },
+    "The update service is temporarily unavailable. Try again later."
+  ]
 ])("the %s state is stated exactly once on the About page", (_name, state, expected) => {
   const { view, dispose } = renderAbout(state)
   try {

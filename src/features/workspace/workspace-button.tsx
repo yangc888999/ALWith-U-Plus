@@ -38,7 +38,7 @@ export function WorkspaceButton() {
             aria-controls="file-workspace-panel"
             onClick={onClick}
           >
-            <PanelsTopLeft className="size-4 text-sky-600 dark:text-sky-400" />
+            <PanelsTopLeft className="size-4" />
           </Button>
         }
       />

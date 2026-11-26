@@ -1,7 +1,13 @@
 import { toast } from "sonner"
 import { beforeEach, describe, expect, test, vi } from "vitest"
 
-import type { PluginDetail, PluginMarketplaceEntry, PluginSummary, SkillMetadata } from "@nyssance/codex-acp-v2/client"
+import type {
+  PluginDetail,
+  PluginMarketplaceEntry,
+  PluginReadResponse,
+  PluginSummary,
+  SkillMetadata
+} from "@nyssance/codex-acp-v2/client"
 import { must } from "@/lib/__tests__/must"
 import i18n from "@/lib/i18n"
 
@@ -31,6 +37,20 @@ function plugin(id: string, installed: boolean): PluginSummary {
     interface: null,
     keywords: []
   }
+}
+
+/** What the adapter sends for an online marketplace entry: only list-card fields survive. */
+function compactPlugin(id: string): PluginSummary {
+  return {
+    id,
+    remotePluginId: id,
+    name: id,
+    installed: false,
+    enabled: false,
+    installPolicy: "AVAILABLE",
+    availability: "AVAILABLE",
+    interface: { displayName: "Remote compact", shortDescription: "Small payload", developerName: "OpenAI" }
+  } as unknown as PluginSummary
 }
 
 function skill(path: string, enabled: boolean): SkillMetadata {
@@ -137,6 +157,62 @@ describe("plugins store", () => {
     expect(state.skillErrors).toEqual([{ path: "/b/bad", message: "broken" }])
     expect(state.installed.map((entry) => entry.plugin.id)).toEqual(["alpha"])
     expect(api.calls[0]).toBe("skills:/a,/b")
+  })
+
+  test("refresh completes the compact fields used by the online marketplace", async () => {
+    const api = fakeApi()
+    const remote = compactPlugin("remote-compact")
+    api.listPlugins = vi.fn(async () => ({
+      marketplaces: [{ name: "online", path: null, interface: null, plugins: [remote] }],
+      marketplaceLoadErrors: [],
+      featuredPluginIds: [remote.id]
+    }))
+    const store = createPluginsStore(api)
+
+    await store.getState().refresh([], { slices: ["marketplace"], includeRemote: true })
+
+    const normalized = store.getState().marketplaces[0]!.plugins[0]!
+    expect(normalized.keywords).toEqual([])
+    expect(normalized.source).toEqual({ type: "remote" })
+    expect(normalized.interface).toMatchObject({
+      displayName: "Remote compact",
+      capabilities: [],
+      screenshots: [],
+      screenshotUrls: []
+    })
+  })
+
+  test("readPlugin fills a compact summary and missing detail collections", async () => {
+    const api = fakeApi()
+    const remote = compactPlugin("remote-compact")
+    api.readPlugin = vi.fn(
+      async () =>
+        ({
+          plugin: {
+            summary: remote,
+            description: "Remote description",
+            skills: undefined,
+            hooks: undefined,
+            apps: undefined,
+            mcpServers: undefined,
+            scheduledTasks: undefined
+          }
+        }) as unknown as PluginReadResponse
+    )
+    const store = createPluginsStore(api)
+
+    const detail = await store.getState().readPlugin({
+      plugin: remote,
+      marketplace: { name: "online", path: null, interface: null, plugins: [remote] }
+    })
+
+    expect(detail.summary.keywords).toEqual([])
+    expect(detail.summary.interface?.screenshots).toEqual([])
+    expect(detail.skills).toEqual([])
+    expect(detail.hooks).toEqual([])
+    expect(detail.apps).toEqual([])
+    expect(detail.mcpServers).toEqual([])
+    expect(detail.scheduledTasks).toBeNull()
   })
 
   test("install targets the marketplace by path or remote name and refreshes", async () => {

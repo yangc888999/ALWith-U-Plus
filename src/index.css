@@ -1363,6 +1363,14 @@ pre::-webkit-scrollbar-thumb {
   font-size: var(--sidebar-font-size, 13px);
 }
 
+/* The session row already shows its title and age; repeating them above the action menu only
+   pushes the real actions down. Keep the hover card as an action menu. */
+[data-slot="codex-hover-card"] [data-slot="hover-info-card-summary"],
+[data-slot="codex-hover-card"] [data-slot="hover-info-card-details"],
+[data-slot="codex-hover-card"] [data-slot="hover-info-card-separator"] {
+  display: none;
+}
+
 /* Pane keeps its track outside the viewport, with stable content clearance even when hidden. */
 [data-slot="scroll-area-viewport"] {
   scrollbar-width: none;

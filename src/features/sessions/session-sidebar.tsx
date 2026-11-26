@@ -53,7 +53,6 @@ import { ProjectSessionPopover } from "@/features/chat/project-session-popover"
 import { AddToCollectionAction } from "@/features/collection/collection-menu"
 import { CollectionPanel } from "@/features/collection/collection-panel"
 import { dispatchCollection, reportCollection } from "@/features/collection/store"
-import { DriveArchiveAction } from "@/features/drive/archive-action"
 import { useDriveVisible } from "@/features/drive/use-drive-visible"
 import { GroupPanel } from "@/features/groups/group-panel"
 import { GuideButton } from "@/features/guide/guide-button"
@@ -83,7 +82,7 @@ import { SidebarMenuRow } from "./sidebar-menu-row"
 import { useSessionsUiStore } from "./store"
 import { useActivityNotification } from "./use-activity-notification"
 
-/** U's own hover-card actions on a session row: collections, then drive. */
+/** U's own hover-card actions on a session row: collections and group membership. */
 function SessionRowActions({ sessionRow, collectionId }: { sessionRow: SessionSummary; collectionId?: string }) {
   const { t } = useTranslation()
   return (
@@ -98,7 +97,6 @@ function SessionRowActions({ sessionRow, collectionId }: { sessionRow: SessionSu
           }
         />
       )}
-      <DriveArchiveAction sessionId={sessionRow.sessionId} />
     </>
   )
 }

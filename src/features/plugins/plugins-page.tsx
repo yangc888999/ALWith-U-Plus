@@ -239,7 +239,7 @@ const MarketplaceResults = memo(function MarketplaceResults({
             pluginTitle(plugin),
             pluginDescription(plugin),
             plugin.interface?.developerName ?? "",
-            ...plugin.keywords
+            ...(Array.isArray(plugin.keywords) ? plugin.keywords : [])
           ]
             .join("\n")
             .toLowerCase()

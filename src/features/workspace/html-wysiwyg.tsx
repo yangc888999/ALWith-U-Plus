@@ -21,7 +21,7 @@
  */
 import type { EditorController, EditorDocument, PreviewProvider } from "@alwith/module-editor"
 import type { PreviewContext, PreviewHost } from "@alwith/module-editor/previews"
-import type { FileSystem } from "@alwith/module-fs/core"
+import { basename, dirname, type FileSystem, joinPath } from "@alwith/module-fs/core"
 import { info } from "@tauri-apps/plugin-log"
 import {
   Bold,
@@ -105,6 +105,17 @@ const delay = (milliseconds: number): Promise<void> =>
 
 function decodeHtml(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes)
+}
+
+/** A side-by-side draft copy next to the report, so loading the disk version never discards it. */
+function draftCopyPath(path: string, now = new Date()): string {
+  const name = basename(path)
+  const dot = name.lastIndexOf(".")
+  const stem = dot > 0 ? name.slice(0, dot) : name
+  const extension = dot > 0 ? name.slice(dot) : ".html"
+  const pad = (value: number, width = 2): string => String(value).padStart(width, "0")
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}-${pad(now.getMilliseconds(), 3)}`
+  return joinPath(dirname(path), `${stem}-draft-${stamp}${extension}`)
 }
 
 /** Read bytes and version only when both stats agree. A version that moved while reading is a
@@ -568,11 +579,32 @@ function HtmlToolbar({
     postToFrame(frame(), hostMessage({ type: "undo", nonce: nonceRef.current }))
   }
 
+  const writeDraftCopy = async (path: string, html: string): Promise<string> => {
+    const copyPath = draftCopyPath(path)
+    await options.fs.writeFile(copyPath, new TextEncoder().encode(html), { mode: "create" })
+    return copyPath
+  }
+
   const loadDiskVersion = async (): Promise<void> => {
     const current = sessionRef.current
     if (current === null || nonceRef.current === null) return
-    setConflict(null)
+    if (conflictBusy) return
+    setConflictBusy(true)
     setConflictError(null)
+    if (conflict !== null) {
+      try {
+        const copyPath = await writeDraftCopy(current.document.path, conflict.local)
+        saveLog(`conflict-load-disk-draft path=${copyPath}`)
+        toast.success(`${labels.htmlDraftCopySaved ?? "Draft copy saved"}: ${copyPath}`, {
+          id: "html-draft-copy-saved"
+        })
+      } catch (error) {
+        setConflictError(error instanceof Error ? error.message : String(error))
+        setConflictBusy(false)
+        return
+      }
+    }
+    setConflict(null)
     postToFrame(frame(), hostMessage({ type: "set-mode", nonce: nonceRef.current, editing: false }))
     current.setEditing(false)
     try {
@@ -580,6 +612,26 @@ function HtmlToolbar({
       saveLog(`conflict-load-disk path=${current.document.path}`)
     } catch (error) {
       current.context.onError(error)
+    } finally {
+      setConflictBusy(false)
+    }
+  }
+
+  const saveDraftCopy = async (): Promise<void> => {
+    const current = sessionRef.current
+    if (current === null || conflict === null || conflictBusy) return
+    setConflictBusy(true)
+    setConflictError(null)
+    try {
+      const copyPath = await writeDraftCopy(current.document.path, conflict.local)
+      saveLog(`conflict-draft-copy path=${copyPath}`)
+      toast.success(`${labels.htmlDraftCopySaved ?? "Draft copy saved"}: ${copyPath}`, {
+        id: "html-draft-copy-saved"
+      })
+    } catch (error) {
+      setConflictError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setConflictBusy(false)
     }
   }
 
@@ -678,6 +730,9 @@ function HtmlToolbar({
             <div className="me-auto min-h-4 text-xs text-destructive" role="status">
               {conflictError}
             </div>
+            <Button type="button" variant="outline" disabled={conflictBusy} onClick={() => void saveDraftCopy()}>
+              {labels.htmlSaveDraftCopy ?? "Save draft copy"}
+            </Button>
             <Button type="button" variant="outline" disabled={conflictBusy} onClick={() => void loadDiskVersion()}>
               {labels.htmlUseDiskVersion ?? "Load file version"}
             </Button>

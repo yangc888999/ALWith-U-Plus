@@ -47,6 +47,79 @@ export type PluginsApi = {
 /** A plugin together with the marketplace it was listed under (needed to install and read). */
 export type PluginEntry = { plugin: PluginSummary; marketplace: PluginMarketplaceEntry }
 
+type PluginInterfaceShape = NonNullable<PluginSummary["interface"]>
+type RawPlugin = Partial<Omit<PluginSummary, "interface" | "source">> & {
+  source?: PluginSummary["source"]
+  interface?: Partial<PluginInterfaceShape> | null
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
+}
+
+/**
+ * The adapter compacts remote marketplace entries to keep the online index small. Those entries
+ * omit `keywords`, `screenshots`, `capabilities` and several identity fields even though the
+ * client type describes a complete PluginSummary. Fill the missing fields once, at the store
+ * boundary, so the list and detail pages never need to know which catalog produced an entry.
+ */
+function normalizePlugin(plugin: PluginSummary, marketplace: PluginMarketplaceEntry): PluginSummary {
+  const raw = plugin as RawPlugin
+  const iface = raw.interface
+  return {
+    id: raw.id ?? raw.name ?? "",
+    remotePluginId: raw.remotePluginId ?? null,
+    version: raw.version ?? null,
+    localVersion: raw.localVersion ?? null,
+    name: raw.name ?? raw.id ?? "",
+    source: raw.source ?? (marketplace.path === null ? { type: "remote" } : { type: "local", path: raw.name ?? "" }),
+    shareContext: raw.shareContext ?? null,
+    installed: raw.installed === true,
+    installedAt: raw.installedAt ?? null,
+    enabled: raw.enabled === true,
+    installPolicy: raw.installPolicy ?? "NOT_AVAILABLE",
+    installPolicySource: raw.installPolicySource ?? null,
+    mustShowInstallationInterstitial: raw.mustShowInstallationInterstitial ?? null,
+    availability: raw.availability ?? "AVAILABLE",
+    authPolicy: raw.authPolicy ?? "ON_USE",
+    disabledReason: raw.disabledReason ?? null,
+    eligiblePlanTypes: Array.isArray(raw.eligiblePlanTypes) ? stringList(raw.eligiblePlanTypes) : null,
+    interface:
+      iface === null || iface === undefined
+        ? null
+        : {
+            displayName: iface.displayName ?? null,
+            shortDescription: iface.shortDescription ?? null,
+            longDescription: iface.longDescription ?? null,
+            developerName: iface.developerName ?? null,
+            category: iface.category ?? null,
+            capabilities: stringList(iface.capabilities),
+            websiteUrl: iface.websiteUrl ?? null,
+            privacyPolicyUrl: iface.privacyPolicyUrl ?? null,
+            termsOfServiceUrl: iface.termsOfServiceUrl ?? null,
+            defaultPrompt: Array.isArray(iface.defaultPrompt) ? stringList(iface.defaultPrompt) : null,
+            brandColor: iface.brandColor ?? null,
+            composerIcon: iface.composerIcon ?? null,
+            composerIconUrl: iface.composerIconUrl ?? null,
+            logo: iface.logo ?? null,
+            logoDark: iface.logoDark ?? null,
+            logoUrl: iface.logoUrl ?? null,
+            logoUrlDark: iface.logoUrlDark ?? null,
+            screenshots: stringList(iface.screenshots),
+            screenshotUrls: stringList(iface.screenshotUrls)
+          },
+    keywords: stringList(raw.keywords)
+  }
+}
+
+function normalizeMarketplace(marketplace: PluginMarketplaceEntry): PluginMarketplaceEntry {
+  return {
+    ...marketplace,
+    interface: marketplace.interface ?? null,
+    plugins: (marketplace.plugins ?? []).map((plugin) => normalizePlugin(plugin, marketplace))
+  }
+}
+
 /**
  * The page has three independent catalogs and each costs the engine a full scan: `skills/list`
  * walks every project directory, `plugin/list` walks the marketplaces, `plugin/installed` walks
@@ -146,7 +219,8 @@ function mergeSkills(response: SkillsListResponse): {
 /** Installed plugins across marketplaces, newest install first, as the official Manage tab sorts. */
 function installedEntries(response: PluginInstalledResponse): PluginEntry[] {
   const entries: PluginEntry[] = []
-  for (const marketplace of response.marketplaces) {
+  for (const source of response.marketplaces ?? []) {
+    const marketplace = normalizeMarketplace(source)
     for (const plugin of marketplace.plugins) if (plugin.installed) entries.push({ plugin, marketplace })
   }
   return entries.toSorted((a, b) => (b.plugin.installedAt ?? 0) - (a.plugin.installedAt ?? 0))
@@ -274,9 +348,9 @@ export function createPluginsStore(api: PluginsApi): PluginsStore {
                 ...(plugins === null
                   ? {}
                   : {
-                      marketplaces: plugins.marketplaces,
-                      marketplaceLoadErrors: plugins.marketplaceLoadErrors,
-                      featuredPluginIds: plugins.featuredPluginIds
+                      marketplaces: (plugins.marketplaces ?? []).map(normalizeMarketplace),
+                      marketplaceLoadErrors: plugins.marketplaceLoadErrors ?? [],
+                      featuredPluginIds: plugins.featuredPluginIds ?? []
                     }),
                 ...(installed === null ? {} : { installed: installedEntries(installed) })
               })
@@ -367,7 +441,20 @@ export function createPluginsStore(api: PluginsApi): PluginsStore {
         }
       },
 
-      readPlugin: async (entry) => (await api.readPlugin(readParams(entry))).plugin,
+      readPlugin: async (entry) => {
+        const detail = (await api.readPlugin(readParams(entry))).plugin
+        if (!detail) throw new Error("Invalid plugin detail response")
+        return {
+          ...detail,
+          summary: normalizePlugin(detail.summary ?? entry.plugin, entry.marketplace),
+          description: detail.description ?? null,
+          skills: Array.isArray(detail.skills) ? detail.skills : [],
+          hooks: Array.isArray(detail.hooks) ? detail.hooks : [],
+          apps: Array.isArray(detail.apps) ? detail.apps : [],
+          mcpServers: stringList(detail.mcpServers),
+          scheduledTasks: Array.isArray(detail.scheduledTasks) ? detail.scheduledTasks : null
+        }
+      },
 
       setSkillEnabled: async (skill, enabled) => {
         if (skill.path in get().busySkills) return

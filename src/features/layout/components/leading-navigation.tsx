@@ -1,4 +1,4 @@
-import { LayoutGridIcon, PanelLeftCloseIcon, PanelLeftOpenIcon } from "lucide-react"
+import { ChevronLeftIcon, ChevronRightIcon, LayoutGridIcon } from "lucide-react"
 import { type ReactElement, type ReactNode, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
@@ -108,15 +108,15 @@ export function LeadingNavigation({
         <Button
           variant="ghost"
           size="icon-xs"
-          className="ms-auto shrink-0 text-muted-foreground"
+          className="ms-auto size-5 shrink-0 rounded-md text-muted-foreground/60 hover:text-foreground"
           aria-label={t(expanded ? "workbench.collapse" : "workbench.expand")}
           title={t(expanded ? "workbench.collapse" : "workbench.expand")}
           onClick={() => setExpanded((value) => !value)}
         >
           {expanded ? (
-            <PanelLeftCloseIcon className="size-4" aria-hidden="true" />
+            <ChevronLeftIcon className="size-3.5" aria-hidden="true" />
           ) : (
-            <PanelLeftOpenIcon className="size-4" aria-hidden="true" />
+            <ChevronRightIcon className="size-3.5" aria-hidden="true" />
           )}
         </Button>
       </div>

@@ -4,7 +4,7 @@
 
 import { isTauri } from "@tauri-apps/api/core"
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
-import { FolderOpenIcon, ShieldCheckIcon } from "lucide-react"
+import { CircleAlertIcon, FolderOpenIcon, ShieldCheckIcon } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -22,6 +22,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { defaultModelChoice } from "@/lib/default-model"
 import { describeError } from "@/lib/error-text"
 import type { ModelOption } from "@/lib/model-options"
@@ -29,6 +30,7 @@ import { useModelOptions } from "@/lib/use-model-options"
 import { cn } from "@/lib/utils"
 
 import { LarkTargetPicker } from "./lark-target-picker"
+import { LarkUserPermissionDialog } from "./lark-user-permission-dialog"
 import {
   isRepeatRule,
   type LarkTarget,
@@ -140,6 +142,7 @@ export function NewTaskDialog({
   // 更不能在这里自建第二份清单去猜哪些 id 能跑。
   const modelOptions = useModelOptions()
   const [form, setForm] = useState<TaskDraft>(() => draftFromTask(task))
+  const [userPermissionOpen, setUserPermissionOpen] = useState(false)
   const [workspaceCustom, setWorkspaceCustom] = useState(() => Boolean(task?.cwd))
   const [validityMode, setValidityMode] = useState<"forever" | "until">(() => (task?.validUntil ? "until" : "forever"))
   // 高级设置是常驻分组：折叠把「推送到飞书」这个本轮主角藏起来，编辑历史任务时尤其难找。
@@ -304,7 +307,8 @@ export function NewTaskDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[90vh] min-h-0 flex-col overflow-hidden border-border/70 p-0 shadow-2xl sm:max-w-2xl">
         <DialogHeader className="shrink-0 border-b border-border/60 px-4 pt-5 pb-4 sm:px-6 sm:pt-6">
           <DialogTitle className="text-base">
@@ -552,14 +556,17 @@ export function NewTaskDialog({
                   <span className="text-sm font-medium text-foreground">{t("automation.fieldLark")}</span>
                   <p className="mt-0.5 text-xs leading-4 text-muted-foreground">{t("automation.larkOffHint")}</p>
                 </div>
-                <Switch
-                  id="automation-lark-push"
-                  checked={form.larkNotify}
-                  // 没装 CLI 只锁「开」这个方向：老任务本来就开着推送，必须留一条关掉的路。
-                  disabled={cliAvailable === false && !form.larkNotify}
-                  onCheckedChange={(checked) => patch({ larkNotify: checked })}
-                  aria-label={t("automation.fieldLark")}
-                />
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="text-[11px] text-muted-foreground">{t("automation.larkBroadcast")}</span>
+                  <Switch
+                    id="automation-lark-push"
+                    checked={form.larkNotify}
+                    // 没装 CLI 只锁「开」这个方向：老任务本来就开着推送，必须留一条关掉的路。
+                    disabled={cliAvailable === false && !form.larkNotify}
+                    onCheckedChange={(checked) => patch({ larkNotify: checked })}
+                    aria-label={t("automation.larkBroadcast")}
+                  />
+                </div>
               </div>
               {/* 没装 CLI：这条链路根本走不通。给一句实话 + 一个直接跳到组件安装页的入口，
                   而不是让人对着一个永远发不出去的开关猜（2026-11-08）。 */}
@@ -600,21 +607,59 @@ export function NewTaskDialog({
                       </Button>
                     </div>
                   )}
-                  <ControlField
-                    label={t("automation.fieldLarkIdentity")}
-                    htmlFor="automation-lark-identity"
-                    hint={t("automation.larkIdentityHint")}
-                  >
-                    <select
-                      id="automation-lark-identity"
-                      className={selectClass}
-                      value={form.larkIdentity}
-                      onChange={(event) => patch({ larkIdentity: event.target.value })}
+                  <div className="space-y-2">
+                    <span className="text-xs font-medium text-foreground/80">{t("automation.fieldLarkIdentity")}</span>
+                    <div
+                      role="group"
+                      aria-label={t("automation.fieldLarkIdentity")}
+                      className="overflow-hidden rounded-md border border-input bg-background/60 dark:bg-input/20"
                     >
-                      <option value="bot">{t("automation.larkIdentityBot")}</option>
-                      <option value="user">{t("automation.larkIdentityUser")}</option>
-                    </select>
-                  </ControlField>
+                      <div className="flex items-center justify-between gap-3 px-3 py-2">
+                        <span className="text-xs font-medium text-foreground">{t("automation.larkIdentityBot")}</span>
+                        <Switch
+                          checked={form.larkIdentity === "bot"}
+                          onCheckedChange={(checked) => {
+                            if (checked) patch({ larkIdentity: "bot" })
+                          }}
+                          aria-label={t("automation.larkIdentityBot")}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between gap-3 border-t border-border/50 px-3 py-2">
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span className="text-xs font-medium text-foreground">{t("automation.larkIdentityUser")}</span>
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <button
+                                  type="button"
+                                  aria-label={t("automation.larkUserPermissionHint")}
+                                  className="flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                                >
+                                  <CircleAlertIcon className="size-3.5" aria-hidden="true" />
+                                </button>
+                              }
+                            />
+                            <TooltipContent className="max-w-64 text-balance">
+                              {t("automation.larkUserPermissionHint")}
+                            </TooltipContent>
+                          </Tooltip>
+                        </span>
+                        <Switch
+                          checked={form.larkIdentity === "user"}
+                          disabled={cliAvailable === false}
+                          onCheckedChange={(checked) => {
+                            if (!checked) {
+                              patch({ larkIdentity: "bot" })
+                              return
+                            }
+                            setUserPermissionOpen(true)
+                          }}
+                          aria-label={t("automation.larkIdentityUser")}
+                        />
+                      </div>
+                    </div>
+                    <p className="text-[11px] leading-4 text-muted-foreground">{t("automation.larkIdentityHint")}</p>
+                  </div>
                   {selfTarget !== null && (
                     <div className="flex items-center justify-between gap-2 rounded-md border border-border/50 bg-background/60 px-3 py-2">
                       <div className="min-w-0">
@@ -674,6 +719,13 @@ export function NewTaskDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
-    </Dialog>
+      </Dialog>
+      <LarkUserPermissionDialog
+        open={userPermissionOpen}
+        onOpenChange={setUserPermissionOpen}
+        onGranted={() => patch({ larkIdentity: "user" })}
+        onOpenExtensions={onOpenExtensions}
+      />
+    </>
   )
 }

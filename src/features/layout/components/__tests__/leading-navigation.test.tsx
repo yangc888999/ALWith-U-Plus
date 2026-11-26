@@ -69,3 +69,30 @@ test("leading navigation switches pages and is inaccessible on the main screen",
   expect(view.queryByRole("button", { name: "Plugins" })).not.toBeInTheDocument()
   expect(view.getByRole("main")).toHaveTextContent("Chat")
 })
+
+test("the navigation collapse control uses a compact chevron", () => {
+  localStorage.setItem("alwith.workbench.navigation.expanded", "true")
+  const view = render(
+    <LeadingNavigation
+      activePage="overview"
+      onOpenOverview={() => {}}
+      onOpenPlugins={() => {}}
+      onOpenExtensions={() => {}}
+      onOpenArchives={() => {}}
+      onOpenAutomation={() => {}}
+      onOpenGroups={() => {}}
+      onOpenUsage={() => {}}
+      onOpenSkills={() => {}}
+    />
+  )
+  try {
+    const collapse = view.getByRole("button", { name: "Collapse navigation" })
+    expect(collapse).toHaveClass("size-5")
+    expect(collapse.querySelector(".lucide-chevron-left")).not.toBeNull()
+    fireEvent.click(collapse)
+    const expand = view.getByRole("button", { name: "Expand navigation" })
+    expect(expand.querySelector(".lucide-chevron-right")).not.toBeNull()
+  } finally {
+    localStorage.removeItem("alwith.workbench.navigation.expanded")
+  }
+})

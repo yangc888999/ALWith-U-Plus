@@ -26,10 +26,12 @@ export function WorkbenchOverview({ onOpen }: { onOpen: (page: WorkbenchFeatureI
         </header>
 
         <div className="grid min-w-0 grid-cols-1 gap-7 @3xl:grid-cols-2 @3xl:gap-10">
-          {capabilities !== undefined && <OverviewGroup group={capabilities} onOpen={onOpen} />}
+          <div className="flex min-w-0 flex-col gap-7">
+            {capabilities !== undefined && <OverviewGroup group={capabilities} onOpen={onOpen} />}
+            {records !== undefined && <OverviewGroup group={records} onOpen={onOpen} />}
+          </div>
           <div className="flex min-w-0 flex-col gap-7">
             {workflow !== undefined && <OverviewGroup group={workflow} onOpen={onOpen} />}
-            {records !== undefined && <OverviewGroup group={records} onOpen={onOpen} />}
           </div>
         </div>
       </div>

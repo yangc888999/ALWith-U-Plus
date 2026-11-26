@@ -329,6 +329,7 @@ export class RemoteChatClient extends CodexClient {
       sessionWindows: {},
       accountModelRecovery: {},
       pendingModels: {},
+      pendingEfforts: {},
       configPending: {},
       drafts: {},
       sessionList: [],

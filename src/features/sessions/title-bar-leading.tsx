@@ -76,12 +76,7 @@ export function TitleBarLeadingActions({
               className={ACTION_CLASS}
               onClick={() => setView(view === "collections" ? "sessions" : "collections")}
             >
-              <StarIcon
-                className={`size-4 ${
-                  view === "collections" ? "fill-amber-400 text-amber-500" : "text-amber-500/80"
-                }`}
-                aria-hidden="true"
-              />
+              <StarIcon className="size-4" aria-hidden="true" />
             </Button>
           }
         />

@@ -17,7 +17,8 @@ import { useStore } from "zustand"
 
 import { selectedModelId } from "@/agent/native-models"
 import { client } from "@/lib/client"
-import { displayModelLabel, type ProviderSnapshot } from "@/lib/providers"
+import { resolveModelOptions } from "@/lib/model-options"
+import { displayModelLabel, getProviderSnapshot, type ProviderSnapshot } from "@/lib/providers"
 
 import { DraftModelSelect } from "./draft-model-select"
 import { chatModelMenu } from "./model-catalog"
@@ -33,6 +34,116 @@ export type ModelEntryKind = "menu" | "recovery" | "draft" | "none"
  * `||` chain per surface, and a seventh condition was easy to add to one and forget on the other.
  */
 export type ModelGate = "ready" | "preparing" | "failed" | "offline" | "detached" | "restoring" | "read-only"
+
+type ConfigOption = Session["configOptions"][number]
+export type PendingEffort = { model: string; effort: string }
+type SelectShape = {
+  type?: string
+  configId?: string
+  category?: string | null
+  currentValue?: unknown
+  options?: unknown
+}
+type SelectEntry = { value?: unknown; name?: unknown; options?: unknown; _meta?: unknown }
+
+const EFFORT_LABELS: Record<string, string> = {
+  none: "None",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Max",
+  ultra: "Ultra",
+  persistent: "Persistent"
+}
+
+function selectEntries(option: SelectShape): SelectEntry[] {
+  const entries = Array.isArray(option.options) ? (option.options as SelectEntry[]) : []
+  return entries.flatMap((entry) =>
+    Array.isArray(entry.options) ? (entry.options as SelectEntry[]) : [entry]
+  )
+}
+
+function selectChoices(option: SelectShape): Array<{ value: string; name: string }> {
+  return selectEntries(option).filter(
+    (entry): entry is { value: string; name: string } =>
+      typeof entry.value === "string" && typeof entry.name === "string"
+  )
+}
+
+/** The session's own catalog carries the ladder for every model, including a parked one. */
+function sessionEffortProfile(
+  options: readonly ConfigOption[],
+  model: string
+): { efforts: string[]; defaultEffort: string | null } | null {
+  const modelOption = options.find((option) => option.category === "model" && option.type === "select") as
+    | (ConfigOption & SelectShape)
+    | undefined
+  if (modelOption === undefined) return null
+  const choice = selectEntries(modelOption).find((entry) => entry.value === model)
+  const alwith = (choice?._meta as { alwith?: { supportedReasoningEfforts?: unknown; defaultReasoningEffort?: unknown } } | undefined)
+    ?.alwith
+  const efforts = Array.isArray(alwith?.supportedReasoningEfforts)
+    ? alwith.supportedReasoningEfforts.filter((entry): entry is string => typeof entry === "string")
+    : []
+  if (efforts.length === 0) return null
+  return {
+    efforts,
+    defaultEffort: typeof alwith?.defaultReasoningEffort === "string" ? alwith.defaultReasoningEffort : null
+  }
+}
+
+/**
+ * While a model switch is parked, the session still describes the old model's effort ladder.
+ * Replace it with the pending model's ladder so Effort stays editable during the running turn;
+ * the choice itself is parked by the client and lands with the model on the next turn.
+ */
+export function pickerOptionsWithPendingEffort(
+  options: readonly ConfigOption[],
+  pendingModel: string | null,
+  pendingEffort: PendingEffort | null
+): ConfigOption[] {
+  const thought = options.find((option) => option.category === "thought_level" && option.type === "select") as
+    | (ConfigOption & SelectShape)
+    | undefined
+  if (thought === undefined) return [...options]
+  const model = pendingModel ?? selectedModelId([...options])
+  if (model === null) return [...options]
+
+  if (pendingModel === null) {
+    if (pendingEffort?.model !== model) return [...options]
+    if (!selectChoices(thought).some((choice) => choice.value === pendingEffort.effort)) return [...options]
+    return options.map((option) =>
+      option === thought ? ({ ...option, currentValue: pendingEffort.effort } as unknown as ConfigOption) : option
+    )
+  }
+
+  const withoutFastMode = options.filter((option) => option.configId !== "fast-mode")
+  const sessionProfile = sessionEffortProfile(options, pendingModel)
+  const catalogProfile = sessionProfile === null ? resolveModelOptions({ providerSnapshot: getProviderSnapshot() }).byId(pendingModel) : null
+  const efforts = sessionProfile?.efforts ?? catalogProfile?.efforts ?? []
+  if (efforts.length === 0) {
+    return withoutFastMode.filter((option) => option !== thought)
+  }
+  const names = new Map(selectChoices(thought).map((choice) => [choice.value, choice.name]))
+  const levels = efforts.map((value) => ({
+    value,
+    name: names.get(value) ?? EFFORT_LABELS[value] ?? value
+  }))
+  const requested =
+    pendingEffort?.model === pendingModel && efforts.includes(pendingEffort.effort)
+      ? pendingEffort.effort
+      : null
+  const defaultEffort = sessionProfile?.defaultEffort ?? catalogProfile?.defaultEffort ?? null
+  const fallback =
+    defaultEffort !== null && efforts.includes(defaultEffort) ? defaultEffort : efforts[0]!
+  return withoutFastMode.map((option) =>
+    option === thought
+      ? ({ ...option, currentValue: requested ?? fallback, options: levels } as unknown as ConfigOption)
+      : option
+  )
+}
 
 export function modelGateOf(
   session: Session | null,
@@ -109,10 +220,15 @@ export function ModelEntry(props: DraftModelEntry | SessionModelEntry) {
     sessionId === null ? false : (state.accountModelRecovery?.[sessionId] ?? false)
   )
   const pending = useStore(client.store, (state) => sessionId === null ? null : (state.pendingModels?.[sessionId] ?? null))
+  const pendingEffort = useStore(client.store, (state) =>
+    sessionId === null ? null : (state.pendingEfforts?.[sessionId] ?? null)
+  )
   const options = props.session?.configOptions ?? []
-  const pickerOptions = pending === null ? options : options
-    .filter((option) => option.category !== "thought_level" && option.configId !== "fast-mode")
-    .map((option) => option.category === "model" && option.type === "select" ? { ...option, currentValue: pending } : option)
+  const pickerOptions = pickerOptionsWithPendingEffort(options, pending, pendingEffort).map((option) =>
+    pending !== null && option.category === "model" && option.type === "select"
+      ? { ...option, currentValue: pending }
+      : option
+  )
 
   if (props.surface === "draft") {
     const kind = modelEntryKind(props.session, "draft", { failure: props.failure, preparing: props.preparing })

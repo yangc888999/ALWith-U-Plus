@@ -15,6 +15,18 @@ interface StableRead {
   version: string
 }
 
+export interface WriteConflict {
+  path: string
+  localBytes: Uint8Array
+  currentBytes: Uint8Array
+  currentVersion: string
+}
+
+export interface ResilientWriteOptions {
+  /** Called before a genuine external edit is surfaced. The save still refuses to overwrite. */
+  onConflict?: (conflict: WriteConflict) => void | Promise<void>
+}
+
 const delay = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => globalThis.setTimeout(resolve, milliseconds))
 
@@ -48,7 +60,7 @@ async function readStable(fs: FsTransaction, path: string): Promise<StableRead> 
  * remain the underlying implementation's responsibility. The read cache is deliberately small and
  * scoped to the most recent editor reads, because it is a conflict baseline, not a document cache.
  */
-export function createResilientWriteFileSystem(fs: FileSystem): FileSystem {
+export function createResilientWriteFileSystem(fs: FileSystem, hooks: ResilientWriteOptions = {}): FileSystem {
   const baseRead = fs.readFile.bind(fs)
   const baseStat = fs.stat.bind(fs)
   const readCache = new Map<string, Uint8Array>()
@@ -90,7 +102,15 @@ export function createResilientWriteFileSystem(fs: FileSystem): FileSystem {
       }
       // The version moved but the base body did not: retry the same conditional write against the
       // fresh marker. A different base body is a real concurrent edit and must stay untouched.
-      if (baseBytes === undefined || !sameBytes(current.bytes, baseBytes)) throw error
+      if (baseBytes === undefined || !sameBytes(current.bytes, baseBytes)) {
+        await hooks.onConflict?.({
+          path,
+          localBytes: bytes.slice(),
+          currentBytes: current.bytes.slice(),
+          currentVersion: current.version
+        })
+        throw error
+      }
       try {
         await target.writeFile(path, bytes, { ...options, expectedVersion: current.version })
         rememberRead(path, bytes)

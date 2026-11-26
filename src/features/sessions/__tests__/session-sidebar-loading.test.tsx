@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, within } from "@testing-library/react"
+import { SessionRow } from "@alwith/module-chat/session-list"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { SidebarProvider } from "@/components/ui/sidebar"
@@ -7,6 +8,7 @@ import { client } from "@/lib/client"
 import { initI18n } from "@/lib/i18n"
 
 import { SessionSidebar } from "../session-sidebar"
+import { SessionListHostProvider } from "../session-list-host"
 import type { PendingChatRow } from "../pending-chat"
 import { useSessionsUiStore } from "../store"
 
@@ -65,6 +67,24 @@ test("the session row offers one delete action and requires confirmation for tha
   } finally {
     remove.mockRestore()
   }
+})
+
+test("a session without a runtime state still shows the idle turn indicator", () => {
+  const session = {
+    sessionId: "idle-indicator",
+    cwd: "/project",
+    title: "Idle session",
+    updatedAt: null,
+    archived: false
+  }
+  client.store.setState({ sessionListLoaded: true, sessionList: [session], runStates: {} })
+  const view = render(
+    <SessionListHostProvider>
+      <SessionRow sessionRow={session} active={false} onSelect={() => {}} />
+    </SessionListHostProvider>
+  )
+  const leading = view.container.querySelector('[data-slot="navigation-leading"]')
+  expect(leading?.querySelector(".bg-green-500")).not.toBeNull()
 })
 
 test.each([

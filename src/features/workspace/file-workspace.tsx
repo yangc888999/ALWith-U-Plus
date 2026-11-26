@@ -100,6 +100,12 @@ import { usePreviewExtension } from "./preview-extension"
 import { applyStoredCommentsVisibility, commentsHidden, setCommentsHidden } from "./preview-resources"
 import { PreviewSurface } from "./preview-surface"
 import { createResilientWriteFileSystem } from "./resilient-write-fs"
+import {
+  isMarkdownDocumentPath,
+  MarkdownConflictDialog,
+  markdownDraftPath,
+  type MarkdownConflictState
+} from "./markdown-conflict-dialog"
 import { WorkspaceButton } from "./workspace-button"
 import { WorkspaceEditor } from "./workspace-editor"
 import { WorkspacePanels } from "./workspace-panels"
@@ -109,6 +115,7 @@ import { createHtmlPreviewHost } from "./html-preview"
 import { createWysiwygHtmlIntegration, freezeHtmlSourceDuringEditing, HTML_EDITING_ATTRIBUTE } from "./html-wysiwyg"
 import { localPreviewProviders } from "./local-previews"
 import { createWysiwygMarkdownIntegration, LARGE_MARKDOWN_BYTES, MARKDOWN_EDITING_ATTRIBUTE } from "./markdown-wysiwyg"
+
 import { MoveToDialog } from "./move-to-dialog"
 import { moveWorkspaceFiles, type WorkspaceMoveOutcome } from "./move-workspace-files"
 import { resolvePreviewResource } from "./preview-resources"
@@ -277,6 +284,65 @@ export function FileWorkspace({
   const [moveTarget, setMoveTarget] = useState<{ path: string; kind: "file" | "directory" } | null>(null)
   const [publishSources, setPublishSources] = useState<{ owner: Workspace; paths: readonly string[] } | null>(null)
   const [moveSources, setMoveSources] = useState<{ owner: Workspace; paths: readonly string[] } | null>(null)
+  const [markdownConflict, setMarkdownConflict] = useState<MarkdownConflictState | null>(null)
+  const [markdownConflictBusy, setMarkdownConflictBusy] = useState(false)
+  const [markdownConflictError, setMarkdownConflictError] = useState<string | null>(null)
+
+  const findEditorDocument = (path: string) => {
+    for (const owner of workspaces.current.values()) {
+      const document = owner.editor.getSnapshot().documents.find((entry) => entry.path === path)
+      if (document !== undefined) return { owner, document }
+    }
+    return null
+  }
+
+  const loadMarkdownDiskVersion = async (): Promise<void> => {
+    if (markdownConflict === null || markdownConflictBusy) return
+    const target = findEditorDocument(markdownConflict.path)
+    if (target === null) {
+      setMarkdownConflict(null)
+      return
+    }
+    setMarkdownConflictBusy(true)
+    setMarkdownConflictError(null)
+    try {
+      // `update` + `save` loads the disk text without opening the editor's own discard/save prompt:
+      // the conditional write sees the exact bytes already on disk and adopts them.
+      target.owner.editor.update(target.document.id, markdownConflict.current)
+      await target.owner.editor.save(target.document.id)
+      setMarkdownConflict(null)
+    } catch (error) {
+      setMarkdownConflictError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setMarkdownConflictBusy(false)
+    }
+  }
+
+  const overwriteMarkdownWithDraft = async (): Promise<void> => {
+    if (markdownConflict === null || markdownConflictBusy) return
+    const target = findEditorDocument(markdownConflict.path)
+    if (target === null) {
+      setMarkdownConflict(null)
+      return
+    }
+    setMarkdownConflictBusy(true)
+    setMarkdownConflictError(null)
+    try {
+      await target.owner.fs.writeFile(
+        markdownConflict.path,
+        new TextEncoder().encode(markdownConflict.local),
+        { mode: "replace", expectedVersion: markdownConflict.version }
+      )
+      // The editor still holds the old version marker. This save is a no-op adoption of the
+      // bytes that were just written, which clears dirty/externalChange without another write.
+      await target.owner.editor.save(target.document.id)
+      setMarkdownConflict(null)
+    } catch (error) {
+      setMarkdownConflictError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setMarkdownConflictBusy(false)
+    }
+  }
   const condenseHost = useMemo(
     () => ({
       readSnooze: (id: RemoteId): Promise<number | null> => {
@@ -867,6 +933,8 @@ export function FileWorkspace({
       htmlKeepDraft: translateRef.current("workspace.htmlKeepDraft"),
       htmlUseDiskVersion: translateRef.current("workspace.htmlUseDiskVersion"),
       htmlOverwriteDraft: translateRef.current("workspace.htmlOverwriteDraft"),
+      htmlSaveDraftCopy: translateRef.current("workspace.htmlSaveDraftCopy"),
+      htmlDraftCopySaved: translateRef.current("workspace.htmlDraftCopySaved"),
       htmlSaveStillUpdating: translateRef.current("workspace.htmlSaveStillUpdating")
     }
     // Drive occupies both integration extension points only for drive documents; the WYSIWYG
@@ -1034,7 +1102,27 @@ export function FileWorkspace({
         // Markdown autosave uses the controller's conditional write. Wrap only the editor-facing
         // filesystem so a sync that rotates the version without changing the body cannot turn every
         // autosave into a false "changed on disk" error.
-        const fs = createResilientWriteFileSystem(rawFs)
+        const fs = createResilientWriteFileSystem(rawFs, {
+          onConflict: async (conflict) => {
+            if (!isMarkdownDocumentPath(conflict.path)) return
+            const draftPath = markdownDraftPath(conflict.path)
+            let draftError: string | null = null
+            try {
+              await rawFs.writeFile(draftPath, conflict.localBytes, { mode: "replace" })
+            } catch (error) {
+              draftError = error instanceof Error ? error.message : String(error)
+            }
+            setMarkdownConflict({
+              path: conflict.path,
+              local: new TextDecoder().decode(conflict.localBytes),
+              current: new TextDecoder().decode(conflict.currentBytes),
+              version: conflict.currentVersion,
+              draftPath,
+              draftError
+            })
+            setMarkdownConflictError(null)
+          }
+        })
         const editor = yield* Effect.acquireRelease(
           Effect.sync(() =>
             createEditorController({
@@ -2141,6 +2229,17 @@ export function FileWorkspace({
           )}
         </DialogContent>
       </Dialog>
+      <MarkdownConflictDialog
+        conflict={markdownConflict}
+        busy={markdownConflictBusy}
+        error={markdownConflictError}
+        onUseDisk={() => void loadMarkdownDiskVersion()}
+        onOverwrite={() => void overwriteMarkdownWithDraft()}
+        onKeep={() => {
+          setMarkdownConflict(null)
+          setMarkdownConflictError(null)
+        }}
+      />
       {dialog}
       <DriveSharingDialog path={sharingPath} onClose={() => setSharingPath(null)} />
     </WorkspaceContext.Provider>

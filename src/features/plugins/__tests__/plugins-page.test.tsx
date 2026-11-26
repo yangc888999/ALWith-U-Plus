@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
-import type { PluginMarketplaceEntry, PluginSummary, SkillMetadata } from "@nyssance/codex-acp-v2/client"
+import type { PluginDetail, PluginMarketplaceEntry, PluginSummary, SkillMetadata } from "@nyssance/codex-acp-v2/client"
 import { must } from "@/lib/__tests__/must"
 import { client } from "@/lib/client"
 import i18n, { initI18n } from "@/lib/i18n"
@@ -284,6 +284,50 @@ test("details read the selected source, retry failures, and preserve the catalog
   fireEvent.keyDown(view.getByRole("dialog"), { key: "Escape" })
   fireEvent.click(view.getByRole("button", { name: "Plugins" }))
   expect(view.getByPlaceholderText("Search plugins")).toHaveValue("Source")
+})
+
+test("compact online marketplace entries render and open without crashing", async () => {
+  const compact = {
+    id: "remote-compact",
+    remotePluginId: "remote-compact",
+    name: "Remote compact",
+    installed: false,
+    enabled: false,
+    installPolicy: "AVAILABLE",
+    availability: "AVAILABLE",
+    interface: {
+      displayName: "Remote compact",
+      shortDescription: "Small payload",
+      developerName: "OpenAI"
+    }
+  } as unknown as PluginSummary
+  const marketplace: PluginMarketplaceEntry = {
+    name: "online",
+    path: null,
+    interface: null,
+    plugins: [compact]
+  }
+  const read = vi.fn(
+    async () =>
+      ({
+        summary: compact,
+        description: "Remote description",
+        skills: undefined,
+        hooks: undefined,
+        apps: undefined,
+        mcpServers: undefined,
+        scheduledTasks: undefined
+      }) as unknown as PluginDetail
+  )
+  pluginsStore.setState({ marketplaces: [marketplace], featuredPluginIds: [compact.id], readPlugin: read })
+
+  const view = render(<PluginsPage cwd={null} active />)
+  expect(view.getByText("Remote compact")).toBeDefined()
+  fireEvent.click(view.getByRole("button", { name: "Remote compact" }))
+
+  expect(await view.findByRole("heading", { name: "Remote compact" })).toBeDefined()
+  expect(view.getByText("Remote description")).toBeDefined()
+  expect(view.container.textContent).not.toContain("Something went wrong")
 })
 
 test("install controls do not open details, and detail actions follow refreshed installation state", async () => {

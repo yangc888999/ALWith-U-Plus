@@ -9,6 +9,8 @@ import { emitTo } from "@tauri-apps/api/event"
 import i18n from "i18next"
 import { toast } from "sonner"
 
+import { createStableDriveController } from "./drive-store"
+
 const nativeTransport = createTauriDriveTransport()
 export const driveTransport = {
   ...nativeTransport,
@@ -32,7 +34,7 @@ export const driveTransport = {
     return response
   }
 }
-const controller = createDriveController(driveTransport)
+const controller = createStableDriveController(createDriveController(driveTransport))
 export const drive: DriveController = {
   ...controller,
   async request(request: DriveRequest): Promise<DriveResponse> {

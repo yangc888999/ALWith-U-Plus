@@ -56,10 +56,16 @@ export function PluginDetailPage({ entry, onBack }: { entry: PluginEntry; onBack
   const title = info?.displayName ?? summary.name
   const unavailable = current.availability !== "AVAILABLE" || current.installPolicy === "NOT_AVAILABLE"
   const description = info?.longDescription ?? detail?.description ?? info?.shortDescription
+  const keywords = Array.isArray(summary.keywords) ? summary.keywords : []
+  const capabilities = Array.isArray(info?.capabilities) ? info.capabilities : []
   const screenshots = [
-    ...(info?.screenshots.map((path) => convertFileSrc(path)) ?? []),
-    ...(info?.screenshotUrls ?? [])
+    ...(Array.isArray(info?.screenshots) ? info.screenshots.map((path) => convertFileSrc(path)) : []),
+    ...(Array.isArray(info?.screenshotUrls) ? info.screenshotUrls : [])
   ]
+  const skills = Array.isArray(detail?.skills) ? detail.skills : []
+  const hooks = Array.isArray(detail?.hooks) ? detail.hooks : []
+  const apps = Array.isArray(detail?.apps) ? detail.apps : []
+  const mcpServers = Array.isArray(detail?.mcpServers) ? detail.mcpServers : []
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <nav
@@ -81,9 +87,9 @@ export function PluginDetailPage({ entry, onBack }: { entry: PluginEntry; onBack
             <div className="min-w-0">
               <h1 className="text-3xl font-semibold">{title}</h1>
               {info?.shortDescription && <p className="mt-1 text-sm text-muted-foreground">{info.shortDescription}</p>}
-              {summary.keywords.length > 0 && (
+              {keywords.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1">
-                  {[...new Set(summary.keywords)].map((tag) => (
+                  {[...new Set(keywords)].map((tag) => (
                     <Badge key={tag} variant="secondary" className="text-[10px] font-normal">
                       {tag}
                     </Badge>
@@ -160,18 +166,18 @@ export function PluginDetailPage({ entry, onBack }: { entry: PluginEntry; onBack
               ))}
             </div>
           )}
-          {info && info.capabilities.length > 0 && (
-            <DetailSection label={t("plugins.detail.capabilities")} count={info.capabilities.length}>
-              {info.capabilities.map((value) => (
+          {capabilities.length > 0 && (
+            <DetailSection label={t("plugins.detail.capabilities")} count={capabilities.length}>
+              {capabilities.map((value) => (
                 <Badge key={value} variant="secondary" className="me-2">
                   {value}
                 </Badge>
               ))}
             </DetailSection>
           )}
-          {detail && detail.mcpServers.length > 0 && (
-            <DetailSection label={t("plugins.detail.mcpServers")} count={detail.mcpServers.length}>
-              {detail.mcpServers.map((name) => (
+          {mcpServers.length > 0 && (
+            <DetailSection label={t("plugins.detail.mcpServers")} count={mcpServers.length}>
+              {mcpServers.map((name) => (
                 <div key={name} className="flex items-center gap-3 py-1">
                   <PluginIcon name={summary.name} className="size-6 rounded-md" />
                   <span className="text-sm font-medium">{name}</span>
@@ -179,9 +185,9 @@ export function PluginDetailPage({ entry, onBack }: { entry: PluginEntry; onBack
               ))}
             </DetailSection>
           )}
-          {detail && detail.skills.length > 0 && (
-            <DetailSection label={t("plugins.detail.skills")} count={detail.skills.length}>
-              {detail.skills.map((item) => (
+          {skills.length > 0 && (
+            <DetailSection label={t("plugins.detail.skills")} count={skills.length}>
+              {skills.map((item) => (
                 <Button
                   key={item.path ?? item.name}
                   variant="ghost"
@@ -199,9 +205,9 @@ export function PluginDetailPage({ entry, onBack }: { entry: PluginEntry; onBack
               ))}
             </DetailSection>
           )}
-          {detail && detail.apps.length > 0 && (
-            <DetailSection label={t("plugins.detail.apps")} count={detail.apps.length}>
-              {detail.apps.map((app) => (
+          {apps.length > 0 && (
+            <DetailSection label={t("plugins.detail.apps")} count={apps.length}>
+              {apps.map((app) => (
                 <div key={app.id} className="rounded-xl bg-muted/50 px-4 py-3">
                   <div className="text-sm font-medium">{app.name}</div>
                   {app.description && <p className="mt-1 text-xs text-muted-foreground">{app.description}</p>}
@@ -210,9 +216,9 @@ export function PluginDetailPage({ entry, onBack }: { entry: PluginEntry; onBack
               ))}
             </DetailSection>
           )}
-          {detail && detail.hooks.length > 0 && (
-            <DetailSection label={t("plugins.detail.hooks")} count={detail.hooks.length}>
-              {detail.hooks.map((hook) => (
+          {hooks.length > 0 && (
+            <DetailSection label={t("plugins.detail.hooks")} count={hooks.length}>
+              {hooks.map((hook) => (
                 <p key={hook.key} className="text-sm">
                   {hook.eventName}
                 </p>

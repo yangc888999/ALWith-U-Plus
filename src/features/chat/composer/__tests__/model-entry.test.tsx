@@ -14,7 +14,7 @@ import { expect, test, vi } from "vitest"
 import { client } from "@/lib/client"
 import { initI18n } from "@/lib/i18n"
 
-import { ModelEntry, modelEntryKind, modelGateOf } from "../model-entry"
+import { ModelEntry, modelEntryKind, modelGateOf, pickerOptionsWithPendingEffort } from "../model-entry"
 
 vi.mock("../draft-model-select", () => ({
   DraftModelSelect: () => <div data-testid="draft-picker" />
@@ -22,6 +22,18 @@ vi.mock("../draft-model-select", () => ({
 vi.mock("../recovery-model-select", () => ({
   RecoveryModelSelect: () => <div data-testid="recovery-picker" />
 }))
+vi.mock("@/lib/model-options", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/model-options")>()
+  return {
+    ...actual,
+    resolveModelOptions: (() => ({
+      byId: (id: string) =>
+        id === "gpt-6.2-sol"
+          ? { id, groupId: "chatgpt", label: "GPT 6.2 Sol", efforts: ["low", "high"], defaultEffort: "low" }
+          : null
+    })) as unknown as typeof actual.resolveModelOptions
+  }
+})
 // The package menu needs a conversation host; this file tests the slot U renders around it.
 vi.mock("@alwith/module-chat/conversation", () => ({
   ModelMenu: ({ onModelChange }: { onModelChange: (model: string) => void }) => (
@@ -73,6 +85,32 @@ test("the gate names one reason, and only ready enables the control", () => {
   expect(modelGateOf(sessionWith([modelOption], { attached: false }))).toBe("detached")
   expect(modelGateOf(sessionWith([modelOption], { attached: true, restoring: true }))).toBe("restoring")
   expect(modelGateOf(sessionWith([modelOption], { attached: true, readOnly: true }))).toBe("read-only")
+})
+
+test("a pending model keeps its own effort ladder visible and selected", () => {
+  const model = {
+    ...modelOption,
+    currentValue: "gpt-6.2-sol",
+    options: [{ value: "gpt-6.2-sol", name: "GPT 6.2 Sol" }]
+  }
+  const effort = {
+    ...effortOption,
+    currentValue: "medium",
+    options: [
+      { value: "low", name: "Low" },
+      { value: "medium", name: "Medium" }
+    ]
+  }
+  const pending = pickerOptionsWithPendingEffort([model, effort], "gpt-6.2-sol", {
+    model: "gpt-6.2-sol",
+    effort: "high"
+  })
+  const selected = pending.find((option) => option.category === "thought_level") as unknown as {
+    currentValue: string
+    options: Array<{ value: string }>
+  }
+  expect(selected.currentValue).toBe("high")
+  expect(selected.options.map((option) => option.value)).toEqual(["low", "high"])
 })
 
 test("a failed draft preparation renders the draft picker", () => {

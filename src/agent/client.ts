@@ -172,6 +172,8 @@ export type AppState = CodexClientState & {
   /** Account revocation is independent of transient turn errors and mirrored to auxiliary windows. */
   accountModelRecovery: Record<string, boolean>
   pendingModels: Record<string, string>
+  /** Effort chosen for the next turn, keyed by the model it belongs to. */
+  pendingEfforts: Record<string, { model: string; effort: string }>
   /** Window ownership survives switching the visible conversation; never persisted. */
   sessionWindows: Record<string, DraftOwner>
   /** Only drafts created by this connection are eligible for automatic cleanup. */
@@ -558,7 +560,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     super(
       openPort,
       { info: { name: "alwith-u", version: "0.1.0" }, ...base },
-      { sessionWindows: {}, draftSessions: {}, accountModelRecovery: {}, pendingModels: {} }
+      { sessionWindows: {}, draftSessions: {}, accountModelRecovery: {}, pendingModels: {}, pendingEfforts: {} }
     )
     this.resolveModelOption = resolveModel
     this.defaultEffortOption = defaultEffort
@@ -797,15 +799,28 @@ export class CodexClient extends CodexAcpClient<AppState> {
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
     if (!this.holds(id)) return
     const session = this.session(id)
-    const effort = this.defaultEffortForModel(session, model)
-    if (effort === null) return
-    if (this.selectedEffort(session.configOptions) === effort) return
+    const parked = this.state.pendingEfforts[id]
+    const requested = parked?.model === model ? parked.effort : null
     const supported = this.supportedEfforts(id)
-    if (supported === null || !supported.includes(effort)) return
+    const effort =
+      requested !== null && (supported === null || supported.includes(requested))
+        ? requested
+        : this.defaultEffortForModel(session, model)
+    if (effort === null) return
+    if (this.selectedEffort(session.configOptions) === effort) {
+      if (requested !== null) this.clearPendingEffort(id, requested)
+      return
+    }
+    if (supported === null || !supported.includes(effort)) {
+      if (requested !== null) this.clearPendingEffort(id, requested)
+      return
+    }
     try {
       await this.writeConfig(id, "effort", effort, this.state.sessionWindows[id] ?? "main")
     } catch {
       // A rejected level must not cost the model switch; the model keeps its own default.
+    } finally {
+      if (requested !== null) this.clearPendingEffort(id, requested)
     }
   }
 
@@ -1443,6 +1458,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
   private readonly pendingModelWatchers = new Map<string, () => void>()
   /** In-flight applications of a parked switch, so the next prompt can await them. */
   private readonly pendingModelApplies = new Map<string, Promise<boolean>>()
+  private readonly pendingEffortWatchers = new Map<string, () => void>()
+  private readonly pendingEffortApplies = new Map<string, Promise<boolean>>()
   private readonly stoppingSessions = new Set<string>()
   /** Consecutive refusals per conversation, and when the next attempt is allowed (see the cap above). */
   private readonly parkedAttempts = new Map<string, number>()
@@ -1584,6 +1601,9 @@ export class CodexClient extends CodexAcpClient<AppState> {
       this.runChanges.set(run.sessionId, { signature, at: born })
     }
     super.applyRunStates(sessions, source)
+    // A turn settling is the moment a parked effort becomes writable. Pending model switches
+    // handle their own follow-up; this covers the effort-only case.
+    for (const id of Object.keys(this.state.pendingEfforts)) void this.applyPendingEffort(id)
   }
 
   /** The rejection the agent answers a mid-turn provider change with. */
@@ -1610,11 +1630,33 @@ export class CodexClient extends CodexAcpClient<AppState> {
 
   override setConfig(id: string, configId: string, value: string | boolean, owner: DraftOwner = "main"): Promise<void> {
     const session = this.state.sessions[id]
-    if (
-      configId === "effort" ||
-      configId === "fast-mode" ||
-      (session && configId === this.effortConfigId(session.configOptions))
-    ) {
+    const effortId = session === undefined ? null : this.effortConfigId(session.configOptions)
+    const isEffort = configId === "effort" || (effortId !== null && configId === effortId)
+    if (isEffort) {
+      if (typeof value !== "string") return this.writeConfig(id, configId, value, owner)
+      const pendingModel = this.state.pendingModels[id]
+      const model = pendingModel ?? (session === undefined ? null : selectedModel(session.configOptions))
+      const current = session === undefined ? null : this.selectedEffort(session.configOptions)
+      // The engine refuses configuration writes during a turn. Keep the reader's choice instead
+      // of surfacing that rejection: a pending model owns its own ladder, and an effort-only
+      // change is applied the moment the turn settles.
+      if (model !== null && (pendingModel !== undefined || this.sessionBusy(id))) {
+        if (pendingModel === undefined && current === value) {
+          this.clearPendingEffort(id)
+          return Promise.resolve()
+        }
+        this.parkPendingEffort(id, model, value)
+        return Promise.resolve()
+      }
+      return this.enqueueModelWrite(
+        id,
+        async () => {
+          await this.writeConfig(id, configId, value, owner)
+        },
+        false
+      )
+    }
+    if (configId === "fast-mode") {
       return this.enqueueModelWrite(
         id,
         async () => {
@@ -1997,6 +2039,83 @@ export class CodexClient extends CodexAcpClient<AppState> {
     this.setApp({ pendingModels })
   }
 
+  /**
+   * Parks an effort chosen while the turn is still running.
+   *
+   * The engine refuses config writes mid-turn, and a parked model switch replaces the whole effort
+   * ladder. Remember the level against the model it belongs to so the next turn starts with the
+   * reader's choice instead of the new model's default.
+   */
+  private parkPendingEffort(id: string, model: string, effort: string): void {
+    const current = this.state.pendingEfforts[id]
+    if (current?.model !== model || current.effort !== effort) {
+      this.logInfo?.(`[pending-effort] park id=${id} model=${model} effort=${effort}`)
+      this.setApp({ pendingEfforts: { ...this.state.pendingEfforts, [id]: { model, effort } } })
+    }
+    if (this.pendingEffortWatchers.has(id)) return
+    const stop = this.store.subscribe(() => {
+      void this.applyPendingEffort(id)
+    })
+    this.pendingEffortWatchers.set(id, stop)
+  }
+
+  private clearPendingEffort(id: string, effort?: string): void {
+    const current = this.state.pendingEfforts[id]
+    if (current === undefined || (effort !== undefined && current.effort !== effort)) return
+    const stop = this.pendingEffortWatchers.get(id)
+    this.pendingEffortWatchers.delete(id)
+    stop?.()
+    const pendingEfforts = { ...this.state.pendingEfforts }
+    delete pendingEfforts[id]
+    this.setApp({ pendingEfforts })
+  }
+
+  /** Applies a parked effort once its model is current and the turn has settled. */
+  private applyPendingEffort(id: string): Promise<boolean> {
+    const applying = this.pendingEffortApplies.get(id)
+    if (applying !== undefined) return applying
+    const pending = this.state.pendingEfforts[id]
+    if (pending === undefined) return Promise.resolve(true)
+    const session = this.state.sessions[id]
+    if (session === undefined) return Promise.resolve(false)
+    const ready = () => !this.stoppingSessions.has(id) && session?.attached === true && !this.sessionBusy(id)
+    if (!ready() || this.state.pendingModels[id] !== undefined || this.modelWrites.has(id) || this.pendingModelApplies.has(id))
+      return Promise.resolve(false)
+    const current = selectedModel(session.configOptions)
+    if (current === null || canonicalModelSelection(current) !== canonicalModelSelection(pending.model)) {
+      this.clearPendingEffort(id)
+      return Promise.resolve(true)
+    }
+    const supported = this.supportedEfforts(id)
+    if (supported !== null && !supported.includes(pending.effort)) {
+      this.clearPendingEffort(id)
+      return Promise.resolve(true)
+    }
+    const write = this.enqueueModelWrite(id, async () => {
+      if (this.state.pendingEfforts[id] === pending && ready())
+        await this.writeConfig(id, "effort", pending.effort, this.state.sessionWindows[id] ?? "main")
+    })
+    const apply = this.withTimeout(write, 20_000, "setConfig(effort)")
+      .then(
+        () => {
+          this.logInfo?.(`[pending-effort] apply landed id=${id} effort=${pending.effort}`)
+          this.clearPendingEffort(id, pending.effort)
+          return true
+        },
+        (error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error)
+          this.logInfo?.(`[pending-effort] apply threw id=${id} effort=${pending.effort} error=${message.slice(0, 240)}`)
+          if (!this.turnBusyRejection(message)) this.clearPendingEffort(id, pending.effort)
+          return false
+        }
+      )
+      .finally(() => {
+        this.pendingEffortApplies.delete(id)
+      })
+    this.pendingEffortApplies.set(id, apply)
+    return apply
+  }
+
   /** Applies the parked choice now, or joins the application already in flight. */
   private applyParkedModel(id: string, force = false): Promise<boolean> {
     const applying = this.pendingModelApplies.get(id)
@@ -2071,7 +2190,13 @@ export class CodexClient extends CodexAcpClient<AppState> {
   }
 
   private hasModelWrite(id: string): boolean {
-    return this.modelWrites.has(id) || this.pendingModelApplies.has(id) || this.state.pendingModels[id] !== undefined
+    return (
+      this.modelWrites.has(id) ||
+      this.pendingModelApplies.has(id) ||
+      this.state.pendingModels[id] !== undefined ||
+      this.pendingEffortApplies.has(id) ||
+      this.state.pendingEfforts[id] !== undefined
+    )
   }
 
   private async waitForModelSwitch(id: string): Promise<void> {
@@ -2083,8 +2208,22 @@ export class CodexClient extends CodexAcpClient<AppState> {
       }
       const applying = this.pendingModelApplies.get(id)
       const pending = this.state.pendingModels[id]
-      if (applying === undefined && pending === undefined) return
+      if (applying === undefined && pending === undefined) break
       if (!(await (applying ?? this.applyParkedModel(id, true)))) throw new Error(i18n.t("chat.pendingModelBusy"))
+    }
+    await this.waitForPendingEffort(id)
+  }
+
+  private async waitForPendingEffort(id: string): Promise<void> {
+    for (;;) {
+      const applying = this.pendingEffortApplies.get(id)
+      const pending = this.state.pendingEfforts[id]
+      if (applying === undefined && pending === undefined) return
+      const applied = await (applying ?? this.applyPendingEffort(id))
+      // A rejected level is cleared rather than retried forever; the next prompt can proceed
+      // with the model's own default. A still-parked choice means the session is not writable.
+      if (this.state.pendingEfforts[id] === undefined) return
+      if (!applied) throw new Error(i18n.t("chat.pendingModelBusy"))
     }
   }
 

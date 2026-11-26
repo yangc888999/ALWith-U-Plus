@@ -107,6 +107,8 @@ export interface WysiwygLabels {
   htmlKeepDraft?: string
   htmlUseDiskVersion?: string
   htmlOverwriteDraft?: string
+  htmlSaveDraftCopy?: string
+  htmlDraftCopySaved?: string
   htmlSaveStillUpdating?: string
 }
 
