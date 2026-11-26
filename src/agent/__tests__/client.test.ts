@@ -12,7 +12,18 @@ import { groupSessionRows } from "@/lib/group-sessions"
 import { removeGroup, setGroup } from "@/lib/groups"
 import { modelFastModeFor, setModelFastMode } from "@/lib/model-fast-mode"
 import { pendingPlanFor, setPendingPlan } from "@/lib/pending-plan"
-import { cancelQueuedPrompt, QueueCancelledError, queuedPromptCount, queuedPromptText } from "@/lib/queued-prompt"
+import {
+  beginQueuedPrompt,
+  cancelQueuedPrompt,
+  clearQueuedPrompts,
+  deleteQueuedPrompt,
+  editQueuedPrompt,
+  jumpQueuedPrompt,
+  pauseQueuedPrompts,
+  QueueCancelledError,
+  queuedPromptCount,
+  queuedPromptItems
+} from "@/lib/queued-prompt"
 import { setSandboxSettings } from "@/lib/sandbox-preference"
 import { orchestrationFor, setOrchestration } from "@/lib/session-orchestration"
 
@@ -76,7 +87,13 @@ async function unregisterGateway(port: FakeHubPort, id: string) {
 
 const clients: CodexClient[] = []
 afterEach(() => {
-  for (const client of clients.splice(0)) client.disconnect()
+  for (const client of clients.splice(0)) {
+    // Fake agents number sessions from s0 for every test. Clear every queue before disconnecting
+    // so a row left behind by one failure path cannot make the next test's identically named
+    // session look busy and wait forever.
+    for (const id of Object.keys(client.state.sessions)) cancelQueuedPrompt(id)
+    client.disconnect()
+  }
 })
 
 async function make(
@@ -1809,10 +1826,11 @@ test("a turn moves off a withdrawn default model before it reaches the backend",
   expect(client.session(id).configOptions.find((entry) => entry.configId === "model")?.currentValue).toBe("gpt-6.1-sol")
 })
 
-test("Stop drops the message queued behind the turn instead of sending it next", async () => {
+test("Stop pauses the message queued behind the turn instead of destroying it", async () => {
   // "queued" send mode holds a message until the running turn settles. Without clearing it here,
   // pressing Stop is immediately followed by that message going out — the extra round nobody asked
-  // for. The composer puts the cancelled text back in the input, so nothing is lost.
+  // for. Keep the row waiting instead of cancelling every row; multiple rows cannot all be put
+  // back into the single composer safely.
   const { client } = await make()
   const id = await client.newSession("/tmp/stop-queue")
   const internals = client as unknown as {
@@ -1828,9 +1846,67 @@ test("Stop drops the message queued behind the turn instead of sending it next",
   await vi.waitFor(() => expect(queuedPromptCount(id)).toBe(1))
 
   await client.cancel(id)
+  expect(queuedPromptCount(id)).toBe(1)
+  cancelQueuedPrompt(id)
   await expect(pending).rejects.toBeInstanceOf(QueueCancelledError)
   expect(queuedPromptCount(id)).toBe(0)
   setQueueSendMode("immediate")
+})
+
+test("Stop preserves multiple queued rows instead of cancelling all but one", async () => {
+  const { client } = await make()
+  const id = await client.newSession("/tmp/stop-multi-queue")
+  const internals = client as unknown as {
+    holds: (sessionId: string) => boolean
+    session: (sessionId: string) => Session
+  }
+  vi.spyOn(internals, "holds").mockReturnValue(true)
+  const real = client.session(id)
+  vi.spyOn(internals, "session").mockImplementation(() => ({ ...real, state: "running" }) as Session)
+
+  setQueueSendMode("queued")
+  const first = client.prompt(id, [{ type: "text", text: "第一条" }]).then(
+    () => null,
+    (error: unknown) => error
+  )
+  const second = client.prompt(id, [{ type: "text", text: "第二条" }]).then(
+    () => null,
+    (error: unknown) => error
+  )
+  await vi.waitFor(() => expect(queuedPromptCount(id)).toBe(2))
+
+  await client.cancel(id)
+  expect(queuedPromptCount(id)).toBe(2)
+  cancelQueuedPrompt(id)
+  expect(await first).toBeInstanceOf(QueueCancelledError)
+  expect(await second).toBeInstanceOf(QueueCancelledError)
+  expect(queuedPromptCount(id)).toBe(0)
+  setQueueSendMode("immediate")
+})
+
+test("resume reopens a stopped session and sends the paused queue", async () => {
+  const { client, fake } = await make()
+  const id = await client.newSession("/tmp/queue-resume")
+  fake.promptHoldIdle.current = (text) => text === "first"
+  setQueueSendMode("queued")
+  try {
+    const first = client.prompt(id, [{ type: "text", text: "first" }]).catch(() => undefined)
+    await vi.waitFor(() => expect(client.session(id).state).toBe("running"))
+    const second = client.prompt(id, [{ type: "text", text: "second" }])
+    await vi.waitFor(() => expect(queuedPromptCount(id)).toBe(1))
+
+    await client.cancel(id)
+    expect(queuedPromptItems(id)).toMatchObject([{ paused: true, pauseReason: "stop" }])
+
+    fake.promptHoldIdle.current = null
+    await client.resumeQueuedPromptQueue(id, "/tmp/queue-resume")
+    await vi.waitFor(() => expect(fake.prompts).toEqual(["first", "second"]))
+    await expect(second).resolves.toBeDefined()
+    expect(queuedPromptCount(id)).toBe(0)
+    await first
+  } finally {
+    setQueueSendMode("immediate")
+  }
 })
 
 test("a stale Runtime 'running' entry does not wedge a parked model switch", async () => {
@@ -2413,10 +2489,13 @@ test("a supplement waiting for a rejected switch does not steer or later send on
     client.prompt(id, [{ type: "text", text: "only for the new model" }])
   ])
   await fake.pushUpdate(id, { sessionUpdate: "state_update", state: "idle" })
-  expect((await result).map((entry) => entry.status)).toEqual(["fulfilled", "rejected"])
+  await vi.waitFor(() => expect(queuedPromptItems(id)[0]?.paused).toBe(true))
   expect(client.pendingModelFor(id)).toBeNull()
   expect(fake.steers).toEqual([])
   expect(fake.prompts).toEqual([])
+  expect(queuedPromptItems(id)).toMatchObject([{ paused: true, pauseReason: "model-error" }])
+  cancelQueuedPrompt(id)
+  expect((await result).map((entry) => entry.status)).toEqual(["fulfilled", "rejected"])
 })
 
 test("a refusal naming the bare upstream model retries a sibling on the same gateway", async () => {
@@ -4257,10 +4336,12 @@ test("queued send mode holds the next message until the running turn settles", a
   await vi.waitFor(() => expect(client.session(id).state).toBe("running"))
 
   setQueueSendMode("queued")
-  void client.prompt(id, [{ type: "text", text: "second" }]).catch(() => {})
+  const second = client.prompt(id, [{ type: "text", text: "second" }])
   await new Promise((resolve) => setTimeout(resolve, 80))
   // Nothing reached the agent: the queued message is still waiting for the turn to end.
   expect(fake.prompts).toEqual(["first"])
+  cancelQueuedPrompt(id)
+  await expect(second).rejects.toBeInstanceOf(QueueCancelledError)
 
   // Immediate mode uses the adapter's live steering channel.
   setQueueSendMode("immediate")
@@ -4295,6 +4376,311 @@ test("a queued message goes out on its own once the session falls idle", async (
   setQueueSendMode("immediate")
 })
 
+test("editing a queued row updates the prompt that dispatches and keeps image metadata", async () => {
+  const { client } = await make()
+  const id = await client.newSession("/tmp/queue-edit")
+  const internals = client as unknown as {
+    holds: (sessionId: string) => boolean
+    session: (sessionId: string) => Session
+    sendPrompt: (sessionId: string, prompt: unknown[], options?: unknown) => Promise<string>
+  }
+  vi.spyOn(internals, "holds").mockReturnValue(true)
+  const real = client.session(id)
+  const state = { value: "running" }
+  vi.spyOn(internals, "session").mockImplementation(() => ({ ...real, state: state.value }) as Session)
+  const send = vi.spyOn(internals, "sendPrompt").mockResolvedValue("sent")
+
+  setQueueSendMode("queued")
+  try {
+    void client.prompt(id, [
+      { type: "text", text: "original" },
+      { type: "image", data: "abc", mimeType: "image/png" }
+    ])
+    await vi.waitFor(() => expect(queuedPromptCount(id)).toBe(1))
+    const row = queuedPromptItems(id)[0]
+    if (row === undefined) throw new Error("expected a waiting row")
+    expect(row.image).toBe("data:image/png;base64,abc")
+    expect(row.imageCount).toBe(1)
+    expect(editQueuedPrompt(id, row.id, "edited")).toBe(true)
+
+    state.value = "idle"
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1))
+    const sentPrompt = send.mock.calls[0]?.[1] as Array<{ type: string; text?: string }>
+    expect(sentPrompt[0]).toMatchObject({ type: "text", text: "edited" })
+    expect(sentPrompt[1]).toMatchObject({ type: "image", data: "abc" })
+  } finally {
+    setQueueSendMode("immediate")
+  }
+})
+
+test("jumping a queued row steers it into the running turn and removes the row", async () => {
+  const { client } = await make()
+  const id = await client.newSession("/tmp/queue-jump")
+  const internals = client as unknown as {
+    holds: (sessionId: string) => boolean
+    session: (sessionId: string) => Session
+    steerActiveTurn: (sessionId: string, prompt: unknown[]) => Promise<string>
+  }
+  vi.spyOn(internals, "holds").mockReturnValue(true)
+  const real = client.session(id)
+  vi.spyOn(internals, "session").mockImplementation(() => ({ ...real, state: "running" }) as Session)
+  const steer = vi.spyOn(internals, "steerActiveTurn").mockResolvedValue("steer:receipt")
+
+  setQueueSendMode("queued")
+  try {
+    const pending = client.prompt(id, [{ type: "text", text: "补充一条" }])
+    await vi.waitFor(() => expect(queuedPromptCount(id)).toBe(1))
+    const row = queuedPromptItems(id)[0]
+    if (row === undefined) throw new Error("expected a waiting row")
+    await expect(jumpQueuedPrompt(id, row.id)).resolves.toBe("sent")
+    expect(steer).toHaveBeenCalledWith(id, [expect.objectContaining({ type: "text", text: "补充一条" })])
+    expect(queuedPromptCount(id)).toBe(0)
+    await expect(pending).resolves.toBe(`queue:${row.id}:removed`)
+  } finally {
+    setQueueSendMode("immediate")
+  }
+})
+
+test("a timed-out jump pauses the queue instead of silently retrying a possibly delivered message", async () => {
+  const { client } = await make()
+  const id = await client.newSession("/tmp/queue-jump-timeout")
+  const internals = client as unknown as {
+    holds: (sessionId: string) => boolean
+    session: (sessionId: string) => Session
+    steerActiveTurn: (sessionId: string, prompt: unknown[]) => Promise<string>
+  }
+  vi.spyOn(internals, "holds").mockReturnValue(true)
+  const real = client.session(id)
+  vi.spyOn(internals, "session").mockImplementation(() => ({ ...real, state: "running" }) as Session)
+  vi.spyOn(internals, "steerActiveTurn").mockImplementation(() => new Promise(() => {}))
+
+  setQueueSendMode("queued")
+  try {
+    const pending = client.prompt(id, [{ type: "text", text: "maybe delivered" }])
+    await vi.waitFor(() => expect(queuedPromptCount(id)).toBe(1))
+    const row = queuedPromptItems(id)[0]
+    if (row === undefined) throw new Error("expected a queued row")
+
+    vi.useFakeTimers()
+    const jumped = jumpQueuedPrompt(id, row.id)
+    await vi.advanceTimersByTimeAsync(15_001)
+    await expect(jumped).resolves.toBe("queued")
+    expect(queuedPromptItems(id)).toMatchObject([
+      { id: row.id, paused: true, pauseReason: "steer-unknown", jumping: false }
+    ])
+    vi.useRealTimers()
+    cancelQueuedPrompt(id)
+    await expect(pending).rejects.toBeInstanceOf(QueueCancelledError)
+  } finally {
+    vi.useRealTimers()
+    setQueueSendMode("immediate")
+  }
+})
+
+test("queued messages dispatch one at a time in row order", async () => {
+  const { client } = await make()
+  const id = await client.newSession("/tmp/queue-order")
+  const internals = client as unknown as {
+    holds: (sessionId: string) => boolean
+    session: (sessionId: string) => Session
+    sendPrompt: (sessionId: string, prompt: unknown[]) => Promise<string>
+  }
+  vi.spyOn(internals, "holds").mockReturnValue(true)
+  const real = client.session(id)
+  const state = { value: "running" }
+  vi.spyOn(internals, "session").mockImplementation(() => ({ ...real, state: state.value }) as Session)
+  const releases: Array<() => void> = []
+  const send = vi.spyOn(internals, "sendPrompt").mockImplementation(
+    (_sessionId, prompt) =>
+      new Promise<string>((resolve) => {
+        const text = (prompt[0] as { text?: string } | undefined)?.text ?? ""
+        releases.push(() => resolve(text))
+      })
+  )
+
+  setQueueSendMode("queued")
+  try {
+    const first = client.prompt(id, [{ type: "text", text: "first" }])
+    const second = client.prompt(id, [{ type: "text", text: "second" }])
+    await vi.waitFor(() => expect(queuedPromptCount(id)).toBe(2))
+
+    state.value = "idle"
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1))
+    expect((send.mock.calls[0]?.[1][0] as { text?: string } | undefined)?.text).toBe("first")
+    // The first row stays visible until its acceptance receipt; the second must stay parked.
+    expect(queuedPromptCount(id)).toBe(2)
+    expect(queuedPromptItems(id).map((row) => row.dispatching)).toEqual([true, false])
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(send).toHaveBeenCalledTimes(1)
+
+    releases[0]?.()
+    await expect(first).resolves.toBe("first")
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2))
+    expect((send.mock.calls[1]?.[1][0] as { text?: string } | undefined)?.text).toBe("second")
+    expect(queuedPromptCount(id)).toBe(1)
+    expect(queuedPromptItems(id)[0]?.dispatching).toBe(true)
+
+    releases[1]?.()
+    await expect(second).resolves.toBe("second")
+    expect(queuedPromptCount(id)).toBe(0)
+  } finally {
+    setQueueSendMode("immediate")
+  }
+})
+
+test("a message sent during the idle polling window still joins the queue behind older rows", async () => {
+  const { client } = await make()
+  const id = await client.newSession("/tmp/queue-order-window")
+  const internals = client as unknown as {
+    holds: (sessionId: string) => boolean
+    session: (sessionId: string) => Session
+    sendPrompt: (sessionId: string, prompt: unknown[]) => Promise<string>
+  }
+  vi.spyOn(internals, "holds").mockReturnValue(true)
+  const real = client.session(id)
+  const state = { value: "running" }
+  vi.spyOn(internals, "session").mockImplementation(() => ({ ...real, state: state.value }) as Session)
+  const send = vi.spyOn(internals, "sendPrompt").mockResolvedValue("sent")
+
+  setQueueSendMode("queued")
+  try {
+    const first = client.prompt(id, [{ type: "text", text: "first" }])
+    const second = client.prompt(id, [{ type: "text", text: "second" }])
+    await vi.waitFor(() => expect(queuedPromptCount(id)).toBe(2))
+
+    state.value = "idle"
+    const late = client.prompt(id, [{ type: "text", text: "late" }])
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(3))
+    expect(
+      send.mock.calls.map((call) => (call[1][0] as { text?: string } | undefined)?.text)
+    ).toEqual(["first", "second", "late"])
+    await Promise.all([first, second, late])
+  } finally {
+    setQueueSendMode("immediate")
+  }
+})
+
+test("a refused queued dispatch keeps its row and pauses instead of rejecting the submit", async () => {
+  const { client } = await make()
+  const id = await client.newSession("/tmp/queue-dispatch-failure")
+  const internals = client as unknown as {
+    holds: (sessionId: string) => boolean
+    session: (sessionId: string) => Session
+    sendPrompt: (sessionId: string, prompt: unknown[]) => Promise<string>
+  }
+  vi.spyOn(internals, "holds").mockReturnValue(true)
+  const real = client.session(id)
+  const state = { value: "running" }
+  vi.spyOn(internals, "session").mockImplementation(() => ({ ...real, state: state.value }) as Session)
+  const send = vi
+    .spyOn(internals, "sendPrompt")
+    .mockRejectedValueOnce(new Error("model switch failed"))
+    .mockResolvedValueOnce("retried")
+
+  setQueueSendMode("queued")
+  try {
+    const pending = client.prompt(id, [{ type: "text", text: "do not lose me" }])
+    await vi.waitFor(() => expect(queuedPromptCount(id)).toBe(1))
+    const row = queuedPromptItems(id)[0]
+    if (row === undefined) throw new Error("expected a queued row")
+
+    state.value = "idle"
+    let settled = false
+    void pending.finally(() => {
+      settled = true
+    })
+    await vi.waitFor(() => expect(queuedPromptItems(id)[0]?.paused).toBe(true))
+    expect(queuedPromptItems(id)).toMatchObject([
+      { id: row.id, paused: true, pauseReason: "turn-error", dispatching: false }
+    ])
+    expect(settled).toBe(false)
+
+    await client.resumeQueuedPromptQueue(id, "/tmp/queue-dispatch-failure")
+    await expect(pending).resolves.toBe("retried")
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(queuedPromptCount(id)).toBe(0)
+  } finally {
+    setQueueSendMode("immediate")
+  }
+})
+
+test("a failed turn pauses queued messages visibly instead of hiding them behind stopped state", async () => {
+  const { client, fake } = await make()
+  const id = await client.newSession("/tmp/queue-turn-failure")
+  const internals = client as unknown as {
+    promptWithTimeout: (sessionId: string, prompt: unknown[], options?: unknown) => Promise<string>
+  }
+  beginQueuedPrompt(id, "preserve me")
+  fake.promptError.current = () => new Error("upstream failed")
+  try {
+    await expect(internals.promptWithTimeout(id, [{ type: "text", text: "fail" }], undefined)).rejects.toThrow()
+    expect(queuedPromptItems(id)).toMatchObject([{ paused: true, pauseReason: "turn-error" }])
+    fake.promptError.current = null
+    await expect(internals.promptWithTimeout(id, [{ type: "text", text: "recover" }], undefined)).resolves.toBeDefined()
+    expect(queuedPromptItems(id)).toMatchObject([{ paused: false, pauseReason: null }])
+  } finally {
+    clearQueuedPrompts(id)
+  }
+})
+
+test("clearing the paused queue after Stop still lets the next send reopen the session", async () => {
+  const { client, fake } = await make()
+  const id = await client.newSession("/tmp/queue-clear-then-send")
+  const internals = client as unknown as { open: (sessionId: string, cwd: string) => Promise<void> }
+  const open = vi.spyOn(internals, "open")
+  fake.promptHoldIdle.current = (text) => text === "first"
+  setQueueSendMode("queued")
+  try {
+    const first = client.prompt(id, [{ type: "text", text: "first" }]).catch(() => undefined)
+    await vi.waitFor(() => expect(client.session(id).state).toBe("running"))
+    const queued = client.prompt(id, [{ type: "text", text: "discard me" }])
+    await vi.waitFor(() => expect(queuedPromptCount(id)).toBe(1))
+    const queuedId = queuedPromptItems(id)[0]?.id
+    if (queuedId === undefined) throw new Error("expected a queued row")
+
+    await client.cancel(id)
+    clearQueuedPrompts(id)
+    await expect(queued).resolves.toBe(`queue:${queuedId}:removed`)
+
+    fake.promptHoldIdle.current = null
+    const third = client.prompt(id, [{ type: "text", text: "third" }])
+    await vi.waitFor(() => expect(fake.prompts).toEqual(["first", "third"]))
+    expect(open).toHaveBeenCalledWith(id, "/tmp/queue-clear-then-send")
+    await third
+    await first
+  } finally {
+    setQueueSendMode("immediate")
+  }
+})
+
+test("deleting a waiting row resolves its submit without dispatching or restoring it", async () => {
+  const { client } = await make()
+  const id = await client.newSession("/tmp/queue-delete")
+  const internals = client as unknown as {
+    holds: (sessionId: string) => boolean
+    session: (sessionId: string) => Session
+    sendPrompt: (sessionId: string, prompt: unknown[]) => Promise<string>
+  }
+  vi.spyOn(internals, "holds").mockReturnValue(true)
+  const real = client.session(id)
+  vi.spyOn(internals, "session").mockImplementation(() => ({ ...real, state: "running" }) as Session)
+  const send = vi.spyOn(internals, "sendPrompt")
+
+  setQueueSendMode("queued")
+  try {
+    const pending = client.prompt(id, [{ type: "text", text: "do not send" }])
+    await vi.waitFor(() => expect(queuedPromptCount(id)).toBe(1))
+    const row = queuedPromptItems(id)[0]
+    if (row === undefined) throw new Error("expected a waiting row")
+    deleteQueuedPrompt(id, row.id)
+    await expect(pending).resolves.toBe(`queue:${row.id}:removed`)
+    expect(send).not.toHaveBeenCalled()
+    expect(queuedPromptCount(id)).toBe(0)
+  } finally {
+    setQueueSendMode("immediate")
+  }
+})
+
 test("immediate send mode inserts a supplement while the first turn is still running", async () => {
   const { client, fake } = await make()
   const id = await client.newSession("/tmp/immediate-steer")
@@ -4316,6 +4702,58 @@ test("immediate send mode inserts a supplement while the first turn is still run
   } finally {
     setQueueSendMode("immediate")
   }
+})
+
+test("a steering receipt without a confirmed outcome stays queued instead of clearing the row", async () => {
+  const { client, fake } = await make()
+  const id = await client.newSession("/tmp/immediate-unknown-steer")
+  fake.promptHoldIdle.current = (text) => text === "first"
+  fake.steeringResponse.current = () => ({})
+  setQueueSendMode("immediate")
+  try {
+    const first = client.prompt(id, [{ type: "text", text: "first" }]).catch(() => undefined)
+    await vi.waitFor(() => expect(client.session(id).state).toBe("running"))
+
+    const supplement = client.prompt(id, [{ type: "text", text: "supplement" }])
+    await vi.waitFor(() => expect(queuedPromptCount(id)).toBe(1))
+    expect(fake.steers).toEqual(["supplement"])
+    expect(fake.prompts).toEqual(["first"])
+
+    cancelQueuedPrompt(id)
+    await expect(supplement).rejects.toBeInstanceOf(QueueCancelledError)
+    await client.cancel(id)
+    await first
+  } finally {
+    setQueueSendMode("immediate")
+  }
+})
+
+test("a new message joins a paused queue instead of bypassing it", async () => {
+  const { client } = await make()
+  const id = await client.newSession("/tmp/paused-queue-prompt")
+  const internals = client as unknown as {
+    holds: (sessionId: string) => boolean
+    session: (sessionId: string) => Session
+    sendPrompt: (sessionId: string, prompt: unknown[]) => Promise<string>
+  }
+  vi.spyOn(internals, "holds").mockReturnValue(true)
+  const real = client.session(id)
+  vi.spyOn(internals, "session").mockImplementation(() => ({ ...real, state: "idle" }) as Session)
+  const send = vi.spyOn(internals, "sendPrompt").mockResolvedValue("sent")
+
+  beginQueuedPrompt(id, "waiting")
+  pauseQueuedPrompts(id, "stop")
+  const pending = client.prompt(id, [{ type: "text", text: "also wait" }])
+  await vi.waitFor(() => expect(queuedPromptCount(id)).toBe(2))
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  expect(send).not.toHaveBeenCalled()
+  expect(queuedPromptItems(id).every((item) => item.paused)).toBe(true)
+  const newRowId = queuedPromptItems(id)[1]?.id
+  expect(newRowId).toBeDefined()
+
+  clearQueuedPrompts(id)
+  await expect(pending).resolves.toBe(`queue:${newRowId}:removed`)
+  expect(queuedPromptCount(id)).toBe(0)
 })
 
 test("a non-steerable refusal is classified so the caller can queue the supplement", () => {
@@ -4354,7 +4792,7 @@ test("cancelling a queued message rejects without sending and clears the chip", 
   setQueueSendMode("queued")
   const pending = client.prompt(id, [{ type: "text", text: "不要发了" }])
   await vi.waitFor(() => expect(queuedPromptCount(id)).toBe(1))
-  expect(queuedPromptText(id)).toBe("不要发了")
+  expect(queuedPromptItems(id)[0]?.text).toBe("不要发了")
 
   cancelQueuedPrompt(id)
   await expect(pending).rejects.toBeInstanceOf(QueueCancelledError)

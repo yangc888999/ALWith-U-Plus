@@ -199,7 +199,21 @@ export function patchAdapter(source: string): string {
             await Promise.allSettled([...this.activePrompts.values()].map((prompt) => (prompt?.completion instanceof Promise ? prompt.completion.catch(() => {}) : Promise.resolve())));`,
     `        const matchesRoute = (result) => matchesSelection(result, model, target, catalog);
         if (!matchesRoute(metadata)) {
-          for (let attempt = 0; attempt < 3 && !matchesRoute(metadata); attempt++) {`
+          for (let attempt = 0; attempt < 8 && !matchesRoute(metadata); attempt++) {`
+  )
+  replace(
+    `            await new Promise((resolve) => setTimeout(resolve, 500));
+            if (!this.sessionPublishIsCurrent(session, generation)) break;
+            metadata = await resume(model);`,
+    `            await new Promise((resolve) => setTimeout(resolve, 500));
+            if (!this.sessionPublishIsCurrent(session, generation)) break;
+            // Codex keeps a loaded thread on its old model even when resume passes a new one.
+            // The initial detach above only covers the first attempt. Detach before every retry
+            // so a thread that was still settling reloads and the model override takes effect.
+            await client.appServerClient.threadUnsubscribe({
+              threadId: session.sessionId
+            }).catch(() => {});
+            metadata = await resume(model);`
   )
   replace(
     `          throw RequestError.invalidRequest(undefined, "Session closed during provider selection");
@@ -213,7 +227,10 @@ export function patchAdapter(source: string): string {
   )
   replace(
     '            await resume(ModelId.fromString(session.currentModelId).model);',
-    `            const restored = await resume(currentModel);
+    `            await client.appServerClient.threadUnsubscribe({
+              threadId: session.sessionId
+            }).catch(() => {});
+            const restored = await resume(currentModel);
             if (!matchesSelection(restored, currentModel, session.authProvider ?? rollbackRouting.runtimeIdFor(currentModel) ?? rollbackRouting.nativeModelProvider(), rollbackRouting))
               throw new Error("Rollback did not restore the previous session route");`
   )

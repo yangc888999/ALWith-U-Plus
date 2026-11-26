@@ -40,6 +40,8 @@ export type FakeAgent = {
   prompts: string[]
   /** Text of every `_session/steering` request, in order. */
   steers: string[]
+  /** Forces the raw steering receipt, so tests can exercise malformed or legacy responses. */
+  steeringResponse: { current: ((text: string) => Record<string, unknown>) | null }
   /** Configuration writes and prompts in the order the agent received them. */
   events: Array<
     { type: "config"; request: acp.SetSessionConfigOptionRequest } | { type: "prompt"; sessionId: string; text: string }
@@ -162,6 +164,7 @@ export function createFakeAgent(): FakeAgent {
   const configChanges: string[] = []
   const prompts: string[] = []
   const steers: string[] = []
+  const steeringResponse: FakeAgent["steeringResponse"] = { current: null }
   const events: FakeAgent["events"] = []
   const changingConfig = new Set<string>()
   const renamed = new Map<string, string>()
@@ -433,6 +436,8 @@ export function createFakeAgent(): FakeAgent {
     async ({ params, client }) => {
       const text = params.prompt.map((block) => (block.type === "text" ? block.text : "")).join("")
       steers.push(text)
+      const override = steeringResponse.current?.(text)
+      if (override !== null && override !== undefined) return override
       if (!active.has(params.sessionId)) return { outcome: "startedNewTurn" as const }
       const sequence = (steeringSequence.get(params.sessionId) ?? 0) + 1
       steeringSequence.set(params.sessionId, sequence)
@@ -605,6 +610,7 @@ export function createFakeAgent(): FakeAgent {
     configChanges,
     prompts,
     steers,
+    steeringResponse,
     events,
     renamed,
     fileSearches,

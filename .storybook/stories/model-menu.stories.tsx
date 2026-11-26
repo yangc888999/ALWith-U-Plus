@@ -139,6 +139,10 @@ export const Providers: Story = {
     await userEvent.click(canvas.getByTestId("model-trigger"))
     await expect(await body.findAllByRole("menuitemradio")).toHaveLength(11)
     const qwen = body.getByRole("menuitemradio", { name: "3.8 Flash" })
+    await expect(getComputedStyle(qwen).fontSize).toBe("13px")
+    await expect(getComputedStyle(document.querySelector<HTMLElement>("[data-model-menu-footer]")!).fontSize).toBe(
+      "13px"
+    )
     qwen.focus()
     await userEvent.keyboard("{Enter}")
     await expect(canvas.getByTestId("model-trigger")).toHaveTextContent("3.8 Flash")

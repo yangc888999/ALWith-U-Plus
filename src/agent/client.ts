@@ -93,7 +93,18 @@ import {
 } from "@/lib/group-runtime"
 import { groupSessionKind, rememberGroupSessionRow, replaceGroupSessionRows } from "@/lib/group-sessions"
 import { type PendingPlan, pendingPlanFor, setPendingPlan } from "@/lib/pending-plan"
-import { beginQueuedPrompt, cancelQueuedPrompt, endQueuedPrompt, QueueCancelledError } from "@/lib/queued-prompt"
+import {
+  beginQueuedPrompt,
+  endQueuedPrompt,
+  pauseQueuedPrompts,
+  QueueCancelledError,
+  queuedPromptCount,
+  queuedPromptHead,
+  queuedPromptPauseReason,
+  queuedPromptPaused,
+  resumeQueuedPrompts,
+  setQueuedPromptDispatching
+} from "@/lib/queued-prompt"
 import { isModelRetired, retireModel, reviveModel } from "@/lib/retired-models"
 import { sandboxAllows, sandboxCapabilities, sandboxMode, sandboxSettings } from "@/lib/sandbox-preference"
 import {
@@ -222,6 +233,9 @@ const PENDING_MODEL_RETRY_MS = 2_000
  * worth a permanent timer — try a few times with backoff, then say so and drop it.
  */
 const PENDING_MODEL_MAX_ATTEMPTS = 5
+
+/** A live steer must answer quickly; a hung adapter request must not look like a sent message. */
+const STEER_TIMEOUT_MS = 15_000
 
 /** First retry delay after a refused switch; doubles per attempt up to `PENDING_MODEL_RETRY_MS * 8`. */
 const PENDING_MODEL_BACKOFF_MS = 2_000
@@ -365,11 +379,24 @@ function promptText(content: acp.ContentBlock[]): string {
     .join("\n")
 }
 
+/** Replaces the prompt's editable text while preserving images, links and other blocks. */
+function replacePromptText(content: acp.ContentBlock[], text: string): acp.ContentBlock[] {
+  let replaced = false
+  const next = content.flatMap((block): acp.ContentBlock[] => {
+    if (block.type !== "text") return [block]
+    if (replaced) return []
+    replaced = true
+    return [{ ...block, text }]
+  })
+  if (!replaced) next.unshift({ type: "text", text })
+  return next
+}
+
 /** One line for the "排队中" chip: the message's first line, trimmed; null when it is all files. */
 function promptSummary(content: acp.ContentBlock[]): string | null {
   const first = promptText(content).split("\n", 1)[0]?.trim() ?? ""
   if (first === "") return null
-  return first.length > 32 ? `${first.slice(0, 32)}…` : first
+  return first.length > 160 ? `${first.slice(0, 160)}…` : first
 }
 
 /** The planner half of an orchestrated turn: frame the work, do not execute it. */
@@ -1433,6 +1460,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * outvote an in-flight prompt.
    */
   private readonly stoppedSessions = new Set<string>()
+  /** Sessions whose dispatch started from the queue and whose turn is still running. */
+  private readonly queuedTurns = new Set<string>()
   /**
    * Sessions whose prompt promise has not settled yet — the only real live-turn heartbeat.
    *
@@ -1879,7 +1908,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * next `setConfig` can land, but it must not tear down the conversation underneath itself.
    */
   private async cancelTurn(id: string): Promise<void> {
-    cancelQueuedPrompt(id)
+    pauseQueuedPrompts(id, "stop")
     this.stoppedSessions.add(id)
     await super.cancel(id)
     // A choice parked behind this turn must not outlive it. Left alone, the "下一轮" badge sits on
@@ -1898,7 +1927,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * the Runtime to retire the session and all of its child work.
    */
   override async cancel(id: string): Promise<void> {
-    cancelQueuedPrompt(id)
+    pauseQueuedPrompts(id, "stop")
     // The last gesture was Stop: a model pick made after reopening lands immediately instead of
     // parking behind a turn that no longer exists. The next prompt clears this marker.
     this.stoppedSessions.add(id)
@@ -2002,7 +2031,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
           // the turn settles. Any other failure means this choice cannot apply at all — drop it,
           // or every store tick would start another write and starve the app's timers.
           if (!this.turnBusyRejection(message)) {
-            cancelQueuedPrompt(id)
+            pauseQueuedPrompts(id, "model-error")
             this.clearParkedModel(id, pending)
             toast.error(i18n.t("chat.modelSwitchNotApplied", { model: pending }))
             return false
@@ -2013,7 +2042,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
           const attempts = (this.parkedAttempts.get(id) ?? 0) + 1
           if (attempts >= PENDING_MODEL_MAX_ATTEMPTS) {
             this.logInfo?.(`[pending-model] giving up id=${id} model=${pending} attempts=${attempts}`)
-            cancelQueuedPrompt(id)
+            pauseQueuedPrompts(id, "model-error")
             this.clearParkedModel(id, pending)
             toast.error(i18n.t("chat.pendingModelFailed"))
             return false
@@ -2076,27 +2105,151 @@ export class CodexClient extends CodexAcpClient<AppState> {
     prompt: acp.ContentBlock[],
     options?: PromptOptions
   ): Promise<string> {
-    const entry = beginQueuedPrompt(id, promptSummary(prompt))
-    const deadline = Date.now() + 15 * 60_000
-    try {
-      const write = this.modelWrites.get(id)
-      if (write !== undefined) await write
-      while (Date.now() < deadline) {
-        if (entry.cancelled) throw new QueueCancelledError()
-        const session = this.holds(id) ? this.session(id) : undefined
-        if (session === undefined) break
-        // Same two clocks as a parked model switch: the ACP state alone can say idle a beat before
-        // the Runtime does, and sending into that gap is what tore down the opening stream.
-        if (session.state === "idle" && !this.runtimeRunningFresh(id) && !this.promptInFlight.has(id))
-          return await this.sendPrompt(id, prompt, options)
-        await new Promise<void>((resolve) => setTimeout(resolve, 500))
+    let dispatchPrompt = prompt
+    let dispatchOptions = options
+    const images = prompt.filter(
+      (block): block is Extract<acp.ContentBlock, { type: "image" }> => block.type === "image"
+    )
+    const entry = beginQueuedPrompt(id, promptSummary(prompt), {
+      body: promptText(prompt),
+      image: images[0] === undefined ? null : `data:${images[0].mimeType};base64,${images[0].data}`,
+      imageCount: images.length,
+      edit: (text) => {
+        dispatchPrompt = replacePromptText(dispatchPrompt, text)
+        if (dispatchOptions?.display !== undefined) {
+          dispatchOptions = {
+            ...dispatchOptions,
+            display: replacePromptText(dispatchOptions.display, text)
+          }
+        }
+      },
+      jump: async () => {
+        if (this.stoppingSessions.has(id) || this.stoppedSessions.has(id)) return "queued"
+        const busy = this.holds(id) ? this.session(id) : undefined
+        const runtimeRow = this.state.runStates[id]
+        const stillRunning = runtimeRow === undefined || this.runtimeRunningFresh(id)
+        if (busy === undefined || busy.state === "idle" || !stillRunning) return "queued"
+        try {
+          await this.withTimeout(this.steerActiveTurn(id, dispatchPrompt), STEER_TIMEOUT_MS, "steerActiveTurn")
+          return "sent"
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          if (/超时|timed out/i.test(message)) {
+            if (!queuedPromptPaused(id)) {
+              pauseQueuedPrompts(id, "steer-unknown")
+              toast.warning(i18n.t("chat.steerUnknownPaused"))
+            }
+            return "queued"
+          }
+          if (
+            /method not found|unknown method|not supported|no active turn/i.test(message) ||
+            turnNotSteerable(error)
+          ) {
+            toast.info(i18n.t("chat.steerQueuedFallback"))
+            return "queued"
+          }
+          throw error
+        }
       }
+    })
+    for (;;) {
+      if (entry.removed) return `queue:${entry.id}:removed`
       if (entry.cancelled) throw new QueueCancelledError()
-      // Session gone or waited out: send anyway rather than dropping the user's words.
-      return await this.sendPrompt(id, prompt, options)
-    } finally {
-      endQueuedPrompt(id, entry)
+      // A manual jump owns the entry until steering settles. Do not race it from the normal
+      // head-of-queue dispatch below.
+      if (entry.jumping) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 100))
+        continue
+      }
+      // Stop/model-switch/dispatch failures pause instead of cancelling: every row keeps its text
+      // and attachments and this same wait loop resumes it after the explicit Resume action.
+      if (entry.paused) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 250))
+        continue
+      }
+      // Stop pauses the queue instead of destroying every waiting row. A queued prompt that
+      // belonged to a stopped turn must not fire while the session is closing or stopped; it
+      // waits for an explicit new turn to reopen the conversation.
+      if (this.stoppingSessions.has(id) || this.stoppedSessions.has(id)) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 250))
+        continue
+      }
+      // Only the head of the list may dispatch. This is what makes reordering meaningful and
+      // keeps several queued messages from all waking up on the same idle tick.
+      if (!queuedPromptHead(id, entry)) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 150))
+        continue
+      }
+      // A parked model write must land first. Failure keeps the row and pauses visibly; this loop
+      // itself stays alive, so Resume retries the same head instead of leaving it ownerless.
+      const write = this.modelWrites.get(id)
+      if (write !== undefined) {
+        try {
+          await write
+        } catch {
+          this.pauseQueueAfterFailure(id)
+          continue
+        }
+        continue
+      }
+      const session = this.holds(id) ? this.session(id) : undefined
+      // A stop closes the ACP session. Keep the queued rows alive until the conversation is
+      // reopened rather than sending into a closed session and returning only one draft.
+      if (session === undefined) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 250))
+        continue
+      }
+      // Same two clocks as a parked model switch: the ACP state alone can say idle a beat before
+      // the Runtime does, and sending into that gap is what tore down the opening stream.
+      if (
+        session.state === "idle" &&
+        !this.runtimeRunningFresh(id) &&
+        !this.promptInFlight.has(id) &&
+        !this.queuedTurns.has(id)
+      ) {
+        // Keep the row visible until the engine confirms acceptance. Removing it first lost the
+        // only copy of the text and images when a model switch or session reopen refused the
+        // dispatch before the composer could take its draft back.
+        this.queuedTurns.add(id)
+        setQueuedPromptDispatching(id, entry.id, true)
+        try {
+          const receipt = await this.sendPrompt(id, dispatchPrompt, dispatchOptions)
+          entry.removed = true
+          endQueuedPrompt(id, entry)
+          return receipt
+        } catch (error) {
+          if (error instanceof QueueCancelledError) throw error
+          if (entry.cancelled) throw new QueueCancelledError()
+          if (entry.removed) return `queue:${entry.id}:removed`
+          // Keep the row and this loop alive. Rejecting would restore the original prompt into
+          // the composer while the row stayed queued; returning would leave a paused head with
+          // no waiter, so Resume could never dispatch it.
+          this.pauseQueueAfterFailure(id)
+        } finally {
+          setQueuedPromptDispatching(id, entry.id, false)
+          this.queuedTurns.delete(id)
+        }
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 250))
     }
+  }
+
+  /** Leaves a queued message recoverable instead of turning a dispatch refusal into a loss. */
+  private pauseQueueAfterFailure(id: string): void {
+    if (queuedPromptPauseReason(id) !== null) return
+    pauseQueuedPrompts(id, "turn-error")
+    toast.error(i18n.t("chat.queueDispatchPaused"))
+  }
+
+  /** Reopens a stopped session if needed, then lets its paused queue resume in order. */
+  async resumeQueuedPromptQueue(id: string, cwd: string): Promise<void> {
+    const stopDeadline = Date.now() + 10_000
+    while (this.stoppingSessions.has(id) && Date.now() < stopDeadline)
+      await new Promise<void>((resolve) => setTimeout(resolve, 100))
+    const session = this.holds(id) ? this.session(id) : undefined
+    if (session === undefined || !session.attached) await this.open(id, cwd)
+    this.stoppedSessions.delete(id)
+    resumeQueuedPrompts(id)
   }
 
   /**
@@ -2108,6 +2261,18 @@ export class CodexClient extends CodexAcpClient<AppState> {
    * non-text prompts so file/voice-only sends are untouched.
    */
   override prompt(id: string, prompt: acp.ContentBlock[], options?: PromptOptions): Promise<string> {
+    // A paused queue owns every subsequent message until an explicit resume, including in
+    // immediate mode. Sending past it would silently reorder the reader's own queue.
+    if (queuedPromptPaused(id)) return this.waitForIdleThenPrompt(id, prompt, options)
+    // A nonempty queue (or a head already waiting for its receipt) also owns the next message.
+    // Checking only `session.state` left a 150–250ms idle window where a new prompt jumped ahead
+    // of rows that had been waiting for minutes.
+    if (queuedPromptCount(id) > 0 || this.queuedTurns.has(id))
+      return this.waitForIdleThenPrompt(id, prompt, options)
+    const session = this.holds(id) ? this.session(id) : undefined
+    // Stop closes the ACP session. The next explicit send reopens it instead of failing with
+    // "Open the session before sending" after the paused queue was cleared.
+    if (session !== undefined && !session.attached) return this.reopenThenPrompt(id, session.cwd, prompt, options)
     if (prompt.length === 1 && isText(prompt[0]) && prompt[0].text.trim() === "/compact") {
       if (this.sessionBusy(id) || this.hasModelWrite(id) || this.inRoleScope(id))
         return Promise.reject(new Error(i18n.t("error.sessionBusy")))
@@ -2143,7 +2308,6 @@ export class CodexClient extends CodexAcpClient<AppState> {
     }
     const doc = getActivePreview()
     if (doc === null) return this.sendPrompt(id, prompt, options)
-    const session = this.holds(id) ? this.session(id) : undefined
     const trim = (path: string): string => path.replace(/[\\/]+$/, "")
     if (session !== undefined && doc.root !== "" && trim(session.cwd) !== trim(doc.root))
       return this.sendPrompt(id, prompt, options)
@@ -2159,10 +2323,21 @@ export class CodexClient extends CodexAcpClient<AppState> {
     })
   }
 
+  private async reopenThenPrompt(
+    id: string,
+    cwd: string,
+    prompt: acp.ContentBlock[],
+    options?: PromptOptions
+  ): Promise<string> {
+    await this.open(id, cwd)
+    this.stoppedSessions.delete(id)
+    return this.prompt(id, prompt, options)
+  }
+
   /** Send into the running turn, or queue if the engine says this step is not steerable. */
   private async sendImmediate(id: string, prompt: acp.ContentBlock[], options?: PromptOptions): Promise<string> {
     try {
-      return await this.steerActiveTurn(id, prompt)
+      return await this.withTimeout(this.steerActiveTurn(id, prompt), STEER_TIMEOUT_MS, "steerActiveTurn")
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       // An adapter that predates the steering extension still accepts an ordinary prompt; it
@@ -2190,7 +2365,11 @@ export class CodexClient extends CodexAcpClient<AppState> {
       "_session/steering",
       { sessionId: id, prompt }
     )
-    if (result?.outcome === "failed") throw new Error("turn_not_steerable")
+    // An older adapter or a swallowed engine result may omit the outcome. Only an explicit
+    // receipt proves the message entered the live turn; everything else must take the queue
+    // path instead of clearing the row as if it had been delivered.
+    if (result?.outcome !== "injected" && result?.outcome !== "startedNewTurn")
+      throw new Error("turn_not_steerable")
     // The adapter emits the user message when the steer lands; this receipt only releases the
     // composer, so it deliberately does not invent a second timeline item.
     return `steer:${crypto.randomUUID()}`
@@ -3256,6 +3435,12 @@ export class CodexClient extends CodexAcpClient<AppState> {
           if (cleared) return
           receiptId = receipt
           settled = true
+          // An internal retry may have succeeded after an earlier attempt paused the queue. The
+          // turn is healthy again, so let the preserved rows continue in order.
+          if (queuedPromptPauseReason(id) === "turn-error" && !this.stoppingSessions.has(id)) {
+            this.stoppedSessions.delete(id)
+            resumeQueuedPrompts(id)
+          }
           // Release the caller on acceptance, but keep monitoring until the real terminal state.
           resolve(receipt)
           if (this.state.sessions[id]?.turnEndedAt[receipt] !== undefined) clear()
@@ -3268,6 +3453,9 @@ export class CodexClient extends CodexAcpClient<AppState> {
           // land at once instead of parking behind a turn that no longer exists — the capacity
           // failure that ends a turn is precisely when the user reaches for the picker.
           this.stoppedSessions.add(id)
+          // A hidden `stoppedSessions` marker used to make every row behind this turn loop forever.
+          // Pause visibly instead, so the reader can resume or clear the preserved messages.
+          if (queuedPromptPauseReason(id) === null) pauseQueuedPrompts(id, "turn-error")
           reject(error)
         }
       )

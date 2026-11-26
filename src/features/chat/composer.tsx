@@ -25,6 +25,7 @@ import { client } from "@/lib/client"
 import { describeError } from "@/lib/error-text"
 import { groupByDirectory } from "@/lib/groups"
 import { isTemporaryChatDir } from "@/lib/quick-chat"
+import { isQueueCancelled } from "@/lib/queued-prompt"
 import { orchestrationAllowedFor } from "@/lib/session-orchestration"
 import { useHandoffBusy } from "@/lib/use-surface-operation"
 
@@ -33,7 +34,7 @@ import { chatModelMenu } from "./composer/model-catalog"
 import { nativeAttachmentPolicy, NativeFileDrop } from "./composer/native-file-drop"
 import { OrchestrationControl } from "./composer/orchestration-control"
 import { predictionPreference } from "./composer/prediction-preference"
-import { QueuedPromptChip } from "./composer/queued-prompt-chip"
+import { QueuedPromptList } from "./composer/queued-prompt-list"
 import { TurnProgressBar } from "./turn-progress"
 
 /** Nothing to hand a receipt to: the surface already owns the conversation it is typing into. */
@@ -311,7 +312,9 @@ export function ChatComposer({
           // The composer cannot take the draft back (e.g. it is busy); the toast below still tells
           // the reader the send failed.
         }
-        toast.error(describeError(error))
+        // Editing a queued row removes it from the queue and deliberately rejects its submit so
+        // the composer can take the content back. That is a requested move, not a failed send.
+        if (!isQueueCancelled(error)) toast.error(describeError(error))
       })
     },
     [accountRecovery, onSubmit, sessionId, t]
@@ -380,12 +383,10 @@ export function ChatComposer({
             // document reference and project controls get the second. Keeping them apart means a
             // long progress line, a queued message and 分工 cannot all compete for one strip.
             <div className="flex w-full min-w-0 flex-col gap-1">
+              <QueuedPromptList session={props.session} embedded />
               <div className="flex w-full min-w-0 items-center justify-between gap-2">
                 <div className="min-w-0 flex-1">
                   <TurnProgressBar session={props.session} />
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  <QueuedPromptChip session={props.session} compact />
                 </div>
               </div>
               <div className="flex w-full min-w-0 items-center justify-between gap-2">

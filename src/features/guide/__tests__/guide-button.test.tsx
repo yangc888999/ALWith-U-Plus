@@ -18,6 +18,8 @@ test("help opens an ordered menu and keyboard shortcuts open the existing refere
   await initI18n("zh-CN")
   const view = render(<GuideButton />)
   await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "帮助" }))))
+  // The popup portals outside the sidebar, so it must carry the sidebar text scale itself.
+  expect(view.getByRole("menu")).toHaveAttribute("data-sidebar-popover", "")
   expect(view.getAllByRole("menuitem")).toEqual(
     ["键盘快捷键", "用户指南"].map((name) => view.getByRole("menuitem", { name }))
   )

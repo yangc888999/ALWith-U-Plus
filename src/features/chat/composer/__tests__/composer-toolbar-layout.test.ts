@@ -102,6 +102,19 @@ test("the model trigger shrinks and ellipsises instead of overflowing the toolba
   expect(nameLine).not.toContain("overflow: visible")
 })
 
+test("the model menu keeps the compact trigger's type scale", () => {
+  // The picker inherited 16px chrome and 14px rows from the dropdown primitive, so opening it
+  // made the model control jump a full size above its 12px trigger. Keep the whole menu on the
+  // 13px chrome scale, including header, rows and the settings footer.
+  expect(styles).toMatch(
+    /\[data-slot="dropdown-menu-content"\]:has\(\[data-model-menu-list\]\)\s*\{[^}]*font-size: 0\.8125rem;/
+  )
+  expect(styles).toMatch(
+    /\[data-slot="dropdown-menu-content"\]:has\(\[data-model-menu-list\]\)\s+:is\(\[data-model-menu-header\], \[data-model-menu-footer\], \[data-model-menu-list\]\)\s*\{[^}]*font-size: 0\.8125rem;/
+  )
+  expect(styles).toMatch(/\[data-model-menu-list\] \[role="menuitemradio"\]\s*\{[^}]*min-height: 2rem;/)
+})
+
 test("the toolbar stays one line: the send key is pinned and the picker yields", () => {
   const group = ruleOf(".chat-composer-toolbar > div > div:last-child")
   expect(group).toContain("min-width: 0")

@@ -1501,10 +1501,26 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
 [data-slot="dropdown-menu-content"]:has([data-model-menu-list]) {
   --model-picker-row-background: color-mix(in oklab, var(--background) 76%, var(--muted));
   --model-picker-selected-background: color-mix(in oklab, var(--settings-accent) 12%, var(--background));
+  /* The trigger is 12px. The package menu inherited 16px on its chrome and 14px on its rows,
+     which made the picker read a full size above the composer it opens from. Keep the list compact
+     and reduce the row height with it, without changing the surrounding dropdown primitive. */
+  font-size: 0.8125rem;
+  line-height: 1.125rem;
+}
+[data-slot="dropdown-menu-content"]:has([data-model-menu-list])
+  :is([data-model-menu-header], [data-model-menu-footer], [data-model-menu-list]) {
+  font-size: 0.8125rem;
+  line-height: 1.125rem;
+}
+[data-slot="dropdown-menu-content"]:has([data-model-menu-list])
+  :is([data-model-menu-header], [data-model-menu-footer], [data-model-menu-list])
+  :is(div, span, p, button) {
+  font-size: 0.8125rem;
+  line-height: 1.125rem;
 }
 [data-model-menu-list] [role="menuitemradio"] {
   position: relative;
-  min-height: 2.25rem;
+  min-height: 2rem;
   margin-inline: 0.125rem;
   border-radius: calc(var(--radius) * 0.8);
   padding-inline: 0.625rem;
@@ -1942,6 +1958,13 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
    conditionally, so emptiness is read from what is actually inside it. */
 [data-chat-input-header]:not(:has(button, span)) {
   display: none;
+}
+
+/* Inline queue editing keeps the global focus ring, but at the queue row's compact scale:
+   the form-size 2px ring around a two-line textarea read as a second card. */
+[data-queued-prompt-editing] textarea:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 18%, transparent);
 }
 
 /* New-task hero: the composer is a standalone module under the greeting, not the bottom dock

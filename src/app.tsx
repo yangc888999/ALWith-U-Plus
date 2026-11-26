@@ -358,6 +358,10 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   const [quickChatDirectoryPending, setQuickChatDirectoryPending] = useState(false)
   const select = useCallback((sessionRow: SessionSummary) => {
     cancel()
+    // A failed model choice leaves a transient error toast keyed to that conversation. Opening
+    // the conversation is an explicit reset of that surface; keeping the old failure on screen
+    // made the first chat look permanently broken even after its model was restored.
+    toast.dismiss(`model-choice:${sessionRow.sessionId}`)
     setQuickChatDirectoryPending(false)
     // A project opened from history must have its memory file too, not only the ones picked in
     // the composer: the read-memory action would otherwise find nothing on older projects.

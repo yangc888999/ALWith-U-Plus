@@ -46,7 +46,15 @@ export function GuideButton(): ReactNode {
         >
           <CircleHelpIcon className="size-4 shrink-0" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent side="top" align="end" sideOffset={8} style={{ width: menuWidth }}>
+        {/* The menu lives under <body>, outside .main-sidebar-panel. Carry the sidebar scale so
+            help rows stay 13px like the account and project popovers, not the 14px app default. */}
+        <DropdownMenuContent
+          data-sidebar-popover=""
+          side="top"
+          align="end"
+          sideOffset={8}
+          style={{ width: menuWidth }}
+        >
           <DropdownMenuItem className="h-8 py-0" onClick={() => setHotkeysOpen(true)}>
             <KeyboardIcon className="text-muted-foreground" />
             {t("shortcuts.title")}

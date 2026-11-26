@@ -346,7 +346,7 @@ test("persistent mismatched or missing provider metadata exhausts bounded retrie
       modelProvider: params.model === "custom-enterprise/DS4.1" ? "alwith" : modelProvider })
     await expect(fixture.switch("gateway:other-enterprise:DS4.1")).rejects.toThrow("did not match the selected runtime after resume retries")
     expect(fixture.calls.resumes.map((params) => params.model)).toEqual([
-      ...Array(4).fill("other-enterprise/DS4.1"), "custom-enterprise/DS4.1"
+      ...Array(9).fill("other-enterprise/DS4.1"), "custom-enterprise/DS4.1"
     ])
     expect(fixture.calls.authReads).toEqual([])
     expect(fixture.session.authProvider).toBe("alwith")
@@ -369,13 +369,35 @@ test("a provider that settles within the retry bound publishes auth only after m
   expect(fixture.calls.releases).toBe(1)
 })
 
+test("a loaded thread is detached before retrying so the new model can land", async () => {
+  const fixture = rebindFixture()
+  fixture.respond = (params, attempt) => {
+    // The initial detach already happened before the first resume. A loaded thread keeps
+    // answering with its old gateway model until a retry detaches it again. This is the
+    // Fable 5.1 -> native Sol shape: the target is a plain model, not another gateway.
+    const detachedForRetry = fixture.calls.unsubscribes.length > 1
+    return {
+      thread: { id: params.threadId },
+      model: attempt === 1 || !detachedForRetry ? "custom-enterprise/DS4.1" : params.model,
+      modelProvider: params.modelProvider
+    }
+  }
+  await fixture.switch("DS4.1")
+  expect(fixture.calls.resumes.map((params) => params.model)).toEqual([
+    "DS4.1",
+    "DS4.1"
+  ])
+  expect(fixture.calls.unsubscribes).toHaveLength(2)
+  expect(fixture.calls.authReads).toEqual(["alwith"])
+})
+
 test("a shared runtime acknowledging the old logical model cannot confirm a switch", async () => {
   const fixture = rebindFixture()
   fixture.respond = (params) => ({ thread: { id: params.threadId }, model: "custom-enterprise/DS4.1", modelProvider: "alwith" })
   fixture.agent.activePrompts.set("unrelated-thread", { completion: new Promise(() => {}) })
   await expect(fixture.switch("gateway:other-enterprise:DS4.1")).rejects.toThrow("did not match")
   expect(fixture.calls.resumes.map((call) => call.model)).toEqual([
-    ...Array(4).fill("other-enterprise/DS4.1"), "custom-enterprise/DS4.1"
+    ...Array(9).fill("other-enterprise/DS4.1"), "custom-enterprise/DS4.1"
   ])
   expect(fixture.calls.authReads).toEqual([])
   expect(fixture.calls.closed).toBe(0)
