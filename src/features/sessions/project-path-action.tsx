@@ -48,7 +48,7 @@ export function ProjectPathAction({
     >
       <ProjectAppIcon app={editor.active} />
       <OverflowMarquee className="flex-1 text-start">
-        {appearance === "session" ? t("actions.openFolder") : cwd}
+        {t("actions.openFolder")}
       </OverflowMarquee>
       <span className="invisible shrink-0 rounded-sm p-0.5 group-hover/path:visible group-focus-visible/path:visible">
         <ArrowUpRightIcon className="size-4" />

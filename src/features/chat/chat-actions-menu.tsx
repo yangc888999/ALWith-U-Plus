@@ -63,7 +63,7 @@ export function ChatActionsMenu({
   cwd: string | null
   onNewChat: () => void
   onNewProject?: () => void
-  onDeleted?: (sessionId: string) => void
+  onDeleted?: (sessionId: string, cwd: string) => void
 }) {
   const { t } = useTranslation()
   const canRename = useApp((state) => hasRename(state.agent))
@@ -86,7 +86,7 @@ export function ChatActionsMenu({
         await client.renameSession(session.id, name.trim())
       } else {
         await client.delete(session.id)
-        onDeleted?.(session.id)
+        onDeleted?.(session.id, session.cwd)
       }
       setDialog(null)
     } catch (error) {

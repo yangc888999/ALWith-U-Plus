@@ -102,7 +102,7 @@ import { notifyConversation } from "@/lib/notify"
 import { type Preferences, savePreference } from "@/lib/preferences"
 import { ensureProjectMemory } from "@/lib/project-memory"
 import { applyProvidersWhenIdle } from "@/lib/providers"
-import { createChatDirectory, isTemporaryChatDir } from "@/lib/quick-chat"
+import { createChatDirectory, deleteChatOwnDirectory, isTemporaryChatDir } from "@/lib/quick-chat"
 import {
   type CachedRateLimits,
   hasRateLimitWindows,
@@ -147,6 +147,9 @@ const MeetingsPage = lazy(() =>
   import("@/features/groups/meetings-page").then((module) => ({ default: module.MeetingsPage }))
 )
 const UsagePage = lazy(() => import("@/features/usage/usage-page").then((module) => ({ default: module.UsagePage })))
+const OnlineBiPage = lazy(() =>
+  import("@/features/workspace/online-bi-page").then((module) => ({ default: module.OnlineBiPage }))
+)
 const SkillsPage = lazy(() =>
   import("@/features/plugins/skills-page").then((module) => ({ default: module.SkillsPage }))
 )
@@ -209,6 +212,13 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     initialPreferences.defaultStartSurface === "chat" ? null : initialPreferences.lastProjectDirectory
   )
   const [draftStartSurface, setDraftStartSurface] = useState<"chat" | "work">(initialPreferences.defaultStartSurface)
+  // A conversation started from a project folder is a project conversation from the first frame:
+  // it opens the four-column workspace and skips the generic "new task" hero. This is explicit
+  // rather than inferred from `lastDirectory`, because a restored last folder must not turn a
+  // normal launch into a project session.
+  const [draftProjectSession, setDraftProjectSession] = useState(false)
+  // Quick-chat creation skips the generic welcome screen and opens the composer directly.
+  const [draftDirectChat, setDraftDirectChat] = useState(false)
   const providerSnapshot = useProviders()
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [hotkeysOpen, setHotkeysOpen] = useState(false)
@@ -228,6 +238,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     view === "skills" ||
     view === "groups" ||
     view === "automation" ||
+    view === "online-bi" ||
     view === "archives" ||
     view === "usage"
   const [extensionView, setExtensionView] = useState<string | null>(null)
@@ -272,6 +283,10 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     setLeadingPage("automation")
     setView("automation")
   }, [])
+  const openOnlineBi = useCallback(() => {
+    setLeadingPage("online-bi")
+    setView("online-bi")
+  }, [])
   const openGroups = useCallback((focusRoles = false) => {
     setLeadingPage("groups")
     setView("groups")
@@ -290,15 +305,14 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       else if (page === "skills") openSkills()
       else if (page === "groups") openGroups(false)
       else if (page === "automation") openAutomation()
+      else if (page === "online-bi") openOnlineBi()
       else if (page === "archives") openArchives()
       else openUsage()
     },
-    [openPlugins, openExtensions, openSkills, openGroups, openAutomation, openArchives, openUsage]
+    [openPlugins, openExtensions, openSkills, openGroups, openAutomation, openOnlineBi, openArchives, openUsage]
   )
-  // The online BI surface is a child webview of the main window, so it stays glued on top when the
-  // canvas slides to the leading screen (the main content is only `inert`, never unmounted). Close
-  // both the preview extension and the standalone BI window the moment we leave the main screen, so
-  // the floating BI panel auto-dismisses instead of lingering over the leading view.
+  // Preview extensions and the standalone BI window are main-screen surfaces. The dedicated
+  // workbench Online BI page owns its own native view and closes it on unmount.
   const closePreviewExtension = usePreviewExtension((state) => state.close)
   useEffect(() => {
     if (!leading) return
@@ -402,12 +416,31 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       {
         connect: async () => {
           await client.connect()
-          if (client.state.draftSessions[sessionRow.sessionId] !== "main") await client.discardDraft("main")
         },
         unarchive: (id) => client.unarchive(id),
         release: async (id) => {
+          // Bringing a floating draft back into `main` deletes the current main draft slot. Save
+          // that unsent text/attachments first so clicking the pending row later restores them;
+          // otherwise a screenshot attached before switching disappears with the engine session.
+          const targetIsDraft = client.state.draftSessions[id] !== undefined
+          const outgoingDraftId = targetIsDraft
+            ? Object.keys(client.state.draftSessions).find(
+                (draftId) => client.state.draftSessions[draftId] === "main" && draftId !== id
+              )
+            : undefined
+          const outgoingDraft =
+            outgoingDraftId === undefined ? null : await exportDraft(outgoingDraftId).catch(() => null)
           const transfer = await releaseChatWindow(id)
-          await client.transferDraft(id, "main")
+          try {
+            await client.transferDraft(id, "main")
+          } finally {
+            if (
+              outgoingDraft !== null &&
+              outgoingDraftId !== undefined &&
+              client.state.draftSessions[outgoingDraftId] === undefined
+            )
+              importDraft(DRAFT_SESSION_ID, outgoingDraft)
+          }
           return transfer
         },
         importDraft,
@@ -612,6 +645,8 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     if (directory === lastDirectory) return
     if (isGroupDirectory(directory)) cancel()
     else begin(directory)
+    setDraftProjectSession(!isTemporaryChatDir(directory) && !isGroupDirectory(directory))
+    setDraftDirectChat(isTemporaryChatDir(directory))
     chooseDraftFolder(directory)
   }
   const newChatInDirectory = useCallback(
@@ -633,6 +668,10 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
               collectionId === undefined ? null : { id: collectionId, generation: surfaceGeneration + 1 }
             )
             setDraftStartSurface(isTemporaryChatDir(directory) ? initialPreferences.defaultStartSurface : "work")
+            setDraftProjectSession(
+              groupId === null && !isTemporaryChatDir(directory) && !isGroupDirectory(directory)
+            )
+            setDraftDirectChat(groupId === null && isTemporaryChatDir(directory))
             // A group draft still owns the meeting folder; binding it here keeps four columns and the
             // group's files visible before the first message creates a session id.
             chooseDraftFolder(directory, groupId)
@@ -723,6 +762,8 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
             // Clearing the context means the next visit starts on a fresh draft in the same project,
             // not on the chat that was just archived. The project itself is remembered separately.
             chooseDraftFolder(cwd)
+            setDraftProjectSession(!isTemporaryChatDir(cwd) && !isGroupDirectory(cwd))
+            setDraftDirectChat(isTemporaryChatDir(cwd))
             importDraft(DRAFT_SESSION_ID, null)
             setSurfaceGeneration((value) => value + 1)
             setChatRevealRequest((value) => value + 1)
@@ -782,6 +823,10 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                 }
                 if (signal.abandoned) return null
                 importDraft(transfer.sessionId ?? DRAFT_SESSION_ID, transfer.draft)
+                setDraftProjectSession(
+                  transfer.cwd !== null && !isTemporaryChatDir(transfer.cwd) && !isGroupDirectory(transfer.cwd)
+                )
+                setDraftDirectChat(transfer.cwd !== null && isTemporaryChatDir(transfer.cwd))
                 setLastDirectory(transfer.cwd)
                 setSelectedId(transfer.sessionId)
                 setSurfaceGeneration((value) => value + 1)
@@ -1170,7 +1215,12 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
             error: null
           }))
           try {
-            const failures = await commands.larkCliSend({ targets, text, identity: request.larkIdentity })
+            const failures = await commands.larkCliSend({
+              targets,
+              text,
+              identity: request.larkIdentity,
+              format: request.larkMessageFormat ?? "markdown"
+            })
             for (const receipt of receipts) {
               const failure = failures.find(
                 (entry) => entry.startsWith(`${receipt.targetName}：`) || entry.startsWith(`${receipt.targetName}:`)
@@ -1378,20 +1428,13 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       else newChatInDirectory(cwd)
     }
 
-    const deleted = (sessionId: string): void => {
+    const deleted = (sessionId: string, cwd: string): void => {
       setSelectedId((current) => (current === sessionId ? null : current))
-      // A temporary chat owns its folder, so deleting the conversation takes it along. Only the
-      // conversation on screen is known here: a background one was released before this callback
-      // and its cwd is gone. Say so instead of deleting a guessed path — and tell the reader how to
-      // get the folder cleaned up, which is to open that conversation and delete it from there.
-      if (session !== null && session.id === sessionId) {
-        if (isTemporaryChatDir(session.cwd) && session.cwd !== null) {
-          const path = session.cwd
-          void commands.deleteChatDirectory({ path }).catch(() => {})
-        }
-      } else if (draftSessions[sessionId] === undefined) {
-        toast.info(t("chat.folderLeftBehind"), { id: "chat-folder-left", duration: 8000 })
-      }
+      // Every temporary conversation owns exactly one folder. The menu passes its cwd so this
+      // also works for a session that is not the one currently rendered.
+      void deleteChatOwnDirectory(cwd).catch((error: unknown) =>
+        toast.error(t("chat.folderDeleteFailed", { message: describeError(error) }))
+      )
     }
     // A picked conversation whose preparation is still running gets its own surface. Rendering the
     // draft composer here would let the reader type into a draft that `transferDraft`/`importDraft`
@@ -1443,6 +1486,8 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           key={`draft-${surfaceGeneration}`}
           onNewChat={newChat}
           startSurface={draftStartSurface}
+          projectSession={draftProjectSession}
+          directChat={draftDirectChat}
           cwd={lastDirectory}
           projectMenu={
             <ChatProjectMenu
@@ -1549,6 +1594,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                 onOpenExtensions={openExtensions}
                 onOpenGroups={() => openGroups(false)}
                 onOpenAutomation={openAutomation}
+                onOpenOnlineBi={openOnlineBi}
                 onOpenUsage={openUsage}
                 onOpenSkills={openSkills}
               >
@@ -1606,6 +1652,12 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                   <div className="min-h-0 flex-1 overflow-auto">
                     <Suspense fallback={null}>
                       <UsagePage />
+                    </Suspense>
+                  </div>
+                ) : leadingPage === "online-bi" ? (
+                  <div className="flex min-h-0 flex-1 flex-col">
+                    <Suspense fallback={null}>
+                      <OnlineBiPage />
                     </Suspense>
                   </div>
                 ) : leadingPage === "skills" ? (
@@ -1676,6 +1728,8 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                               await client.discardDraft("main")
                               flushSync(() => {
                                 chooseDraftFolder(root.localPath)
+                                setDraftProjectSession(true)
+                                setDraftDirectChat(false)
                                 importDraft(DRAFT_SESSION_ID, null)
                                 setSurfaceGeneration((value) => value + 1)
                                 setSelectedId(null)

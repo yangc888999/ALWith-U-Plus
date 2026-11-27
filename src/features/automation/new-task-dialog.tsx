@@ -51,6 +51,7 @@ export const DEFAULT_TASK_DRAFT: TaskDraft = {
   fastMode: false,
   larkNotify: false,
   larkTargets: [],
+  larkMessageFormat: "markdown",
   larkIdentity: "bot",
   repeat: "daily",
   intervalMinutes: 60,
@@ -113,6 +114,7 @@ function draftFromTask(task: ScheduledTask | null): TaskDraft {
     fastMode: task.fastMode,
     larkNotify: task.larkNotify,
     larkTargets: task.larkTargets,
+    larkMessageFormat: task.larkMessageFormat ?? "markdown",
     larkIdentity: task.larkIdentity,
     repeat: task.repeat,
     intervalMinutes: task.intervalMinutes,
@@ -607,6 +609,25 @@ export function NewTaskDialog({
                       </Button>
                     </div>
                   )}
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="automation-lark-format" className="text-xs font-medium text-foreground/80">
+                      {t("automation.fieldLarkFormat")}
+                    </label>
+                    <select
+                      id="automation-lark-format"
+                      className={selectClass}
+                      value={form.larkMessageFormat ?? "markdown"}
+                      onChange={(event) =>
+                        patch({
+                          larkMessageFormat: event.target.value === "text" ? "text" : "markdown"
+                        })
+                      }
+                    >
+                      <option value="markdown">{t("automation.larkFormatMarkdown")}</option>
+                      <option value="text">{t("automation.larkFormatText")}</option>
+                    </select>
+                    <p className="text-[11px] leading-4 text-muted-foreground">{t("automation.larkFormatHint")}</p>
+                  </div>
                   <div className="space-y-2">
                     <span className="text-xs font-medium text-foreground/80">{t("automation.fieldLarkIdentity")}</span>
                     <div
@@ -661,32 +682,29 @@ export function NewTaskDialog({
                     <p className="text-[11px] leading-4 text-muted-foreground">{t("automation.larkIdentityHint")}</p>
                   </div>
                   {selfTarget !== null && (
-                    <div className="flex items-center justify-between gap-2 rounded-md border border-border/50 bg-background/60 px-3 py-2">
+                    <div className="flex items-center justify-between gap-3 rounded-md border border-border/50 bg-background/60 px-3 py-2">
                       <div className="min-w-0">
                         <div className="truncate text-xs font-medium text-foreground">
-                          {t("automation.larkSelfTarget", { name: selfTarget.name })}
+                          {t("automation.larkSelfSend")}
                         </div>
-                        <div className="truncate font-mono text-[10px] text-muted-foreground">{selfTarget.id}</div>
+                        <div className="truncate text-[11px] text-muted-foreground">
+                          {t("automation.larkSelfSendHint", { name: selfTarget.name })}
+                        </div>
                       </div>
-                      {/* 默认收件人已经在列表里了就不再摆一个灰掉的按钮。 */}
-                      {!form.larkTargets.some((entry) => entry.id === selfTarget.id) && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="h-6 shrink-0 px-2 text-[11px]"
-                          onClick={() =>
-                            patch({
-                              larkTargets: [
-                                selfTarget,
-                                ...form.larkTargets.filter((entry) => entry.id !== selfTarget.id)
-                              ]
-                            })
-                          }
-                        >
-                          {t("automation.larkAddSelf")}
-                        </Button>
-                      )}
+                      <Switch
+                        checked={form.larkTargets.some((entry) => entry.id === selfTarget.id)}
+                        onCheckedChange={(checked) =>
+                          patch({
+                            larkTargets: checked
+                              ? [
+                                  selfTarget,
+                                  ...form.larkTargets.filter((entry) => entry.id !== selfTarget.id)
+                                ]
+                              : form.larkTargets.filter((entry) => entry.id !== selfTarget.id)
+                          })
+                        }
+                        aria-label={t("automation.larkSelfSend")}
+                      />
                     </div>
                   )}
                   <div className="flex flex-col gap-1.5">

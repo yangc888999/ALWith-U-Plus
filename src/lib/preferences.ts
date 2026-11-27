@@ -16,6 +16,8 @@ export type Preferences = {
   sidebarPinned: boolean
   chatWindowShortcut?: string
   lastProjectDirectory: string | null
+  /** Root folder that owns per-chat timestamp directories. null = historical default. */
+  chatDirectory?: string | null
   /** Which new-task tab the next launch opens on. */
   defaultStartSurface: "chat" | "work"
   language: string | null
@@ -42,6 +44,7 @@ const preferenceKeys: Record<keyof Preferences, string> = {
   sidebarPinned: "appearance.sidebarPinned",
   chatWindowShortcut: "chat.windowShortcut",
   lastProjectDirectory: "general.lastProjectDirectory",
+  chatDirectory: "general.chatDirectory",
   defaultStartSurface: "general.defaultStartSurface",
   language: "general.language",
   zoomLevel: "appearance.zoomLevel",
@@ -70,6 +73,7 @@ export function defaultPreferences(): Preferences {
     sidebarPinned: true,
     chatWindowShortcut: "Alt+Space",
     lastProjectDirectory: null,
+    chatDirectory: null,
     defaultStartSurface: "chat",
     language: null,
     zoomLevel: null,
@@ -89,6 +93,7 @@ export async function loadPreferences(): Promise<Preferences> {
   await settingsStore.read()
   const [
     lastProjectDirectory,
+    chatDirectory,
     defaultStartSurface,
     language,
     zoomLevel,
@@ -101,6 +106,7 @@ export async function loadPreferences(): Promise<Preferences> {
     fontSizes
   ] = await Promise.all([
     store.get<string>("lastProjectDirectory"),
+    store.get<string>("chatDirectory"),
     store.get<"chat" | "work">("defaultStartSurface"),
     store.get<string>("language"),
     store.get<number>("zoomLevel"),
@@ -131,6 +137,7 @@ export async function loadPreferences(): Promise<Preferences> {
     sidebarPinned: sidebarPinned ?? true,
     chatWindowShortcut: (await store.get<string>("chatWindowShortcut")) ?? "Alt+Space",
     lastProjectDirectory: restoredDirectory,
+    chatDirectory: chatDirectory ?? null,
     defaultStartSurface: defaultStartSurface === "work" ? "work" : "chat",
     language: language ?? null,
     zoomLevel: zoomLevel ?? null,

@@ -215,7 +215,8 @@ describe("任务 CRUD 与启停", () => {
     const restored = await reloaded()
     expect(restored.getTask("legacy")).toMatchObject({
       larkNotify: false,
-      larkTargets: []
+      larkTargets: [],
+      larkMessageFormat: "markdown"
     })
     expect(restored.getTask("legacy")).not.toHaveProperty("larkEmptyResultNoticeToSelf")
   })

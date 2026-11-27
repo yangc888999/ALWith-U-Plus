@@ -518,6 +518,7 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 online_bi::online_bi_credentials_save_token,
                 online_bi_embed::online_bi_embed_mount,
                 online_bi_embed::online_bi_embed_navigate,
+                online_bi_embed::online_bi_embed_current_url,
                 online_bi_embed::online_bi_embed_set_visible,
                 online_bi_embed::online_bi_embed_close,
                 session_origin::apply_session_provider,

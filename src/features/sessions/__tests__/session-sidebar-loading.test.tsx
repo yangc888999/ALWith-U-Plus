@@ -114,12 +114,13 @@ test("only the matching, renderable native row can replace a new project placeho
   expect(loading.getByRole("button", { name: "Previous draft" })).toBeVisible()
 })
 
-test("empty quick chats stays first and collapsed with a project hover card", () => {
+test("empty quick chats stays first, collapsed, with an inline create button and no hover card", () => {
   client.store.setState({ sessionListLoaded: true, sessionList: [] })
   const view = showSidebar()
   const quick = view.getByRole("button", { name: "Chats (0)" })
   expect(quick).toHaveAttribute("aria-expanded", "false")
-  expect(quick.closest('[data-slot="popover-trigger"]')).not.toBeNull()
+  expect(quick.closest('[data-slot="popover-trigger"]')).toBeNull()
+  expect(view.getByRole("button", { name: "Create new chat" })).toBeVisible()
   // Every group starts collapsed, so nothing in the sidebar is expanded yet.
   expect(view.queryAllByRole("button", { expanded: true })).toHaveLength(0)
 })

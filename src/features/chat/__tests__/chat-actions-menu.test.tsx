@@ -57,7 +57,7 @@ test("delete requires confirmation, keeps the dialog on failure and reports the 
   const state = client.state
   client.store.setState({ connection: "ready" })
   const remove = vi.spyOn(client, "delete").mockRejectedValueOnce(new Error("Cannot delete yet")).mockResolvedValue()
-  const deleted: string[] = []
+  const deleted: Array<[string, string]> = []
   try {
     const view = render(
       <ChatActionsMenu
@@ -65,7 +65,7 @@ test("delete requires confirmation, keeps the dialog on failure and reports the 
         session={createSession("floating-id", "/tmp/project")}
         cwd="/tmp/project"
         onNewChat={() => {}}
-        onDeleted={(id) => deleted.push(id)}
+        onDeleted={(id, cwd) => deleted.push([id, cwd])}
       />
     )
     await act(() => {
@@ -91,7 +91,7 @@ test("delete requires confirmation, keeps the dialog on failure and reports the 
         fireEvent.click(view.getByRole("button", { name: "Delete" }))
       })
     })
-    await waitFor(() => expect(deleted).toEqual(["floating-id"]))
+    await waitFor(() => expect(deleted).toEqual([["floating-id", "/tmp/project"]]))
     expect(remove).toHaveBeenCalledWith("floating-id")
   } finally {
     remove.mockRestore()

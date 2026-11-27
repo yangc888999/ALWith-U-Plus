@@ -14,6 +14,7 @@ pub const PREFERENCE_KEYS: &[(&str, &str)] = &[
     ("sidebarPinned", "appearance.sidebarPinned"),
     ("chatWindowShortcut", "chat.windowShortcut"),
     ("lastProjectDirectory", "general.lastProjectDirectory"),
+    ("chatDirectory", "general.chatDirectory"),
     ("modelSelections", "chat.modelSelections"),
     ("navigationSoundMode", "chat.navigationSoundMode"),
     ("navigationInstrument", "chat.navigationInstrument"),
@@ -351,6 +352,7 @@ fn setting_validity(key: &str, value: &Value) -> Option<bool> {
         | "editor.renderWhitespace" => value.is_boolean(),
         "general.language"
         | "general.lastProjectDirectory"
+        | "general.chatDirectory"
         | "general.externalEditor"
         | "chat.windowShortcut"
         | "chat.navigationInstrument"

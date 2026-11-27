@@ -110,7 +110,7 @@ export const commands = {
   larkCliStatus: (): Promise<LarkCliStatus_Serialize> => __t3Invoke<LarkCliStatus_Serialize>("lark_cli_status"),
   larkCliTargets: (args: { kind: string; query: string }): Promise<LarkTarget[]> =>
     __t3Invoke<LarkTarget[]>("lark_cli_targets", args),
-  larkCliSend: (args: { targets: LarkTarget[]; text: string; identity: string }): Promise<string[]> =>
+  larkCliSend: (args: { targets: LarkTarget[]; text: string; identity: string; format: string }): Promise<string[]> =>
     __t3Invoke<string[]>("lark_cli_send", args),
   larkCliInstall: (): Promise<InstallResult> => __t3Invoke<InstallResult>("lark_cli_install"),
   /**
@@ -654,6 +654,12 @@ export const commands = {
    */
   onlineBiEmbedNavigate: (args: { url: string }): Promise<null> => __t3Invoke<null>("online_bi_embed_navigate", args),
   /**
+   *  The report address the native view is on right now. This is the source of truth for 「取当前地址」:
+   *  the page can navigate itself inside Streamlit, so the address bar in the host webview cannot
+   *  infer the final report URL from the URL it requested.
+   */
+  onlineBiEmbedCurrentUrl: (): Promise<string | null> => __t3Invoke<string | null>("online_bi_embed_current_url"),
+  /**
    *  Hides the view without destroying it: the session lives in this window's cookie jar.
    */
   onlineBiEmbedSetVisible: (args: { visible: boolean }): Promise<null> =>
@@ -686,7 +692,7 @@ export const commands = {
    */
   quickChatDirectory: (): Promise<string> => __t3Invoke<string>("quick_chat_directory"),
   /**
-   *  A fresh folder for one temporary chat: `<quick-chat>/Chat/<stamp>/`.
+   *  A fresh folder for one temporary chat: `<configured-root>/<YY-MM-DD-HH-MM-SS>/`.
    *
    *  Chats used to share one directory, so their memory and any files they produced all landed in the
    *  same place and could not be removed together. One folder per conversation lets the whole thing
@@ -697,8 +703,8 @@ export const commands = {
   /**
    *  Removes a temporary chat's own folder when the conversation is deleted.
    *
-   *  Guarded on purpose: the path must sit under `<quick-chat>/Chat/`, so a malformed or hostile
-   *  caller cannot point this at a project (or anywhere else).
+   *  Guarded on purpose: the target must be a timestamp folder. A marked folder may live under any
+   *  former configured root; the unmarked legacy `Chat/<stamp>` shape remains supported.
    */
   deleteChatDirectory: (args: { path: string }): Promise<null> => __t3Invoke<null>("delete_chat_directory", args),
   /**
@@ -962,6 +968,7 @@ export type CommandErrors = {
   onlineBiCredentialsSaveToken: string
   onlineBiEmbedMount: string
   onlineBiEmbedNavigate: string
+  onlineBiEmbedCurrentUrl: string
   onlineBiEmbedSetVisible: string
   onlineBiEmbedClose: string
   applySessionProvider: string

@@ -521,3 +521,14 @@ fn the_drive_master_switch_is_a_registered_boolean_setting() {
     assert!(!private.contains_key("drive.yupEnabled"));
     assert!(s.update(changes(json!({"drive.yupEnabled": "no"})), None).is_err());
 }
+
+#[test]
+fn the_chat_storage_root_is_a_registered_path_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = SettingsStore::load(dir.path().into()).unwrap();
+    s.update(changes(json!({"general.chatDirectory": "/Volumes/Work/ALWith Chats"})), None).unwrap();
+    assert_eq!(s.values["general.chatDirectory"], "/Volumes/Work/ALWith Chats");
+    s.update(changes(json!({"general.chatDirectory": serde_json::Value::Null})), None).unwrap();
+    assert!(!s.values.contains_key("general.chatDirectory"));
+    assert!(s.update(changes(json!({"general.chatDirectory": 42})), None).is_err());
+}

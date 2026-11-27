@@ -1,17 +1,19 @@
 /**
- * 「在线 BI」 — the company BI dashboard, opened from the sidebar in the preview column.
+ * 「在线 BI」 — the company BI dashboard, opened as a full workbench page.
  *
- * It is not an extension (BI 指标 comes from the extension host); this is one fixed URL the app
- * hosts itself, mounted in the same preview slot so it reads like its sibling.
+ * It is not an extension (BI 指标 comes from the extension host); the workbench page owns the
+ * native view directly so tabs, address navigation and the report session share one cookie jar.
  *
  * The board restores a session from `?s=<JWT>`, the same trick the BI Metrics extension uses. The
  * embedded URL is built from the stored token and page, and a live token is reused when a BI window
  * is already open.
  */
 export const ONLINE_BI_VIEW_ID = "alwith:online-bi"
+const ONLINE_BI_ORIGIN = "https://bi.finture.id"
+const ONLINE_BI_DEFAULT_REPORT_URL = `${ONLINE_BI_ORIGIN}/personal_dashboard`
 // Open the board itself (not the bare portal root): after sign-in Streamlit appends ?s=<JWT> here,
 // which is exactly what the embedded frame needs. The root / is a separate portal and ignores it.
-export const ONLINE_BI_URL = "https://bi.finture.id/personal_dashboard?embed=true&embed_options=show_padding"
+export const ONLINE_BI_URL = `${ONLINE_BI_DEFAULT_REPORT_URL}?embed=true&embed_options=show_padding`
 /** Which page the preview column opens: `/personal_dashboard` unless the reader changed it. */
 const ONLINE_BI_PATH_KEY = "alwith:online-bi-path"
 
@@ -22,6 +24,43 @@ function storedOnlineBiPath(): string {
 
 export function saveOnlineBiPath(path: string): void {
   localStorage.setItem(ONLINE_BI_PATH_KEY, path.trim())
+}
+
+/** Normalize a full URL or a path pasted into 在线 BI. Tokens and embed-only flags never persist. */
+export function normalizeOnlineBiReportUrl(raw: string): string | null {
+  let value = raw.trim()
+  if (value === "") return null
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) {
+    if (value.startsWith("/") || value.startsWith("?") || !value.includes(".")) {
+      value = `${ONLINE_BI_ORIGIN}/${value.replace(/^\/+/, "")}`
+    } else {
+      value = `https://${value}`
+    }
+  }
+  try {
+    const parsed = new URL(value)
+    if (parsed.hostname !== "bi.finture.id") return null
+    parsed.searchParams.delete("s")
+    parsed.searchParams.delete("embed")
+    parsed.searchParams.delete("embed_options")
+    return parsed.toString()
+  } catch {
+    return null
+  }
+}
+
+/** The address the native view should load: normalized report URL plus Streamlit's embed switches. */
+export function onlineBiEmbedUrl(reportUrl: string): string {
+  const normalized = normalizeOnlineBiReportUrl(reportUrl) ?? ONLINE_BI_DEFAULT_REPORT_URL
+  const parsed = new URL(normalized)
+  parsed.searchParams.set("embed", "true")
+  parsed.searchParams.set("embed_options", "show_padding")
+  return parsed.toString()
+}
+
+/** Last single-page address from older builds, promoted into the default tab. */
+export function onlineBiStoredReportUrl(): string {
+  return normalizeOnlineBiReportUrl(`${ONLINE_BI_ORIGIN}${storedOnlineBiPath()}`) ?? ONLINE_BI_DEFAULT_REPORT_URL
 }
 
 /** Closes the sign-in window once the frame can take over. */
@@ -67,20 +106,26 @@ async function extractOnlineBiToken(): Promise<string | null> {
  * signed in without the user copy-pasting anything.
  */
 export async function getOnlineBiEmbedSrc(): Promise<string> {
+  return getOnlineBiEmbedSrcFor(onlineBiStoredReportUrl())
+}
+
+/** Build an authenticated embed URL for any selected report tab. */
+export async function getOnlineBiEmbedSrcFor(reportUrl: string): Promise<string> {
   const { invoke } = await import("@tauri-apps/api/core")
-  // The stored credentials decide the origin and the token; the page comes from the local setting,
-  // so changing it never needs the keychain round-trip.
-  const base = withStoredPath(await invoke<string>("online_bi_embed_url"))
+  const base = onlineBiEmbedUrl(reportUrl)
   // A real token is a long JWT-ish string; a path like /personal_dashboard is a common mis-paste
   // that would make the embed fail silently, so treat it as "no usable token" and try the window.
-  const storedToken = base.match(/[?&]s=([^&]*)/)?.[1] ?? ""
+  const configured = await invoke<string>("online_bi_embed_url")
+  const storedToken = configured.match(/[?&]s=([^&]*)/)?.[1] ?? ""
   const storedLooksValid = storedToken.length > 16 && !/^\/|personal_dashboard/i.test(storedToken)
-  if (storedLooksValid) return base
-  const token = await extractOnlineBiToken()
-  if (token) {
-    const separator = base.includes("?") ? "&" : "?"
-    return `${base}${separator}s=${encodeURIComponent(token)}`
+  const authenticated = (token: string): string => {
+    const parsed = new URL(base)
+    parsed.searchParams.set("s", token)
+    return parsed.toString()
   }
+  if (storedLooksValid) return authenticated(storedToken)
+  const token = await extractOnlineBiToken()
+  if (token) return authenticated(token)
   return base
 }
 
@@ -95,17 +140,6 @@ export function stripOnlineBiToken(url: string): string {
   try {
     const parsed = new URL(url)
     parsed.searchParams.delete("s")
-    return parsed.toString()
-  } catch {
-    return url
-  }
-}
-
-/** Keeps the origin and query of `url`, swaps the path for the one stored in settings. */
-function withStoredPath(url: string): string {
-  try {
-    const parsed = new URL(url)
-    parsed.pathname = storedOnlineBiPath()
     return parsed.toString()
   } catch {
     return url

@@ -33,6 +33,7 @@ test("leading navigation switches pages and is inaccessible on the main screen",
               onOpenExtensions={() => setPage("extensions")}
               onOpenArchives={() => setPage("archives")}
               onOpenAutomation={() => setPage("automation")}
+              onOpenOnlineBi={() => setPage("online-bi")}
               onOpenGroups={() => setPage("groups")}
               onOpenUsage={() => setPage("usage")}
               onOpenSkills={() => setPage("skills")}
@@ -53,6 +54,7 @@ test("leading navigation switches pages and is inaccessible on the main screen",
     ["Skills", "skills"],
     ["Meetings", "groups"],
     ["Scheduled tasks", "automation"],
+    ["Online BI", "online-bi"],
     ["Archive", "archives"],
     ["Usage", "usage"]
   ] as const) {
@@ -80,6 +82,7 @@ test("the navigation collapse control uses a compact chevron", () => {
       onOpenExtensions={() => {}}
       onOpenArchives={() => {}}
       onOpenAutomation={() => {}}
+      onOpenOnlineBi={() => {}}
       onOpenGroups={() => {}}
       onOpenUsage={() => {}}
       onOpenSkills={() => {}}

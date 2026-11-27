@@ -1,7 +1,7 @@
 import { ArchiveIcon, BlocksIcon, GaugeIcon, PuzzleIcon, SparklesIcon } from "lucide-react"
 import type { ComponentType, SVGProps } from "react"
 
-import { MeetingsGlyph, ScheduledTasksGlyph } from "./feature-glyphs"
+import { MeetingsGlyph, OnlineBiGlyph, ScheduledTasksGlyph } from "./feature-glyphs"
 
 export type WorkbenchPage =
   | "overview"
@@ -10,6 +10,7 @@ export type WorkbenchPage =
   | "skills"
   | "groups"
   | "automation"
+  | "online-bi"
   | "archives"
   | "usage"
 
@@ -69,6 +70,12 @@ export const WORKBENCH_GROUPS: WorkbenchFeatureGroup[] = [
         labelKey: "workbench.automation",
         descriptionKey: "workbench.automationDesc",
         icon: ScheduledTasksGlyph
+      },
+      {
+        id: "online-bi",
+        labelKey: "workbench.onlineBi",
+        descriptionKey: "workbench.onlineBiDesc",
+        icon: OnlineBiGlyph
       }
     ]
   },

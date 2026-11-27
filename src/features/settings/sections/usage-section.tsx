@@ -126,7 +126,7 @@ function money(value: number, locale: string): string {
 }
 
 const HEAT_TIERS = [
-  "color-mix(in oklab, var(--muted-foreground) 12%, transparent)",
+  "color-mix(in oklab, var(--muted-foreground) 18%, var(--card))",
   "color-mix(in oklab, var(--settings-accent) 25%, transparent)",
   "color-mix(in oklab, var(--settings-accent) 45%, transparent)",
   "color-mix(in oklab, var(--settings-accent) 70%, transparent)",
@@ -1087,7 +1087,7 @@ export function UsageSection({
               value={externalEnabled ? usageScope : "internal"}
               onValueChange={(value) => setUsageScope(value as UsageScopeFilter)}
             >
-              <SelectTrigger size="sm" aria-label={t("usageReport.scopeLabel")} className="w-[140px]">
+              <SelectTrigger size="sm" aria-label={t("usageReport.scopeLabel")} className="min-w-[7.5rem] max-w-[13rem]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1101,7 +1101,7 @@ export function UsageSection({
               value={range}
               onValueChange={(value) => setRange(value as Range)}
             >
-              <SelectTrigger size="sm" aria-label={t("usageReport.rangeLabel")} className="w-[128px]">
+              <SelectTrigger size="sm" aria-label={t("usageReport.rangeLabel")} className="min-w-[8rem] max-w-[12rem]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1289,7 +1289,7 @@ export function UsageSection({
                   value={groupBy}
                   onValueChange={(value) => setGroupBy(value as GroupBy)}
                 >
-                  <SelectTrigger size="sm" aria-label={t("usageReport.group")} className="w-[96px]">
+                  <SelectTrigger size="sm" aria-label={t("usageReport.group")} className="min-w-[6rem] max-w-[10rem]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1309,7 +1309,7 @@ export function UsageSection({
                   value={metric}
                   onValueChange={(value) => setMetric(value as Metric)}
                 >
-                  <SelectTrigger size="sm" aria-label={t("usageReport.metric")} className="w-[104px]">
+                  <SelectTrigger size="sm" aria-label={t("usageReport.metric")} className="min-w-[6.5rem] max-w-[10rem]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1325,7 +1325,7 @@ export function UsageSection({
                   value={String(top)}
                   onValueChange={(value) => setTop(Number(value))}
                 >
-                  <SelectTrigger size="sm" aria-label={t("usageReport.top")} className="w-[64px]">
+                  <SelectTrigger size="sm" aria-label={t("usageReport.top")} className="min-w-[4.5rem] max-w-[7rem]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1455,7 +1455,7 @@ export function UsageSection({
                   value={String(monthSpan)}
                   onValueChange={(value) => setMonthSpan(Number(value) as 3 | 6 | 12)}
                 >
-                  <SelectTrigger size="sm" aria-label={t("usageReport.monthSpan")} className="w-[92px]">
+                  <SelectTrigger size="sm" aria-label={t("usageReport.monthSpan")} className="min-w-[5.5rem] max-w-[8rem]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1471,7 +1471,7 @@ export function UsageSection({
                   value={anchorMonth}
                   onValueChange={(value) => value !== null && setAnchorMonth(value)}
                 >
-                  <SelectTrigger size="sm" aria-label={t("usageReport.monthAnchor")} className="w-[116px]">
+                  <SelectTrigger size="sm" aria-label={t("usageReport.monthAnchor")} className="min-w-[7rem] max-w-[11rem]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1516,7 +1516,7 @@ export function UsageSection({
                       {block.cells.map((cell) => (
                         <span
                           key={cell.date}
-                          className="aspect-square w-full rounded-[2px]"
+                          className="aspect-square w-full rounded-[2px] ring-1 ring-foreground/10 ring-inset"
                           style={{
                             gridColumn: cell.column + 1,
                             gridRow: cell.row + 1,
@@ -1532,7 +1532,7 @@ export function UsageSection({
               <div className="mt-2 flex items-center justify-end gap-1 text-[10px] text-muted-foreground">
                 <span>{t("usageReport.less")}</span>
                 {HEAT_TIERS.map((color, index) => (
-                  <span key={index} className="size-[10px] rounded-[2px]" style={{ backgroundColor: color }} />
+                  <span key={index} className="size-[10px] rounded-[2px] ring-1 ring-foreground/10 ring-inset" style={{ backgroundColor: color }} />
                 ))}
                 <span>{t("usageReport.more")}</span>
               </div>
@@ -1548,7 +1548,7 @@ export function UsageSection({
                 value={heatRange}
                 onValueChange={(value) => value !== null && setHeatRange(value as HeatRange)}
               >
-                <SelectTrigger size="sm" aria-label={t("usageReport.hourHeatmap")} className="w-[116px]">
+                <SelectTrigger size="sm" aria-label={t("usageReport.hourHeatmap")} className="min-w-[7rem] max-w-[11rem]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1631,7 +1631,7 @@ export function UsageSection({
                     value={detailVendor}
                     onValueChange={(value) => setDetailVendor(value ?? "")}
                   >
-                    <SelectTrigger size="sm" aria-label={t("usageReport.filterVendor")} className="w-[140px]">
+                    <SelectTrigger size="sm" aria-label={t("usageReport.filterVendor")} className="min-w-[7.5rem] max-w-[13rem]">
                       <SelectValue placeholder={t("usageReport.filterVendor")} />
                     </SelectTrigger>
                     <SelectContent>
@@ -1651,7 +1651,7 @@ export function UsageSection({
                     value={detailModel}
                     onValueChange={(value) => setDetailModel(value ?? "")}
                   >
-                    <SelectTrigger size="sm" aria-label={t("usageReport.filterModel")} className="w-[180px]">
+                    <SelectTrigger size="sm" aria-label={t("usageReport.filterModel")} className="min-w-[8rem] max-w-[16rem]">
                       <SelectValue placeholder={t("usageReport.filterModel")} />
                     </SelectTrigger>
                     <SelectContent>

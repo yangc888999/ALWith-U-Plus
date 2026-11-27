@@ -26,6 +26,7 @@ export function LeadingNavigation({
   onOpenExtensions,
   onOpenArchives,
   onOpenAutomation,
+  onOpenOnlineBi,
   onOpenGroups,
   onOpenUsage,
   onOpenSkills,
@@ -38,6 +39,7 @@ export function LeadingNavigation({
   onOpenExtensions: () => void
   onOpenArchives: () => void
   onOpenAutomation: () => void
+  onOpenOnlineBi: () => void
   onOpenGroups: () => void
   onOpenUsage: () => void
   onOpenSkills: () => void
@@ -50,6 +52,7 @@ export function LeadingNavigation({
     skills: onOpenSkills,
     groups: onOpenGroups,
     automation: onOpenAutomation,
+    "online-bi": onOpenOnlineBi,
     archives: onOpenArchives,
     usage: onOpenUsage
   }

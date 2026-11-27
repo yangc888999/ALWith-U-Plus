@@ -13,7 +13,7 @@
    renders once the transcript leaves it a 48px gutter, so cap the column a little short of the
    pane instead of letting `max-w-3xl` fill it edge to edge. */
 [data-timeline-user-message-navigation-content] {
-  max-width: min(48rem, 100% - 4.5rem);
+  max-width: min(48rem, 100% - 6rem);
 }
 
 /* Isolate technical notation from the interface direction. */
@@ -381,7 +381,6 @@ html[data-window-backdrop="acrylic"]
 html {
   font-size: clamp(16px, calc(0.5vw + 7px), 22px);
 }
-[data-timeline-user-message-navigation-content],
 [data-session-actions],
 [data-chat-drop-zone],
 [data-turn-progress],
@@ -2138,6 +2137,17 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
 .welcome-hero {
   padding-block: clamp(1.5rem, 5vh, 4rem) 2rem;
   justify-content: safe center;
+}
+.welcome-hero-core {
+  container-type: inline-size;
+}
+/* The chat column can be narrow in the four-column project workspace even on a wide display.
+   Two columns there compressed project names to two or three characters; keep one card per row
+   until the actual composer column has enough room. */
+@container (min-width: 34rem) {
+  .welcome-recent-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 .welcome-hero-composer [data-composer][data-composer-dock] {
   border-block-start: 0;

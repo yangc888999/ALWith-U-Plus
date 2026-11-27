@@ -89,6 +89,8 @@ export function DraftChat({
   onNewChat,
   onNewProject,
   startSurface = "work",
+  projectSession = false,
+  directChat = false,
   onOpenProject
 }: {
   owner: DraftOwner
@@ -114,6 +116,10 @@ export function DraftChat({
   onNewProject?: () => void
   /** Which new-task tab opens first. Embedded test surfaces keep Work unless they say otherwise. */
   startSurface?: "chat" | "work"
+  /** A new conversation started from a project folder: skip the generic hero and open directly. */
+  projectSession?: boolean
+  /** A newly created quick chat: skip the generic hero and land straight in its composer. */
+  directChat?: boolean
   /** Opens the newest conversation in a recent project, or a fresh draft when it has none. */
   onOpenProject?: (cwd: string, sessionId?: string) => void
 }) {
@@ -142,7 +148,12 @@ export function DraftChat({
   const workProjectSelected = !temporaryChat
   const [surface, setSurface] = useState<"chat" | "work">(startSurface)
   const [projectReminderOpen, setProjectReminderOpen] = useState(false)
-  const chatSurface = surface === "chat"
+  const projectDraft = projectSession && !temporaryChat && displayDirectory !== null
+  const directChatDraft = directChat && temporaryChat
+  const minimalDraft = projectDraft || directChatDraft
+  // A project conversation has no meaningful "temporary chat" tab: force the work composer even
+  // when the previous surface preference was Chat.
+  const chatSurface = directChatDraft || (!projectDraft && surface === "chat")
   // Startup config failures are transient: retry quietly instead of flashing the raw English ACP
   // error in the sidebar for one frame (the main window already has its own startup grace).
   const startupRecoveryAttempts = useRef(0)
@@ -189,6 +200,19 @@ export function DraftChat({
     const timer = window.setInterval(() => setNow(new Date()), 60_000)
     return () => window.clearInterval(timer)
   }, [])
+  const autoFocused = useRef(false)
+  useEffect(() => {
+    // The package focuses once on mount, but the textarea is disabled until preparation finishes.
+    // That first focus is a no-op on WebKit, so a new conversation sometimes accepted typing
+    // without ever showing the caret. Retry once the ready state turns the control on.
+    if (autoFocused.current || preparing || error !== null || connection !== "ready") return
+    autoFocused.current = true
+    const timer = window.setTimeout(() => {
+      const active = document.activeElement
+      if (active === null || active === document.body) focusComposer(true)
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [preparing, error, connection])
   const name = welcomeName(profile?.displayName, profile?.email)
   const period = greetingPeriod(now)
   const greeting = t(greetingKey(period, name !== null), { name: name ?? "" })
@@ -378,49 +402,53 @@ export function DraftChat({
         )}
         <div
           className="welcome-hero relative flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-6"
-          data-welcome-mode={surface}
+          data-welcome-mode={projectDraft ? "work" : directChatDraft ? "chat" : surface}
+          data-project-draft={projectDraft ? "true" : undefined}
+          data-direct-chat={directChatDraft ? "true" : undefined}
         >
           {/* Only the greeting and composer form the centred hero. Recent projects hang below the
               composer without joining its height, so switching Work on/off never moves the hero. */}
           <div className="welcome-hero-core relative flex w-full flex-col items-center">
-            <div className="flex w-full flex-col items-center gap-5">
-              <div className="w-full max-w-4xl text-center">
-                <p className="text-[0.8125rem] leading-5 font-medium tracking-[0.01em] text-muted-foreground">
-                  {greeting}
-                </p>
-                <h1 className="mt-1 text-[1.125rem] leading-7 font-medium tracking-[-0.01em] text-foreground/85 sm:text-[1.25rem]">
-                  {subtitle}
-                </h1>
+            {!minimalDraft && (
+              <div className="flex w-full flex-col items-center gap-5">
+                <div className="w-full max-w-4xl text-center">
+                  <p className="text-[0.8125rem] leading-5 font-medium tracking-[0.01em] text-muted-foreground">
+                    {greeting}
+                  </p>
+                  <h1 className="mt-1 text-[1.125rem] leading-7 font-medium tracking-[-0.01em] text-foreground/85 sm:text-[1.25rem]">
+                    {subtitle}
+                  </h1>
+                </div>
+                <div
+                  role="tablist"
+                  aria-label={t("welcome.startMode")}
+                  className="grid w-[16rem] grid-cols-2 gap-1 rounded-full border border-border/70 bg-muted/55 p-1.5"
+                >
+                  {(["chat", "work"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      role="tab"
+                      aria-selected={surface === mode}
+                      className={cn(
+                        "inline-flex h-10 w-full items-center justify-center rounded-full text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        surface === mode
+                          ? "bg-background text-foreground shadow-sm ring-1 ring-border/70"
+                          : "text-muted-foreground hover:text-foreground"
+                      )}
+                      onClick={() => {
+                        setSurface(mode)
+                        requestAnimationFrame(() => focusComposer())
+                      }}
+                    >
+                      {t(mode === "chat" ? "welcome.tabChat" : "welcome.tabWork")}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <div
-                role="tablist"
-                aria-label={t("welcome.startMode")}
-                className="grid w-[16rem] grid-cols-2 gap-1 rounded-full border border-border/70 bg-muted/55 p-1.5"
-              >
-                {(["chat", "work"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    role="tab"
-                    aria-selected={surface === mode}
-                    className={cn(
-                      "inline-flex h-10 w-full items-center justify-center rounded-full text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                      surface === mode
-                        ? "bg-background text-foreground shadow-sm ring-1 ring-border/70"
-                        : "text-muted-foreground hover:text-foreground"
-                    )}
-                    onClick={() => {
-                      setSurface(mode)
-                      requestAnimationFrame(() => focusComposer())
-                    }}
-                  >
-                    {t(mode === "chat" ? "welcome.tabChat" : "welcome.tabWork")}
-                  </button>
-                ))}
-              </div>
-            </div>
+            )}
             <div
-              className="welcome-hero-composer mt-5 w-full max-w-3xl"
+              className={cn("welcome-hero-composer w-full max-w-3xl", minimalDraft ? "mt-0" : "mt-5")}
               // A capture-phase guard runs before the package clears its draft and dispatches the
               // prompt. Clicking send or pressing Enter without a project therefore opens the reminder
               // while leaving every typed character and attachment in place.
@@ -515,7 +543,7 @@ export function DraftChat({
                 <SessionActions sessionId={id} />
               </div>
             )}
-            {!chatSurface && recentProjectItems.length > 0 && (
+            {!chatSurface && !minimalDraft && recentProjectItems.length > 0 && (
               <section
                 className="welcome-hero-recent absolute inset-x-0 top-[calc(100%+1.5rem)] mx-auto w-full max-w-3xl"
                 aria-label={t("welcome.recentProjects")}
@@ -523,7 +551,7 @@ export function DraftChat({
                 <h2 className="mb-2 px-1 text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
                   {t("welcome.recentProjects")}
                 </h2>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div className="welcome-recent-grid grid grid-cols-1 gap-2">
                   {recentProjectItems.map((item) => (
                     <button
                       key={item.cwd}

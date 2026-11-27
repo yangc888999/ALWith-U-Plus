@@ -7,8 +7,10 @@
 //! engine's own skills and stay read-only.
 
 use serde::Serialize;
+use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tauri::State;
 
 #[derive(Debug, Serialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
@@ -212,46 +214,124 @@ pub fn skills_install(source: String) -> Result<SkillEntry, String> {
     Ok(entry_for(&id, &target, false, true))
 }
 
+fn default_quick_chat_root() -> Result<PathBuf, String> {
+    let home =
+        std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).map_err(|_| "HOME is not set".to_string())?;
+    Ok(PathBuf::from(home).join("Documents").join("Codex"))
+}
+
+/// Read the user's chosen chat root. Empty / missing values fall back to the historical default,
+/// so upgrading does not move existing chats or require a migration.
+fn configured_quick_chat_root(state: &crate::settings::SharedSettings) -> Result<PathBuf, String> {
+    let configured = {
+        let store = state.0.lock().map_err(|_| "Settings lock poisoned")?;
+        store
+            .values
+            .get("general.chatDirectory")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    let directory = configured.map(PathBuf::from).unwrap_or(default_quick_chat_root()?);
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    Ok(directory)
+}
+
+/// `YY-MM-DD-HH-MM-SS` for new chats; the legacy `YYYY-MM-DD HH-MM-SS` is still accepted when
+/// deleting folders created by older builds.
+fn is_chat_stamp(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let new_positions = [2, 5, 8, 11, 14];
+    let legacy_positions = [4, 7, 13, 16];
+    match bytes.len() {
+        17 => bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| if new_positions.contains(&index) { *byte == b'-' } else { byte.is_ascii_digit() }),
+        19 => bytes.iter().enumerate().all(|(index, byte)| {
+            if legacy_positions.contains(&index) {
+                *byte == b'-'
+            } else if index == 10 {
+                *byte == b' '
+            } else {
+                byte.is_ascii_digit()
+            }
+        }),
+        _ => false,
+    }
+}
+
+fn is_chat_directory_target(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else { return false };
+    if !is_chat_stamp(name) {
+        return false;
+    }
+    // Older builds nested chats below `<root>/Chat/<stamp>` and have no marker. New chats sit
+    // directly below the chosen root and carry a hidden marker so an unrelated project that happens
+    // to use a timestamp-like name can never be deleted by mistake.
+    let legacy_parent = path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        .is_some_and(|parent| parent == "Chat");
+    legacy_parent || path.join(".alwith-chat").is_file()
+}
+
 /// The directory temporary "chat" sessions live in: the app's default project-less folder.
 ///
 /// module-chat treats `~/Documents/Codex` (and `~/Documents/ALwith`) as quick-chat directories,
 /// so a new chat created here belongs to the "会话" section instead of any project.
 #[tauri3_specta::command]
-pub fn quick_chat_directory() -> Result<String, String> {
-    let home =
-        std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).map_err(|_| "HOME is not set".to_string())?;
-    let directory = std::path::PathBuf::from(home).join("Documents").join("Codex");
-    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+pub fn quick_chat_directory(state: State<'_, crate::settings::SharedSettings>) -> Result<String, String> {
+    let directory = configured_quick_chat_root(&state)?;
     Ok(directory.to_string_lossy().to_string())
 }
 
-/// A fresh folder for one temporary chat: `<quick-chat>/Chat/<stamp>/`.
+/// A fresh folder for one temporary chat: `<configured-root>/<YY-MM-DD-HH-MM-SS>/`.
 ///
 /// Chats used to share one directory, so their memory and any files they produced all landed in the
 /// same place and could not be removed together. One folder per conversation lets the whole thing
 /// go when the conversation is deleted. The stamp comes from the frontend because the native side
 /// cannot cheaply format the local timezone.
 #[tauri3_specta::command]
-pub fn new_chat_directory(stamp: String) -> Result<String, String> {
-    let base = quick_chat_directory()?;
-    let directory = std::path::PathBuf::from(base).join("Chat").join(&stamp);
-    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+pub fn new_chat_directory(state: State<'_, crate::settings::SharedSettings>, stamp: String) -> Result<String, String> {
+    if stamp.len() != 17 || !is_chat_stamp(&stamp) {
+        return Err("聊天文件夹名称必须是 YY-MM-DD-HH-MM-SS".into());
+    }
+    let base = configured_quick_chat_root(&state)?;
+    let directory = base.join(&stamp);
+    std::fs::create_dir(&directory).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            format!("聊天文件夹已存在：{}", directory.display())
+        } else {
+            error.to_string()
+        }
+    })?;
+    if let Err(error) = std::fs::write(directory.join(".alwith-chat"), "ALWith U chat folder\n") {
+        let _ = std::fs::remove_dir_all(&directory);
+        return Err(error.to_string());
+    }
     Ok(directory.to_string_lossy().to_string())
 }
 
 /// Removes a temporary chat's own folder when the conversation is deleted.
 ///
-/// Guarded on purpose: the path must sit under `<quick-chat>/Chat/`, so a malformed or hostile
-/// caller cannot point this at a project (or anywhere else).
+/// Guarded on purpose: the target must be a timestamp folder. A marked folder may live under any
+/// former configured root; the unmarked legacy `Chat/<stamp>` shape remains supported.
 #[tauri3_specta::command]
 pub fn delete_chat_directory(path: String) -> Result<(), String> {
-    let base = std::path::PathBuf::from(quick_chat_directory()?).join("Chat");
-    let target = std::path::PathBuf::from(&path);
-    if !target.starts_with(&base) {
-        return Err(format!("refusing to delete outside {}", base.display()));
+    let target = PathBuf::from(&path);
+    if !is_chat_directory_target(&target) {
+        return Err(format!("refusing to delete non-chat directory {}", target.display()));
     }
-    if !target.exists() {
-        return Ok(());
+    let metadata = match std::fs::symlink_metadata(&target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!("refusing to delete non-directory {}", target.display()));
     }
     std::fs::remove_dir_all(&target).map_err(|error| error.to_string())
 }
@@ -439,6 +519,29 @@ mod tests {
     #[test]
     fn frontmatter_absent_returns_none() {
         assert_eq!(parse_frontmatter("# just markdown"), (None, None));
+    }
+
+    #[test]
+    fn chat_stamps_accept_new_and_legacy_names_only() {
+        assert!(is_chat_stamp("26-11-28-09-08-07"));
+        assert!(is_chat_stamp("2026-11-28 09-08-07"));
+        assert!(!is_chat_stamp("26-11-28 09-08-07"));
+        assert!(!is_chat_stamp("../escape"));
+        assert!(!is_chat_stamp("26-11-28-09-08"));
+    }
+
+    #[test]
+    fn chat_deletion_targets_only_marked_or_legacy_timestamp_folders() {
+        let root = std::env::temp_dir().join(format!("alwith-chat-target-{}", std::process::id()));
+        let marked = root.join("26-11-28-09-08-07");
+        std::fs::create_dir_all(&marked).unwrap();
+        std::fs::write(marked.join(".alwith-chat"), "marker").unwrap();
+        assert!(is_chat_directory_target(&marked));
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(is_chat_directory_target(Path::new("/old/root/Chat/2026-11-28 09-08-07")));
+        assert!(!is_chat_directory_target(Path::new("/Users/me/Chats/26-11-28-09-08-07")));
+        assert!(!is_chat_directory_target(Path::new("/Users/me/project/Chat/not-a-stamp")));
     }
 }
 

@@ -7,6 +7,7 @@ import {
   type ReactNode,
   type RefObject,
   useCallback,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -44,6 +45,7 @@ import { ChatHeaderActions } from "./chat-header-actions"
 import { useChatHost, useTimelineSlots } from "./chat-host"
 import { ChatComposer } from "./composer"
 import { ModelEntry } from "./composer/model-entry"
+import { useComposerSession } from "./composer-session"
 import { ChatSearch } from "./dialogs/chat-search"
 import { FilePreviewModal } from "./dialogs/file-preview-modal"
 import { ImageLightbox } from "./dialogs/image-lightbox"
@@ -63,7 +65,7 @@ type ChatViewProps = {
   onNewProject?: () => void
   /** Opens a fresh thread in the given project so the agent stops carrying old context. */
   onClearContext?: (cwd: string) => void
-  onDeleted: (sessionId: string) => void
+  onDeleted: (sessionId: string, cwd: string) => void
 }
 
 // Issue #3: message-level lazy loading. Historical sessions can hold thousands of items and the
@@ -190,12 +192,26 @@ function Conversation({
     setRenderedSession(liveSession.current)
   }, [session.items.length, session.restoring])
   const shownSession = session.restoring ? renderedSession : session
+  // While tokens stream in, let React keep the transcript update interruptible. The composer and
+  // its draft/attachment state are urgent; markdown reflow is not. Replay already has its own
+  // calm cadence, so keep its first-page guarantee by not deferring that path.
+  const deferredItems = useDeferredValue(shownSession.items)
+  const transcriptItems =
+    shownSession.restoring || shownSession.state !== "running" ? shownSession.items : deferredItems
   const windowedItems = useMemo(
-    () => sliceLastTurns(shownSession.items, visibleTurns),
-    [shownSession.items, visibleTurns]
+    () => sliceLastTurns(transcriptItems, visibleTurns),
+    [transcriptItems, visibleTurns]
   )
   const windowedSession = useMemo(() => ({ ...shownSession, items: windowedItems }), [shownSession, windowedItems])
-  const hasMoreHistory = windowedItems.length < shownSession.items.length
+  const hasMoreHistory = windowedItems.length < transcriptItems.length
+  // Keep the composer on a projection that only changes when its own controls change. Streaming
+  // otherwise replaced the session object (and its item array) on every token, re-rendering the
+  // textarea and every toolbar control in the middle of typing an interjection.
+  const composerSession = useComposerSession(session)
+  const composerModelSelector = useMemo(
+    () => <ModelEntry surface="session" session={composerSession} />,
+    [composerSession]
+  )
 
   const scrollAdjustRef = useRef<number | null>(null)
   const loadEarlier = useCallback(() => {
@@ -350,9 +366,9 @@ function Conversation({
         <div className="flex flex-col" data-chat-drop-zone>
           <GroupDiscussionBar session={session} />
           <ChatComposer
-            session={session}
+            session={composerSession}
             voiceResume={voiceResume}
-            modelSelector={<ModelEntry surface="session" session={session} />}
+            modelSelector={composerModelSelector}
           />
         </div>
       }

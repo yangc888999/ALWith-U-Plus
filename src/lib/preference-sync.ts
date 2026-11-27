@@ -9,6 +9,7 @@ import { predictionPreference } from "@/features/chat/composer/prediction-prefer
 import i18n, { isLanguageCode } from "@/lib/i18n"
 import { applyFontSizes } from "@/lib/font-size"
 import { type PreferenceChange, PREFERENCES_CHANGED } from "@/lib/preferences"
+import { primeQuickChatRoot } from "@/lib/quick-chat"
 import { applyUiFont } from "@/lib/ui-font"
 import { syncZoomLevel } from "@/lib/zoom"
 
@@ -54,6 +55,11 @@ export function startPreferenceSync(): Promise<() => void> {
             return
           case "navigationInstrument":
             navigationSoundStore.setState({ instrument: change.value as never })
+            return
+          case "chatDirectory":
+            if (change.value !== null && typeof change.value !== "string")
+              throw new Error("Invalid chat directory preference")
+            await primeQuickChatRoot()
             return
           default:
             return

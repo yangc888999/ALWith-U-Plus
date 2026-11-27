@@ -3,19 +3,15 @@ import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
+import { conflictDraftPath } from "./conflict-draft"
+
 export function isMarkdownDocumentPath(path: string): boolean {
   return /\.(md|markdown|mdown|mdx)$/i.test(path)
 }
 
 /** One fixed, hidden draft per document; repeated conflicts overwrite it instead of piling versions. */
 export function markdownDraftPath(path: string): string {
-  const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"))
-  const directory = slash >= 0 ? path.slice(0, slash + 1) : ""
-  const name = path.slice(slash + 1)
-  const dot = name.lastIndexOf(".")
-  const stem = dot > 0 ? name.slice(0, dot) : name
-  const extension = dot > 0 ? name.slice(dot) : ".md"
-  return `${directory}.${stem}.conflict-draft${extension}`
+  return conflictDraftPath(path, ".md")
 }
 
 export interface MarkdownConflictState {

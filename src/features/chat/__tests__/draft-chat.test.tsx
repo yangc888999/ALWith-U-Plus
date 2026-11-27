@@ -210,7 +210,7 @@ test("floating project menus switch from a draft to another conversation and exc
     const header = within(must(view.container.querySelector("header"), "the floating window header"))
     await act(() => Promise.resolve(fireEvent.click(header.getByRole("button", { name: "window-original" }))))
     expect(view.queryByRole("button", { name: "Current draft" })).toBeNull()
-    expect(view.getByText("1 chat")).toBeVisible()
+    expect(view.queryByText("1 chat")).toBeNull()
     await act(() => Promise.resolve(fireEvent.click(view.getByRole("button", { name: "Other conversation" }))))
     await waitFor(() => expect(chatWindow.publishChatWindowSurface).toHaveBeenLastCalledWith(existing, true))
     expect(env.real.state.draftSessions[draft]).toBeUndefined()
@@ -816,6 +816,10 @@ test("new chat prepares once under StrictMode and exposes the real model before 
   try {
     await waitFor(() => expect(view.getByTestId("model-trigger")).toHaveTextContent(/^6.1-Sol$/))
     await waitFor(() => expect(view.getByRole("textbox").hasAttribute("disabled")).toBe(false))
+    await waitFor(() => expect(document.activeElement).toBe(view.getByRole("textbox")))
+    expect((view.getByRole("textbox") as HTMLTextAreaElement).selectionStart).toBe(
+      (view.getByRole("textbox") as HTMLTextAreaElement).value.length
+    )
     expect(selected).not.toBeNull()
     expect(fake.modelHints.size).toBe(1)
     expect(real.session(must<string>(selected, "selected draft")).cwd).toBe("/Users/mac/Documents/ALwith")
@@ -823,6 +827,55 @@ test("new chat prepares once under StrictMode and exposes the real model before 
     expect(real.state.sessionList.map((row) => row.sessionId)).toEqual([selected])
     await act(() => Promise.try(() => fireEvent.click(view.getByTestId("model-trigger"))))
     expect(view.getByRole("menuitemradio", { name: "GPT-6.1 Sol" })).toBeTruthy()
+  } finally {
+    await act(() => Promise.try(() => view.unmount()))
+    restore()
+  }
+})
+
+test("a project session skips the generic new-task hero and lands in the composer", async () => {
+  const { restore } = await environment()
+  const props = {
+    owner: "main" as const,
+    cwd: "/tmp/project-session",
+    projectSession: true,
+    onCwdChange: () => {},
+    onCreated: () => {},
+    onSendingChange: () => {},
+    onAuthRequired: () => {},
+    providerSnapshot: providers,
+    onNewChat: () => {}
+  }
+  const view = render(<DraftChat {...props} />)
+  try {
+    await waitFor(() => expect(view.getByRole("textbox").hasAttribute("disabled")).toBe(false))
+    expect(view.queryByRole("tablist", { name: "Start mode" })).toBeNull()
+    expect(view.getByRole("textbox")).toBeVisible()
+  } finally {
+    await act(() => Promise.try(() => view.unmount()))
+    restore()
+  }
+})
+
+test("a directly created quick chat skips the welcome hero and opens its composer", async () => {
+  const { restore } = await environment()
+  const props = {
+    owner: "main" as const,
+    cwd: "/tmp/26-11-28-09-08-07",
+    directChat: true,
+    onCwdChange: () => {},
+    onCreated: () => {},
+    onSendingChange: () => {},
+    onAuthRequired: () => {},
+    providerSnapshot: providers,
+    onNewChat: () => {}
+  }
+  const view = render(<DraftChat {...props} />)
+  try {
+    await waitFor(() => expect(view.getByRole("textbox").hasAttribute("disabled")).toBe(false))
+    expect(view.container.querySelector('[data-direct-chat="true"]')).not.toBeNull()
+    expect(view.queryByRole("tablist", { name: "Start mode" })).toBeNull()
+    expect(view.getByRole("textbox")).toBeVisible()
   } finally {
     await act(() => Promise.try(() => view.unmount()))
     restore()
@@ -965,7 +1018,7 @@ test("picking another project lists the new draft before session/new, even when 
     expect(env.real.state.sessionList.filter((row) => row.cwd === paths[1])).toHaveLength(1)
     expect(view.getByRole("dialog", { name: "second" }).querySelector("[data-pending-chat]")).not.toBeNull()
     await act(async () => { await env.real.listSessions(); history.resolve() })
-    expect(within(view.getByRole("dialog", { name: "second" })).getByText("1 chat")).toBeVisible()
+    expect(within(view.getByRole("dialog", { name: "second" })).queryByText("1 chat")).toBeNull()
     expect(view.getByRole("dialog", { name: "second" }).querySelector("[data-pending-chat]")).toBeNull()
   } finally {
     for (const release of gates.values()) release()

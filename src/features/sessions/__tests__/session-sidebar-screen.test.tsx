@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react"
 import { useState } from "react"
-import { afterEach, expect, test } from "vitest"
+import { afterEach, expect, test, vi } from "vitest"
 
 import { usePlatformAuth } from "@/features/auth/store"
 import { type MainScreen, MainSidebarLayout } from "@/features/layout/components/main-sidebar-layout"
@@ -260,8 +260,10 @@ test("the sidebar keeps 资料库 and no longer carries a BI Metrics row", async
   expect(view.getByLabelText("Drive filter")).toBeVisible()
   await act(() => Promise.try(() => fireEvent.click(library)))
   expect(library.hasAttribute("aria-current")).toBe(false)
-  // BI Metrics now lives in the preview pane, not as a sidebar row.
+  // BI destinations moved out of the sidebar: BI Metrics comes from extensions and Online BI
+  // now lives in the workbench.
   expect(view.queryByRole("button", { name: "BI Metrics" })).toBeNull()
+  expect(view.queryByRole("button", { name: "Online BI" })).toBeNull()
   // Without company access the 资料库 row stays visible but dimmed, with the reason on hover: a
   // destination the reader knows about must not disappear, and clicking it leads to the page that
   // can actually fix it (2026-11-08).
@@ -274,6 +276,7 @@ test("the sidebar keeps 资料库 and no longer carries a BI Metrics row", async
 
 test("the quick-chat group carries its count while project rows stay uncounted", () => {
   useSessionsUiStore.setState({ view: "sessions" })
+  const newChat = vi.fn()
   client.store.setState({
     sessionListLoaded: true,
     sessionList: [
@@ -293,7 +296,7 @@ test("the quick-chat group carries its count while project rows stay uncounted",
           leadingPage="plugins"
           selectedId={null}
           onSelect={() => {}}
-          onNewChat={() => {}}
+          onNewChat={newChat}
           onNewProjectChat={() => {}}
           onSearch={() => {}}
           onOpenSettings={() => {}}
@@ -307,7 +310,14 @@ test("the quick-chat group carries its count while project rows stay uncounted",
   )
   // 聊天 keeps its count inline, exactly like 项目; the project groups below show only their names,
   // because a second number next to every folder read as two different measurements.
-  expect(sidebarButton(view, { name: "Chats (0)" })).toHaveAttribute("aria-expanded", "true")
+  const chatHeader = sidebarButton(view, { name: "Chats (0)" })
+  expect(chatHeader).toHaveAttribute("aria-expanded", "true")
+  fireEvent.pointerEnter(chatHeader)
+  expect(view.queryByRole("dialog")).toBeNull()
+  const plus = view.container.querySelector<HTMLButtonElement>("[data-quick-chat-new]")
+  if (plus === null) throw new Error("quick-chat new button is missing")
+  fireEvent.click(plus)
+  expect(newChat).toHaveBeenCalledOnce()
   expect(view.queryByText("2", { exact: true })).toBeNull()
   expect(view.queryByText(/loaded/i)).toBeNull()
   expect(view.queryByRole("button", { name: "Load more" })).toBeNull()

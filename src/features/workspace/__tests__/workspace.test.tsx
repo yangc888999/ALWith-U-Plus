@@ -361,7 +361,8 @@ function Surface({
   invalidDirectory = null,
   directoryKey = undefined,
   sessionId = null,
-  chat = false
+  chat = false,
+  draft = false
 }: {
   cwd: string | null
   chatRevealRequest?: number
@@ -373,6 +374,7 @@ function Surface({
   directoryKey?: string
   sessionId?: string | null
   chat?: boolean
+  draft?: boolean
 }) {
   const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null)
   return (
@@ -389,6 +391,7 @@ function Surface({
         guidance={guidance}
         invalidDirectory={invalidDirectory}
         chat={chat}
+        draft={draft}
       >
         <ChatHeader title="Conversation" project={<span>Project</span>}>
           {null}
@@ -809,6 +812,15 @@ test("starting a chat in a project reopens the columns that were closed on a pre
 
   view.rerender(<Surface cwd="/a" defaultOpen columnsRequest={1} />)
   expect(await screen.findByRole("treeitem", { name: /one.txt/ })).toBeInTheDocument()
+})
+
+test("a project draft opens the four columns before its first message creates a session", async () => {
+  // The project draft has no session id yet, but it already owns the project folder. Treating
+  // every draft as a plain temporary chat used to keep the tree and preview shut until the first
+  // message, which is the "new chat in a project still looks like the home screen" bug.
+  render(<Surface cwd="/a" defaultOpen draft columnsRequest={1} />)
+  expect(await screen.findByRole("treeitem", { name: /one.txt/ })).toBeVisible()
+  expect(screen.getByRole("button", { name: "Close workspace" })).toHaveAttribute("aria-expanded", "true")
 })
 
 test("Desktop root context menu omits rename, copy and delete", async () => {

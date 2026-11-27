@@ -1,7 +1,7 @@
 //! Scheduled-task notifications and the user-facing Lark CLI component.
 //!
 //! The CLI owns the OAuth tokens and the API calls; this module only enumerates recipients,
-//! sends one short text message per target, and — for Settings' "组件 → 飞书 CLI" card — exposes
+//! sends one short Markdown message per target, and — for Settings' "组件 → 飞书 CLI" card — exposes
 //! install / update / auth operations.
 //!
 //! Install / update deliberately do NOT use `npm install -g`: macOS writes global packages into
@@ -244,9 +244,14 @@ pub fn parse_users(value: &Value) -> Vec<LarkTarget> {
 
 /// `--as bot` is the working default: the user identity needs the extra
 /// `im:message.send_as_user` scope that is not granted by a normal CLI login.
-pub fn send_args(target: &LarkTarget, text: &str, identity: &str) -> Vec<String> {
+pub fn send_args(target: &LarkTarget, text: &str, identity: &str, format: &str) -> Vec<String> {
     let flag = if target.kind == "user" { "--user-id" } else { "--chat-id" };
-    ["im", "+messages-send", flag, &target.id, "--text", text, "--as", identity, "--format", "json"]
+    // `--text` becomes Feishu `msg_type: text`, so Markdown stays literal (`**bold**`, `-`).
+    // `--markdown` wraps the same body as a post and lets the client render headings, bold,
+    // bullets and links consistently in both group chats and direct messages. The two switches
+    // are mutually exclusive, so exactly one is selected from the task's saved preference.
+    let format_flag = if format == "text" { "--text" } else { "--markdown" };
+    ["im", "+messages-send", flag, &target.id, format_flag, text, "--as", identity, "--format", "json"]
         .iter()
         .map(|value| (*value).to_string())
         .collect()
@@ -307,7 +312,9 @@ pub async fn lark_cli_targets(kind: String, query: String) -> Result<Vec<LarkTar
 }
 
 #[tauri3_specta::command]
-pub async fn lark_cli_send(targets: Vec<LarkTarget>, text: String, identity: String) -> Result<Vec<String>, String> {
+pub async fn lark_cli_send(
+    targets: Vec<LarkTarget>, text: String, identity: String, format: String,
+) -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         // Empty messages are rejected by the API; refusing here keeps a misconfigured task from
         // producing a wall of identical failures.
@@ -315,9 +322,10 @@ pub async fn lark_cli_send(targets: Vec<LarkTarget>, text: String, identity: Str
             return Err("推送内容为空".to_string());
         }
         let identity = if identity == "user" { "user" } else { "bot" };
+        let format = if format == "text" { "text" } else { "markdown" };
         let mut failures = Vec::new();
         for target in &targets {
-            let args = send_args(target, &text, identity);
+            let args = send_args(target, &text, identity, format);
             if let Err(error) = run_cli(&args) {
                 failures.push(format!("{}：{}", target.name, error));
             }
@@ -759,16 +767,24 @@ mod tests {
     #[test]
     fn send_args_use_the_matching_id_flag_and_never_a_shell() {
         let chat = LarkTarget { id: "oc_1".into(), name: "群".into(), kind: "chat".into() };
-        let args = send_args(&chat, "任务完成", "bot");
+        let args = send_args(&chat, "任务完成", "bot", "markdown");
         assert!(args.contains(&"--chat-id".to_string()));
         assert!(args.contains(&"oc_1".to_string()));
         assert!(!args.contains(&"--user-id".to_string()));
         assert!(args.contains(&"--as".to_string()));
+        assert!(args.contains(&"--markdown".to_string()));
+        assert!(!args.contains(&"--text".to_string()));
 
         let user = LarkTarget { id: "ou_1".into(), name: "我".into(), kind: "user".into() };
-        let args = send_args(&user, "任务完成", "user");
+        let args = send_args(&user, "任务完成", "user", "markdown");
         assert!(args.contains(&"--user-id".to_string()));
         assert!(args.contains(&"ou_1".to_string()));
+        assert!(args.contains(&"--markdown".to_string()));
+        assert!(!args.contains(&"--text".to_string()));
+
+        let args = send_args(&chat, "任务完成", "bot", "text");
+        assert!(args.contains(&"--text".to_string()));
+        assert!(!args.contains(&"--markdown".to_string()));
     }
 
     #[test]

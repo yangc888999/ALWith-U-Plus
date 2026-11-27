@@ -99,6 +99,7 @@ import type { PanelControls } from "./panel-controls-context"
 import { usePreviewExtension } from "./preview-extension"
 import { applyStoredCommentsVisibility, commentsHidden, setCommentsHidden } from "./preview-resources"
 import { PreviewSurface } from "./preview-surface"
+import { writeConflictDraft } from "./conflict-draft"
 import { createResilientWriteFileSystem } from "./resilient-write-fs"
 import {
   isMarkdownDocumentPath,
@@ -398,10 +399,10 @@ export function FileWorkspace({
   // A temporary chat has none of these columns, so its window header carries no switches for them.
   // Leaving them visible offered 评论栏 / 文件树 / 工作区 on a surface that has no tree to hide.
   const temporaryChat = isTemporaryChatDir(cwd) && !isChatOwnDirectory(cwd)
-  // A draft has no directory yet, and a temporary chat is not a project: every workspace entry
-  // point stays shut for both. The chat keeps its own folder for file operations, but the tree,
-  // preview and 四方格 controls never appear.
-  const workspaceAllowed = !draft && !chat
+  // A draft without an explicit project has no directory yet, and a temporary chat is not a
+  // project: every workspace entry point stays shut for both. A project draft is different — it
+  // already owns the folder and must show the tree/preview from the first frame.
+  const workspaceAllowed = !chat && (!draft || defaultOpen)
   // P0-5: hiding the *whole* toolbar for a temporary chat (or a chat whose directory has not
   // arrived) removed the only buttons that could explain why 文件栏 does nothing. Keep 四方格 and
   // 文件栏 always reachable; only the chat-specific actions are hidden when there is no directory.
@@ -436,11 +437,11 @@ export function FileWorkspace({
   }, [chatRevealRequest, navigateCanvas])
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   useEffect(() => {
-    // Switching projects must not keep the previous project's BI surface in the preview pane.
+    // Switching projects must not keep the previous project's preview extension in the pane.
     closePreviewExtension()
   }, [workspace?.root, closePreviewExtension])
   useEffect(() => {
-    // The sidebar opens BI into the preview column even while the column is collapsed.
+    // A preview extension keeps the column open even while it was previously collapsed.
     if (previewExtension !== null) setVisible(true)
   }, [previewExtension])
   // Plain URL by default: the dashboard keeps its own first-party session inside the frame, so the
@@ -497,7 +498,10 @@ export function FileWorkspace({
   // transition that has to close columns the user did not close themselves.
   const wasProject = useRef(defaultOpen)
   useEffect(() => {
-    if (draft) {
+    // A draft in a real project is still a project conversation: keep the four-column workspace
+    // available before the first message materializes a session id. A draft with no explicit
+    // project binding keeps the old two-column new-task surface.
+    if (draft && !defaultOpen) {
       setViewMode(false)
       setVisible(false)
       reportEmptyState()
@@ -540,7 +544,7 @@ export function FileWorkspace({
   // that was opened (and maybe collapsed) earlier in this run. `openedProjects` still keeps the
   // ordinary revisits quiet; this signal deliberately bypasses it.
   useEffect(() => {
-    if (draft || columnsRequest === 0 || !defaultOpen || cwd === null) {
+    if ((draft && !defaultOpen) || columnsRequest === 0 || !defaultOpen || cwd === null) {
       reportEmptyState()
       return
     }
@@ -1105,10 +1109,10 @@ export function FileWorkspace({
         const fs = createResilientWriteFileSystem(rawFs, {
           onConflict: async (conflict) => {
             if (!isMarkdownDocumentPath(conflict.path)) return
-            const draftPath = markdownDraftPath(conflict.path)
+            let draftPath = markdownDraftPath(conflict.path)
             let draftError: string | null = null
             try {
-              await rawFs.writeFile(draftPath, conflict.localBytes, { mode: "replace" })
+              draftPath = await writeConflictDraft(rawFs, conflict.path, conflict.localBytes, ".md")
             } catch (error) {
               draftError = error instanceof Error ? error.message : String(error)
             }

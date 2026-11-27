@@ -182,6 +182,7 @@ export function startAutomationScheduler(execute: AutomationExecutor, canRun: ()
           fastMode: task.fastMode,
           larkNotify: task.larkNotify,
           larkTargets: task.larkTargets,
+          larkMessageFormat: task.larkMessageFormat ?? "markdown",
           larkIdentity: task.larkIdentity,
           monitorSessionId: task.monitorSessionId,
           taskFiredAt: now

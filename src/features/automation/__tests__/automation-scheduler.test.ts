@@ -96,6 +96,7 @@ test("an overdue task fires on the startup tick without the settings window", as
     fastMode: false,
     larkNotify: false,
     larkTargets: [],
+    larkMessageFormat: "markdown",
     larkIdentity: "bot",
   })
   expect(store.listRuns()).toHaveLength(1)

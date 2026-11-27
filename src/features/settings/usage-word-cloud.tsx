@@ -46,35 +46,82 @@ const NOISE_WORDS = new Set([
   "name", "value", "data", "api", "url", "http", "https", "www", "the", "and"
 ])
 
+const MIN_TERM_DOCUMENTS = 2
+const MIN_PHRASE_COUNT = 3
+const MAX_TERM_CHARS = 24
+const MAX_NGRAM_UNITS = 3
+
+function isCandidateWord(word: string): boolean {
+  if (word.length === 0 || word.length > 12) return false
+  if (STOP_WORDS.has(word) || NOISE_WORDS.has(word) || /^\d+$/.test(word)) return false
+  // File names and paths arrive as segmented tokens ("memory.md"); they name a file, not a topic.
+  if (word.includes(".") || word.includes("_") || word.includes("/")) return false
+  if (/^[\p{P}\p{S}]+$/u.test(word)) return false
+  // A lone Latin letter comes from markup or a code fragment, never from a useful topic.
+  if (word.length === 1 && !/^[\p{Script=Han}]$/u.test(word)) return false
+  return true
+}
+
+function tokensOf(prompt: string, segmenter: SegmenterLike | null): string[] {
+  const words = segmenter
+    ? Array.from(segmenter.segment(prompt), (part) => part.segment.trim().toLowerCase())
+    : prompt.split(/[^\p{L}\p{N}]+/u).map((word) => word.trim().toLowerCase())
+  return words.filter(isCandidateWord)
+}
+
+function phraseOf(tokens: string[]): string | null {
+  if (tokens.length < 2 || tokens.length > MAX_NGRAM_UNITS) return null
+  const text = tokens.join("")
+  if (text.length < 3 || text.length > MAX_TERM_CHARS) return null
+  return text
+}
+
 /**
- * Ranked words (highest frequency first). A word must appear in at least two different prompts —
- * one long pasted document repeating a token 50 times says nothing about what the user asks about.
+ * Ranked words and short phrases (highest frequency first). A term must appear in at least two
+ * different prompts — one long pasted document repeating a token 50 times says nothing about what
+ * the user asks about. The n-grams are bounded by adjacent segmented words, not arbitrary
+ * characters, so repeated prose does not turn into a wall of substrings.
  */
 export function topTerms(prompts: readonly string[], limit = 40): Term[] {
   const segmenter = Segmenter === undefined ? null : new Segmenter("zh-CN", { granularity: "word" })
-  const counts = new Map<string, number>()
-  const docs = new Map<string, number>()
+  const candidates = new Map<string, { count: number; docs: number; units: number }>()
   for (const prompt of prompts) {
-    const words = segmenter
-      ? Array.from(segmenter.segment(prompt), (part) => part.segment.trim().toLowerCase())
-      : prompt.split(/[^\p{L}\p{N}]+/u).map((word) => word.trim().toLowerCase())
+    const tokens = tokensOf(prompt, segmenter)
     const seen = new Set<string>()
-    for (const word of words) {
-      if (word.length < 2 || word.length > 12) continue
-      if (STOP_WORDS.has(word) || NOISE_WORDS.has(word) || /^\d+$/.test(word)) continue
-      // File names and paths arrive as segmented tokens ("memory.md"); they name a file, not a topic.
-      if (word.includes(".") || word.includes("_") || word.includes("/")) continue
-      if (/^[\p{P}\p{S}]+$/u.test(word)) continue
-      counts.set(word, (counts.get(word) ?? 0) + 1)
-      seen.add(word)
+    const add = (text: string, units: number): void => {
+      seen.add(text)
+      const previous = candidates.get(text)
+      candidates.set(text, { count: (previous?.count ?? 0) + 1, docs: previous?.docs ?? 0, units })
     }
-    for (const word of seen) docs.set(word, (docs.get(word) ?? 0) + 1)
+    for (const token of tokens) {
+      if (token.length >= 2) add(token, 1)
+    }
+    for (let size = 2; size <= MAX_NGRAM_UNITS; size += 1) {
+      for (let index = 0; index <= tokens.length - size; index += 1) {
+        const phrase = phraseOf(tokens.slice(index, index + size))
+        if (phrase !== null) add(phrase, size)
+      }
+    }
+    // Document frequency is what stops one giant prompt from dominating the cloud. `seen` is
+    // already unique per prompt, so every candidate can simply add one here.
+    for (const text of seen) {
+      const candidate = candidates.get(text)
+      if (candidate !== undefined) candidate.docs += 1
+    }
   }
-  return [...counts.entries()]
-    .filter(([word, count]) => count >= 2 && (docs.get(word) ?? 0) >= 2)
-    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+  return [...candidates.entries()]
+    .filter(
+      ([, candidate]) =>
+        candidate.docs >= MIN_TERM_DOCUMENTS &&
+        candidate.count >= (candidate.units > 1 ? MIN_PHRASE_COUNT : 2)
+    )
+    .sort((left, right) => {
+      const score = (entry: [string, { count: number; units: number }]): number =>
+        entry[1].count * (1 + (entry[1].units - 1) * 0.2)
+      return score(right) - score(left) || right[1].count - left[1].count || left[0].localeCompare(right[0])
+    })
     .slice(0, limit)
-    .map(([text, count]) => ({ text, count }))
+    .map(([text, candidate]) => ({ text, count: candidate.count }))
 }
 
 export function WordCloud({ prompts }: { prompts: readonly string[] }): ReactNode {

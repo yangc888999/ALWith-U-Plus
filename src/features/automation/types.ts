@@ -34,6 +34,13 @@ export interface LarkTarget {
   kind: string
 }
 
+/** `--markdown` renders rich text (`msg_type: post`); `--text` keeps Markdown literal. */
+export type LarkMessageFormat = "markdown" | "text"
+
+export function isLarkMessageFormat(value: unknown): value is LarkMessageFormat {
+  return value === "markdown" || value === "text"
+}
+
 /** 新建 / 编辑弹窗提交的可编辑字段。 */
 export interface TaskDraft {
   name: string
@@ -51,6 +58,8 @@ export interface TaskDraft {
   /** 运行结束后把结果推送到飞书。 */
   larkNotify: boolean
   larkTargets: LarkTarget[]
+  /** Optional for old tasks and cross-window requests; the sender falls back to Markdown. */
+  larkMessageFormat?: LarkMessageFormat
   /** `bot` = 机器人身份（默认，开箱可用）；`user` = 本人身份（需额外授权 scope）。 */
   larkIdentity: string
   repeat: RepeatRule
@@ -128,6 +137,8 @@ export interface AutomationRunRequest {
   fastMode: boolean
   larkNotify: boolean
   larkTargets: LarkTarget[]
+  /** Optional for older queued requests; defaults to Markdown. */
+  larkMessageFormat?: LarkMessageFormat
   larkIdentity: string
   /** 复用的监控会话；省略 / null 表示主窗口需要新建一条并回写任务（兼容旧版请求）。 */
   monitorSessionId?: string | null

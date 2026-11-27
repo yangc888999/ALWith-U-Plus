@@ -70,7 +70,7 @@ test("project popover shows the full count, expands beyond five chats and routes
       })
     })
     expect(list).not.toHaveBeenCalled()
-    expect(view.getByText("7 chats")).toBeDefined()
+    expect(view.queryByText("7 chats")).toBeNull()
     expect(view.getAllByRole("button", { name: /^Chat / })).toHaveLength(5)
     expect(view.getAllByRole("button", { name: /^Chat / })[0]?.textContent).toContain("Chat 6")
     await act(() => {
@@ -112,7 +112,7 @@ test("loading and failure expose shared list state, and retry refreshes the shar
     })
     await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Retry" }))))
     expect(list).toHaveBeenLastCalledWith({ reset: true })
-    expect(view.getByText("0 chats")).toBeDefined()
+    expect(view.queryByText("0 chats")).toBeNull()
   } finally {
     list.mockRestore()
   }
@@ -184,7 +184,7 @@ test("changing projects selects from the latest shared snapshot", async () => {
       })
     )
   )
-  expect(view.getByText("1 chat")).toBeDefined()
+  expect(view.queryByText("1 chat")).toBeNull()
   expect(view.getByRole("button", { name: "Other project" })).toBeDefined()
   expect(view.queryByRole("button", { name: "Chat 0" })).toBeNull()
 })
@@ -200,7 +200,7 @@ test("sidebar hover shares the header cache while clicking still toggles the pro
         fireEvent.click(header.getByRole("button", { name: "project" }))
       })
     })
-    expect(header.getByText("7 chats")).toBeDefined()
+    expect(header.queryByText("7 chats")).toBeNull()
     header.unmount()
     const sidebar = render(
       <NavigationGroup
@@ -323,7 +323,7 @@ test("project path aliases share the popover cache and still show every matching
         fireEvent.click(first.getByRole("button", { name: "deleted-project" }))
       })
     })
-    expect(first.getByText("7 chats")).toBeDefined()
+    expect(first.queryByText("7 chats")).toBeNull()
     first.unmount()
     const second = render(
       <ProjectSessionPopover cwd="/private/var/deleted-project" onSelect={() => {}} onNewChat={() => {}} />
@@ -333,7 +333,7 @@ test("project path aliases share the popover cache and still show every matching
         fireEvent.click(second.getByRole("button", { name: "deleted-project" }))
       })
     })
-    expect(second.getByText("7 chats")).toBeDefined()
+    expect(second.queryByText("7 chats")).toBeNull()
     expect(list).not.toHaveBeenCalled()
     await act(() => {
       return Promise.try(() => {
@@ -353,8 +353,10 @@ test.each(["/Users/mac/Documents/Codex", "/Users/mac/Documents/ALwith"])(
     client.store.setState({ sessionList: sessionRows("/Users/mac/Documents/Codex/nested") })
     const view = render(<ProjectSessionPopover cwd={cwd} onSelect={() => {}} onNewChat={() => {}} />)
     await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Chats" }))))
-    expect(view.getByText("7 chats")).toBeVisible()
-    expect(view.getByText("/Users/mac/Documents/ALwith")).toBeVisible()
+    expect(view.queryByText("7 chats")).toBeNull()
+    expect(view.getByRole("button", { name: "Open project folder" }).getAttribute("title")).toContain(
+      "/Users/mac/Documents/ALwith"
+    )
   }
 )
 
@@ -368,7 +370,7 @@ test.each([
   client.store.setState({ sessionList: sessionRows(cwd) })
   const view = render(<ProjectSessionPopover cwd={cwd} onSelect={() => {}} onNewChat={() => {}} />)
   await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "project" }))))
-  expect(view.getByText("7 chats")).toBeDefined()
+  expect(view.queryByText("7 chats")).toBeNull()
 })
 
 test("the Drive action has an explicit label and opens existing project sessions", async () => {

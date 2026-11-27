@@ -29,6 +29,7 @@ import { markStartupReady } from "@/lib/startup-window"
 import { useStartupSilent } from "@/lib/use-startup-silent"
 import type { Preferences } from "@/lib/preferences"
 import { ensureProjectMemory } from "@/lib/project-memory"
+import { deleteChatOwnDirectory } from "@/lib/quick-chat"
 import { useProjectMemory } from "@/lib/use-project-memory"
 import { useProviders } from "@/lib/use-providers"
 import { useSurfaceOperation } from "@/lib/use-surface-operation"
@@ -140,8 +141,11 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
   }, [operation])
 
   const deleted = useCallback(
-    (sessionId: string) => {
-      if (current.current.selectedId === sessionId) newChat()
+    (sessionId: string, cwd: string) => {
+      if (current.current.selectedId === sessionId) {
+        void deleteChatOwnDirectory(cwd).catch(report)
+        newChat()
+      }
     },
     [newChat]
   )

@@ -5,7 +5,15 @@
 import type * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { usePromptInputAttachments } from "@alwith/module-chat/composer-context"
 import { Composer, type ComposerProps, setComposerDraft, useComposer } from "@alwith/module-chat/conversation"
-import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useRef, useState } from "react"
+import {
+  memo,
+  type MouseEvent as ReactMouseEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState
+} from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 import { useStore } from "zustand"
@@ -39,6 +47,54 @@ import { TurnProgressBar } from "./turn-progress"
 
 /** Nothing to hand a receipt to: the surface already owns the conversation it is typing into. */
 const noHandOff: NonNullable<ComposerProps["onHandOff"]> = () => {}
+
+/**
+ * Preserve a real caret position across stream-driven rerenders.
+ *
+ * The package textarea is controlled. WKWebView sometimes moves a focused textarea's selection to
+ * the end when React commits a rerender even if the string did not change; during a running turn
+ * that made typing into the middle of a supplement jump to the end. We only restore after a
+ * transcript update and only when the text is unchanged, so ordinary typing, IME composition,
+ * sends and programmatic draft replacement keep their natural selection.
+ */
+function ComposerCaretGuard({ sessionId }: { sessionId: string }) {
+  const items = useStore(client.store, (state) => state.sessions[sessionId]?.items)
+  const caret = useRef<{ value: string; start: number; end: number } | null>(null)
+  const record = useCallback(() => {
+    const field = document.activeElement
+    if (!(field instanceof HTMLTextAreaElement) || field.closest("[data-composer]") === null) return
+    caret.current = {
+      value: field.value,
+      start: field.selectionStart ?? field.value.length,
+      end: field.selectionEnd ?? field.value.length
+    }
+  }, [])
+
+  useEffect(() => {
+    const events = ["focusin", "input", "keyup", "mouseup", "compositionend"] as const
+    for (const event of events) document.addEventListener(event, record, true)
+    return () => {
+      for (const event of events) document.removeEventListener(event, record, true)
+    }
+  }, [record])
+
+  useLayoutEffect(() => {
+    // Reading the item list makes this effect run after every streamed token commit.
+    if (items === undefined) return
+    const field = document.activeElement
+    if (!(field instanceof HTMLTextAreaElement) || field.closest("[data-composer]") === null) return
+    const saved = caret.current
+    if (saved === null) return
+    if (saved.value !== field.value) {
+      record()
+      return
+    }
+    if (field.selectionStart !== saved.start || field.selectionEnd !== saved.end)
+      field.setSelectionRange(saved.start, saved.end)
+  }, [items, record])
+
+  return null
+}
 
 /** The input's height, dragged from the top edge of the card and remembered across launches. */
 const INPUT_HEIGHT_KEY = "alwith:composer-input-height"
@@ -233,7 +289,7 @@ function ComposerFileDrop({ restoreRef }: { restoreRef: { current: ((content: ac
  * a second, differently-behaving one. Making it required turns that into a compile error instead
  * of something the reader discovers on screen (2026-11-17).
  */
-export function ChatComposer({
+function ChatComposerImpl({
   voiceResume,
   onSubmit,
   ...props
@@ -360,6 +416,7 @@ export function ChatComposer({
       className="relative"
       onContextMenu={openMenu}
     >
+      <ComposerCaretGuard sessionId={sessionId} />
       <ComposerResizeHandle shellRef={shellRef} />
       {/* One line, no buttons, no slot taken: it explains the refusals the reader is about to see
           and points at the picker that already sits in the toolbar below. */}
@@ -417,3 +474,10 @@ export function ChatComposer({
     </div>
   )
 }
+
+/**
+ * The composer sits in the same tree as the streaming transcript. Memoizing it keeps a new
+ * assistant token from re-rendering the textarea, attachment tray, model picker and voice controls;
+ * callers that need live item data pass a stable composer projection instead.
+ */
+export const ChatComposer = memo(ChatComposerImpl)

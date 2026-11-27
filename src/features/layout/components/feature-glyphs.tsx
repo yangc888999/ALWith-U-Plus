@@ -49,3 +49,16 @@ export function MeetingsGlyph(props: GlyphProps): ReactElement {
     </Glyph>
   )
 }
+
+/** A compact BI board: framed canvas, rising bars, and a live trend line. */
+export function OnlineBiGlyph(props: GlyphProps): ReactElement {
+  return (
+    <Glyph data-feature-glyph="online-bi" {...props}>
+      <g transform="translate(12 12) scale(1.15) translate(-12 -12)">
+        <rect x="3.75" y="4.5" width="16.5" height="15" rx="2.4" />
+        <path d="M7.2 15.8v-3.1M11.1 15.8V8.6M15 15.8v-5.2" />
+        <path d="M7.2 8.8h3.9M16.9 7.9l-1.3 1.3-1.2-1.2-1.5 1.5" />
+      </g>
+    </Glyph>
+  )
+}

@@ -163,7 +163,7 @@ test("project and session shortcuts follow preference changes, display the app i
     )
     await waitFor(() => expect(view.container.querySelectorAll("img")).toHaveLength(2))
     const buttons = view.getAllByRole("button", { name: "Open project folder" })
-    expect(buttons[0]).toHaveTextContent("/projects/one")
+    expect(buttons[0]).toHaveTextContent("Open project folder")
     expect(buttons[1]).toHaveTextContent("Open project folder")
     expect(buttons[0]?.title).toContain("Visual Studio Code")
     await act(() => {

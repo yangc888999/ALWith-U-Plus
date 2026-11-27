@@ -26,6 +26,7 @@ import { applyFontSizes } from "@/lib/font-size"
 import { installScrollActivity } from "@/lib/scroll-activity"
 import { bootstrapSettings } from "@/lib/settings-store"
 import { installToastErrorLocalization } from "@/lib/toast-error"
+import { primeQuickChatRoot } from "@/lib/quick-chat"
 import { applyUiFont } from "@/lib/ui-font"
 import { hydrateZoom } from "@/lib/zoom"
 import { startZoomViewport } from "@/lib/zoom-viewport"
@@ -69,6 +70,7 @@ export function bootstrapAuxWindow(opts: {
       avatar: preferences.profileAvatar
     })
     await initI18n(preferences.language)
+    await primeQuickChatRoot()
     if (opts.zoomControls) await startZoomViewport()
     await hydrateZoom(preferences.zoomLevel)
     hydrateNavigationSound({ soundMode: preferences.navigationSoundMode, instrument: preferences.navigationInstrument })

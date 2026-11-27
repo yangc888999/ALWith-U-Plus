@@ -20,7 +20,6 @@ import {
   BlocksIcon,
   BoxesIcon,
   CalendarClockIcon,
-  ChartColumnIcon,
   ChevronRightIcon,
   CirclePlusIcon,
   CloudIcon,
@@ -64,7 +63,6 @@ import {
 import type { WorkbenchPage } from "@/features/layout/components/workbench-features"
 import { useDisplayProfile } from "@/features/profile/use-display-profile"
 import { UpdateStatusButton } from "@/features/updater/components/update-status-button"
-import { ONLINE_BI_VIEW_ID } from "@/features/workspace/online-bi"
 import { usePreviewExtension } from "@/features/workspace/preview-extension"
 import { automationSessionRows, automationTitleOf, subscribeAutomationSessionRows } from "@/lib/automation-sessions"
 import { useApp } from "@/lib/client"
@@ -383,8 +381,6 @@ function SidebarPanels({
   // exists but you cannot use it yet" → keep it, dimmed. Collapsing both into one flag left the row
   // sitting in the sidebar after the switch was turned off (2026-11-08).
   const driveEnabled = useDriveEnabledPreference()
-  const previewExtension = usePreviewExtension((state) => state.id)
-  const openPreviewExtension = usePreviewExtension((state) => state.open)
   const closePreviewExtension = usePreviewExtension((state) => state.close)
   const [driveVisited, setDriveVisited] = useState(false)
   useEffect(() => {
@@ -546,17 +542,6 @@ function SidebarPanels({
         ]
       : []),
     {
-      id: "online-bi",
-      label: t("sidebar.onlineBi"),
-      icon: ChartColumnIcon,
-      active: previewExtension === ONLINE_BI_VIEW_ID,
-      onSelect: () => {
-        setView("sessions")
-        if (previewExtension === ONLINE_BI_VIEW_ID) closePreviewExtension()
-        else openPreviewExtension(ONLINE_BI_VIEW_ID)
-      }
-    },
-    {
       id: "groups",
       label: t("sidebar.groups"),
       icon: UsersIcon,
@@ -701,21 +686,8 @@ function SidebarPanels({
                 }}
               />
             )}
-            {/* 在线 BI replaced the BI 指标 extension entry. It opens in the preview column; the
-              frame gets its session from the token in 设置 → 在线 BI, because a cross-site frame
-              never receives the sign-in cookie. */}
             {/* 群 is its own destination: a discussion has its own project, its own document and
               its own roster, so it gets a panel instead of a folder in the session list. */}
-            <SidebarMenuRow
-              label={t("sidebar.onlineBi")}
-              icon={ChartColumnIcon}
-              active={previewExtension === ONLINE_BI_VIEW_ID}
-              onPrimary={() => {
-                setView("sessions")
-                if (previewExtension === ONLINE_BI_VIEW_ID) closePreviewExtension()
-                else openPreviewExtension(ONLINE_BI_VIEW_ID)
-              }}
-            />
             <SidebarMenuRow
               label={t("sidebar.groups")}
               icon={UsersIcon}
@@ -782,15 +754,37 @@ function SidebarPanels({
                       // gets a matching "项目" section label so the sidebar reads as two sections.
                       // A group's conversations are not projects and never reach this list (the client
                       // diverts them to the 群聊 panel), so every folder here is a real project.
+                      if (cwd === null) {
+                        return (
+                          <>
+                            <div className="flex w-full min-w-0 items-center gap-1">
+                              <div className="min-w-0 flex-1">{header}</div>
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                className="me-1 size-6 shrink-0"
+                                data-quick-chat-new=""
+                                aria-label={t("sidebar.newChatFromHeader")}
+                                title={t("sidebar.newChatFromHeader")}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  onNewChat()
+                                }}
+                              >
+                                <CirclePlusIcon />
+                              </Button>
+                            </div>
+                            {cwd === pendingGroup && pendingRow}
+                          </>
+                        )
+                      }
                       const label =
-                        cwd !== null ? (
-                          <div
-                            data-project-label=""
-                            className="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground"
-                          >
-                            {`${t("sidebar.projects")} (${projectCount})`}
-                          </div>
-                        ) : null
+                        <div
+                          data-project-label=""
+                          className="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground"
+                        >
+                          {`${t("sidebar.projects")} (${projectCount})`}
+                        </div>
                       return (
                         <>
                           {label}

@@ -159,6 +159,7 @@ export function AutomationSection({ onOpenExtensions }: { onOpenExtensions: () =
       fastMode: task.fastMode,
       larkNotify: task.larkNotify,
       larkTargets: task.larkTargets,
+      larkMessageFormat: task.larkMessageFormat ?? "markdown",
       larkIdentity: task.larkIdentity,
       monitorSessionId: task.monitorSessionId
     }

@@ -219,7 +219,6 @@ function ProjectPopover({
               pendingChat={pendingChat}
               onSelectPending={() => leave(() => onSelectPending?.())}
               directory={directory}
-              showHeading={trigger === undefined}
               expanded={expanded}
               onExpand={(x, y) => {
                 expandPointer.current = { x, y }
@@ -254,7 +253,6 @@ function ProjectContents({
   onSelect,
   onNewChat,
   onOpened,
-  showHeading,
   expanded,
   onExpand,
   onCollectionOpenChange
@@ -262,7 +260,6 @@ function ProjectContents({
   onNewChat: () => void
   directory: DirectoryState
   onOpened: () => void
-  showHeading: boolean
   expanded: boolean
   onExpand: (x: number, y: number) => void
   onCollectionOpenChange: (open: boolean) => void
@@ -310,17 +307,6 @@ function ProjectContents({
   }
   return (
     <>
-      {showHeading && (
-        <div className="flex min-h-8 items-center gap-2 px-3 py-1.5">
-          <FolderClosedIcon className="size-4 shrink-0" />
-          <span className="min-w-0 flex-1 truncate font-medium">
-            {cwd === null ? t("sidebar.quickChats") : basename(cwd)}
-          </span>
-          <span className="shrink-0 text-xs text-muted-foreground" aria-live="polite">
-            {result?.status === "ready" ? t("chat.project.chatCount", { count: sessionRows.length + (localRow ? 1 : 0) }) : null}
-          </span>
-        </div>
-      )}
       <Pane
         className="flex max-h-70 flex-auto flex-col pe-0"
         viewportClassName="h-auto min-h-0 pe-0"

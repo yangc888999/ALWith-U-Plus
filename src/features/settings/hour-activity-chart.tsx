@@ -44,7 +44,7 @@ export function peakHour(heat: HourlyHeat): HourTotal | null {
 
 /** One continuous accent ramp. Square-root keeps low values visible next to a huge peak. */
 export function heatColor(value: number, max: number): string {
-  if (value <= 0 || max <= 0) return "color-mix(in oklab, var(--muted-foreground) 9%, transparent)"
+  if (value <= 0 || max <= 0) return "color-mix(in oklab, var(--muted-foreground) 18%, var(--card))"
   const strength = 18 + Math.sqrt(Math.min(1, value / max)) * 82
   return `color-mix(in oklab, var(--settings-accent) ${strength.toFixed(1)}%, transparent)`
 }
@@ -89,7 +89,7 @@ export function HourActivityChart({
               cy={CENTER}
               r={(INNER + OUTER) / 2}
               fill="none"
-              stroke="color-mix(in oklab, var(--muted-foreground) 7%, transparent)"
+              stroke="color-mix(in oklab, var(--muted-foreground) 12%, var(--card))"
               strokeWidth={STROKE + 3}
             />
             {totals.map((total) => {

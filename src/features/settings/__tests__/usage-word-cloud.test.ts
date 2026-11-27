@@ -25,3 +25,15 @@ test("repeated words outrank filler, and filler is dropped entirely", () => {
 test("a word seen only once never enters the cloud", () => {
   expect(topTerms(["完全不同的句子", "另一次性的词汇"])).toEqual([])
 })
+
+test("repeated adjacent words become short phrases instead of only single words", () => {
+  const terms = topTerms([
+    "帮我优化用量页的模型价格，模型价格显示不全",
+    "用量页的模型价格需要按厂商分开",
+    "模型价格更新逻辑要检查"
+  ], 80)
+  const text = terms.map((term) => term.text)
+  expect(text).toContain("模型价格")
+  expect(text).not.toContain("页模型")
+  expect(text).not.toContain("用量页模型")
+})

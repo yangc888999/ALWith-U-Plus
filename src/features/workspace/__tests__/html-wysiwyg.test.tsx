@@ -374,7 +374,7 @@ test("a real concurrent body change keeps both versions and never overwrites", a
   expect(h.context.onError).not.toHaveBeenCalled()
 })
 
-test("the conflict dialog can load the disk version and leave the local draft behind", async () => {
+test("the conflict dialog can load the disk version and keep one fixed hidden draft", async () => {
   const h = await setup()
   fireEvent.click(screen.getByRole("button", { name: "Edit" }))
   h.send("mode", { editing: true })
@@ -391,9 +391,7 @@ test("the conflict dialog can load the disk version and leave the local draft be
     expect(h.controller.getSnapshot().documents[0]?.savedText).toBe(disk)
   })
   expect(new TextDecoder().decode(await h.fs.readFile(h.document.path))).toBe(disk)
-  const drafts = (await h.fs.readDirectory("/repo")).filter((entry) => /^report-draft-.*\.html$/.test(entry.name))
-  expect(drafts).toHaveLength(1)
-  expect(new TextDecoder().decode(await h.fs.readFile(drafts[0]!.path))).toBe(local)
+  expect(new TextDecoder().decode(await h.fs.readFile("/repo/.report.conflict-draft.html"))).toBe(local)
   expect(h.context.onError).not.toHaveBeenCalled()
 })
 
@@ -409,13 +407,8 @@ test("the conflict dialog can save a separate draft copy without touching either
 
   fireEvent.click(screen.getByRole("button", { name: "Save draft copy" }))
 
-  let draftPath = ""
-  await waitFor(async () => {
-    const drafts = (await h.fs.readDirectory("/repo")).filter((entry) => /^report-draft-.*\.html$/.test(entry.name))
-    expect(drafts).toHaveLength(1)
-    draftPath = drafts[0]!.path
-  })
-  expect(new TextDecoder().decode(await h.fs.readFile(draftPath))).toBe(local)
+  const draftPath = "/repo/.report.conflict-draft.html"
+  await waitFor(async () => expect(new TextDecoder().decode(await h.fs.readFile(draftPath))).toBe(local))
   expect(new TextDecoder().decode(await h.fs.readFile(h.document.path))).toBe(disk)
   expect(screen.getByTestId("html-save-conflict")).toBeInTheDocument()
   expect(h.context.onError).not.toHaveBeenCalled()

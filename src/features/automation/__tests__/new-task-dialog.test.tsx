@@ -306,8 +306,14 @@ test("a new task pushes to Lark by default, addressed to the signed-in user", as
     )
   )
   expect(screen.getByLabelText("Send as")).toBeTruthy()
+  expect(screen.getByLabelText("Message format")).toHaveValue("markdown")
   // 收件人是异步补进来的（读 CLI 登录态 → 自动填本人），提交前等 chip 出现，别在两次更新之间点。
   await waitFor(() => expect(screen.getByText("测试同学")).toBeTruthy())
+  expect(screen.getByRole("switch", { name: "Send to me as the agent" }).getAttribute("aria-checked")).toBe(
+    "true"
+  )
+
+  fireEvent.change(screen.getByLabelText("Message format"), { target: { value: "text" } })
 
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: /confirm/i }))
@@ -315,8 +321,26 @@ test("a new task pushes to Lark by default, addressed to the signed-in user", as
   expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
     larkNotify: true,
     larkIdentity: "bot",
+    larkMessageFormat: "text",
     larkTargets: [{ id: "ou_self", name: "测试同学", kind: "user" }]
   })
+})
+
+test("the self-delivery switch removes and restores the signed-in user", async () => {
+  larkApi.status.mockResolvedValue(CLI_READY)
+  larkApi.auth.mockResolvedValue(SIGNED_IN)
+  renderDialog()
+  fillRequiredFields()
+
+  const selfSwitch = await screen.findByRole("switch", { name: "Send to me as the agent" })
+  await waitFor(() => expect(selfSwitch.getAttribute("aria-checked")).toBe("true"))
+  fireEvent.click(selfSwitch)
+  expect(selfSwitch.getAttribute("aria-checked")).toBe("false")
+  expect(screen.queryByRole("button", { name: "Remove 测试同学" })).toBeNull()
+
+  fireEvent.click(selfSwitch)
+  expect(selfSwitch.getAttribute("aria-checked")).toBe("true")
+  expect(screen.getByRole("button", { name: "Remove 测试同学" })).toBeTruthy()
 })
 
 test("without the Lark CLI the toggle is disabled and points at the component installer", async () => {

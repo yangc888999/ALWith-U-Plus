@@ -21,7 +21,7 @@
  */
 import type { EditorController, EditorDocument, PreviewProvider } from "@alwith/module-editor"
 import type { PreviewContext, PreviewHost } from "@alwith/module-editor/previews"
-import { basename, dirname, type FileSystem, joinPath } from "@alwith/module-fs/core"
+import type { FileSystem } from "@alwith/module-fs/core"
 import { info } from "@tauri-apps/plugin-log"
 import {
   Bold,
@@ -55,6 +55,7 @@ import {
 } from "@/components/ui/dialog"
 
 import { Toolbar, type ToolbarItem } from "./components/Toolbar"
+import { writeConflictDraft } from "./conflict-draft"
 import { htmlEditBridgeScript } from "./html-edit-bridge"
 import { acceptFrameMessage, hostMessage, mintNonce, postToFrame } from "./html-edit-protocol"
 import type { HtmlPreviewHostControl } from "./html-preview"
@@ -105,17 +106,6 @@ const delay = (milliseconds: number): Promise<void> =>
 
 function decodeHtml(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes)
-}
-
-/** A side-by-side draft copy next to the report, so loading the disk version never discards it. */
-function draftCopyPath(path: string, now = new Date()): string {
-  const name = basename(path)
-  const dot = name.lastIndexOf(".")
-  const stem = dot > 0 ? name.slice(0, dot) : name
-  const extension = dot > 0 ? name.slice(dot) : ".html"
-  const pad = (value: number, width = 2): string => String(value).padStart(width, "0")
-  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}-${pad(now.getMilliseconds(), 3)}`
-  return joinPath(dirname(path), `${stem}-draft-${stamp}${extension}`)
 }
 
 /** Read bytes and version only when both stats agree. A version that moved while reading is a
@@ -579,11 +569,8 @@ function HtmlToolbar({
     postToFrame(frame(), hostMessage({ type: "undo", nonce: nonceRef.current }))
   }
 
-  const writeDraftCopy = async (path: string, html: string): Promise<string> => {
-    const copyPath = draftCopyPath(path)
-    await options.fs.writeFile(copyPath, new TextEncoder().encode(html), { mode: "create" })
-    return copyPath
-  }
+  const writeDraftCopy = (path: string, html: string): Promise<string> =>
+    writeConflictDraft(options.fs, path, new TextEncoder().encode(html), ".html")
 
   const loadDiskVersion = async (): Promise<void> => {
     const current = sessionRef.current

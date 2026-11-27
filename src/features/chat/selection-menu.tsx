@@ -95,11 +95,15 @@ function seedDraft(sessionId: string, text: string): void {
 }
 
 /** Focuses the composer input after a quote lands, so typing can continue immediately. */
-export function focusComposer(): void {
+export function focusComposer(atEnd = false): void {
   const field = document.querySelector<HTMLElement>(
     "[data-composer] textarea, [data-composer] [contenteditable='true'], [data-composer] [contenteditable='']"
   )
-  field?.focus()
+  field?.focus({ preventScroll: true })
+  // A newly mounted draft can receive focus while the control is still disabled. Once it becomes
+  // ready, put the caret at the end of the existing draft instead of relying on WebKit's fallback
+  // selection. Callers that only need focus (quote/selection actions) keep the previous behaviour.
+  if (atEnd && field instanceof HTMLTextAreaElement) field.setSelectionRange(field.value.length, field.value.length)
 }
 
 export function SelectionMenu({

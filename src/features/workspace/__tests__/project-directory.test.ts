@@ -191,7 +191,11 @@ describe("shouldOpenFourColumns", () => {
     await primeQuickChatRoot()
     const QUICK_CHAT_ROOT = "/Users/me/Documents/ALwith"
     expect(
-      shouldOpenFourColumns({ boundDirectory: `${QUICK_CHAT_ROOT}/Chat/2026-11-16`, sessionCwd: null, previewVisible: true })
+      shouldOpenFourColumns({
+        boundDirectory: `${QUICK_CHAT_ROOT}/26-11-16-22-54-03`,
+        sessionCwd: null,
+        previewVisible: true
+      })
     ).toBe(false)
     expect(
       shouldOpenFourColumns({ boundDirectory: QUICK_CHAT_ROOT, sessionCwd: null, previewVisible: true })

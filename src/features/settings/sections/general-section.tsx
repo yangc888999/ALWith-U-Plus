@@ -1,4 +1,13 @@
-import { BrainIcon, LanguagesIcon, PlayCircleIcon, SparklesIcon, SquareArrowOutUpRightIcon } from "lucide-react"
+import { open as openDialog } from "@tauri-apps/plugin-dialog"
+import {
+  BrainIcon,
+  FolderOpenIcon,
+  LanguagesIcon,
+  PlayCircleIcon,
+  RotateCcwIcon,
+  SparklesIcon,
+  SquareArrowOutUpRightIcon
+} from "lucide-react"
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -12,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue
 } from "@/components/alwith-ui/select"
+import { commands } from "@/bindings"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -21,6 +31,7 @@ import { ProjectAppIcon, useExternalApps } from "@/features/chat/open-in-editor"
 import { requestChatSurface } from "@/lib/chat-window"
 import i18n, { isLanguageCode, LANGUAGES } from "@/lib/i18n"
 import { loadPreferences, savePreference } from "@/lib/preferences"
+import { primeQuickChatRoot } from "@/lib/quick-chat"
 
 import { AutostartRow } from "./autostart-row"
 import { useDriveVisible } from "@/features/drive/use-drive-visible"
@@ -103,13 +114,52 @@ export function GeneralSection() {
   const [shortcut, setShortcut] = useState("")
   const [savingShortcut, setSavingShortcut] = useState(false)
   const [startSurface, setStartSurface] = useState<"chat" | "work">("chat")
+  const [chatDirectory, setChatDirectory] = useState<string | null>(null)
+  const [defaultChatDirectory, setDefaultChatDirectory] = useState("")
+  const [savingChatDirectory, setSavingChatDirectory] = useState(false)
   useEffect(() => {
-    void loadPreferences().then((preferences) => {
-      setExternalEditor(preferences.externalEditor)
-      setShortcut(preferences.chatWindowShortcut ?? "Alt+Space")
-      setStartSurface(preferences.defaultStartSurface)
-    })
+    void Promise.all([loadPreferences(), commands.quickChatDirectory()])
+      .then(([preferences, defaultDirectory]) => {
+        setExternalEditor(preferences.externalEditor)
+        setShortcut(preferences.chatWindowShortcut ?? "Alt+Space")
+        setStartSurface(preferences.defaultStartSurface)
+        setChatDirectory(preferences.chatDirectory ?? null)
+        setDefaultChatDirectory(defaultDirectory)
+      })
+      .catch((error: unknown) => toast.error(String(error)))
   }, [])
+  const selectedChatDirectory = chatDirectory ?? defaultChatDirectory
+  const chooseChatDirectory = async (): Promise<void> => {
+    const picked = await openDialog({
+      directory: true,
+      multiple: false,
+      defaultPath: selectedChatDirectory || undefined,
+      title: t("settings.chatStorageChoose")
+    })
+    if (typeof picked !== "string" || picked.trim() === "") return
+    setSavingChatDirectory(true)
+    try {
+      await savePreference("chatDirectory", picked)
+      await primeQuickChatRoot()
+      setChatDirectory(picked)
+    } catch (error: unknown) {
+      toast.error(String(error))
+    } finally {
+      setSavingChatDirectory(false)
+    }
+  }
+  const resetChatDirectory = async (): Promise<void> => {
+    setSavingChatDirectory(true)
+    try {
+      await savePreference("chatDirectory", null)
+      await primeQuickChatRoot()
+      setChatDirectory(null)
+    } catch (error: unknown) {
+      toast.error(String(error))
+    } finally {
+      setSavingChatDirectory(false)
+    }
+  }
   const activeEditor = apps.find((app) => app.bundle_id === externalEditor) ?? apps[0]
   return (
     <>
@@ -180,6 +230,41 @@ export function GeneralSection() {
               </SelectGroup>
             </SelectContent>
           </Select>
+        </SettingRow>
+      </SettingsCard>
+
+      <SettingsCard
+        title={t("settings.cardChatStorage")}
+        desc={t("settings.cardChatStorageDesc")}
+        icon={<FolderOpenIcon className="size-3.5" />}
+      >
+        <SettingRow title={t("settings.chatStorageDirectory")} desc={t("settings.chatStorageDirectoryDesc")} aligned>
+          <div className="flex w-full min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+            <Input
+              readOnly
+              className="min-w-0 flex-1 font-mono text-xs"
+              aria-label={t("settings.chatStorageDirectory")}
+              title={selectedChatDirectory}
+              value={selectedChatDirectory}
+            />
+            <div className="flex shrink-0 items-center gap-2">
+              <Button variant="outline" size="default" disabled={savingChatDirectory} onClick={() => void chooseChatDirectory()}>
+                {t("settings.chatStorageChoose")}
+              </Button>
+              {chatDirectory !== null && (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={savingChatDirectory}
+                  aria-label={t("settings.chatStorageReset")}
+                  title={t("settings.chatStorageReset")}
+                  onClick={() => void resetChatDirectory()}
+                >
+                  <RotateCcwIcon />
+                </Button>
+              )}
+            </div>
+          </div>
         </SettingRow>
       </SettingsCard>
 

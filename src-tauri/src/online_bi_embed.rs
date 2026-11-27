@@ -154,6 +154,14 @@ pub fn online_bi_embed_navigate(app: AppHandle, url: String) -> Result<(), Strin
     view.navigate(parsed(&url)?).map_err(|error| error.to_string())
 }
 
+/// The report address the native view is on right now. This is the source of truth for 「取当前地址」:
+/// the page can navigate itself inside Streamlit, so the address bar in the host webview cannot
+/// infer the final report URL from the URL it requested.
+#[tauri3_specta::command]
+pub fn online_bi_embed_current_url(app: AppHandle) -> Result<Option<String>, String> {
+    Ok(existing(&app).and_then(|view| view.url().ok()).map(|url| url.to_string()))
+}
+
 /// Hides the view without destroying it: the session lives in this window's cookie jar.
 #[tauri3_specta::command]
 pub fn online_bi_embed_set_visible(app: AppHandle, visible: bool) -> Result<(), String> {
