@@ -1,6 +1,6 @@
 import { expect, test } from "vitest"
 
-import { withoutCitationMarkers } from "../citation-markers"
+import { CitationStreamFilter, withoutCitationMarkers } from "@/lib/citation-markers"
 
 const marker = (refs: string): string =>
   `\uE200cite${refs
@@ -22,4 +22,24 @@ test("ordinary prose that mentions cite or a reference id is left alone", () => 
   expect(withoutCitationMarkers("Please cite the source; turn0search0 is only a tool id.")).toBe(
     "Please cite the source; turn0search0 is only a tool id."
   )
+})
+
+test("other private-use markers are not treated as citations", () => {
+  const other = "\uE200visualize\uE202chart\uE201"
+  expect(withoutCitationMarkers(other)).toBe(other)
+})
+
+test("a citation marker split across streamed chunks leaves no tail", () => {
+  const filter = new CitationStreamFilter()
+  expect(filter.push("answer \uE200ci")).toBe("answer ")
+  expect(filter.push("te\uE202turn0sea")).toBe("")
+  expect(filter.push("rch0\uE201 done")).toBe(" done")
+  filter.flush()
+})
+
+test("a streamed non-citation marker is preserved when the prefix resolves", () => {
+  const filter = new CitationStreamFilter()
+  expect(filter.push("text \uE200")).toBe("text ")
+  expect(filter.push("visualize\uE202chart\uE201")).toBe("\uE200visualize\uE202chart\uE201")
+  filter.flush()
 })

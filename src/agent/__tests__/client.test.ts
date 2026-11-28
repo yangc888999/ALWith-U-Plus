@@ -1076,6 +1076,32 @@ test("prompt acknowledgement is not completion; cancelling one session leaves th
   expect(client.state.sessions[b]).toBe(client.session(b))
 })
 
+test("citation markers are removed from the stored assistant text, not only the renderer", async () => {
+  const { client, fake } = await make()
+  const id = await client.newSession("/tmp/citation-source")
+  await fake.pushUpdate(id, {
+    sessionUpdate: "agent_message_chunk",
+    messageId: "answer-with-citation",
+    content: { type: "text", text: "answer \uE200cite\uE202turn0search0\uE201 done" }
+  } as never)
+  const item = client.session(id).items.find((entry) => entry.kind === "assistant")
+  expect(item?.kind === "assistant" && textOf(item.content)).toBe("answer  done")
+})
+
+test("citation markers split across streamed chunks leave no reference tail", async () => {
+  const { client, fake } = await make()
+  const id = await client.newSession("/tmp/citation-split")
+  for (const text of ["answer \uE200ci", "te\uE202turn0sea", "rch0\uE201 done"]) {
+    await fake.pushUpdate(id, {
+      sessionUpdate: "agent_message_chunk",
+      messageId: "split-answer",
+      content: { type: "text", text }
+    } as never)
+  }
+  const item = client.session(id).items.find((entry) => entry.kind === "assistant")
+  expect(item?.kind === "assistant" && textOf(item.content)).toBe("answer  done")
+})
+
 test("post-steer assistant chunks start a new item under the interjection", async () => {
   const { client, fake } = await make()
   const id = await client.newSession("/tmp/steer-segment")

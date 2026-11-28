@@ -9,7 +9,7 @@ import { ChatDirectoryContext, chatFileName, resolveChatLink, useOpenChatLink } 
 import { LinkedImage } from "./linked-image"
 import { ResourceContent } from "@alwith/module-chat/resource-content"
 import { MermaidDiagram } from "./mermaid-diagram"
-import { withoutCitationMarkers } from "./citation-markers"
+import { withoutCitationMarkers } from "@/lib/citation-markers"
 
 const markdown = createChatMarkdown()
 const artifactExtension = /\.(?:png|jpe?g|gif|webp|bmp|svg|pdf|docx?|xlsx?|pptx?|csv|tsv|zip|tar|gz|mp[34]|wav|ogg|webm|mov)(?:[?#].*)?$/i

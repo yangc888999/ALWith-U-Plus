@@ -3,7 +3,9 @@ import { invoke, isTauri } from "@tauri-apps/api/core"
 import { toast } from "sonner"
 
 import { isEnterpriseModel } from "@/features/auth/enterprise-providers"
+import { CitationStreamFilter, withoutCitationMarkers } from "@/lib/citation-markers"
 import { companyModelConfig } from "@/lib/company-model-config"
+import { describeError } from "@/lib/error-text"
 import i18n from "@/lib/i18n"
 import { modelFastModeChoiceFor } from "@/lib/model-fast-mode"
 import { canonicalModelSelection, modelDisplayId, modelVendorId, sameModelIdentity } from "@/lib/model-identity"
@@ -502,6 +504,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
   >()
   /** Assistant/thought ids observed in this session, so a later user boundary can snapshot them. */
   private readonly assistantMessageIds = new Map<string, Set<string>>()
+  /** Message-scoped filters for citations split across ACP streaming chunks. */
+  private readonly citationStreams = new Map<string, CitationStreamFilter>()
   /** Monotonic revocation/recovery counters so a stale recovery cannot clear a newer revocation. */
   private readonly accountRevocations = new Map<string, number>()
   private readonly accountRecoveries = new Map<string, number>()
@@ -1602,7 +1606,57 @@ export class CodexClient extends CodexAcpClient<AppState> {
   }
 
   protected override onUpdate(sessionId: string, update: acp.SessionUpdate): void {
-    super.onUpdate(sessionId, this.segmentSteerUpdate(sessionId, update))
+    super.onUpdate(sessionId, this.segmentSteerUpdate(sessionId, this.sanitizeCitationUpdate(sessionId, update)))
+  }
+
+  /** Citation tokens are display metadata, never part of the stored answer/copy/export text. */
+  private sanitizeCitationUpdate(sessionId: string, update: acp.SessionUpdate): acp.SessionUpdate {
+    const kind = update.sessionUpdate
+    if (kind === "state_update") {
+      if ((update as { state?: unknown }).state === "idle") this.clearCitationStreams(sessionId)
+      return update
+    }
+    if (
+      kind !== "agent_message" &&
+      kind !== "agent_message_chunk" &&
+      kind !== "agent_thought" &&
+      kind !== "agent_thought_chunk"
+    )
+      return update
+    const messageId = typeof (update as { messageId?: unknown }).messageId === "string" ? update.messageId : ""
+    const key = `${sessionId}:${kind}:${messageId}`
+    let filter: CitationStreamFilter | undefined
+    if (kind.endsWith("_chunk")) {
+      filter = this.citationStreams.get(key)
+      if (filter === undefined) {
+        filter = new CitationStreamFilter()
+        this.citationStreams.set(key, filter)
+      }
+    } else {
+      this.citationStreams.get(key)?.flush()
+      this.citationStreams.delete(key)
+    }
+    const content = (update as { content?: unknown }).content
+    const clean = (block: unknown): unknown => {
+      if (typeof block !== "object" || block === null) return block
+      const entry = block as { type?: unknown; text?: unknown }
+      if (entry.type !== "text" || typeof entry.text !== "string") return block
+      return { ...entry, text: filter === undefined ? withoutCitationMarkers(entry.text) : filter.push(entry.text) }
+    }
+    if (Array.isArray(content)) return { ...update, content: content.map(clean) } as acp.SessionUpdate
+    if (typeof content === "object" && content !== null)
+      return { ...update, content: clean(content) } as acp.SessionUpdate
+    return update
+  }
+
+  private clearCitationStreams(sessionId: string): void {
+    const prefix = `${sessionId}:`
+    for (const key of this.citationStreams.keys()) {
+      if (key.startsWith(prefix)) {
+        this.citationStreams.get(key)?.flush()
+        this.citationStreams.delete(key)
+      }
+    }
   }
 
   /**
@@ -2069,10 +2123,11 @@ export class CodexClient extends CodexAcpClient<AppState> {
       // once the user has pressed it, the composer and model picker must be usable immediately,
       // not stay on the stop button until some later store tick happens to settle the row.
       const reopened = this.state.sessions[id]
-      if (this.stoppedSessions.has(id) && reopened?.state === "running")
-        this.publishSession({ ...reopened, state: "idle", restoring: false, error: null })
+      if (this.stoppedSessions.has(id) && reopened?.state === "running" && reopened.error === null)
+        this.publishSession({ ...reopened, state: "idle", restoring: false })
     } catch (error) {
       this.logInfo?.(`[stop] auto-reopen failed id=${id} error=${String(error).slice(0, 240)}`)
+      toast.error(describeError(error))
     }
   }
 
@@ -4034,6 +4089,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     this.gatewayModels.delete(id)
     this.steerSegments.delete(id)
     this.assistantMessageIds.delete(id)
+    this.clearCitationStreams(id)
     this.accountRevocations.delete(id)
     this.accountRecoveries.delete(id)
     this.setApp((state) => {

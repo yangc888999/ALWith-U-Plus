@@ -74,7 +74,6 @@ import { pinCheckedFreeModels } from "@/features/settings/free-model-order"
 import { useCompanyModelDisplayName } from "@/lib/company-display-name"
 import { defaultModelSnapshot, subscribeDefaultModel } from "@/lib/default-model"
 import { describeError } from "@/lib/error-text"
-import { resolveModelConfig } from "@/lib/model-config"
 import { modelFastModeSnapshot, setModelFastMode, subscribeModelFastMode } from "@/lib/model-fast-mode"
 import { parseModelIdentity } from "@/lib/model-identity"
 import { openExternal } from "@/lib/open"
@@ -120,7 +119,7 @@ import {
   saveProviderKey,
   testProvider
 } from "@/lib/providers"
-import { type SettingsNativeModels, useSettingsNativeModels } from "@/lib/settings-bridge"
+import { useSettingsNativeModels } from "@/lib/settings-bridge"
 import { useBooleanSetting } from "@/lib/use-boolean-setting"
 import { useProviders } from "@/lib/use-providers"
 import { cn } from "@/lib/utils"
@@ -265,24 +264,6 @@ function providerIdForModel(model: string | null): string | null {
     if (identity.kind === "invalid") return null
   }
   return PROVIDERS.find((provider) => provider.native === true)?.id ?? null
-}
-
-/**
- * 已下架 is a *verdict*, so it may only come from a config that is authoritative.
- *
- * The main window answers `sourceKind: "bundled"` when no session is open; a bundled catalog ships
- * with the app and is therefore partial, and diffing the user's saved rows against it is exactly how
- * a callable model got labelled 已下架. This returns nothing unless a live session published its own
- * picker — the one list that can prove an id was withdrawn.
- */
-export function unverifiedNativeModels(native: SettingsNativeModels | null | undefined): readonly string[] {
-  // 空集是结论，不是偷懒：会话里的模型列表是**推荐子集**（Codex 的「推荐模型集」预设），
-  // 不是全量目录。6.1 Terra / 6 Sol / 6 Luna 这类模型 Codex 明明有，只是不在当前预设里，
-  // 拿「推荐子集」去 diff 用户的已保存行，就会把可调用的模型标成「未验证」——错在把
-  // 一个被过滤过的视图当权威。没有全量目录，就不下这个判断。
-  void native
-  void resolveModelConfig
-  return []
 }
 
 export function ProviderSection({ initialProviderId }: { initialProviderId?: string } = {}) {
