@@ -62,10 +62,26 @@ test("composer is a distinct card inside the chat column", () => {
   // Once the preview and tree columns are closed, the input must use the same measure as the
   // transcript instead of stopping at its old 56rem cap.
   const dropZone = /\[data-composer\] > \[data-chat-drop-zone\]\s*\{([^}]*)\}/.exec(styles)?.[1] ?? ""
-  expect(dropZone).toContain("max-width: var(--chat-column-width)")
+  expect(dropZone).toContain("width: var(--chat-composer-width)")
+  expect(dropZone).toContain("max-width: var(--chat-composer-width)")
   expect(dropZone).not.toContain("max-width: 56rem")
   // An empty row must not leave a bare strip (and its divider) above the input.
   expect(styles).toMatch(/\[data-chat-input-header\]:not\(:has\(button, span\)\)\s*\{\s*display: none;/)
+})
+
+test("transcript and composer share one adaptive width and keep the turn-rail gutter", () => {
+  expect(styles).toContain(
+    "--chat-content-width: min(var(--chat-column-width), calc(100% - var(--chat-rail-gutter)))"
+  )
+  expect(styles).toContain(
+    "calc(var(--chat-column-width) - var(--chat-rail-gutter) + 32px)"
+  )
+  expect(styles).toMatch(
+    /\[data-timeline-user-message-navigation-content\]\s*\{\s*max-width:\s*var\(--chat-content-width\)/
+  )
+  expect(styles).toMatch(
+    /\[data-session-actions\],\s*\[data-turn-progress\],\s*\[data-group-bar\]\s*\{\s*max-width:\s*var\(--chat-content-width\)/
+  )
 })
 
 test("a populated composer status row has its own tint and hairline", () => {

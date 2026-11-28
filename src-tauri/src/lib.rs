@@ -54,6 +54,7 @@ mod skills;
 mod window_effects;
 use atlas_tauri as trackpad;
 mod lark_cli;
+mod playwright_component;
 mod support_components;
 mod tray;
 mod updater;
@@ -405,6 +406,10 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 lark_cli::lark_cli_auth_complete,
                 lark_cli::lark_cli_auth_logout,
                 lark_cli::lark_cli_user_profile,
+                playwright_component::playwright_component_status,
+                playwright_component::playwright_component_check_update,
+                playwright_component::playwright_component_install,
+                playwright_component::playwright_component_update,
                 support_components::node_status,
                 support_components::node_install,
                 support_components::brew_status,

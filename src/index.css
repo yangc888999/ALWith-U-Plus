@@ -13,7 +13,7 @@
    renders once the transcript leaves it a 48px gutter, so cap the column a little short of the
    pane instead of letting `max-w-3xl` fill it edge to edge. */
 [data-timeline-user-message-navigation-content] {
-  max-width: min(48rem, 100% - 6rem);
+  max-width: var(--chat-content-width);
 }
 
 /* Isolate technical notation from the interface direction. */
@@ -374,6 +374,15 @@ html[data-window-backdrop="acrylic"]
    simply fills it and nothing changes. */
 :root {
   --chat-column-width: 70rem; /* 1120px at the default 16px root */
+  /* The turn rail needs a 48px leading gutter at the default root size. Transcript rows and the
+     composer card share this visual measure; the composer box is slightly wider so its 16px
+     side padding lands the card on exactly the same edges as the text. */
+  --chat-rail-gutter: 6rem;
+  --chat-content-width: min(var(--chat-column-width), calc(100% - var(--chat-rail-gutter)));
+  --chat-composer-width: min(
+    calc(var(--chat-column-width) - var(--chat-rail-gutter) + 32px),
+    calc(100% - var(--chat-rail-gutter) + 32px)
+  );
 }
 /* High-density desktops expose a much wider CSS viewport than a laptop (often 2560-3200px).
    A fixed 16px root left every rem-based control physically small there. Scale the root with
@@ -382,9 +391,11 @@ html {
   font-size: clamp(16px, calc(0.5vw + 7px), 22px);
 }
 [data-session-actions],
-[data-chat-drop-zone],
 [data-turn-progress],
 [data-group-bar] {
+  max-width: var(--chat-content-width);
+}
+[data-chat-drop-zone] {
   max-width: var(--chat-column-width);
 }
 /* Docked navigation already supplies the 4px inset at the content-facing edge. */
@@ -2014,8 +2025,8 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   /* The transcript, session actions and composer all share one measure. The composer used to
      stop at 56rem while the transcript grew to 70rem, which left the input visibly narrower than
      the text whenever the preview/tree columns were closed. */
-  width: min(100%, var(--chat-column-width));
-  max-width: var(--chat-column-width);
+  width: var(--chat-composer-width);
+  max-width: var(--chat-composer-width);
   margin-inline: auto;
   padding-inline: 16px;
   padding-bottom: 12px;

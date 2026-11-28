@@ -43,3 +43,18 @@ test("a streamed non-citation marker is preserved when the prefix resolves", () 
   expect(filter.push("visualize\uE202chart\uE201")).toBe("\uE200visualize\uE202chart\uE201")
   filter.flush()
 })
+
+test("the streamed prefix is case-insensitive like the static cleaner", () => {
+  const filter = new CitationStreamFilter()
+  expect(filter.push("answer \uE200CIT")).toBe("answer ")
+  expect(filter.push("E\uE202turn0search0\uE201 done")).toBe(" done")
+  filter.flush()
+})
+
+test("abandoning a split marker does not swallow the next answer and drops its stray closer", () => {
+  const filter = new CitationStreamFilter()
+  expect(filter.push("first answer \uE200cite\uE202turn0")).toBe("first answer ")
+  filter.abandon()
+  expect(filter.push("second real answer \uE201 tail")).toBe("second real answer  tail")
+  filter.flush()
+})

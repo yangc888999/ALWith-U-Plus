@@ -323,6 +323,46 @@ test("the quick-chat group carries its count while project rows stay uncounted",
   expect(view.queryByRole("button", { name: "Load more" })).toBeNull()
 })
 
+test("new task opens the welcome handler while the chat + starts a quick chat directly", () => {
+  useSessionsUiStore.setState({ view: "sessions" })
+  const newTask = vi.fn()
+  const newQuickChat = vi.fn()
+  client.store.setState({ sessionListLoaded: true, sessionList: [] })
+  const view = render(
+    <MainSidebarLayout
+      initialPinned
+      screen="main"
+      leading={null}
+      main={null}
+      sidebar={
+        <SessionSidebar
+          screen="main"
+          leadingPage="overview"
+          selectedId={null}
+          onSelect={() => {}}
+          onNewChat={newTask}
+          onNewQuickChat={newQuickChat}
+          onNewProjectChat={() => {}}
+          onSearch={() => {}}
+          onOpenSettings={() => {}}
+          onOpenPlugins={() => {}}
+          onOpenExtensions={() => {}}
+          onOpenAutomation={() => {}}
+          onSwitchScreen={() => {}}
+        />
+      }
+    />
+  )
+  fireEvent.click(sidebarButton(view, { name: "New task" }))
+  expect(newTask).toHaveBeenCalledOnce()
+  expect(newQuickChat).not.toHaveBeenCalled()
+  const plus = view.container.querySelector<HTMLButtonElement>("[data-quick-chat-new]")
+  if (plus === null) throw new Error("quick-chat new button is missing")
+  fireEvent.click(plus)
+  expect(newQuickChat).toHaveBeenCalledOnce()
+  expect(newTask).toHaveBeenCalledOnce()
+})
+
 test("Extensions sits below plugins and selects its own leading page without an agent connection", async () => {
   client.store.setState({ connection: "disconnected", agent: null })
   function Harness() {

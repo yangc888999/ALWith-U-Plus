@@ -5,6 +5,7 @@ import { toast } from "sonner"
 
 import { commands } from "@/bindings"
 import { LarkCliCard } from "@/features/settings/sections/lark-cli-card"
+import { PlaywrightComponentCard } from "@/features/settings/sections/playwright-component-card"
 
 import type { CompanyApp } from "./company-apps"
 import { ExtensionMount } from "./extension-view"
@@ -146,7 +147,10 @@ export function ExtensionsSection({ onOpenSurface }: { onOpenSurface?: (id: stri
           <h2 className="text-sm font-medium text-[var(--settings-accent-ink)]">{t("extensions.components.title")}</h2>
           <span className="text-xs text-muted-foreground">{t("extensions.components.description")}</span>
         </div>
-        <LarkCliCard />
+        <div className="flex flex-col gap-3">
+          <LarkCliCard />
+          <PlaywrightComponentCard />
+        </div>
       </section>
     </div>
   )

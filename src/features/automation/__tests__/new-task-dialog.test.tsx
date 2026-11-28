@@ -28,6 +28,7 @@ vi.mock("@/bindings", () => ({
       if (key === "larkCliAuthLogin") return (args: unknown) => larkApi.login(args)
       if (key === "larkCliAuthComplete") return (args: unknown) => larkApi.complete(args)
       if (key === "larkCliTargets") return () => larkApi.targets()
+      if (key === "readTextFile") return (args: { path: string }) => Promise.resolve(`# Prompt\n\nRead from ${args.path}`)
       return () => new Promise(() => {})
     }
   })
@@ -120,6 +121,9 @@ beforeAll(async () => {
 
 beforeEach(() => {
   openFolder.mockReset()
+  openFolder.mockImplementation((options: { directory?: boolean }) =>
+    Promise.resolve(options.directory ? "/tmp/project" : "/tmp/project/prompt.md")
+  )
   // 默认全部挂起：没有授权人本人、没有 CLI 状态，弹窗停在「推送关着」的初始态。
   larkApi.status.mockReset().mockImplementation(() => new Promise(() => {}))
   larkApi.auth.mockReset().mockImplementation(() => new Promise(() => {}))
@@ -156,30 +160,39 @@ const SIGNED_IN = {
   ]
 }
 
-function renderDialog(onSubmit = vi.fn(), task: ScheduledTask | null = null) {
+function renderDialog(onSubmit = vi.fn(), task: ScheduledTask | null = null, executed = false) {
   const onOpenChange = vi.fn()
-  const view = render(<NewTaskDialog open onOpenChange={onOpenChange} task={task} onSubmit={onSubmit} />)
+  const view = render(
+    <NewTaskDialog open onOpenChange={onOpenChange} task={task} executed={executed} onSubmit={onSubmit} />
+  )
   return { view, onSubmit, onOpenChange }
 }
 
-function fillRequiredFields(): void {
+async function fillRequiredFields(): Promise<void> {
   fireEvent.change(screen.getByLabelText("Task name"), { target: { value: "交易日切片更新" } })
-  fireEvent.change(screen.getByLabelText("Add prompt"), { target: { value: "请更新" } })
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Choose project folder" }))
+  })
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Choose MD file" }))
+  })
 }
 
-test("a custom workspace is picked through the folder dialog, not typed in", async () => {
-  openFolder.mockResolvedValue("/Users/flyme/Documents/YUP/部门")
+test("project folder and prompt file are picked through dialogs, not typed in", async () => {
   const { onSubmit } = renderDialog()
-  fillRequiredFields()
-
-  fireEvent.change(screen.getByLabelText("Select workspace"), { target: { value: "custom" } })
-  const picker = screen.getByRole("button", { name: "Choose a folder…" })
+  fireEvent.change(screen.getByLabelText("Task name"), { target: { value: "交易日切片更新" } })
+  openFolder.mockResolvedValueOnce("/Users/flyme/Documents/YUP/部门")
   await act(async () => {
-    fireEvent.click(picker)
+    fireEvent.click(screen.getByRole("button", { name: "Choose project folder" }))
+  })
+  openFolder.mockResolvedValueOnce("/Users/flyme/Documents/YUP/部门/daily.md")
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Choose MD file" }))
   })
 
   expect(openFolder).toHaveBeenCalledWith(expect.objectContaining({ directory: true, multiple: false }))
   expect(screen.getByText("/Users/flyme/Documents/YUP/部门")).toBeTruthy()
+  expect(screen.getByRole("button", { name: "Choose MD file" }).textContent).toContain("daily.md")
 
   // A task can pin the model it runs on; the options come from the shared model catalog.
   fireEvent.change(screen.getByLabelText("Model"), {
@@ -192,18 +205,50 @@ test("a custom workspace is picked through the folder dialog, not typed in", asy
   expect(onSubmit).toHaveBeenCalledOnce()
   expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
     cwd: "/Users/flyme/Documents/YUP/部门",
+    promptFile: "/Users/flyme/Documents/YUP/部门/daily.md",
     model: "gateway:qwen:qwen-flash"
   })
 })
 
-test("custom workspace without a chosen folder cannot be submitted", () => {
+test("a task without a project folder opens the required-field reminder and cannot be submitted", async () => {
   const { onSubmit } = renderDialog()
-  fillRequiredFields()
-  fireEvent.change(screen.getByLabelText("Select workspace"), { target: { value: "custom" } })
+  fireEvent.change(screen.getByLabelText("Task name"), { target: { value: "交易日切片更新" } })
 
-  const confirm = screen.getByRole("button", { name: /confirm/i }) as HTMLButtonElement
-  expect(confirm.disabled).toBe(true)
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /confirm/i }))
+  })
+  expect(screen.getByText("Choose a project folder")).toBeTruthy()
   expect(onSubmit).not.toHaveBeenCalled()
+})
+
+test("a project folder without a prompt Markdown file opens the prompt reminder", async () => {
+  const { onSubmit } = renderDialog()
+  fireEvent.change(screen.getByLabelText("Task name"), { target: { value: "交易日切片更新" } })
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Choose project folder" }))
+  })
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: /confirm/i }))
+  })
+  expect(screen.getByText("Choose a prompt Markdown file")).toBeTruthy()
+  expect(onSubmit).not.toHaveBeenCalled()
+})
+
+test("an executed task locks the project folder but keeps the prompt file editable", () => {
+  const task: ScheduledTask = {
+    ...DEFAULT_TASK_DRAFT,
+    id: "locked-task",
+    cwd: "/tmp/project",
+    promptFile: "/tmp/project/prompt.md",
+    nextRunAt: null,
+    monitorSessionId: "session-1",
+    createdAt: 0,
+    updatedAt: 0
+  }
+  renderDialog(vi.fn(), task, true)
+  expect((screen.getByRole("button", { name: "Choose project folder" }) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.getByText(/project folder is locked/i)).toBeTruthy()
+  expect((screen.getByRole("button", { name: "Choose MD file" }) as HTMLButtonElement).disabled).toBe(false)
 })
 
 test("the removed WeCom placeholder is no longer offered", () => {
@@ -222,7 +267,7 @@ test("the dialog keeps the shared translucent overlay surface", () => {
 
 test("effort comes from the selected model and fast mode is GPT-only", async () => {
   const { onSubmit } = renderDialog()
-  fillRequiredFields()
+  await fillRequiredFields()
 
   // Nothing to pick before a model is chosen: the ladder belongs to the model.
   const effort = screen.getByLabelText("Reasoning effort") as HTMLSelectElement
@@ -250,7 +295,7 @@ test("effort comes from the selected model and fast mode is GPT-only", async () 
 
 test("switching to a non-GPT model clears the effort and hides fast mode", async () => {
   const { onSubmit } = renderDialog()
-  fillRequiredFields()
+  await fillRequiredFields()
 
   fireEvent.change(screen.getByLabelText("Model"), { target: { value: "gpt-6.1-sol" } })
   await act(async () => undefined)
@@ -274,7 +319,7 @@ test("switching to a non-GPT model clears the effort and hides fast mode", async
 
 test("with no resolved Lark account yet, delivery stays off until it is switched on", async () => {
   const { onSubmit } = renderDialog()
-  fillRequiredFields()
+  await fillRequiredFields()
 
   fireEvent.click(screen.getByLabelText("Bot broadcast"))
   await act(async () => undefined)
@@ -297,7 +342,7 @@ test("a new task pushes to Lark by default, addressed to the signed-in user", as
   larkApi.status.mockResolvedValue(CLI_READY)
   larkApi.auth.mockResolvedValue(SIGNED_IN)
   const { onSubmit } = renderDialog()
-  fillRequiredFields()
+  await fillRequiredFields()
 
   // 默认开：不用点任何东西，收件人就是授权人本人。
   await waitFor(() =>
@@ -330,7 +375,7 @@ test("the self-delivery switch removes and restores the signed-in user", async (
   larkApi.status.mockResolvedValue(CLI_READY)
   larkApi.auth.mockResolvedValue(SIGNED_IN)
   renderDialog()
-  fillRequiredFields()
+  await fillRequiredFields()
 
   const selfSwitch = await screen.findByRole("switch", { name: "Send to me as the agent" })
   await waitFor(() => expect(selfSwitch.getAttribute("aria-checked")).toBe("true"))
@@ -432,7 +477,7 @@ test("new tasks no longer offer or persist a private empty-report notice", async
   larkApi.status.mockResolvedValue(CLI_READY)
   larkApi.auth.mockResolvedValue(SIGNED_IN)
   const { onSubmit } = renderDialog()
-  fillRequiredFields()
+  await fillRequiredFields()
   await waitFor(() =>
     expect(screen.getByRole("switch", { name: "Bot broadcast" }).getAttribute("aria-checked")).toBe(
       "true"

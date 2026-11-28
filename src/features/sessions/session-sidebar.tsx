@@ -277,7 +277,10 @@ type SessionSidebarProps = {
   leadingPage: WorkbenchPage
   selectedId: string | null
   onSelect: (sessionRow: SessionSummary) => void
+  /** 「新建任务」：打开通用欢迎页，不创建任何目录或会话。 */
   onNewChat: () => void
+  /** 「聊天」标题右侧 +：直接创建临时聊天，跳过欢迎页。 */
+  onNewQuickChat?: () => void
   /** Creates a project: the user picks a directory first. The header carries the button. */
   onNewProject?: () => void
   onNewProjectChat: (cwd: string | null, collectionId?: string, groupId?: string | null) => void
@@ -320,6 +323,7 @@ function SidebarPanels({
   selectedId,
   onSelect,
   onNewChat,
+  onNewQuickChat,
   onNewProjectChat,
   onViewFiles,
   onSearch,
@@ -768,7 +772,8 @@ function SidebarPanels({
                                 title={t("sidebar.newChatFromHeader")}
                                 onClick={(event) => {
                                   event.stopPropagation()
-                                  onNewChat()
+                                  const start = onNewQuickChat ?? onNewChat
+                                  start()
                                 }}
                               >
                                 <CirclePlusIcon />

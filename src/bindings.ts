@@ -149,6 +149,14 @@ export const commands = {
    */
   larkCliUserProfile: (): Promise<LarkUserProfile_Serialize> =>
     __t3Invoke<LarkUserProfile_Serialize>("lark_cli_user_profile"),
+  playwrightComponentStatus: (): Promise<PlaywrightComponentStatus_Serialize> =>
+    __t3Invoke<PlaywrightComponentStatus_Serialize>("playwright_component_status"),
+  playwrightComponentCheckUpdate: (): Promise<PlaywrightUpdateCheck_Serialize> =>
+    __t3Invoke<PlaywrightUpdateCheck_Serialize>("playwright_component_check_update"),
+  playwrightComponentInstall: (): Promise<PlaywrightInstallResult> =>
+    __t3Invoke<PlaywrightInstallResult>("playwright_component_install"),
+  playwrightComponentUpdate: (): Promise<PlaywrightInstallResult> =>
+    __t3Invoke<PlaywrightInstallResult>("playwright_component_update"),
   nodeStatus: (): Promise<NodeStatus_Serialize> => __t3Invoke<NodeStatus_Serialize>("node_status"),
   /**
    *  Download the official macOS universal Node.js `.pkg` for the latest LTS and open it with the
@@ -855,6 +863,10 @@ export type CommandErrors = {
   larkCliAuthComplete: string
   larkCliAuthLogout: string
   larkCliUserProfile: string
+  playwrightComponentStatus: never
+  playwrightComponentCheckUpdate: string
+  playwrightComponentInstall: string
+  playwrightComponentUpdate: string
   nodeStatus: never
   nodeInstall: string
   brewStatus: never
@@ -1982,6 +1994,51 @@ export type Permissions = {
   supported: boolean
   accessibility: boolean
   screenCapture: boolean
+}
+
+export type PlaywrightComponentStatus = PlaywrightComponentStatus_Serialize | PlaywrightComponentStatus_Deserialize
+
+export type PlaywrightComponentStatus_Deserialize = {
+  installed: boolean
+  version?: string | null
+  browserRevision?: string | null
+  browserVersion?: string | null
+  browserPath?: string | null
+  installDir: string
+  hint: string
+}
+
+export type PlaywrightComponentStatus_Serialize = {
+  installed: boolean
+  version: string | null
+  browserRevision: string | null
+  browserVersion: string | null
+  browserPath: string | null
+  installDir: string
+  hint: string
+}
+
+export type PlaywrightInstallResult = {
+  ok: boolean
+  message: string
+}
+
+export type PlaywrightUpdateCheck = PlaywrightUpdateCheck_Serialize | PlaywrightUpdateCheck_Deserialize
+
+export type PlaywrightUpdateCheck_Deserialize = {
+  hasUpdate: boolean
+  currentVersion?: string | null
+  latestVersion?: string | null
+  message: string
+  url?: string | null
+}
+
+export type PlaywrightUpdateCheck_Serialize = {
+  hasUpdate: boolean
+  currentVersion: string | null
+  latestVersion: string | null
+  message: string
+  url: string | null
 }
 
 export type PreparedImport = {

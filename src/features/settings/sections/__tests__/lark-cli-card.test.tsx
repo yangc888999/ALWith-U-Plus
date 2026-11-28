@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
+
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeAll, expect, test, vi } from "vitest"
 
@@ -117,6 +120,14 @@ const unconfiguredAuth = {
 }
 
 beforeAll(() => initI18n("en"))
+
+test("the extensions component card wraps its controls in narrow windows", () => {
+  const css = readFileSync(join(__dirname, "../../settings.css"), "utf8")
+  expect(css).toMatch(/\.extensions-section \.settings-row\s*\{\s*flex-wrap:\s*wrap;/)
+  expect(css).toMatch(
+    /@media \(max-width: 760px\)\s*\{[\s\S]*?\.extensions-section \.settings-row-control\s*\{[^}]*flex:\s*1 1 100%/
+  )
+})
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()

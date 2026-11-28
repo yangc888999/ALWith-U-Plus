@@ -175,6 +175,7 @@ export function startAutomationScheduler(execute: AutomationExecutor, canRun: ()
           taskId: task.id,
           taskName: task.name,
           prompt: task.prompt,
+          promptFile: task.promptFile,
           cwd: task.cwd,
           fullAccess: task.fullAccess,
           model: task.model,

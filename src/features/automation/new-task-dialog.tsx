@@ -4,13 +4,23 @@
 
 import { isTauri } from "@tauri-apps/api/core"
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
-import { CircleAlertIcon, FolderOpenIcon, ShieldCheckIcon } from "lucide-react"
+import { CircleAlertIcon, FileTextIcon, FolderOpenIcon, LockIcon, ShieldCheckIcon } from "lucide-react"
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import { commands } from "@/bindings"
 import { Button } from "@/components/ui/button"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from "@/components/ui/alert-dialog"
 import {
   Dialog,
   DialogContent,
@@ -26,6 +36,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { defaultModelChoice } from "@/lib/default-model"
 import { describeError } from "@/lib/error-text"
 import type { ModelOption } from "@/lib/model-options"
+import { openExternal } from "@/lib/open"
 import { useModelOptions } from "@/lib/use-model-options"
 import { cn } from "@/lib/utils"
 
@@ -44,6 +55,7 @@ import {
 export const DEFAULT_TASK_DRAFT: TaskDraft = {
   name: "",
   prompt: "",
+  promptFile: "",
   cwd: "",
   fullAccess: true,
   model: "",
@@ -107,6 +119,7 @@ function draftFromTask(task: ScheduledTask | null): TaskDraft {
   return {
     name: task.name,
     prompt: task.prompt,
+    promptFile: task.promptFile,
     cwd: task.cwd,
     fullAccess: task.fullAccess,
     model: task.model,
@@ -124,10 +137,30 @@ function draftFromTask(task: ScheduledTask | null): TaskDraft {
   }
 }
 
+function normalizedPath(value: string): string {
+  return value.replaceAll("\\", "/").replace(/\/+$/, "")
+}
+
+function isInsideDirectory(file: string, directory: string): boolean {
+  const normalizedFile = normalizedPath(file)
+  const normalizedDirectory = normalizedPath(directory)
+  if (normalizedFile === "" || normalizedDirectory === "") return false
+  const caseFold = /^[A-Za-z]:\//.test(normalizedDirectory)
+    ? (value: string) => value.toLowerCase()
+    : (value: string) => value
+  return caseFold(normalizedFile).startsWith(`${caseFold(normalizedDirectory)}/`)
+}
+
+function relativePromptPath(file: string, directory: string): string {
+  if (!isInsideDirectory(file, directory)) return file
+  return normalizedPath(file).slice(normalizedPath(directory).length + 1)
+}
+
 export function NewTaskDialog({
   open,
   onOpenChange,
   task,
+  executed = false,
   onSubmit,
   onOpenExtensions
 }: {
@@ -135,6 +168,8 @@ export function NewTaskDialog({
   onOpenChange: (open: boolean) => void
   /** null = 新建；否则为编辑。 */
   task: ScheduledTask | null
+  /** A task that has a run record: its project folder is immutable. */
+  executed?: boolean
   onSubmit: (draft: TaskDraft) => void
   onOpenExtensions?: () => void
 }) {
@@ -145,8 +180,11 @@ export function NewTaskDialog({
   const modelOptions = useModelOptions()
   const [form, setForm] = useState<TaskDraft>(() => draftFromTask(task))
   const [userPermissionOpen, setUserPermissionOpen] = useState(false)
-  const [workspaceCustom, setWorkspaceCustom] = useState(() => Boolean(task?.cwd))
   const [validityMode, setValidityMode] = useState<"forever" | "until">(() => (task?.validUntil ? "until" : "forever"))
+  const [promptPreview, setPromptPreview] = useState("")
+  const [promptPreviewError, setPromptPreviewError] = useState<string | null>(null)
+  const [promptPreviewLoading, setPromptPreviewLoading] = useState(false)
+  const [reminder, setReminder] = useState<"workspace" | "prompt" | "unreadable" | null>(null)
   // 高级设置是常驻分组：折叠把「推送到飞书」这个本轮主角藏起来，编辑历史任务时尤其难找。
   // selfTarget = 飞书 CLI 登录态里的本人，新建/开启推送时作为默认收件人列出来。
   // authChecked 只用来决定「读不到本人」这句提示何时出现，不做 spinner：这个请求通常瞬时返回，
@@ -156,7 +194,6 @@ export function NewTaskDialog({
   // 飞书 CLI 组件本身装没装：没装的话推送这条路根本走不通，要给出「去安装」的入口，
   // 而不是让人对着一个永远发不出去的开关发愣（2026-11-08）。
   const [cliAvailable, setCliAvailable] = useState<boolean | null>(null)
-  const [defaultCwd, setDefaultCwd] = useState("")
   const autoFilledSelf = useRef(false)
   const defaultNotifyApplied = useRef(false)
   const defaultChoice = useMemo(() => (open ? defaultModelChoice() : null), [open])
@@ -165,24 +202,54 @@ export function NewTaskDialog({
   useEffect(() => {
     if (!open) return
     setForm(draftFromTask(task))
-    setWorkspaceCustom(Boolean(task?.cwd))
     setValidityMode(task?.validUntil ? "until" : "forever")
     setAuthChecked(false)
     setCliAvailable(null)
+    setPromptPreview("")
+    setPromptPreviewError(null)
+    setPromptPreviewLoading(false)
+    setReminder(null)
     autoFilledSelf.current = false
     defaultNotifyApplied.current = false
   }, [open, task])
 
-  // 默认工作空间地址 + 授权人本人（飞书 CLI 登录态里的 user identity）。
+  // Preview the selected Markdown file. The task stores the path, not a copy, so opening the
+  // dialog always shows the file's current contents.
+  useEffect(() => {
+    if (!open) return
+    const path = form.promptFile.trim()
+    if (path === "") {
+      setPromptPreviewError(null)
+      setPromptPreviewLoading(false)
+      setPromptPreview(task?.prompt ?? "")
+      return
+    }
+    if (!isTauri()) return
+    let cancelled = false
+    setPromptPreviewLoading(true)
+    setPromptPreviewError(null)
+    void commands
+      .readTextFile({ path })
+      .then((text) => {
+        if (!cancelled) setPromptPreview(text)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setPromptPreview("")
+        setPromptPreviewError(describeError(error))
+      })
+      .finally(() => {
+        if (!cancelled) setPromptPreviewLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, form.promptFile, task?.prompt])
+
+  // 授权人本人（飞书 CLI 登录态里的 user identity）。
   useEffect(() => {
     if (!open || !isTauri()) return
     let cancelled = false
-    void commands
-      .quickChatDirectory()
-      .then((path) => {
-        if (!cancelled) setDefaultCwd(path)
-      })
-      .catch(() => undefined)
     void commands
       .larkCliStatus()
       .then((status) => {
@@ -271,38 +338,103 @@ export function NewTaskDialog({
     : (defaultChoice?.effort ?? defaultEntry?.defaultEffort ?? t("automation.effortDefaultShort"))
   // 选中模型后，Effort / 加速仍按所选模型来；留空时才显示全局默认。
   const effortDisabled = !pinned || effortOptions.length === 0
-  // A custom workspace with no folder chosen would silently fall back to the default one. Make the
-  // missing choice visible instead of writing a task that looks custom but is not.
-  const canSubmit =
-    form.name.trim() !== "" &&
-    form.prompt.trim() !== "" &&
-    (!workspaceCustom || form.cwd.trim() !== "") &&
-    // A task with delivery on but no recipient would be saved and then silently never send.
-    (!form.larkNotify || form.larkTargets.length > 0)
+  // Keep the submit button clickable when the folder or prompt file is missing: pressing it opens
+  // the required-field reminder instead of leaving the reader with a dead disabled button.
+  const canSubmit = form.name.trim() !== "" && (!form.larkNotify || form.larkTargets.length > 0)
+  const workspaceLocked = (executed || task?.folderLocked === true) && form.cwd.trim() !== ""
+  const promptFileName = relativePromptPath(form.promptFile, form.cwd)
+  const reminderTitle =
+    reminder === "workspace"
+      ? t("automation.workspaceRequiredTitle")
+      : reminder === "prompt"
+        ? t("automation.promptFileRequiredTitle")
+        : t("automation.promptFileUnreadableTitle")
+  const reminderDescription =
+    reminder === "workspace"
+      ? t("automation.workspaceRequiredDesc")
+      : reminder === "prompt"
+        ? t("automation.promptFileRequiredDesc")
+        : t("automation.promptFileUnreadableDesc")
 
   /** Pick the working directory through the OS dialog: hand-typed absolute paths are easy to get
    *  wrong and cannot be validated without touching the filesystem. */
   const pickWorkspace = async (): Promise<void> => {
-    if (!isTauri()) return
+    if (!isTauri() || workspaceLocked) return
     try {
       const picked = await openDialog({
         directory: true,
         multiple: false,
         defaultPath: form.cwd.trim() || undefined
       })
-      if (typeof picked === "string" && picked !== "") patch({ cwd: picked })
+      if (typeof picked === "string" && picked !== "") {
+        // A prompt file from the old folder cannot silently stay selected under the new one.
+        patch({ cwd: picked, promptFile: "", prompt: "" })
+        setPromptPreview("")
+        setPromptPreviewError(null)
+      }
     } catch (cause) {
       toast.error(describeError(cause))
     }
   }
 
-  const submit = (): void => {
+  const pickPromptFile = async (): Promise<void> => {
+    if (!isTauri()) return
+    if (form.cwd.trim() === "") {
+      setReminder("workspace")
+      return
+    }
+    try {
+      const picked = await openDialog({
+        directory: false,
+        multiple: false,
+        defaultPath: form.cwd.trim(),
+        filters: [{ name: "Markdown", extensions: ["md", "markdown"] }]
+      })
+      if (typeof picked !== "string" || picked === "") return
+      if (!isInsideDirectory(picked, form.cwd.trim())) {
+        toast.error(t("automation.promptFileOutsideWorkspace"))
+        return
+      }
+      const text = await commands.readTextFile({ path: picked })
+      patch({ promptFile: picked, prompt: "" })
+      setPromptPreview(text)
+      setPromptPreviewError(null)
+    } catch (cause) {
+      toast.error(describeError(cause))
+    }
+  }
+
+  const submit = async (): Promise<void> => {
     if (!canSubmit) return
+    const cwd = form.cwd.trim()
+    if (cwd === "") {
+      setReminder("workspace")
+      return
+    }
+    const promptFile = form.promptFile.trim()
+    const legacyPrompt = form.prompt.trim()
+    if (promptFile === "" && legacyPrompt === "") {
+      setReminder("prompt")
+      return
+    }
+    if (promptFile !== "") {
+      try {
+        const text = await commands.readTextFile({ path: promptFile })
+        if (text.trim() === "") {
+          setReminder("prompt")
+          return
+        }
+      } catch {
+        setReminder("unreadable")
+        return
+      }
+    }
     onSubmit({
       ...form,
       name: form.name.trim(),
-      prompt: form.prompt.trim(),
-      cwd: workspaceCustom ? form.cwd.trim() : "",
+      prompt: promptFile === "" ? legacyPrompt : "",
+      promptFile,
+      cwd,
       validUntil: validityMode === "forever" ? null : form.validUntil
     })
     onOpenChange(false)
@@ -324,7 +456,7 @@ export function NewTaskDialog({
           className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-5 sm:px-6"
           onSubmit={(event) => {
             event.preventDefault()
-            submit()
+            void submit()
           }}
         >
           <FormSection title={t("automation.sectionBasic")}>
@@ -339,74 +471,91 @@ export function NewTaskDialog({
               />
             </ControlField>
 
-            <ControlField label={t("automation.fieldPrompt")} htmlFor="automation-prompt">
-              <div className="overflow-hidden rounded-lg border border-input bg-background shadow-xs transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
-                <Textarea
-                  id="automation-prompt"
-                  aria-label={t("automation.fieldPrompt")}
-                  className="min-h-[112px] resize-y border-0 bg-transparent px-3 py-2.5 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
-                  value={form.prompt}
-                  onChange={(event) => patch({ prompt: event.target.value })}
-                  placeholder={t("automation.fieldPromptPlaceholder")}
-                />
-                <div className="flex flex-wrap items-center gap-1 border-t border-border/60 bg-muted/30 px-2 py-1.5">
-                  <label className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-muted">
+            <ControlField
+              label={t("automation.fieldWorkspaceRequired")}
+              htmlFor="automation-workspace"
+              hint={workspaceLocked ? t("automation.workspaceLockedHint") : t("automation.workspaceRequiredHint")}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  id="automation-workspace"
+                  type="button"
+                  disabled={workspaceLocked}
+                  onClick={() => void pickWorkspace()}
+                  title={form.cwd || t("automation.workspacePickFolder")}
+                  aria-label={t("automation.workspacePickFolder")}
+                  className="inline-flex h-9 min-w-0 max-w-[360px] flex-1 items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-xs shadow-xs transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-70 dark:bg-input/30"
+                >
+                  {workspaceLocked ? (
+                    <LockIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                  ) : (
                     <FolderOpenIcon className="size-3.5 shrink-0" aria-hidden="true" />
-                    <select
-                      aria-label={t("automation.fieldWorkspace")}
-                      className="cursor-pointer appearance-none bg-transparent text-xs text-foreground outline-none"
-                      value={workspaceCustom ? "custom" : "default"}
-                      onChange={(event) => {
-                        const custom = event.target.value === "custom"
-                        setWorkspaceCustom(custom)
-                        if (!custom) patch({ cwd: "" })
-                      }}
-                    >
-                      <option value="default">{t("automation.workspaceDefault")}</option>
-                      <option value="custom">{t("automation.workspaceCustom")}</option>
-                    </select>
-                  </label>
-                  {workspaceCustom && (
-                    <button
-                      type="button"
-                      onClick={() => void pickWorkspace()}
-                      title={form.cwd || t("automation.workspacePick")}
-                      aria-label={t("automation.workspacePick")}
-                      className="inline-flex h-7 max-w-[260px] items-center gap-1.5 rounded-md px-2 text-xs transition-colors hover:bg-muted"
-                    >
-                      <span
-                        className={cn(
-                          "truncate font-mono text-[11px]",
-                          form.cwd === "" ? "text-muted-foreground" : "text-foreground"
-                        )}
-                      >
-                        {form.cwd || t("automation.workspacePick")}
-                      </span>
-                    </button>
                   )}
+                  <span className={cn("truncate font-mono text-[11px]", form.cwd === "" && "text-muted-foreground")}>
+                    {form.cwd || t("automation.workspacePickFolder")}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={form.fullAccess}
+                  onClick={() => patch({ fullAccess: !form.fullAccess })}
+                  title={t(form.fullAccess ? "automation.fullAccessOn" : "automation.fullAccessOff")}
+                  className={cn(
+                    "inline-flex h-9 items-center gap-1.5 rounded-md px-2 text-xs transition-colors hover:bg-muted",
+                    form.fullAccess ? "text-foreground" : "text-muted-foreground"
+                  )}
+                >
+                  <ShieldCheckIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                  {t("automation.fieldFullAccess")}
+                </button>
+              </div>
+            </ControlField>
+
+            <ControlField
+              label={t("automation.fieldPromptFile")}
+              htmlFor="automation-prompt-file"
+              hint={promptPreviewError ?? t("automation.promptFileHint")}
+            >
+              <div className="overflow-hidden rounded-lg border border-input bg-background shadow-xs transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
+                <div className="flex flex-wrap items-center gap-1 border-b border-border/60 bg-muted/30 px-2 py-1.5">
                   <button
                     type="button"
-                    aria-pressed={form.fullAccess}
-                    onClick={() => patch({ fullAccess: !form.fullAccess })}
-                    title={t(form.fullAccess ? "automation.fullAccessOn" : "automation.fullAccessOff")}
-                    className={cn(
-                      "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs transition-colors hover:bg-muted",
-                      form.fullAccess ? "text-foreground" : "text-muted-foreground"
-                    )}
+                    onClick={() => void pickPromptFile()}
+                    aria-label={t("automation.promptFilePick")}
+                    className="inline-flex h-7 min-w-0 max-w-[360px] items-center gap-1.5 rounded-md px-2 text-xs transition-colors hover:bg-muted"
                   >
-                    <ShieldCheckIcon className="size-3.5 shrink-0" aria-hidden="true" />
-                    {t("automation.fieldFullAccess")}
-                  </button>
-                  {!workspaceCustom && defaultCwd !== "" && (
-                    <span
-                      className="ms-auto max-w-[45%] truncate px-1 text-[10px] text-muted-foreground/70"
-                      title={defaultCwd}
-                    >
-                      {t("automation.workspaceDefaultPath", { path: defaultCwd })}
+                    <FileTextIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                    <span className="truncate font-mono text-[11px]">
+                      {promptFileName || t("automation.promptFilePick")}
                     </span>
+                  </button>
+                  {form.promptFile !== "" && (
+                    <button
+                      type="button"
+                      onClick={() => void openExternal(form.promptFile)}
+                      className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-muted"
+                    >
+                      {t("automation.promptFileOpen")}
+                    </button>
                   )}
+                  <span className="ms-auto max-w-[45%] truncate px-1 text-[10px] text-muted-foreground/70">
+                    {t("automation.promptFileRuntimeHint")}
+                  </span>
                 </div>
+                <Textarea
+                  id="automation-prompt-file"
+                  aria-label={t("automation.fieldPromptFile")}
+                  className="min-h-[112px] resize-y border-0 bg-transparent px-3 py-2.5 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
+                  value={promptPreviewLoading ? t("automation.promptFileReading") : promptPreview}
+                  readOnly
+                  placeholder={t("automation.promptFilePlaceholder")}
+                />
               </div>
+              {form.promptFile === "" && form.prompt !== "" && (
+                <p className="text-[11px] leading-4 text-amber-600 dark:text-amber-300">
+                  {t("automation.promptFileLegacyHint")}
+                </p>
+              )}
             </ControlField>
           </FormSection>
 
@@ -744,6 +893,27 @@ export function NewTaskDialog({
         onGranted={() => patch({ larkIdentity: "user" })}
         onOpenExtensions={onOpenExtensions}
       />
+      <AlertDialog open={reminder !== null} onOpenChange={(next) => !next && setReminder(null)}>
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{reminderTitle}</AlertDialogTitle>
+            <AlertDialogDescription>{reminderDescription}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("actions.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const action = reminder
+                setReminder(null)
+                if (action === "workspace") void pickWorkspace()
+                else void pickPromptFile()
+              }}
+            >
+              {reminder === "workspace" ? t("automation.workspacePickFolder") : t("automation.promptFilePick")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

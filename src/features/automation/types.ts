@@ -44,8 +44,11 @@ export function isLarkMessageFormat(value: unknown): value is LarkMessageFormat 
 /** 新建 / 编辑弹窗提交的可编辑字段。 */
 export interface TaskDraft {
   name: string
+  /** Legacy inline prompt. New tasks use `promptFile`; this stays only for old snapshots. */
   prompt: string
-  /** 工作空间（cwd）；空串表示跟随主窗口默认（快速会话目录）。 */
+  /** Markdown prompt file selected inside `cwd`; empty only for legacy inline tasks. */
+  promptFile: string
+  /** Required project folder. After the first run this value is immutable. */
   cwd: string
   /** 允许完全访问：映射为会话的 codex sandbox mode。 */
   fullAccess: boolean
@@ -72,6 +75,8 @@ export interface TaskDraft {
 /** 落库的任务定义。 */
 export interface ScheduledTask extends ScheduleSpec, TaskDraft {
   id: string
+  /** Set when the task starts its first run; the project folder becomes immutable. */
+  folderLocked?: boolean
   /** 下次执行时间（epoch ms），null = 已完成 / 已过期 / 无排期。 */
   nextRunAt: number | null
   /**
@@ -129,6 +134,8 @@ export interface AutomationRunRequest {
   taskId: string
   taskName: string
   prompt: string
+  /** Markdown file read at execution time. Empty falls back to `prompt` for legacy tasks. */
+  promptFile?: string
   cwd: string
   fullAccess: boolean
   /** Empty selects the current default at the start of every run. */

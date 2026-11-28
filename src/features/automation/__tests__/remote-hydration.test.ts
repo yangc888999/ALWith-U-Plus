@@ -53,7 +53,8 @@ async function flushWrites(): Promise<void> {
 const draft = {
   name: "每日群消息汇总",
   prompt: "读取飞书群消息并生成日报",
-  cwd: "",
+  promptFile: "",
+  cwd: "/tmp/project",
   fullAccess: true,
   model: "",
   effort: "",

@@ -1102,6 +1102,59 @@ test("citation markers split across streamed chunks leave no reference tail", as
   expect(item?.kind === "assistant" && textOf(item.content)).toBe("answer  done")
 })
 
+test("a final agent_message closes the streaming citation filter with the same message id", async () => {
+  const { client, fake } = await make()
+  const id = await client.newSession("/tmp/citation-final")
+  await fake.pushUpdate(id, {
+    sessionUpdate: "agent_message_chunk",
+    messageId: "final-answer",
+    content: { type: "text", text: "answer \uE200cite\uE202turn0" }
+  } as never)
+  await fake.pushUpdate(id, {
+    sessionUpdate: "agent_message",
+    messageId: "final-answer",
+    content: [{ type: "text", text: "answer \uE200cite\uE202turn0search0\uE201 done" }]
+  } as never)
+  const streams = (client as unknown as { citationStreams: Map<string, unknown> }).citationStreams
+  expect(streams.size).toBe(0)
+  const item = client.session(id).items.find((entry) => entry.kind === "assistant")
+  expect(item?.kind === "assistant" && textOf(item.content)).toBe("answer  done")
+})
+
+test("an open citation marker at an interjection boundary does not swallow the next answer", async () => {
+  const { client, fake } = await make()
+  const id = await client.newSession("/tmp/citation-steer")
+  await fake.pushUpdate(id, {
+    sessionUpdate: "user_message",
+    messageId: "q1",
+    content: [{ type: "text", text: "question one" }]
+  } as never)
+  await fake.pushUpdate(id, {
+    sessionUpdate: "agent_message_chunk",
+    messageId: "shared-citation-answer",
+    content: { type: "text", text: "first answer \uE200cite\uE202turn0" }
+  } as never)
+  await fake.pushUpdate(id, {
+    sessionUpdate: "user_message",
+    messageId: "q2",
+    content: [{ type: "text", text: "question two" }]
+  } as never)
+  await fake.pushUpdate(id, {
+    sessionUpdate: "agent_message_chunk",
+    messageId: "shared-citation-answer",
+    content: { type: "text", text: "second real answer \uE201 tail" }
+  } as never)
+
+  const text = client
+    .session(id)
+    .items.filter((entry) => entry.kind === "assistant")
+    .map((entry) => (entry.kind === "assistant" ? textOf(entry.content) : ""))
+    .join("")
+  expect(text).toContain("first answer")
+  expect(text).toContain("second real answer")
+  expect(text).toContain(" tail")
+})
+
 test("post-steer assistant chunks start a new item under the interjection", async () => {
   const { client, fake } = await make()
   const id = await client.newSession("/tmp/steer-segment")
@@ -1134,6 +1187,35 @@ test("post-steer assistant chunks start a new item under the interjection", asyn
   // the new question.
   expect(newAnswer).toBeGreaterThan(interjection)
   expect(items.some((item) => item.kind === "assistant" && textOf(item.content) === "old answer")).toBe(true)
+})
+
+test("a fresh assistant id after a user message stays on its own turn", async () => {
+  const { client, fake } = await make()
+  const id = await client.newSession("/tmp/steer-fresh-id")
+  await fake.pushUpdate(id, {
+    sessionUpdate: "user_message",
+    messageId: "q1",
+    content: [{ type: "text", text: "question one" }]
+  } as never)
+  await fake.pushUpdate(id, {
+    sessionUpdate: "agent_message_chunk",
+    messageId: "a1",
+    content: { type: "text", text: "first answer" }
+  } as never)
+  await fake.pushUpdate(id, {
+    sessionUpdate: "user_message",
+    messageId: "q2",
+    content: [{ type: "text", text: "question two" }]
+  } as never)
+  await fake.pushUpdate(id, {
+    sessionUpdate: "agent_message_chunk",
+    messageId: "a2",
+    content: { type: "text", text: "fresh answer" }
+  } as never)
+  const fresh = client
+    .session(id)
+    .items.find((item) => item.kind === "assistant" && textOf(item.content) === "fresh answer")
+  expect(fresh?.id).toBe("a2")
 })
 
 test("consecutive interjections keep every answer after its own question", async () => {

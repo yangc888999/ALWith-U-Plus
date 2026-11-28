@@ -12,7 +12,8 @@ function draft(overrides: Partial<TaskDraft> = {}): TaskDraft {
   return {
     name: "每日群消息汇总",
     prompt: "读取飞书群消息并生成日报",
-    cwd: "",
+    promptFile: "",
+    cwd: "/tmp/project",
     fullAccess: true,
     model: "",
     effort: "",
@@ -178,6 +179,37 @@ describe("任务 CRUD 与启停", () => {
     expect(store.listTasks()).toHaveLength(0)
   })
 
+  test("the project folder is immutable once the task has a run", async () => {
+    const store = await fresh()
+    const created = store.createTask(draft({ cwd: "/tmp/project-a" }))
+    store.updateTask(created.id, { cwd: "/tmp/project-b" })
+    expect(store.getTask(created.id)?.cwd).toBe("/tmp/project-b")
+
+    store.startAutomationRun({
+      runId: "run-lock",
+      taskId: created.id,
+      taskName: created.name,
+      prompt: created.prompt,
+      promptFile: created.promptFile,
+      cwd: created.cwd,
+      fullAccess: created.fullAccess,
+      model: created.model,
+      effort: created.effort,
+      fastMode: created.fastMode,
+      larkNotify: created.larkNotify,
+      larkTargets: created.larkTargets,
+      larkIdentity: created.larkIdentity
+    })
+    expect(store.getTask(created.id)?.folderLocked).toBe(true)
+    store.updateTask(created.id, { cwd: "/tmp/project-c" })
+    expect(store.getTask(created.id)?.cwd).toBe("/tmp/project-b")
+  })
+
+  test("a new task cannot be created without a project folder", async () => {
+    const store = await fresh()
+    expect(() => store.createTask(draft({ cwd: "  " }))).toThrow(/project folder/i)
+  })
+
   test("Lark delivery is opt-in: a task saved without it never carries targets", async () => {
     const store = await fresh()
     const created = store.createTask(draft())
@@ -196,7 +228,7 @@ describe("任务 CRUD 与启停", () => {
             larkEmptyResultNoticeToSelf: true,
             name: "老任务",
             prompt: "hi",
-            cwd: "",
+            cwd: "/tmp/project",
             fullAccess: true,
             model: "",
             repeat: "daily",
@@ -228,7 +260,7 @@ describe("任务 CRUD 与启停", () => {
       taskId: "task-1",
       taskName: "日报",
       prompt: "写日报",
-      cwd: "",
+      cwd: "/tmp/project",
       fullAccess: true,
       model: "",
       effort: "",
@@ -340,7 +372,7 @@ describe("运行记录", () => {
     taskId: "task-1",
     taskName: "每日群消息汇总",
     prompt: "读取飞书群消息",
-    cwd: "",
+    cwd: "/tmp/project",
     fullAccess: true,
     model: "",
     effort: "",
@@ -450,7 +482,7 @@ describe("localStorage 持久化往返", () => {
           id: "x",
           name: "外部写入",
           prompt: "p",
-          cwd: "",
+          cwd: "/tmp/project",
           fullAccess: false,
           repeat: "weekly",
           intervalMinutes: 60,
@@ -593,7 +625,7 @@ describe("finalizeStaleRunningRuns 僵尸运行记录", () => {
     taskId: "task-z",
     taskName: "被中断的日报",
     prompt: "hi",
-    cwd: "",
+    cwd: "/tmp/project",
     fullAccess: false,
     model: "",
     effort: "",
@@ -743,7 +775,8 @@ describe("运行记录裁剪与运行中标记", () => {
       taskId: "task-1",
       taskName: "每日群消息汇总",
       prompt: "读取飞书群消息并生成日报",
-      cwd: "",
+    promptFile: "",
+      cwd: "/tmp/project",
       fullAccess: false,
       model: "",
       effort: "",

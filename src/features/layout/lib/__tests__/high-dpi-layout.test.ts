@@ -16,6 +16,8 @@ const chat = readFileSync(join(root, "features/chat/chat-view.tsx"), "utf8")
 test("the root scales with wide high-density viewports", () => {
   expect(styles).toMatch(/html\s*\{\s*font-size:\s*clamp\(16px,\s*calc\(0\.5vw \+ 7px\),\s*22px\);\s*\}/)
   expect(styles).toMatch(/--chat-column-width:\s*70rem/)
+  expect(styles).toMatch(/--chat-rail-gutter:\s*6rem/)
+  expect(styles).toMatch(/--chat-content-width:\s*min\(var\(--chat-column-width\),\s*calc\(100% - var\(--chat-rail-gutter\)\)\)/)
   expect(styles).toMatch(
     /@media \(min-width: 1600px\)\s*\{[\s\S]*?\.welcome-hero-composer,[\s\S]*?\.welcome-hero-recent\s*\{[^}]*max-width:\s*56rem/
   )

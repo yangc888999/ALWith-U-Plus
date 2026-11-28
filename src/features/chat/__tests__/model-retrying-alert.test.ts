@@ -69,11 +69,10 @@ function session(current: string, id = "chat-1"): Session {
         category: "model",
         type: "select",
         currentValue: current,
-        // `label()` matches by option `value`; giving the first option `name === current` makes the
-        // toast message contain the model string deterministically (a gateway name stays raw, mirroring
-        // the overload module, because `deepseek/deepseek-flash` ≠ the option value `gateway:...`).
+        // `label()` must resolve a bridge route id (`deepseek/deepseek-flash`) to the picker row's
+        // display name instead of showing the raw routing string.
         options: [
-          { value: current, name: current },
+          { value: current, name: current === "gateway:deepseek:deepseek-flash" ? "DeepSeek V4 Flash" : current },
           { value: "gpt-6.1-terra", name: "gpt-6.1-terra" }
         ]
       }
@@ -125,7 +124,7 @@ test("a retrying event for a running session raises one toast with a jump button
   expect(host.toasts).toHaveLength(1)
   const { message, options } = host.toasts[0]
   expect(String(message)).toContain("11")
-  expect(String(message)).toContain("deepseek/deepseek-flash")
+  expect(String(message)).toContain("DeepSeek V4 Flash")
   // Resolving the session means the jump button is offered.
   expect(options.action).toBeDefined()
   // Clicking it lands the user on the right conversation with a summary the navigator accepts.

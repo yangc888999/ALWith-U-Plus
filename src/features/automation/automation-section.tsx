@@ -4,7 +4,6 @@
 // 有没有打开过都不影响。这里只订阅共享 KV 刷新界面、订阅执行结果弹 toast；「立即运行」
 // 也只是向主窗口发一个请求，运行记录由主窗口统一写入。
 
-import { isTauri } from "@tauri-apps/api/core"
 import {
   CalendarClockIcon,
   FilterIcon,
@@ -19,7 +18,6 @@ import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
-import { commands } from "@/bindings"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
@@ -93,6 +91,8 @@ export function AutomationSection({ onOpenExtensions }: { onOpenExtensions: () =
   useMinuteTick()
 
   const tasks = listTasks()
+  const executedTaskIds = new Set(getAutomationSnapshot().runs.map((run) => run.taskId))
+  for (const task of tasks) if (task.folderLocked === true) executedTaskIds.add(task.id)
   const [tab, setTab] = useState<"tasks" | "runs">("tasks")
   const [filter, setFilter] = useState<TaskFilter>("all")
   const [query, setQuery] = useState("")
@@ -100,16 +100,6 @@ export function AutomationSection({ onOpenExtensions }: { onOpenExtensions: () =
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<ScheduledTask | null>(null)
   const [completionSound, setCompletionSound] = useBooleanSetting("automation.completionSound")
-  // 默认工作空间地址：任务没指定 cwd 时，把真正会用的目录显示在卡片上。
-  const [defaultCwd, setDefaultCwd] = useState("")
-  useEffect(() => {
-    if (!isTauri()) return
-    void commands
-      .quickChatDirectory()
-      .then(setDefaultCwd)
-      .catch(() => undefined)
-  }, [])
-
   const counts: Record<TaskFilter, number> = {
     all: tasks.length,
     enabled: tasks.filter((task) => task.enabled).length,
@@ -119,7 +109,13 @@ export function AutomationSection({ onOpenExtensions }: { onOpenExtensions: () =
   const visible = tasks.filter((task) => {
     if (filter === "enabled" && !task.enabled) return false
     if (filter === "paused" && task.enabled) return false
-    if (q !== "" && !task.name.toLowerCase().includes(q) && !task.prompt.toLowerCase().includes(q)) return false
+    if (
+      q !== "" &&
+      !task.name.toLowerCase().includes(q) &&
+      !task.prompt.toLowerCase().includes(q) &&
+      !task.promptFile.toLowerCase().includes(q)
+    )
+      return false
     return true
   })
 
@@ -146,12 +142,21 @@ export function AutomationSection({ onOpenExtensions }: { onOpenExtensions: () =
     toast.success(t("automation.toastDeleted"))
   }
   const runNow = (task: ScheduledTask): void => {
+    if (task.cwd.trim() === "") {
+      toast.error(t("automation.workspaceRequiredShort"))
+      return
+    }
+    if (task.promptFile.trim() === "" && task.prompt.trim() === "") {
+      toast.error(t("automation.promptFileEmpty"))
+      return
+    }
     const runId = newRunId()
     const request = {
       runId,
       taskId: task.id,
       taskName: task.name,
       prompt: task.prompt,
+      promptFile: task.promptFile,
       cwd: task.cwd,
       fullAccess: task.fullAccess,
       model: task.model,
@@ -274,7 +279,6 @@ export function AutomationSection({ onOpenExtensions }: { onOpenExtensions: () =
                   onEdit={() => openEdit(task)}
                   onRemove={() => remove(task)}
                   onRunNow={() => runNow(task)}
-                  defaultCwd={defaultCwd}
                 />
               ))}
             </div>
@@ -286,6 +290,7 @@ export function AutomationSection({ onOpenExtensions }: { onOpenExtensions: () =
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         task={editing}
+        executed={editing !== null && executedTaskIds.has(editing.id)}
         onSubmit={submit}
         onOpenExtensions={onOpenExtensions}
       />
@@ -331,14 +336,12 @@ function TaskCard({
   onEdit,
   onRemove,
   onRunNow,
-  defaultCwd
 }: {
   task: ScheduledTask
   onToggle: (enabled: boolean) => void
   onEdit: () => void
   onRemove: () => void
   onRunNow: () => void
-  defaultCwd: string
 }) {
   const { t } = useTranslation()
   const schedule = scheduleLabel(task, t)
@@ -353,7 +356,8 @@ function TaskCard({
         : t("automation.modelDefault")
   const effortText = task.effort !== "" ? task.effort : (choice?.effort ?? t("automation.effortDefaultShort"))
   const fastOn = task.model !== "" ? task.fastMode : choice?.fastMode === true
-  const workspaceText = task.cwd !== "" ? task.cwd : defaultCwd
+  const workspaceText = task.cwd
+  const promptFileLabel = task.promptFile === "" ? "" : (task.promptFile.split(/[\\/]/).pop() ?? task.promptFile)
   return (
     <div
       className={cn(
@@ -370,7 +374,9 @@ function TaskCard({
 
       {/* 提示词摘要：两三行截断 */}
       <p className="mt-2 line-clamp-3 text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
-        {task.prompt}
+        {task.promptFile !== ""
+          ? t("automation.summaryPromptFile", { value: promptFileLabel })
+          : task.prompt}
       </p>
 
       <div className="mt-3 flex items-end justify-between gap-2 border-t border-border/50 pt-2.5">
@@ -392,7 +398,7 @@ function TaskCard({
           <div className="mt-0.5 truncate font-mono text-xs text-muted-foreground/70" title={workspaceText}>
             {workspaceText !== ""
               ? t("automation.summaryWorkspace", { value: workspaceText })
-              : t("automation.workspaceDefault")}
+              : t("automation.workspaceRequiredShort")}
           </div>
           {/* 运行时的额外配置：档位 / 加速 / 飞书推送，一眼能看出这个任务不是纯默认跑的 */}
           {(task.effort !== "" || task.fastMode || (task.larkNotify && task.larkTargets.length > 0)) && (

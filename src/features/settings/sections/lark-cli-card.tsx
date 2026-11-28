@@ -404,8 +404,8 @@ export function LarkCliCard() {
         {/* 版本与检查按钮同一行，有更新才多出「立即更新」；更新完成后提醒重启。
             Codex 引擎那一行已不再有检查/更新按钮（引擎随发版走），这套交互只剩 Lark CLI 用。 */}
         <SettingRow compact title={t("support.version")}>
-          <div className="flex min-w-0 flex-col items-end gap-1.5">
-            <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex min-w-0 flex-col items-start gap-1.5 md:items-end">
+            <div className="flex flex-wrap items-center justify-start gap-2 md:justify-end">
               <span className="text-sm text-muted-foreground">
                 {t("support.larkVersion", { version: status?.version ?? "—" })}
               </span>
@@ -427,7 +427,7 @@ export function LarkCliCard() {
               )}
             </div>
             {update && (
-              <div className="flex flex-col items-end gap-1 text-[11px] leading-4 text-muted-foreground">
+              <div className="flex flex-col items-start gap-1 text-[11px] leading-4 text-muted-foreground md:items-end">
                 <span>
                   {update.hasUpdate
                     ? t("support.updateAvailable", {
@@ -437,7 +437,7 @@ export function LarkCliCard() {
                     : t("support.upToDate", { version: update.currentVersion ?? status?.version ?? "?" })}
                 </span>
                 {update.hasUpdate && (
-                  <div className="flex flex-wrap items-center justify-end gap-3">
+                  <div className="flex flex-wrap items-center justify-start gap-3 md:justify-end">
                     {(update.changelog ?? null) !== null && (
                       <button
                         type="button"
@@ -470,7 +470,7 @@ export function LarkCliCard() {
             {/* 安装路径放在右侧控件列，而不是会被 align-items:center 挤压的 desc 第二行。 */}
             {installed && status?.cliPath && (
               <span
-                className="block max-w-full truncate font-mono text-[10px] leading-4 text-muted-foreground/70"
+                className="block max-w-full truncate text-left font-mono text-[10px] leading-4 text-muted-foreground/70 md:text-right"
                 title={status.cliPath}
               >
                 {status.cliPath}
@@ -600,7 +600,7 @@ function UserPermissions({
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="flex w-full items-center gap-2 px-2.5 py-2 text-left transition-colors hover:bg-muted/40"
+          className="flex w-full flex-wrap items-center gap-2 px-2.5 py-2 text-left transition-colors hover:bg-muted/40"
         >
           {open ? (
             <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />

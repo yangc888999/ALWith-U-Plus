@@ -150,6 +150,23 @@ test("an overload event publishes a notice for the running session, not a floati
   expect(host.warning).not.toHaveBeenCalled()
 })
 
+test("a gateway route id resolves to the picker display name", async () => {
+  const routed = session("gateway:deepseek:deepseek-flash")
+  routed.configOptions = [
+    {
+      configId: "model",
+      category: "model",
+      type: "select",
+      currentValue: "gateway:deepseek:deepseek-flash",
+      options: [{ value: "gateway:deepseek:deepseek-flash", name: "DeepSeek V4 Flash" }]
+    }
+  ] as never
+  host.sessions["chat-1"] = routed
+  const mod = await subscribe()
+  emit("deepseek/deepseek-flash", 324)
+  expect(mod.overloadNotice()?.modelName).toBe("DeepSeek V4 Flash")
+})
+
 test("the notice fades after the per-request throttle window", async () => {
   host.sessions["chat-1"] = session("gpt-6.1-sol")
   const mod = await subscribe()

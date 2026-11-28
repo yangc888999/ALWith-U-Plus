@@ -693,7 +693,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     [begin, cancel, chooseDraftFolder, initialPreferences.defaultStartSurface, lastDirectory, operation, setPendingChat, surfaceGeneration]
   )
 
-  /** 新建会话: a temporary chat in its own folder under the quick-chat root, never inside a project. */
+  /** 「聊天」分组 +：a temporary chat in its own folder under the quick-chat root, skipping the hero. */
   const newChat = useCallback(() => {
     const key = begin(null)
     setQuickChatDirectoryPending(true)
@@ -712,6 +712,31 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
         toast.error(describeError(error))
       })
   }, [begin, newChatInDirectory, requestedKey, setPendingChat])
+
+  /** 「新建任务」：return to the generic welcome hero. Only the two explicit sidebar entries skip it. */
+  const newTask = useCallback(() => {
+    const directory = newChatDirectory(lastDirectory)
+    cancel()
+    setQuickChatDirectoryPending(false)
+    setView("chat")
+    setSelectedId(null)
+    void operation
+      .run(
+        async () => {
+          client.releaseDraftSlot("main")
+          setDraftCollection(null)
+          setDraftStartSurface(initialPreferences.defaultStartSurface)
+          setDraftProjectSession(false)
+          setDraftDirectChat(false)
+          chooseDraftFolder(directory)
+          importDraft(DRAFT_SESSION_ID, null)
+          setSurfaceGeneration((value) => value + 1)
+          setChatRevealRequest((value) => value + 1)
+        },
+        { handoff: true }
+      )
+      .catch((error: unknown) => toast.error(describeError(error)))
+  }, [cancel, chooseDraftFolder, initialPreferences.defaultStartSurface, lastDirectory, operation])
 
   /** A recent-project card opens that project's newest conversation, not another blank draft. */
   const openRecentProject = useCallback(
@@ -1105,7 +1130,15 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     const run: OnRunTask = async (request) => {
       let sessionId = request.monitorSessionId ?? ""
       try {
-        const cwd = request.cwd.trim() !== "" ? request.cwd : await commands.quickChatDirectory()
+        const cwd = request.cwd.trim()
+        if (cwd === "") throw new Error(t("automation.workspaceRequiredShort"))
+        // A task's prompt is a Markdown file inside its project folder. Read it at execution time,
+        // not when the task was saved, so editing the file is enough to change the next run.
+        const prompt =
+          request.promptFile !== undefined && request.promptFile.trim() !== ""
+            ? (await commands.readTextFile({ path: request.promptFile.trim() })).trim()
+            : request.prompt.trim()
+        if (prompt === "") throw new Error(t("automation.promptFileEmpty"))
         // One task = one monitor conversation, named after the task. Every run appends to that
         // same thread, so the sidebar keeps a single 「监控」row instead of growing a chat a day.
         // After an app restart the thread is no longer attached: re-open it with the options form
@@ -1167,8 +1200,8 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           const started = new Date()
           const pad2 = (value: number): string => String(value).padStart(2, "0")
           const runStamp = `${started.getFullYear()}-${pad2(started.getMonth() + 1)}-${pad2(started.getDate())} ${pad2(started.getHours())}:${pad2(started.getMinutes())}`
-          const receipt = await client.promptAndWait(sessionId, [{ type: "text", text: request.prompt }], {
-            display: [{ type: "text", text: `【${runStamp} 运行】\n${request.prompt}` }]
+          const receipt = await client.promptAndWait(sessionId, [{ type: "text", text: prompt }], {
+            display: [{ type: "text", text: `【${runStamp} 运行】\n${prompt}` }]
           }, model)
           return {
             runId: request.runId,
@@ -1319,7 +1352,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
   useEffect(() => {
     const webview = getCurrentWindow()
     const listeners = Promise.all([
-      webview.listen<null>(events["menu:new-chat"].name, () => void newChat()),
+      webview.listen<null>(events["menu:new-chat"].name, () => void newTask()),
       webview.listen<null>(events["menu:open-settings"].name, () => void openSettingsWindow()),
       webview.listen<null>(events["menu:command-palette"].name, () => setPaletteOpen((open) => !open)),
       webview.listen<null>(events["menu:open-hotkeys"].name, () => setHotkeysOpen(true))
@@ -1329,7 +1362,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
         for (const stop of stops) stop()
       })
     }
-  }, [newChat])
+  }, [newTask])
 
   useEffect(() => {
     if (!navigator.platform.includes("Win")) return
@@ -1337,7 +1370,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
       if (!event.ctrlKey) return
       if (event.key === "n") {
         event.preventDefault()
-        void newChat()
+        void newTask()
       } else if (event.key === "k") {
         event.preventDefault()
         setPaletteOpen((open) => !open)
@@ -1351,7 +1384,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [newChat])
+  }, [newTask])
 
   const main = (() => {
     // The engine starts in the background; the home screen is there from the first frame, as
@@ -1472,7 +1505,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
             />
           }
           onSelectSession={select}
-          onNewChat={newChat}
+          onNewChat={newTask}
           onClearContext={(cwd) => clearContextInPlace(session.id, cwd)}
           onDeleted={deleted}
         />
@@ -1484,7 +1517,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           collectionId={draftCollection?.generation === surfaceGeneration ? draftCollection.id : undefined}
           owner="main"
           key={`draft-${surfaceGeneration}`}
-          onNewChat={newChat}
+          onNewChat={newTask}
           startSurface={draftStartSurface}
           projectSession={draftProjectSession}
           directChat={draftDirectChat}
@@ -1563,7 +1596,8 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                 leadingPage={leadingPage}
                 selectedId={view === "chat" && mainVisible ? selectedId : null}
                 onSelect={select}
-                onNewChat={newChat}
+                onNewChat={newTask}
+                onNewQuickChat={newChat}
                 onNewProject={newProject}
                 onSearch={() => setPaletteOpen(true)}
                 onNewProjectChat={newChatInDirectory}
@@ -1642,7 +1676,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
                   </div>
                 ) : leadingPage === "extensions" ? (
                   <div className="min-h-0 flex-1 overflow-auto">
-                    <div className="w-full min-w-0 px-8 py-8">
+                    <div className="mx-auto w-full min-w-0 max-w-6xl px-4 py-6 sm:px-8 sm:py-8">
                       <Suspense fallback={null}>
                         <ExtensionsSection onOpenSurface={openExtension} />
                       </Suspense>
@@ -1752,7 +1786,7 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           <CommandPalette
             open={paletteOpen}
             onOpenChange={setPaletteOpen}
-            onNewChat={newChat}
+            onNewChat={newTask}
             onOpenSettings={() => void openSettingsWindow()}
             onOpenPlugins={openPlugins}
             onOpenExtensions={openExtensions}

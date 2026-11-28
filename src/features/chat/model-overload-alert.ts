@@ -19,6 +19,7 @@ import { selectedModelId } from "@/agent/native-models"
 import { client } from "@/lib/client"
 import { parseModelIdentity, sameModelIdentity } from "@/lib/model-identity"
 import { overloadNoticeEnabled } from "@/lib/overload-retry-settings"
+import { displayModelLabel } from "@/lib/providers"
 
 import { activeTool } from "./turn-activity"
 
@@ -88,7 +89,12 @@ function choices(session: Session): Choice[] {
 }
 
 export function label(session: Session, value: string): string {
-  return choices(session).find((choice) => choice.value === value)?.name ?? value
+  // The bridge reports a route id (`deepseek/deepseek-flash`) while the picker stores a gateway
+  // selection (`gateway:deepseek:deepseek-flash`). Resolve the saved display label first, then the
+  // matching picker row, so an external provider never appears as a raw routing string.
+  const saved = displayModelLabel(value)
+  if (saved !== null) return saved
+  return choices(session).find((choice) => matchesReportedModel(choice.value, value))?.name ?? value
 }
 
 function turnKey(session: Session, model: string): string | null {

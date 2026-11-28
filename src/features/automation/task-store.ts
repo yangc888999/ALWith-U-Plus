@@ -202,8 +202,12 @@ function coerceTask(raw: unknown): ScheduledTask | null {
   const repeat = isRepeatRule(String(value.repeat)) ? (value.repeat as RepeatRule) : "daily"
   return {
     id: value.id,
+    folderLocked:
+      value.folderLocked === true ||
+      (typeof value.monitorSessionId === "string" && value.monitorSessionId !== ""),
     name: value.name,
     prompt: typeof value.prompt === "string" ? value.prompt : "",
+    promptFile: typeof value.promptFile === "string" ? value.promptFile : "",
     cwd: typeof value.cwd === "string" ? value.cwd : "",
     fullAccess: value.fullAccess === true,
     // Tasks saved before model selection existed simply follow the session default.
@@ -484,10 +488,14 @@ export function getTask(id: string): ScheduledTask | undefined {
 }
 
 export function createTask(draft: TaskDraft): ScheduledTask {
+  if (draft.cwd.trim() === "") throw new Error("A scheduled task requires a project folder")
+  if (draft.promptFile.trim() === "" && draft.prompt.trim() === "")
+    throw new Error("A scheduled task requires a prompt file")
   const now = Date.now()
   const task: ScheduledTask = {
     ...draft,
     id: newId(),
+    folderLocked: false,
     nextRunAt: null,
     monitorSessionId: null,
     createdAt: now,
@@ -502,7 +510,15 @@ export function updateTask(id: string, patch: Partial<TaskDraft>): void {
   const existing = getTask(id)
   if (existing === undefined) return
   const now = Date.now()
-  const updated: ScheduledTask = { ...existing, ...patch, updatedAt: now }
+  // The project folder is the task's stable identity: once a run exists, a new folder would break
+  // the monitor conversation and its relative prompt file. The UI disables the picker; this guard
+  // keeps every other caller (cross-window events, old tests) honest as well.
+  const executed = existing.folderLocked === true || snapshot.runs.some((run) => run.taskId === id)
+  const updated: ScheduledTask = {
+    ...existing,
+    ...(executed ? { ...patch, cwd: existing.cwd } : patch),
+    updatedAt: now
+  }
   // 规则/时间/有效期/启停变化都要重新排期，从现在起算，避免编辑后立刻补跑。
   updated.nextRunAt = nextRunAt(updated, now)
   commit({
@@ -527,7 +543,9 @@ export function setTaskMonitorSession(taskId: string, sessionId: string): void {
   commit({
     ...snapshot,
     tasks: snapshot.tasks.map((task) =>
-      task.id === taskId ? { ...task, monitorSessionId: sessionId, updatedAt: Date.now() } : task
+      task.id === taskId
+        ? { ...task, monitorSessionId: sessionId, folderLocked: true, updatedAt: Date.now() }
+        : task
     )
   })
 }
@@ -571,6 +589,8 @@ export function dueTasks(now: number = Date.now()): ScheduledTask[] {
   return snapshot.tasks.filter(
     (task) =>
       task.enabled &&
+      task.cwd.trim() !== "" &&
+      (task.promptFile.trim() !== "" || task.prompt.trim() !== "") &&
       task.nextRunAt !== null &&
       task.nextRunAt <= now &&
       now - task.nextRunAt <= CATCH_UP_WINDOW_MS &&
@@ -673,7 +693,11 @@ export function startAutomationRun(request: AutomationRunRequest): RunRecord {
     sessionId: null,
     error: null
   }
-  commit({ ...snapshot, runs: capRuns([record, ...snapshot.runs]) })
+  commit({
+    ...snapshot,
+    tasks: snapshot.tasks.map((task) => (task.id === request.taskId ? { ...task, folderLocked: true } : task)),
+    runs: capRuns([record, ...snapshot.runs])
+  })
   return record
 }
 

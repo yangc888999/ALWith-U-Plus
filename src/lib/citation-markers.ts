@@ -24,8 +24,19 @@ export function withoutCitationMarkers(text: string): string {
  */
 export class CitationStreamFilter {
   private pending = ""
+  private dropNextClose = false
 
   push(text: string): string {
+    if (this.dropNextClose) {
+      const close = text.indexOf("\uE201")
+      const nextMarker = text.indexOf("\uE200")
+      if (close === -1) return text
+      this.dropNextClose = false
+      // A new private-use marker starts before the old close: protect it rather than eating its
+      // closer. Otherwise the first close belongs to the marker abandoned at the turn boundary.
+      if (nextMarker !== -1 && nextMarker < close) return text
+      text = text.slice(0, close) + text.slice(close + 1)
+    }
     if (this.pending === "" && !text.includes("\uE200")) return text
     const input = this.pending + text
     this.pending = ""
@@ -39,7 +50,7 @@ export class CitationStreamFilter {
       }
       output += input.slice(cursor, start)
       const candidate = input.slice(start, start + MARKER_PREFIX.length)
-      if (candidate !== MARKER_PREFIX.slice(0, candidate.length)) {
+      if (candidate.toLowerCase() !== MARKER_PREFIX.slice(0, candidate.length)) {
         // Another private-use marker (for example visualize) shares the opener; preserve it.
         output += "\uE200"
         cursor = start + 1
@@ -61,8 +72,16 @@ export class CitationStreamFilter {
     return output
   }
 
+  /** Called at a user-message boundary: stop hiding the next turn's text behind an old marker. */
+  abandon(): void {
+    if (this.pending === "") return
+    this.pending = ""
+    this.dropNextClose = true
+  }
+
   /** Drops an unterminated marker when the message/stream ends. */
   flush(): void {
     this.pending = ""
+    this.dropNextClose = false
   }
 }

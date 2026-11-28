@@ -502,7 +502,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     string,
     { userMessageId: string; seen: Set<string>; remapped: Map<string, string> }
   >()
-  /** Assistant/thought ids observed in this session, so a later user boundary can snapshot them. */
+  /** Assistant/thought ids observed since the latest user message, for one steer boundary. */
   private readonly assistantMessageIds = new Map<string, Set<string>>()
   /** Message-scoped filters for citations split across ACP streaming chunks. */
   private readonly citationStreams = new Map<string, CitationStreamFilter>()
@@ -1616,6 +1616,13 @@ export class CodexClient extends CodexAcpClient<AppState> {
       if ((update as { state?: unknown }).state === "idle") this.clearCitationStreams(sessionId)
       return update
     }
+    if (kind === "user_message" || kind === "user_message_chunk") {
+      // Steering reuses the assistant messageId. If a citation marker was still open when the
+      // reader interjected, keeping that pending prefix would hide the next answer behind a marker
+      // whose close may never arrive. End it at the turn boundary instead.
+      this.abandonCitationStreams(sessionId)
+      return update
+    }
     if (
       kind !== "agent_message" &&
       kind !== "agent_message_chunk" &&
@@ -1624,7 +1631,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
     )
       return update
     const messageId = typeof (update as { messageId?: unknown }).messageId === "string" ? update.messageId : ""
-    const key = `${sessionId}:${kind}:${messageId}`
+    const streamKind = kind === "agent_thought" || kind === "agent_thought_chunk" ? "thought" : "assistant"
+    const key = `${sessionId}:${streamKind}:${messageId}`
     let filter: CitationStreamFilter | undefined
     if (kind.endsWith("_chunk")) {
       filter = this.citationStreams.get(key)
@@ -1659,6 +1667,13 @@ export class CodexClient extends CodexAcpClient<AppState> {
     }
   }
 
+  private abandonCitationStreams(sessionId: string): void {
+    const prefix = `${sessionId}:`
+    for (const [key, filter] of this.citationStreams) {
+      if (key.startsWith(prefix)) filter.abandon()
+    }
+  }
+
   /**
    * Keeps post-interjection assistant text under the interjection instead of growing the answer
    * bubble that was already on screen. Only ids that existed before the user message are remapped;
@@ -1677,6 +1692,9 @@ export class CodexClient extends CodexAcpClient<AppState> {
         if (item.kind === "assistant" || item.kind === "thought") seen.add(item.id)
       }
       this.steerSegments.set(sessionId, { userMessageId: messageId, seen, remapped: new Map() })
+      // Snapshot only the turn that just ended. Keeping every id ever observed made a new answer
+      // eligible for remapping long after the interjection it actually belonged to.
+      this.assistantMessageIds.set(sessionId, new Set())
       return update
     }
     if (
@@ -2123,7 +2141,12 @@ export class CodexClient extends CodexAcpClient<AppState> {
       // once the user has pressed it, the composer and model picker must be usable immediately,
       // not stay on the stop button until some later store tick happens to settle the row.
       const reopened = this.state.sessions[id]
-      if (this.stoppedSessions.has(id) && reopened?.state === "running" && reopened.error === null)
+      if (
+        this.stoppedSessions.has(id) &&
+        reopened?.state === "running" &&
+        reopened.error === null &&
+        !this.promptInFlight.has(id)
+      )
         this.publishSession({ ...reopened, state: "idle", restoring: false })
     } catch (error) {
       this.logInfo?.(`[stop] auto-reopen failed id=${id} error=${String(error).slice(0, 240)}`)
