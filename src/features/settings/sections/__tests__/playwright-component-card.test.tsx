@@ -65,7 +65,7 @@ test("an uninstalled Playwright component offers install and reports the managed
   render(<PlaywrightComponentCard />)
   await waitFor(() => expect(screen.getByText("Not installed")).toBeTruthy())
   expect(screen.getByRole("button", { name: "Install" })).toBeTruthy()
-  expect(screen.getByTitle("/Users/me/.local/lib/alwith/playwright")).toBeTruthy()
+  await waitFor(() => expect(screen.getByTitle("/Users/me/.local/lib/alwith/playwright")).toBeTruthy())
 })
 
 test("an installed component shows the matching headless shell and can check updates", async () => {

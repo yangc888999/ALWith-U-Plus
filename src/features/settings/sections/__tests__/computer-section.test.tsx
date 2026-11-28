@@ -3,7 +3,9 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest"
 
 import { must } from "@/lib/__tests__/must"
 const native = vi.hoisted(() => ({
-  permission: vi.fn(),
+  permissionStatus: vi.fn(),
+  permissionRequest: vi.fn(),
+  permissionSettings: vi.fn(),
   enable: vi.fn(),
   stop: vi.fn(),
   reconnect: vi.fn(),
@@ -13,8 +15,14 @@ const native = vi.hoisted(() => ({
   permitted: false
 }))
 vi.mock("@/bindings", () => ({
-  commands: { computerRequestPermissions: native.permission }
+  commands: {
+    permissionsCenterStatus: native.permissionStatus,
+    permissionsCenterRequest: native.permissionRequest,
+    permissionsCenterOpenSettings: native.permissionSettings
+  }
 }))
+vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true }))
+vi.mock("@/lib/open", () => ({ openExternal: vi.fn() }))
 vi.mock("@/lib/platform", () => ({ isMac: () => true }))
 vi.mock("@/features/computer/computer-control", () => ({
   useComputerStatus: () => ({
@@ -46,30 +54,29 @@ beforeEach(() => {
   native.lastError = null
   native.enabled = false
   native.permitted = false
+  native.permissionStatus.mockResolvedValue([
+    { id: "accessibility", granted: false, state: "notDetermined" },
+    { id: "screenRecording", granted: false, state: "notAuthorized" }
+  ])
+  native.permissionRequest.mockResolvedValue(null)
+  native.permissionSettings.mockResolvedValue(null)
 })
 afterEach(() => {
   cleanup()
   vi.resetAllMocks()
 })
 test("permission settings stay reachable across requests and reopening the page", async () => {
-  native.permission.mockImplementation(({ request }) => (request ? new Promise(() => {}) : Promise.resolve()))
   const first = render(<ComputerSection />)
   expect(screen.queryByRole("combobox")).toBeNull()
-  fireEvent.click(must(screen.getAllByRole("button", { name: "computer.grantPermissions" })[0], "permission request"))
-  fireEvent.click(must(screen.getAllByRole("button", { name: "computer.openSettings" })[0], "accessibility settings"))
-  expect(native.permission).toHaveBeenLastCalledWith({
-    permission: "accessibility",
-    request: false
-  })
+  await waitFor(() => expect(native.permissionStatus).toHaveBeenCalled())
+  await waitFor(() => expect(screen.getByText("computer.permissionCenterState.notDetermined")).toBeTruthy())
+  fireEvent.click(must(screen.getAllByRole("button", { name: "computer.permissionCenterOpen" })[0], "permission request"))
+  await waitFor(() => expect(native.permissionRequest).toHaveBeenCalledWith({ permission: "accessibility" }))
+  fireEvent.click(must(screen.getAllByRole("button", { name: "computer.permissionCenterOpen" })[1], "screen settings"))
+  await waitFor(() => expect(native.permissionSettings).toHaveBeenCalledWith({ permission: "screenRecording" }))
   first.unmount()
   render(<ComputerSection />)
-  fireEvent.click(must(screen.getAllByRole("button", { name: "computer.openSettings" })[1], "screen settings"))
-  await waitFor(() =>
-    expect(native.permission).toHaveBeenLastCalledWith({
-      permission: "screenCapture",
-      request: false
-    })
-  )
+  await waitFor(() => expect(native.permissionStatus).toHaveBeenCalledTimes(2))
 })
 
 test("switch requires system permissions to enable and can stop globally after permissions are revoked", async () => {

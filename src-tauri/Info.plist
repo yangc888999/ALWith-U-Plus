@@ -2,6 +2,19 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>NSMicrophoneUsageDescription</key><string>ALWith U⁺ uses your microphone to transcribe speech into the chat input and for voice calls with Codex.</string>
+  <key>NSCameraUsageDescription</key><string>ALWith U⁺ uses the camera for video calls and visual tasks you start.</string>
+  <key>NSContactsUsageDescription</key><string>ALWith U⁺ reads contacts only when a task needs to identify people you mention.</string>
+  <key>NSCalendarsUsageDescription</key><string>ALWith U⁺ reads calendars only for scheduling and meeting tasks you start.</string>
+  <key>NSRemindersUsageDescription</key><string>ALWith U⁺ reads reminders only for tasks you explicitly connect to them.</string>
+  <key>NSPhotosUsageDescription</key><string>ALWith U⁺ reads photos only for image tasks you start.</string>
+  <key>NSAppleMusicUsageDescription</key><string>ALWith U⁺ reads Apple Music only for music tasks you start.</string>
+  <key>NSAppleEventsUsageDescription</key><string>ALWith U⁺ controls other apps only when you ask it to perform a computer task.</string>
+  <key>NSDesktopFolderUsageDescription</key><string>ALWith U⁺ reads the Desktop only for files used by tasks you start.</string>
+  <key>NSDocumentsFolderUsageDescription</key><string>ALWith U⁺ reads Documents only for projects and files you open.</string>
+  <key>NSDownloadsFolderUsageDescription</key><string>ALWith U⁺ reads Downloads only for files used by tasks you start.</string>
+  <key>NSLocalNetworkUsageDescription</key><string>ALWith U⁺ uses the local network only for devices and services you connect.</string>
+  <key>NSBluetoothAlwaysUsageDescription</key><string>ALWith U⁺ uses Bluetooth only for devices you connect.</string>
+  <key>NSLocationUsageDescription</key><string>ALWith U⁺ uses location only for tasks that need local context.</string>
   <!-- WKWebView derives navigator.language from the bundle's declared localizations, not from the
        user's system language. With only CFBundleDevelopmentRegion = English, macOS hands the
        webview "en-US" even on a Chinese Mac, so a first launch with no saved preference booted

@@ -1,13 +1,13 @@
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
 
-import { commands } from "@/bindings"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { useComputerStatus } from "@/features/computer/computer-control"
 import { enableComputer, reconnectComputer, stopComputer } from "@/features/computer/operations"
 import { isMac } from "@/lib/platform"
 
+import { OperationPermissionCenter } from "./operation-permission-center"
 import { SettingRow, SettingsCard, SettingsDetails, SettingsNote } from "./shared"
 
 export function ComputerSection() {
@@ -49,50 +49,9 @@ export function ComputerSection() {
         <SettingsNote>{t("computer.scope")}</SettingsNote>
         {status && !status.permissions.supported && <SettingsNote>{t("computer.unsupported")}</SettingsNote>}
         {status && !status.available && <SettingsNote>{t("computer.missing")}</SettingsNote>}
-        {status?.permissions.supported && !permitted && <SettingsNote>{t("computer.permissions")}</SettingsNote>}
-        {isMac() &&
-          status?.permissions.supported &&
-          (["accessibility", "screenCapture"] as const).map((permission) => (
-            <SettingRow
-              key={permission}
-              title={t(`computer.${permission}`)}
-              desc={t(status.permissions[permission] ? "computer.granted" : "computer.notGranted")}
-            >
-              <div className="flex gap-2">
-                {!status.permissions[permission] && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      void perform(() =>
-                        commands.computerRequestPermissions({
-                          permission,
-                          request: true
-                        })
-                      )
-                    }
-                  >
-                    {t("computer.grantPermissions")}
-                  </Button>
-                )}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() =>
-                    void perform(() =>
-                      commands.computerRequestPermissions({
-                        permission,
-                        request: false
-                      })
-                    )
-                  }
-                >
-                  {t("computer.openSettings")}
-                </Button>
-              </div>
-            </SettingRow>
-          ))}
       </SettingsCard>
+
+      {isMac() && <OperationPermissionCenter />}
 
       {status?.available && status.permissions.supported && (
         <SettingsCard title={t("computer.connection")} desc={t(`computer.phases.${status.phase ?? "disabled"}`)}>
@@ -125,3 +84,4 @@ export function ComputerSection() {
     </>
   )
 }
+

@@ -41,6 +41,7 @@ mod online_bi_embed;
 #[cfg(target_os = "macos")]
 mod panel;
 mod panic_report;
+mod permissions_center;
 mod project_memory;
 mod provider_quota;
 mod providers;
@@ -410,6 +411,9 @@ pub fn bindings() -> tauri3_specta::Bindings {
                 playwright_component::playwright_component_check_update,
                 playwright_component::playwright_component_install,
                 playwright_component::playwright_component_update,
+                permissions_center::permissions_center_status,
+                permissions_center::permissions_center_request,
+                permissions_center::permissions_center_open_settings,
                 support_components::node_status,
                 support_components::node_install,
                 support_components::brew_status,

@@ -157,6 +157,12 @@ export const commands = {
     __t3Invoke<PlaywrightInstallResult>("playwright_component_install"),
   playwrightComponentUpdate: (): Promise<PlaywrightInstallResult> =>
     __t3Invoke<PlaywrightInstallResult>("playwright_component_update"),
+  permissionsCenterStatus: (): Promise<OperationPermissionStatus[]> =>
+    __t3Invoke<OperationPermissionStatus[]>("permissions_center_status"),
+  permissionsCenterRequest: (args: { permission: string }): Promise<null> =>
+    __t3Invoke<null>("permissions_center_request", args),
+  permissionsCenterOpenSettings: (args: { permission: string }): Promise<null> =>
+    __t3Invoke<null>("permissions_center_open_settings", args),
   nodeStatus: (): Promise<NodeStatus_Serialize> => __t3Invoke<NodeStatus_Serialize>("node_status"),
   /**
    *  Download the official macOS universal Node.js `.pkg` for the latest LTS and open it with the
@@ -867,6 +873,9 @@ export type CommandErrors = {
   playwrightComponentCheckUpdate: string
   playwrightComponentInstall: string
   playwrightComponentUpdate: string
+  permissionsCenterStatus: never
+  permissionsCenterRequest: string
+  permissionsCenterOpenSettings: string
   nodeStatus: never
   nodeInstall: string
   brewStatus: never
@@ -1981,6 +1990,13 @@ export type OnlineBiCredentials = {
 export type OpenHotkeys = null
 
 export type OpenSettings = null
+
+export type OperationPermissionStatus = {
+  id: string
+  granted: boolean
+  /**  `authorized`, `notDetermined`, `denied`, `restricted`, `notAuthorized`, or `unavailable`. */
+  state: string
+}
 
 export type PairingInfo = {
   deviceId: string
