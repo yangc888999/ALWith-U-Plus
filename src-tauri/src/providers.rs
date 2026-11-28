@@ -827,7 +827,11 @@ pub async fn providers_save(
     app: AppHandle, state: State<'_, Providers>, provider_id: String, input: Option<Input>, expected_revision: u64,
 ) -> Result<Snapshot, String> {
     let runtime = app.state::<crate::runtime::RuntimeState>();
-    let _admission = runtime.admission.lock().await;
+    // Persist first, then apply if this moment is safe. Waiting for another session's admission
+    // held the settings save command forever (the spinner never stopped); the catalog is
+    // independent of that admission and can be persisted immediately. When the runtime is busy,
+    // schedule the same reconciliation that a pending provider change already uses.
+    let admission = try_apply_admission(&runtime.admission);
     {
         let mut inner = state.inner.lock().await;
         let next = update(&inner.saved, provider_id, input, expected_revision)?;
@@ -835,8 +839,12 @@ pub async fn providers_save(
         inner.saved = next;
         inner.error = None;
     }
-    if let Ok(client) = runtime.current() {
-        let _ = apply_locked(&app, &client).await;
+    if admission.is_ok() {
+        if let Ok(client) = runtime.current() {
+            let _ = apply_locked(&app, &client).await;
+        }
+    } else {
+        schedule_apply(&app);
     }
     let snapshot = state.inner.lock().await.snapshot();
     let _ = snapshot.emit(&app);
@@ -847,7 +855,7 @@ pub async fn providers_save_custom(
     app: AppHandle, state: State<'_, Providers>, input: CustomInput, expected_revision: u64,
 ) -> Result<Snapshot, String> {
     let runtime = app.state::<crate::runtime::RuntimeState>();
-    let _admission = runtime.admission.lock().await;
+    let admission = try_apply_admission(&runtime.admission);
     {
         let mut inner = state.inner.lock().await;
         let next = update_custom(&inner.saved, input, expected_revision)?;
@@ -855,8 +863,12 @@ pub async fn providers_save_custom(
         inner.saved = next;
         inner.error = None;
     }
-    if let Ok(client) = runtime.current() {
-        let _ = apply_locked(&app, &client).await;
+    if admission.is_ok() {
+        if let Ok(client) = runtime.current() {
+            let _ = apply_locked(&app, &client).await;
+        }
+    } else {
+        schedule_apply(&app);
     }
     let snapshot = state.inner.lock().await.snapshot();
     let _ = snapshot.emit(&app);
@@ -867,7 +879,7 @@ pub async fn providers_remove_custom(
     app: AppHandle, state: State<'_, Providers>, provider_id: String, expected_revision: u64,
 ) -> Result<Snapshot, String> {
     let runtime = app.state::<crate::runtime::RuntimeState>();
-    let _admission = runtime.admission.lock().await;
+    let admission = try_apply_admission(&runtime.admission);
     {
         let mut inner = state.inner.lock().await;
         let next = remove_custom(&inner.saved, &provider_id, expected_revision)?;
@@ -875,8 +887,12 @@ pub async fn providers_remove_custom(
         inner.saved = next;
         inner.error = None;
     }
-    if let Ok(client) = runtime.current() {
-        let _ = apply_locked(&app, &client).await;
+    if admission.is_ok() {
+        if let Ok(client) = runtime.current() {
+            let _ = apply_locked(&app, &client).await;
+        }
+    } else {
+        schedule_apply(&app);
     }
     let snapshot = state.inner.lock().await.snapshot();
     let _ = snapshot.emit(&app);
@@ -888,7 +904,7 @@ pub async fn providers_save_built_in_models(
     app: AppHandle, state: State<'_, Providers>, provider_id: String, models: Vec<CustomModel>, expected_revision: u64,
 ) -> Result<Snapshot, String> {
     let runtime = app.state::<crate::runtime::RuntimeState>();
-    let _admission = runtime.admission.lock().await;
+    let admission = try_apply_admission(&runtime.admission);
     {
         let mut inner = state.inner.lock().await;
         let next = update_built_in_models(&inner.saved, &provider_id, models, expected_revision)?;
@@ -896,8 +912,12 @@ pub async fn providers_save_built_in_models(
         inner.saved = next;
         inner.error = None;
     }
-    if let Ok(client) = runtime.current() {
-        let _ = apply_locked(&app, &client).await;
+    if admission.is_ok() {
+        if let Ok(client) = runtime.current() {
+            let _ = apply_locked(&app, &client).await;
+        }
+    } else {
+        schedule_apply(&app);
     }
     let snapshot = state.inner.lock().await.snapshot();
     let _ = snapshot.emit(&app);

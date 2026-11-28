@@ -75,7 +75,9 @@ function ImagePreview({ image, index, count }: { image: PreviewImage; index: num
   const [apps, setApps] = useState<AppInfo[]>([])
   const [appsError, setAppsError] = useState(false)
   const [failed, setFailed] = useState(false)
-  const path = localPath(image.uri)
+  // Some tool-generated images carry the source file path only in `alt` (the title) and no
+  // `uri`; without this the Open / Open in side panel buttons were disabled with no feedback.
+  const path = localPath(image.uri) ?? localPath(image.alt)
   const data = /^data:(image\/[^;,]+);base64,([\s\S]*)$/.exec(image.src)
   const name = image.uri ? chatFileName(image.uri) : `image.${data?.[1]?.split("/")[1] ?? "png"}`
   const fit =

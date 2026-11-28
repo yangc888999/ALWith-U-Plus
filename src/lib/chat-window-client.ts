@@ -2,11 +2,10 @@
 // a fixed set of actions; it never attaches an agent or persists another conversation.
 
 import type { Session } from "@alwith/api"
-import type { RealtimeEvent } from "@nyssance/codex-acp-v2/client"
+import type { RateLimitSnapshot, RealtimeEvent } from "@nyssance/codex-acp-v2/client"
 import { emitTo, listen } from "@tauri-apps/api/event"
 
 import { type AppState, CodexClient } from "@/agent/client"
-import type { RateLimitSnapshot } from "@nyssance/codex-acp-v2/client"
 import { macProjectPaths } from "@/agent/project-path"
 import { isMac } from "@/lib/platform"
 import { asError } from "@/lib/text"
@@ -42,6 +41,7 @@ const METHODS = [
   "cancel",
   "close",
   "stopSession",
+  "stopSessionAndReopen",
   "setConfig",
   "respond",
   "readRateLimits",
@@ -369,7 +369,9 @@ export class RemoteChatClient extends CodexClient {
   override listSessions(...args: Parameters<CodexClient["listSessions"]>): Promise<void> {
     return this.request("listSessions", args)
   }
-  override async prepareDraft(...[owner, cwd, model, nativeDefault, onListed]: Parameters<CodexClient["prepareDraft"]>): Promise<string> {
+  override async prepareDraft(
+    ...[owner, cwd, model, nativeDefault, onListed]: Parameters<CodexClient["prepareDraft"]>
+  ): Promise<string> {
     const id = await this.request("prepareDraft", [owner, cwd, model ?? null, nativeDefault ?? false])
     onListed?.(id)
     return id
@@ -434,6 +436,9 @@ export class RemoteChatClient extends CodexClient {
 
   override stopSession(...args: Parameters<CodexClient["stopSession"]>): Promise<void> {
     return this.request("stopSession", args)
+  }
+  override stopSessionAndReopen(...args: Parameters<CodexClient["stopSessionAndReopen"]>): Promise<void> {
+    return this.request("stopSessionAndReopen", args)
   }
   override setConfig(...args: Parameters<CodexClient["setConfig"]>): Promise<void> {
     return this.request("setConfig", [args[0], args[1], args[2], "chat"])

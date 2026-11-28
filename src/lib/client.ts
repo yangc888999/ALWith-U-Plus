@@ -13,14 +13,23 @@ import { computerContextRevision, hostSessionContext, prepareComputerTools } fro
 import { RemoteChatClient } from "@/lib/chat-window-client"
 import { DesktopCodexClient } from "@/lib/desktop-client"
 import { isMac } from "@/lib/platform"
-import { applyProvidersWhenIdle, defaultModelFallback, getProviderSnapshot, isAccountModel, loadProviders, resolveSessionModel } from "@/lib/providers"
+import {
+  applyProvidersWhenIdle,
+  defaultModelFallback,
+  getProviderSnapshot,
+  isAccountModel,
+  loadProviders,
+  resolveSessionModel
+} from "@/lib/providers"
 import { CODEX_AGENT_ID, runtimeClient } from "@/lib/runtime"
 
 export const client =
   isTauri() && getCurrentWebviewWindow().label === "chat"
     ? new RemoteChatClient()
     : new DesktopCodexClient(runtimeClient, {
-        logInfo: (message) => { void info(message).catch(() => {}) },
+        logInfo: (message) => {
+          void info(message).catch(() => {})
+        },
         agentId: CODEX_AGENT_ID,
         launch: { engine: "codex", env: computerRuntimeEnv },
         projectPaths: isMac() ? macProjectPaths : undefined,
@@ -72,9 +81,9 @@ export async function markRead(sessionId: string): Promise<void> {
   await port.markRead(sessionId, client.state.runStates[sessionId]?.version ?? null)
 }
 
-/** Close only this session; Runtime.stopSession would kill the shared Codex agent. */
-export async function stopSession(sessionId: string): Promise<void> {
-  await client.stopSession(sessionId)
+/** Stop the task tree, then reopen the active conversation so its composer stays usable. */
+export async function stopSessionAndReopen(sessionId: string): Promise<void> {
+  await client.stopSessionAndReopen(sessionId)
 }
 
 export function useApp<T>(selector: (state: AppState) => T): T {

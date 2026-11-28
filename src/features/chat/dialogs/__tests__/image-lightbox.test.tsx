@@ -86,6 +86,26 @@ test("preview toolbar zooms, downloads the original, opens its local path and ha
   await waitFor(() => expect(view.queryByRole("dialog")).toBeNull())
 })
 
+test("a local source path in the title still enables Open and the side panel", async () => {
+  const open = vi.spyOn(opener, "openPath").mockResolvedValue()
+  const openFile = vi.fn().mockResolvedValue(undefined)
+  const view = render(
+    <WorkspaceContext value={{ visible: false, toggle: vi.fn(), openFile, openProject: vi.fn(), revealEntry: vi.fn() }}>
+      <ImageLightbox />
+    </WorkspaceContext>
+  )
+  mounted.push(view)
+  act(() => openImageLightbox("data:image/png;base64,aGVsbG8=", "/tmp/report.html"))
+  const dialog = view.getByRole("dialog")
+  expect(within(dialog).getByRole("button", { name: "Open" })).not.toBeDisabled()
+  fireEvent.click(within(dialog).getByRole("button", { name: "Open" }))
+  await waitFor(() => expect(open).toHaveBeenCalledWith("/tmp/report.html"))
+  const sidePanel = within(dialog).getByRole("button", { name: "Open in side panel" })
+  await waitFor(() => expect(sidePanel).not.toBeDisabled())
+  fireEvent.click(sidePanel)
+  await waitFor(() => expect(openFile).toHaveBeenCalledWith("/tmp/report.html", "/tmp"))
+})
+
 test("fit mode leaves sizing to CSS so scrollbars cannot re-trigger the measured fit", async () => {
   const view = render(<ImageLightbox />)
   mounted.push(view)

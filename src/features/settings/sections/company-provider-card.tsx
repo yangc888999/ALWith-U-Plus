@@ -5,9 +5,9 @@ import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { useEnterpriseLogin } from "@/features/auth/use-enterprise-login"
+import { companyModelLabel, setCompanyModelDisplayName, useCompanyModelDisplayName } from "@/lib/company-display-name"
 import type { CustomProvider } from "@/lib/providers"
 import { openSettingsWindow } from "@/lib/window-manager"
-import { companyModelLabel, setCompanyModelDisplayName, useCompanyModelDisplayName } from "@/lib/company-display-name"
 
 import { CompanyReasoningRow } from "./company-reasoning-row"
 
@@ -33,7 +33,7 @@ export function CompanyProviderCard({ provider }: { provider: CustomProvider | n
   const models = provider?.models ?? []
   // The name is a form field with a button, not a live-typing broadcast: every keystroke used to
   // rewrite the channel name in the sidebar, the picker and the model table at once. A save makes
-  // the change one deliberate act, which is also how the other cards behave (see 保存连接).
+  // the change one deliberate act, which is also how the other cards behave (see 保存配置).
   const pendingName = draft ?? displayName
   const nameDirty = pendingName.trim() !== displayName
   const saveName = (): void => {

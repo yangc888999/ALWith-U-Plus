@@ -36,10 +36,10 @@ import {
   turnNotSteerable,
   withoutModelSwitchNotes
 } from "../client"
+import { ModelSelectionError } from "../model-selection-error"
 import { macProjectPaths, type ProjectPaths } from "../project-path"
 import { createFakeAgent } from "./fake-agent"
 import { FakeHubPort } from "./fake-runtime-client"
-import { ModelSelectionError } from "../model-selection-error"
 
 // The client reports model hand-offs through `sonner`. Mocking it keeps those calls assertable
 // without a DOM toast host, and keeps the suite from depending on sonner's own side effects.
@@ -1076,7 +1076,76 @@ test("prompt acknowledgement is not completion; cancelling one session leaves th
   expect(client.state.sessions[b]).toBe(client.session(b))
 })
 
-test("the user's stop closes the ACP session so its backend task tree ends", async () => {
+test("post-steer assistant chunks start a new item under the interjection", async () => {
+  const { client, fake } = await make()
+  const id = await client.newSession("/tmp/steer-segment")
+  await fake.pushUpdate(id, {
+    sessionUpdate: "user_message",
+    messageId: "original-question",
+    content: [{ type: "text", text: "original question" }]
+  } as never)
+  await fake.pushUpdate(id, {
+    sessionUpdate: "agent_message_chunk",
+    messageId: "same-assistant-id",
+    content: { type: "text", text: "old answer" }
+  } as never)
+  await fake.pushUpdate(id, {
+    sessionUpdate: "user_message",
+    messageId: "interjection",
+    content: [{ type: "text", text: "new question" }]
+  } as never)
+  await fake.pushUpdate(id, {
+    sessionUpdate: "agent_message_chunk",
+    messageId: "same-assistant-id",
+    content: { type: "text", text: "new answer" }
+  } as never)
+
+  const items = client.session(id).items
+  const interjection = items.findIndex((item) => item.kind === "user" && item.id === "interjection")
+  const newAnswer = items.findIndex((item) => item.kind === "assistant" && textOf(item.content).includes("new answer"))
+  expect(interjection).toBeGreaterThanOrEqual(0)
+  // The adapter reuses the assistant id; the client must segment it instead of appending above
+  // the new question.
+  expect(newAnswer).toBeGreaterThan(interjection)
+  expect(items.some((item) => item.kind === "assistant" && textOf(item.content) === "old answer")).toBe(true)
+})
+
+test("consecutive interjections keep every answer after its own question", async () => {
+  const { client, fake } = await make()
+  const id = await client.newSession("/tmp/steer-segments-many")
+  const user = async (messageId: string, text: string): Promise<void> =>
+    fake.pushUpdate(id, {
+      sessionUpdate: "user_message",
+      messageId,
+      content: [{ type: "text", text }]
+    } as never)
+  const answer = async (text: string): Promise<void> =>
+    fake.pushUpdate(id, {
+      sessionUpdate: "agent_message_chunk",
+      messageId: "shared-answer",
+      content: { type: "text", text }
+    } as never)
+
+  await user("q1", "question one")
+  await answer("answer one")
+  await user("q2", "question two")
+  await answer("answer two")
+  await user("q3", "question three")
+  await answer("answer three")
+
+  const items = client.session(id).items
+  const positions = ["answer one", "question two", "answer two", "question three", "answer three"].map((text) =>
+    items.findIndex(
+      (item) => (item.kind === "assistant" || item.kind === "user") && textOf(item.content).includes(text)
+    )
+  )
+  expect(positions.every((position) => position >= 0)).toBe(true)
+  expect(positions).toEqual([...positions].sort((left, right) => left - right))
+  // Every answer is its own item, not the previous answer's text with a new suffix.
+  expect(items.filter((item) => item.kind === "assistant")).toHaveLength(3)
+})
+
+test("the user's stop closes the ACP session and reopens the active chat for the next turn", async () => {
   const { client, fake, port } = await make()
   fake.promptHoldIdle.current = () => true
   const id = await client.newSession("/tmp/stop-process")
@@ -1092,9 +1161,46 @@ test("the user's stop closes the ACP session so its backend task tree ends", asy
       (call) => call[1] === "session/close" && (call[2] as { sessionId: string }).sessionId === id
     )
   ).toBe(true)
-  expect(client.state.sessions[id]).toMatchObject({ attached: false, state: "idle" })
+  // Closing is what stops the task tree; the active conversation is then reattached so the
+  // composer can take another message without the reader first clicking the sidebar row.
+  expect(client.state.sessions[id]).toMatchObject({ attached: true, state: "idle" })
   expect(client.session(id).items.some((item) => item.kind === "user")).toBe(true)
   request.mockRestore()
+})
+
+test("a stop settles a replay that still reports the closed turn as running", async () => {
+  const { client, fake } = await make()
+  fake.replayUpdates.push({ sessionUpdate: "state_update", state: "running" } as never)
+  const id = await client.newSession("/tmp/stop-running-replay")
+  await client.cancel(id)
+  // The user's Stop is authoritative even when the resume replay still carries the old run row.
+  expect(client.state.sessions[id]).toMatchObject({ attached: true, state: "idle" })
+})
+
+test("sidebar stop pauses queued messages as well as closing the task tree", async () => {
+  const { client } = await make()
+  const id = await client.newSession("/tmp/sidebar-stop-queue")
+  beginQueuedPrompt(id, "keep me")
+  try {
+    await client.stopSessionAndReopen(id)
+    expect(queuedPromptItems(id)).toMatchObject([{ paused: true, pauseReason: "stop" }])
+  } finally {
+    clearQueuedPrompts(id)
+  }
+})
+
+test("sidebar stop reopens the active session but leaves a background one closed", async () => {
+  const { client } = await make()
+  const active = await client.newSession("/tmp/sidebar-stop-active")
+  const background = await client.newSession("/tmp/sidebar-stop-background")
+  await client.open(active, "/tmp/sidebar-stop-active")
+
+  await client.stopSessionAndReopen(background)
+  expect(client.state.sessions[background]?.attached).toBe(false)
+  expect(client.state.sessions[active]?.attached).toBe(true)
+
+  await client.stopSessionAndReopen(active)
+  expect(client.state.sessions[active]).toMatchObject({ attached: true, state: "idle" })
 })
 
 test("stopping a session retains its transcript, cancels its permission and preserves the shared agent", async () => {
@@ -2716,16 +2822,18 @@ test("the user's message is on screen before Codex reports it; the receipt claim
 })
 
 test("Stop answers the session's pending permission with cancelled before session/cancel — no zombie prompt on the next attach", async () => {
-  const { client } = await make()
+  const { client, fake } = await make()
   const id = await client.newSession("/tmp/a")
   await client.prompt(id, [{ type: "text", text: "permission" }])
   await until(() => client.state.actions.length === 1)
   await client.cancel(id)
   expect(client.state.actions).toEqual([])
+  expect(fake.cancels).toContain(id)
   await until(() => client.session(id).state === "idle")
-  const reply = client.session(id).items.find((item) => item.kind === "assistant")
-  // the fake echoes the answer it got as JSON text
-  expect(JSON.stringify(reply)).toContain("cancelled")
+  // The automatic reopen replays the Runtime's history. The old permission card must not come
+  // back, and a fresh turn must still reach the engine without a zombie prompt.
+  await expect(client.prompt(id, [{ type: "text", text: "after stop" }])).resolves.toBeDefined()
+  expect(client.state.actions).toEqual([])
 })
 
 test("precreated drafts expose real models and appear as one row before the engine indexes them", async () => {
@@ -4586,9 +4694,11 @@ test("a message sent during the idle polling window still joins the queue behind
     state.value = "idle"
     const late = client.prompt(id, [{ type: "text", text: "late" }])
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(3))
-    expect(
-      send.mock.calls.map((call) => (call[1][0] as { text?: string } | undefined)?.text)
-    ).toEqual(["first", "second", "late"])
+    expect(send.mock.calls.map((call) => (call[1][0] as { text?: string } | undefined)?.text)).toEqual([
+      "first",
+      "second",
+      "late"
+    ])
     await Promise.all([first, second, late])
   } finally {
     setQueueSendMode("immediate")
@@ -4658,7 +4768,7 @@ test("a failed turn pauses queued messages visibly instead of hiding them behind
   }
 })
 
-test("clearing the paused queue after Stop still lets the next send reopen the session", async () => {
+test("clearing the paused queue after Stop still lets the next send run in the reopened chat", async () => {
   const { client, fake } = await make()
   const id = await client.newSession("/tmp/queue-clear-then-send")
   const internals = client as unknown as { open: (sessionId: string, cwd: string) => Promise<void> }
@@ -4680,7 +4790,8 @@ test("clearing the paused queue after Stop still lets the next send reopen the s
     fake.promptHoldIdle.current = null
     const third = client.prompt(id, [{ type: "text", text: "third" }])
     await vi.waitFor(() => expect(fake.prompts).toEqual(["first", "third"]))
-    expect(open).toHaveBeenCalledWith(id, "/tmp/queue-clear-then-send")
+    // Stop already reattached the visible chat; the next send must not need a second manual open.
+    expect(open).toHaveBeenCalledExactlyOnceWith(id, "/tmp/queue-clear-then-send", "main")
     await third
     await first
   } finally {

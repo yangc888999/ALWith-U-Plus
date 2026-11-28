@@ -60,7 +60,9 @@ function session(current: string, id = "chat-1"): Session {
     restoring: false,
     readOnly: false,
     error: null,
-    items: [{ id: "user-1", at: Date.now() - 60_000, replayed: false, _meta: null, kind: "user", content: [], echo: null }] as never,
+    items: [
+      { id: "user-1", at: Date.now() - 60_000, replayed: false, _meta: null, kind: "user", content: [], echo: null }
+    ] as never,
     configOptions: [
       {
         configId: "model",
@@ -137,6 +139,27 @@ test("a retrying event for a running session raises one toast with a jump button
     updatedAt: "2026-11-15T00:00:00Z",
     archived: false
   })
+})
+
+test("a retry event that arrives after output resumed is ignored", async () => {
+  const live = session("gpt-6.1-sol")
+  live.clock = Date.now()
+  host.sessions["chat-1"] = live
+  await subscribe()
+  emit("gpt-6.1-sol", 11, "req-after-output")
+  expect(host.toasts).toHaveLength(0)
+})
+
+test("a healthy sibling on the same model does not swallow a stalled chat's alert", async () => {
+  const stalled = session("gpt-6.1-sol", "stalled")
+  stalled.clock = Date.now() - 60_000
+  const streaming = session("gpt-6.1-sol", "streaming")
+  streaming.clock = Date.now()
+  host.sessions = { stalled, streaming }
+  await subscribe()
+  emit("gpt-6.1-sol", 11, "req-stalled-sibling")
+  expect(host.toasts).toHaveLength(1)
+  expect(host.toasts[0].options.action).toBeDefined()
 })
 
 test("the same upstream request is not alerted twice", async () => {

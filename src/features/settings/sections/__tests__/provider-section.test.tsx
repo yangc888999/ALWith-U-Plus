@@ -1,4 +1,4 @@
-import { act, fireEvent, render, within } from "@testing-library/react"
+import { act, fireEvent, render, waitFor, within } from "@testing-library/react"
 import { useState } from "react"
 import { beforeAll, beforeEach, expect, test, vi } from "vitest"
 
@@ -36,7 +36,8 @@ function snapshot(revision: number, region = "intl"): ProviderSnapshot {
     status: "applied",
     error: null,
     customProviders: [],
-    builtInModels: {}, managedProviders: [],
+    builtInModels: {},
+    managedProviders: [],
     providers: { qwen: { configured: true, disabled: false, region, base_url: null, protocol: "responses" } }
   }
 }
@@ -64,12 +65,60 @@ test("a bundled catalog never marks a callable model 已下架; only a live pick
   expect(unverifiedNativeModels(session)).toEqual([])
 })
 
+test("enabling an unconfigured provider opens its connection editor and focuses the key", async () => {
+  const view = render(
+    <ProviderRow
+      provider={provider}
+      saved={null}
+      revision={1}
+      busy={false}
+      models={[]}
+      onSave={vi.fn()}
+      onSaveModels={saveModels}
+      connectionDefaultOpen={false}
+    />
+  )
+  expect(view.queryByLabelText("API key")).toBeNull()
+  await act(() => Promise.try(() => fireEvent.click(view.getByRole("switch", { name: "Enable this provider" }))))
+  await waitFor(() => expect(view.getByLabelText("API key")).toHaveFocus())
+  expect(view.getByRole("button", { name: "Save configuration" })).toBeInTheDocument()
+})
+
+test("connection configuration starts collapsed and expands on request", async () => {
+  const view = render(
+    <ProviderRow
+      provider={provider}
+      saved={null}
+      revision={1}
+      busy={false}
+      models={[]}
+      onSave={vi.fn()}
+      onSaveModels={saveModels}
+      connectionDefaultOpen={false}
+    />
+  )
+  expect(view.queryByLabelText("API key")).toBeNull()
+  const trigger = view.getByRole("button", { name: "Connection settings" })
+  expect(trigger).toHaveAttribute("aria-expanded", "false")
+  await act(() => Promise.try(() => fireEvent.click(trigger)))
+  expect(trigger).toHaveAttribute("aria-expanded", "true")
+  expect(view.getByLabelText("API key")).toBeInTheDocument()
+  expect(view.getByRole("button", { name: "Save configuration" })).toBeInTheDocument()
+})
+
 test("the disable error alerts switch enables silent retries when checked", async () => {
   const { setOverload429ReminderDisabled } = await import("@/lib/overload-429-settings")
   setOverload429ReminderDisabled(false)
   const view = render(
-    <ProviderRow provider={openrouter} saved={null} revision={1} busy={false}
-      models={[]} onSave={vi.fn()} onSaveModels={saveModels} />
+    <ProviderRow
+      provider={openrouter}
+      saved={null}
+      revision={1}
+      busy={false}
+      models={[]}
+      onSave={vi.fn()}
+      onSaveModels={saveModels}
+    />
   )
   const toggle = view.getByRole("switch", { name: "Disable model error alerts" })
   expect(toggle).not.toBeChecked()
@@ -114,7 +163,7 @@ test("an untouched row follows loaded regions and submits the revision it displa
   })
   await act(() => {
     return Promise.try(() => {
-      fireEvent.click(view.getByRole("button", { name: "Save connection" }))
+      fireEvent.click(view.getByRole("button", { name: "Save configuration" }))
     })
   })
   expect(save.mock.calls[0]).toEqual([2, { apiKey: "new-key", region: "intl" }])
@@ -128,7 +177,7 @@ test("an untouched row follows loaded regions and submits the revision it displa
   })
   await act(() => {
     return Promise.try(() => {
-      fireEvent.click(view.getByRole("button", { name: "Save connection" }))
+      fireEvent.click(view.getByRole("button", { name: "Save configuration" }))
     })
   })
   expect(save.mock.calls[1]).toEqual([3, { apiKey: "after-ack", region: "intl" }])
@@ -167,7 +216,7 @@ test("a dirty row keeps its loaded revision across another window's save and ret
   )
   await act(() => {
     return Promise.try(() => {
-      fireEvent.click(view.getByRole("button", { name: "Save connection" }))
+      fireEvent.click(view.getByRole("button", { name: "Save configuration" }))
     })
   })
   expect(save.mock.calls[0]).toEqual([1, { apiKey: "draft-key", region: "cn" }])
@@ -211,7 +260,7 @@ test("a successful save advances the base without erasing text typed while it wa
   })
   await act(() => {
     return Promise.try(() => {
-      fireEvent.click(view.getByRole("button", { name: "Save connection" }))
+      fireEvent.click(view.getByRole("button", { name: "Save configuration" }))
     })
   })
   await act(() => {
@@ -240,7 +289,7 @@ test("a successful save advances the base without erasing text typed while it wa
   )
   await act(() => {
     return Promise.try(() => {
-      fireEvent.click(view.getByRole("button", { name: "Save connection" }))
+      fireEvent.click(view.getByRole("button", { name: "Save configuration" }))
     })
   })
   expect(save.mock.calls[1]).toEqual([2, { apiKey: "next-draft", region: "cn" }])
@@ -281,7 +330,7 @@ test("a built-in provider saves a page-configured API base URL", async () => {
   })
   await act(() => {
     return Promise.try(() => {
-      fireEvent.click(view.getByRole("button", { name: "Save connection" }))
+      fireEvent.click(view.getByRole("button", { name: "Save configuration" }))
     })
   })
   expect(save.mock.calls[0]).toEqual([1, { region: "intl", baseUrl: "https://gateway.example.test/v1" }])
@@ -357,7 +406,7 @@ test("custom model previews reflect edits and keep the JSON draft when reopened"
   expect(view.getByText("model-b")).toBeTruthy()
   await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Edit JSON" }))))
   expect((view.getByLabelText("Models (JSON)") as HTMLTextAreaElement).value).toBe(draft)
-  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Save connection" }))))
+  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Save configuration" }))))
   expect(save.mock.calls).toEqual([[7, { ...customProvider, models: JSON.parse(draft) as unknown }]])
   expect(saved.mock.calls).toEqual([[customProvider.id]])
 })
@@ -372,7 +421,7 @@ test("invalid model JSON stays editable and cannot be saved or hidden by preview
   await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Preview models" }))))
   expect(view.getByLabelText("Models (JSON)").getAttribute("aria-invalid")).toBe("true")
   expect(view.getByRole("alert").textContent).toBe("Add at least one model")
-  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Save connection" }))))
+  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Save configuration" }))))
   expect(save).not.toHaveBeenCalled()
   expect((view.getByLabelText("Models (JSON)") as HTMLTextAreaElement).value).toBe("[]")
 })
@@ -388,7 +437,7 @@ test("a new custom provider starts with the model editor open and masks its API 
     />
   )
   expect(view.getByLabelText("Models (JSON)")).toBeTruthy()
-  expect(view.getByRole("button", { name: "Save connection" }).hasAttribute("disabled")).toBe(true)
+  expect(view.getByRole("button", { name: "Save configuration" }).hasAttribute("disabled")).toBe(true)
   await enterText(view.getByLabelText("API key"), "draft-key")
   expect(view.getByLabelText("API key").getAttribute("type")).toBe("password")
   await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Show key" }))))
@@ -438,9 +487,7 @@ test("syncing models offers them one at a time; + adds a model to the list and -
   expect(view.queryByRole("button", { name: "Remove from model list" })).toBeNull()
 
   // + adds exactly the picked model, with the endpoint's metadata.
-  await act(() =>
-    Promise.try(() => fireEvent.click(view.getAllByRole("button", { name: "Add to model list" })[0]))
-  )
+  await act(() => Promise.try(() => fireEvent.click(view.getAllByRole("button", { name: "Add to model list" })[0])))
   await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Edit JSON" }))))
   expect(JSON.parse((view.getByLabelText("Models (JSON)") as HTMLTextAreaElement).value)).toEqual([
     {
@@ -760,7 +807,10 @@ test("a failed usage read is worded differently from a plan that has no windows"
   const view = render(
     <CodexAccountSummary
       account={{
-        account: { account: { type: "chatgpt", email: "test@example.test", planType: "pro" }, requiresOpenaiAuth: true },
+        account: {
+          account: { type: "chatgpt", email: "test@example.test", planType: "pro" },
+          requiresOpenaiAuth: true
+        },
         rateLimits: null,
         rateLimitsError: true
       }}
@@ -778,7 +828,10 @@ test("a stale snapshot keeps its numbers and says how old they are", () => {
   const view = render(
     <CodexAccountSummary
       account={{
-        account: { account: { type: "chatgpt", email: "test@example.test", planType: "pro" }, requiresOpenaiAuth: true },
+        account: {
+          account: { type: "chatgpt", email: "test@example.test", planType: "pro" },
+          requiresOpenaiAuth: true
+        },
         rateLimits: {
           limitId: null,
           limitName: null,
@@ -805,7 +858,10 @@ test("a fresh read still says when the numbers were captured", () => {
   const view = render(
     <CodexAccountSummary
       account={{
-        account: { account: { type: "chatgpt", email: "test@example.test", planType: "pro" }, requiresOpenaiAuth: true },
+        account: {
+          account: { type: "chatgpt", email: "test@example.test", planType: "pro" },
+          requiresOpenaiAuth: true
+        },
         rateLimits: {
           limitId: null,
           limitName: null,
@@ -940,7 +996,7 @@ test("inverted delete keeps the selected models and drops every other row", asyn
 })
 
 test("a connection save retries once when a model toggle moved the revision", async () => {
-  // One card writes twice: toggling a model saves the catalog (revision 7 → 8), then 保存连接
+  // One card writes twice: toggling a model saves the catalog (revision 7 → 8), then 保存配置
   // sends the revision the card loaded with. The second write must not be reported as another
   // window's edit when a refresh + retry can land it.
   const conflict = new Error("Provider settings changed in another window; reload and retry")
@@ -982,45 +1038,68 @@ test("a conflict that leaves the revision unchanged still surfaces", async () =>
   const conflict = new Error("Provider settings changed in another window; reload and retry")
   const attempt = vi.fn().mockRejectedValue(conflict)
 
-  await expect(retryOnRevisionConflict(attempt, 7, async () => ({ revision: 7 }))).rejects.toThrow(
-    /another window/
-  )
+  await expect(retryOnRevisionConflict(attempt, 7, async () => ({ revision: 7 }))).rejects.toThrow(/another window/)
   expect(attempt).toHaveBeenCalledTimes(1)
 })
 
 test("the protocol selector only appears on OpenRouter and defaults to Responses", () => {
   const other = render(
-    <ProviderRow provider={provider} saved={{ configured: true, disabled: false, region: "intl", base_url: null, protocol: "responses" }}
-      revision={1} busy={false} models={[]} onSave={vi.fn()} onSaveModels={saveModels} />
+    <ProviderRow
+      provider={provider}
+      saved={{ configured: true, disabled: false, region: "intl", base_url: null, protocol: "responses" }}
+      revision={1}
+      busy={false}
+      models={[]}
+      onSave={vi.fn()}
+      onSaveModels={saveModels}
+    />
   )
   expect(other.queryByLabelText("Upstream protocol")).toBeNull()
   other.unmount()
   const view = render(
-    <ProviderRow provider={openrouter} saved={{ configured: true, disabled: false, region: null, base_url: null, protocol: "responses" }}
-      revision={1} busy={false} models={[]} onSave={vi.fn()} onSaveModels={saveModels} />
+    <ProviderRow
+      provider={openrouter}
+      saved={{ configured: true, disabled: false, region: null, base_url: null, protocol: "responses" }}
+      revision={1}
+      busy={false}
+      models={[]}
+      onSave={vi.fn()}
+      onSaveModels={saveModels}
+    />
   )
   expect(view.getByLabelText("Upstream protocol")).toHaveTextContent("Responses API (default)")
 })
 
 test("choosing Chat Completions marks the row dirty and submits the protocol on save", async () => {
   const saved = { configured: true, disabled: false, region: null, base_url: null, protocol: "responses" as const }
-  const save = vi.fn(() => Promise.try(() => ({
-    ...snapshot(2),
-    providers: { openrouter: { ...saved, protocol: "chatCompletions" as const } }
-  })))
+  const save = vi.fn(() =>
+    Promise.try(() => ({
+      ...snapshot(2),
+      providers: { openrouter: { ...saved, protocol: "chatCompletions" as const } }
+    }))
+  )
   const view = render(
-    <ProviderRow provider={openrouter} saved={saved} revision={1} busy={false}
-      models={[]} onSave={save} onSaveModels={saveModels} />
+    <ProviderRow
+      provider={openrouter}
+      saved={saved}
+      revision={1}
+      busy={false}
+      models={[]}
+      onSave={save}
+      onSaveModels={saveModels}
+    />
   )
   const trigger = view.getByLabelText("Upstream protocol")
   fireEvent.click(trigger)
-  await act(() => Promise.try(() => {
-    const option = view.getByRole("option", { name: "Chat Completions" })
-    fireEvent.pointerDown(option, { pointerType: "mouse" })
-    fireEvent.click(option)
-  }))
+  await act(() =>
+    Promise.try(() => {
+      const option = view.getByRole("option", { name: "Chat Completions" })
+      fireEvent.pointerDown(option, { pointerType: "mouse" })
+      fireEvent.click(option)
+    })
+  )
   expect(trigger).toHaveTextContent("Chat Completions")
-  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Save connection" }))))
+  await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Save configuration" }))))
   expect(save.mock.calls[0]).toEqual([1, { protocol: "chatCompletions" }])
   // The accepted value comes back from the snapshot; the row is clean again.
   expect(view.getByLabelText("Upstream protocol")).toHaveTextContent("Chat Completions")

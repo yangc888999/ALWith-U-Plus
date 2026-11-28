@@ -1,4 +1,4 @@
-import { type SessionListHost, SessionListProvider } from "@alwith/module-chat/session-list"
+import { type SessionListClient, type SessionListHost, SessionListProvider } from "@alwith/module-chat/session-list"
 import { type ReactNode, useMemo } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -22,6 +22,27 @@ const APP_STRING_KEYS: Readonly<Record<string, string>> = { "sessionList.quickCh
 export function SessionListHostProvider({ children }: { children: ReactNode }) {
   const { i18n } = useTranslation()
   const language = i18n.language
+  const listClient = useMemo<SessionListClient>(
+    () => ({
+      store: client.store,
+      get state() {
+        return client.state
+      },
+      listSessions: (options) => client.listSessions(options),
+      listArchived: (options) => client.listArchived(options),
+      renameSession: (id, name) => client.renameSession(id, name),
+      fork: (id, cwd) => client.fork(id, cwd),
+      archive: (id) => client.archive(id),
+      unarchive: (id) => client.unarchive(id),
+      delete: (id) => client.delete(id),
+      // A row's stop button is a reader gesture on an existing chat, not a delete: reopen the
+      // chat when it is the one on screen so it is immediately ready for another message.
+      stopSession: (id) => client.stopSessionAndReopen(id),
+      activityReply: (id) => client.activityReply(id),
+      projectPath: (cwd) => client.projectPath(cwd)
+    }),
+    []
+  )
   const host = useMemo(
     () =>
       ({
@@ -37,7 +58,7 @@ export function SessionListHostProvider({ children }: { children: ReactNode }) {
     [i18n, language]
   )
   return (
-    <SessionListProvider host={host} client={client}>
+    <SessionListProvider host={host} client={listClient}>
       {children}
     </SessionListProvider>
   )

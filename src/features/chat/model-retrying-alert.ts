@@ -11,15 +11,15 @@
 // paint every pending toast simultaneously; the user asked for them one after another, so we hold
 // one at a time and only release the next when the current is dismissed (by timeout or by click).
 
+import type { Session } from "@alwith/api"
 import { listen } from "@tauri-apps/api/event"
-import { toast } from "sonner"
 import { info } from "@tauri-apps/plugin-log"
+import { toast } from "sonner"
+
+import { selectedModelId } from "@/agent/native-models"
+import { client } from "@/lib/client"
 import i18n from "@/lib/i18n"
 
-import type { Session } from "@alwith/api"
-
-import { client } from "@/lib/client"
-import { selectedModelId } from "@/agent/native-models"
 import { label, matchesReportedModel, runningSession } from "./model-overload-alert"
 import { jumpToSession, summaryOf } from "./session-jump"
 
@@ -103,14 +103,14 @@ function showToast(alert: PendingAlert): void {
             onClick: () => {
               jumpToSession(summaryOf(alert.session as Session))
               toast.dismiss(id)
-            },
+            }
           },
     // Sonner calls this on both manual and timeout dismissal. Releasing `showing` here — and only
     // here — is what turns the stack into a queue: the next alert waits for this one to leave.
     onDismiss: () => {
       showing = false
       pump()
-    },
+    }
   })
   void info(`[retry-alert] toast model=${alert.model} retries=${alert.retries} session=${alert.session?.id ?? "none"}`)
 }
@@ -121,12 +121,19 @@ export async function startModelRetryingAlerts(): Promise<() => void> {
     const { model, retries, requestId } = event.payload
     if (typeof model !== "string" || model === "") return
     if (typeof retries !== "number" || retries <= 0) return
+    // The strict resolver only uses freshness when it identifies one exact running session.
+    // bestEffortSession is too permissive here: with two chats on the same model it can pick a
+    // healthy sibling that is streaming and suppress a real retry alert from the stalled chat.
+    const strict = runningSession(model)
+    const now = Date.now()
+    if (strict !== null && strict.clock > 0 && strict.clock <= now && now - strict.clock < 5_000) return
+    const session = strict ?? bestEffortSession(model)
     enqueue({
       model,
       retries,
       requestId: typeof requestId === "string" ? requestId : undefined,
-      at: Date.now(),
-      session: bestEffortSession(model),
+      at: now,
+      session
     })
   })
 }

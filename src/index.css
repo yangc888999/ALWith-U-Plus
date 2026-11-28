@@ -2719,3 +2719,17 @@ html[data-window-moving] .main-screen-content > .main-chat-surface {
 html[data-window-moving] [class*="backdrop-blur"] {
   backdrop-filter: none !important;
 }
+
+/* The vendored user-message renderer draws attachments before the text bubble regardless of the
+   content order the reader actually produced. Keep text first, then images, then the hover action
+   row. The message still uses the library's own bubble, spacing and lightbox. */
+.codex-user-message-group > .codex-user-bubble {
+  order: 1;
+}
+.codex-user-message-group > .codex-user-images {
+  order: 2;
+  margin-bottom: 0;
+}
+.codex-user-message-group > .codex-user-actions {
+  order: 3;
+}

@@ -1,5 +1,5 @@
-import { act, cleanup, fireEvent, render, within } from "@testing-library/react"
 import { SessionRow } from "@alwith/module-chat/session-list"
+import { act, cleanup, fireEvent, render, within } from "@testing-library/react"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { SidebarProvider } from "@/components/ui/sidebar"
@@ -7,9 +7,9 @@ import { must } from "@/lib/__tests__/must"
 import { client } from "@/lib/client"
 import { initI18n } from "@/lib/i18n"
 
-import { SessionSidebar } from "../session-sidebar"
-import { SessionListHostProvider } from "../session-list-host"
 import type { PendingChatRow } from "../pending-chat"
+import { SessionListHostProvider } from "../session-list-host"
+import { SessionSidebar } from "../session-sidebar"
 import { useSessionsUiStore } from "../store"
 
 await initI18n("en")
@@ -49,7 +49,13 @@ function showSidebar(pendingDirectory?: string | null, pendingChat?: PendingChat
 }
 
 test("the session row offers one delete action and requires confirmation for that session", async () => {
-  const session = { sessionId: "row-to-delete", cwd: "/project", title: "Example chat", updatedAt: null, archived: false }
+  const session = {
+    sessionId: "row-to-delete",
+    cwd: "/project",
+    title: "Example chat",
+    updatedAt: null,
+    archived: false
+  }
   client.store.setState({ sessionListLoaded: true, sessionList: [session] })
   useSessionsUiStore.setState({ projectOpen: new Map([[session.cwd, true]]) })
   const remove = vi.spyOn(client, "delete").mockResolvedValue(undefined)
@@ -87,6 +93,50 @@ test("a session without a runtime state still shows the idle turn indicator", ()
   expect(leading?.querySelector(".bg-green-500")).not.toBeNull()
 })
 
+test("a session row's stop button uses the reopen-aware stop", async () => {
+  const session = {
+    sessionId: "running-row",
+    cwd: "/project",
+    title: "Running chat",
+    updatedAt: null,
+    archived: false
+  }
+  client.store.setState({
+    sessionListLoaded: true,
+    sessionList: [session],
+    runStates: {
+      [session.sessionId]: {
+        sessionId: session.sessionId,
+        reusableDraft: false,
+        state: "running",
+        cwd: "/project",
+        title: session.title,
+        owner: "stdio",
+        since: 0,
+        lastActivityAt: 0,
+        version: 1,
+        interruption: null,
+        tasks: [],
+        listeningPorts: [],
+        executionId: null,
+        executionRole: null
+      }
+    }
+  })
+  const stop = vi.spyOn(client, "stopSessionAndReopen").mockResolvedValue()
+  try {
+    const view = render(
+      <SessionListHostProvider>
+        <SessionRow sessionRow={session} active={false} onSelect={() => {}} />
+      </SessionListHostProvider>
+    )
+    await act(() => Promise.try(() => fireEvent.click(view.getByRole("button", { name: "Stop" }))))
+    expect(stop).toHaveBeenCalledExactlyOnceWith(session.sessionId)
+  } finally {
+    stop.mockRestore()
+  }
+})
+
 test.each([
   [null, true],
   [null, false],
@@ -107,7 +157,12 @@ test("only the matching, renderable native row can replace a new project placeho
   expect(view.getByRole("button", { name: "New chat" })).toBeVisible()
   view.unmount()
   client.store.setState({ sessionListLoaded: false, sessionList: [{ ...row, sessionId: "next-real" }] })
-  const loading = showSidebar(undefined, { key: "next", directory: row.cwd, status: "connecting", sessionId: "next-real" })
+  const loading = showSidebar(undefined, {
+    key: "next",
+    directory: row.cwd,
+    status: "connecting",
+    sessionId: "next-real"
+  })
   expect(loading.getByRole("button", { name: "New chat" })).toBeVisible()
   act(() => client.store.setState({ sessionListLoaded: true }))
   expect(loading.queryByRole("button", { name: "New chat" })).toBeNull()

@@ -9,6 +9,7 @@ import { ChatDirectoryContext, chatFileName, resolveChatLink, useOpenChatLink } 
 import { LinkedImage } from "./linked-image"
 import { ResourceContent } from "@alwith/module-chat/resource-content"
 import { MermaidDiagram } from "./mermaid-diagram"
+import { withoutCitationMarkers } from "./citation-markers"
 
 const markdown = createChatMarkdown()
 const artifactExtension = /\.(?:png|jpe?g|gif|webp|bmp|svg|pdf|docx?|xlsx?|pptx?|csv|tsv|zip|tar|gz|mp[34]|wav|ogg|webm|mov)(?:[?#].*)?$/i
@@ -63,7 +64,7 @@ function segments(text: string, streaming?: boolean): Segment[] {
 export function CodexMarkdownRenderer({ text, streaming }: { text: string; streaming?: boolean }) {
   // 引擎会在正文里写「模型已从 gateway:custom-<hex>:xxx 更改为 …」这类元信息。十六进制是
   // provider 的编码，读者读不出是什么模型；这里只替换显示文本，落盘内容一字不动。
-  text = readableModelSwitchNotes(text)
+  text = withoutCitationMarkers(readableModelSwitchNotes(text))
   const openLink = useOpenChatLink()
   const cwd = useContext(ChatDirectoryContext)
   const { resolvedTheme } = useTheme()

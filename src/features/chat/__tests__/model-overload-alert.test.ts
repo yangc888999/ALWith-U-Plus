@@ -4,7 +4,9 @@ import { beforeEach, expect, test, vi } from "vitest"
 import { initI18n } from "@/lib/i18n"
 
 const host = vi.hoisted(() => ({
-  listeners: [] as ((event: { payload: { model: string; reason?: string; retryAfter: number | null; attempt?: number; requestId?: string } }) => void)[],
+  listeners: [] as ((event: {
+    payload: { model: string; reason?: string; retryAfter: number | null; attempt?: number; requestId?: string }
+  }) => void)[],
   warning: vi.fn(),
   info: vi.fn(),
   success: vi.fn(),
@@ -27,7 +29,14 @@ vi.mock("sonner", () => ({
 // The module reads the store and nothing else now: switching models moved to the composer picker.
 vi.mock("@/lib/client", () => ({
   client: {
-    state: { get sessions() { return host.sessions }, get runStates() { return host.runStates } }
+    state: {
+      get sessions() {
+        return host.sessions
+      },
+      get runStates() {
+        return host.runStates
+      }
+    }
   }
 }))
 // The mute switch is read by the handler; a getter keeps the test in control of it.
@@ -219,6 +228,15 @@ test("a turn that is still producing output is not reported as stalled", async (
   host.sessions["chat-1"] = session("gpt-6.1-sol", Date.now())
   const mod = await subscribe()
   emit("gpt-6.1-sol", 324)
+  expect(mod.overloadNotice()).toBeNull()
+})
+
+test("a request id does not bypass the fresh-output check", async () => {
+  // The bridge's gateway idle timer can fire after the stream has resumed. A request identity
+  // separates upstream attempts, but it must not turn a live turn into a false "no output" row.
+  host.sessions["chat-1"] = session("gpt-6.1-sol", Date.now())
+  const mod = await subscribe()
+  emit("gpt-6.1-sol", null, "no_ack", { requestId: "req-while-streaming" })
   expect(mod.overloadNotice()).toBeNull()
 })
 

@@ -100,8 +100,8 @@ import {
   QueueCancelledError,
   queuedPromptCount,
   queuedPromptHead,
-  queuedPromptPauseReason,
   queuedPromptPaused,
+  queuedPromptPauseReason,
   resumeQueuedPrompts,
   setQueuedPromptDispatching
 } from "@/lib/queued-prompt"
@@ -114,8 +114,8 @@ import {
   setOrchestration
 } from "@/lib/session-orchestration"
 
-import { ModelSelectionError } from "./model-selection-error"
 import { forkTitle } from "./fork-title"
+import { ModelSelectionError } from "./model-selection-error"
 import {
   hasUsableEffortCatalog,
   isNativeModel,
@@ -490,6 +490,18 @@ export class CodexClient extends CodexAcpClient<AppState> {
   private readonly draftOperations = new Map<DraftOwner, Promise<unknown>>()
   /** Attached session selections, retained for forks and event-stream repair only. */
   private readonly gatewayModels = new Map<string, string>()
+  /**
+   * Steering keeps the adapter's assistant message id alive across the user's interjection. The
+   * transcript groups by user turn, so appending the post-steer chunks to the pre-steer bubble
+   * made the new answer render above the new question. Track the ids that existed when each user
+   * message landed and give later chunks a segment id that starts after that message.
+   */
+  private readonly steerSegments = new Map<
+    string,
+    { userMessageId: string; seen: Set<string>; remapped: Map<string, string> }
+  >()
+  /** Assistant/thought ids observed in this session, so a later user boundary can snapshot them. */
+  private readonly assistantMessageIds = new Map<string, Set<string>>()
   /** Monotonic revocation/recovery counters so a stale recovery cannot clear a newer revocation. */
   private readonly accountRevocations = new Map<string, number>()
   private readonly accountRecoveries = new Map<string, number>()
@@ -886,7 +898,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
     }
     const option = this.session(id).configOptions.find((entry) => entry.configId === "fast-mode")
     // A non-GPT model has no such option: the task simply runs at normal speed.
-    if (fastMode === undefined || option === undefined || !isBooleanOption(option) || option.currentValue === fastMode) return
+    if (fastMode === undefined || option === undefined || !isBooleanOption(option) || option.currentValue === fastMode)
+      return
     try {
       await this.setConfig(id, "fast-mode", fastMode)
     } catch (error) {
@@ -1588,6 +1601,53 @@ export class CodexClient extends CodexAcpClient<AppState> {
     return Date.now() - changed < STALE_RUN_STATE_MS
   }
 
+  protected override onUpdate(sessionId: string, update: acp.SessionUpdate): void {
+    super.onUpdate(sessionId, this.segmentSteerUpdate(sessionId, update))
+  }
+
+  /**
+   * Keeps post-interjection assistant text under the interjection instead of growing the answer
+   * bubble that was already on screen. Only ids that existed before the user message are remapped;
+   * a normal new turn already uses a fresh id and passes through untouched.
+   */
+  private segmentSteerUpdate(sessionId: string, update: acp.SessionUpdate): acp.SessionUpdate {
+    const kind = update.sessionUpdate
+    if (kind === "user_message" || kind === "user_message_chunk") {
+      const messageId = typeof update.messageId === "string" ? update.messageId : ""
+      if (messageId === "") return update
+      const current = this.steerSegments.get(sessionId)
+      if (current?.userMessageId === messageId) return update
+      const session = this.state.sessions[sessionId]
+      const seen = new Set(this.assistantMessageIds.get(sessionId) ?? [])
+      for (const item of session?.items ?? []) {
+        if (item.kind === "assistant" || item.kind === "thought") seen.add(item.id)
+      }
+      this.steerSegments.set(sessionId, { userMessageId: messageId, seen, remapped: new Map() })
+      return update
+    }
+    if (
+      kind !== "agent_message" &&
+      kind !== "agent_message_chunk" &&
+      kind !== "agent_thought" &&
+      kind !== "agent_thought_chunk"
+    )
+      return update
+    const messageId = typeof update.messageId === "string" ? update.messageId : ""
+    if (messageId !== "") {
+      const known = this.assistantMessageIds.get(sessionId) ?? new Set<string>()
+      known.add(messageId)
+      this.assistantMessageIds.set(sessionId, known)
+    }
+    const segment = this.steerSegments.get(sessionId)
+    if (segment === undefined || messageId === "" || !segment.seen.has(messageId)) return update
+    let mapped = segment.remapped.get(messageId)
+    if (mapped === undefined) {
+      mapped = `${messageId}@steer:${segment.userMessageId}`
+      segment.remapped.set(messageId, mapped)
+    }
+    return { ...update, messageId: mapped }
+  }
+
   override applyRunStates(sessions: SessionRunState[], source?: "snapshot" | "event"): void {
     const now = Date.now()
     for (const run of sessions) {
@@ -1771,7 +1831,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
       }
       if (!retry && !this.stoppedSessions.has(id) && this.sessionBusy(id)) {
         const current = live && selectedModel(live.configOptions)
-        if (!current || canonicalModelSelection(current) !== canonicalModelSelection(value)) this.parkModelSwitch(id, value)
+        if (!current || canonicalModelSelection(current) !== canonicalModelSelection(value))
+          this.parkModelSwitch(id, value)
         return
       }
       // Every gateway now shares one Codex provider, so a model from another vendor is just a
@@ -1914,12 +1975,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     }
   }
 
-  private async switchRightAfterStop(
-    id: string,
-    configId: string,
-    value: string,
-    requested: string
-  ): Promise<boolean> {
+  private async switchRightAfterStop(id: string, configId: string, value: string, requested: string): Promise<boolean> {
     if (!this.stoppedSessions.has(id)) return false
     // This pick supersedes anything parked earlier: cancelling below would otherwise apply the old
     // choice first and the two writes would race for the model string.
@@ -1956,7 +2012,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // A choice parked behind this turn must not outlive it. Left alone, the "下一轮" badge sits on
     // the composer waiting for a turn the user just ended, and the picker keeps showing the old
     // model — which is exactly what a stop followed by a model pick looked like.
-    if (this.state.pendingModels[id] !== undefined && !this.pendingModelApplies.has(id)) void this.applyParkedModel(id, true)
+    if (this.state.pendingModels[id] !== undefined && !this.pendingModelApplies.has(id))
+      void this.applyParkedModel(id, true)
   }
 
   /**
@@ -1984,6 +2041,51 @@ export class CodexClient extends CodexAcpClient<AppState> {
     } finally {
       this.stoppingSessions.delete(id)
     }
+    // Closing the ACP session is what stops its backend task tree, but it also detaches the chat.
+    // Reopen the conversation that is still on screen so Stop lands as "ready for the next
+    // message" instead of leaving the reader with a reconnect card.
+    await this.reopenAfterStop(id)
+  }
+
+  /** The slot currently showing this conversation, if any. */
+  private slotOwnerOf(id: string): DraftOwner | null {
+    if (this.slotTargets.main === id) return "main"
+    if (this.slotTargets.chat === id) return "chat"
+    return null
+  }
+
+  /**
+   * Reattaches a conversation after Stop without resuming its paused queue. A slot that moved on
+   * while the stop was settling is left alone, and a failed replay stays with the reconnect card.
+   */
+  private async reopenAfterStop(id: string): Promise<void> {
+    const owner = this.slotOwnerOf(id)
+    if (owner === null || this.slotTargets[owner] !== id) return
+    const session = this.state.sessions[id]
+    if (session === undefined) return
+    try {
+      await this.open(id, session.cwd, owner)
+      // The replay may still describe the turn we just closed as running. Stop is authoritative:
+      // once the user has pressed it, the composer and model picker must be usable immediately,
+      // not stay on the stop button until some later store tick happens to settle the row.
+      const reopened = this.state.sessions[id]
+      if (this.stoppedSessions.has(id) && reopened?.state === "running")
+        this.publishSession({ ...reopened, state: "idle", restoring: false, error: null })
+    } catch (error) {
+      this.logInfo?.(`[stop] auto-reopen failed id=${id} error=${String(error).slice(0, 240)}`)
+    }
+  }
+
+  /**
+   * Sidebar Stop: close the backend task tree, then reopen the conversation if it is the one
+   * currently shown. Sessions stopped in the background stay closed until the reader opens them.
+   */
+  async stopSessionAndReopen(id: string): Promise<void> {
+    pauseQueuedPrompts(id, "stop")
+    this.stoppedSessions.add(id)
+    const active = this.slotOwnerOf(id) !== null
+    await this.stopSession(id)
+    if (active) await this.reopenAfterStop(id)
   }
 
   /**
@@ -2079,7 +2181,12 @@ export class CodexClient extends CodexAcpClient<AppState> {
     const session = this.state.sessions[id]
     if (session === undefined) return Promise.resolve(false)
     const ready = () => !this.stoppingSessions.has(id) && session?.attached === true && !this.sessionBusy(id)
-    if (!ready() || this.state.pendingModels[id] !== undefined || this.modelWrites.has(id) || this.pendingModelApplies.has(id))
+    if (
+      !ready() ||
+      this.state.pendingModels[id] !== undefined ||
+      this.modelWrites.has(id) ||
+      this.pendingModelApplies.has(id)
+    )
       return Promise.resolve(false)
     const current = selectedModel(session.configOptions)
     if (current === null || canonicalModelSelection(current) !== canonicalModelSelection(pending.model)) {
@@ -2104,7 +2211,9 @@ export class CodexClient extends CodexAcpClient<AppState> {
         },
         (error: unknown) => {
           const message = error instanceof Error ? error.message : String(error)
-          this.logInfo?.(`[pending-effort] apply threw id=${id} effort=${pending.effort} error=${message.slice(0, 240)}`)
+          this.logInfo?.(
+            `[pending-effort] apply threw id=${id} effort=${pending.effort} error=${message.slice(0, 240)}`
+          )
           if (!this.turnBusyRejection(message)) this.clearPendingEffort(id, pending.effort)
           return false
         }
@@ -2406,8 +2515,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // A nonempty queue (or a head already waiting for its receipt) also owns the next message.
     // Checking only `session.state` left a 150–250ms idle window where a new prompt jumped ahead
     // of rows that had been waiting for minutes.
-    if (queuedPromptCount(id) > 0 || this.queuedTurns.has(id))
-      return this.waitForIdleThenPrompt(id, prompt, options)
+    if (queuedPromptCount(id) > 0 || this.queuedTurns.has(id)) return this.waitForIdleThenPrompt(id, prompt, options)
     const session = this.holds(id) ? this.session(id) : undefined
     // Stop closes the ACP session. The next explicit send reopens it instead of failing with
     // "Open the session before sending" after the paused queue was cleared.
@@ -2507,8 +2615,7 @@ export class CodexClient extends CodexAcpClient<AppState> {
     // An older adapter or a swallowed engine result may omit the outcome. Only an explicit
     // receipt proves the message entered the live turn; everything else must take the queue
     // path instead of clearing the row as if it had been delivered.
-    if (result?.outcome !== "injected" && result?.outcome !== "startedNewTurn")
-      throw new Error("turn_not_steerable")
+    if (result?.outcome !== "injected" && result?.outcome !== "startedNewTurn") throw new Error("turn_not_steerable")
     // The adapter emits the user message when the steer lands; this receipt only releases the
     // composer, so it deliberately does not invent a second timeline item.
     return `steer:${crypto.randomUUID()}`
@@ -2780,7 +2887,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
       try {
         await this.landModelSwitch(id, "model", advertised, target)
       } catch (cause) {
-        if (unsupportedModel(cause, target) !== null) throw new ModelSelectionError(i18n.t("error.modelUnavailable", { model: target }), { cause })
+        if (unsupportedModel(cause, target) !== null)
+          throw new ModelSelectionError(i18n.t("error.modelUnavailable", { model: target }), { cause })
         throw cause
       } finally {
         this.configOwners.delete(key)
@@ -2790,17 +2898,24 @@ export class CodexClient extends CodexAcpClient<AppState> {
   }
 
   private requireAutomationIdle(id: string): void {
-    if (this.hasModelWrite(id) || this.sessionBusy(id) || this.inRoleScope(id)) throw new Error(i18n.t("error.sessionBusy"))
+    if (this.hasModelWrite(id) || this.sessionBusy(id) || this.inRoleScope(id))
+      throw new Error(i18n.t("error.sessionBusy"))
   }
 
   /** Sends a prompt and resolves once that turn has actually settled, not when it is accepted. */
-  async promptAndWait(id: string, prompt: acp.ContentBlock[], options: PromptOptions, expectedModel: string): Promise<string> {
+  async promptAndWait(
+    id: string,
+    prompt: acp.ContentBlock[],
+    options: PromptOptions,
+    expectedModel: string
+  ): Promise<string> {
     this.requireAutomationIdle(id)
     if (selectedModel(this.session(id).configOptions) !== expectedModel)
       throw new ModelSelectionError(i18n.t("chat.modelSwitchNotApplied", { model: expectedModel }))
     this.stoppedSessions.delete(id)
     const receipt = await this.promptWithTimeout(id, prompt, options).catch((cause: unknown) => {
-      if (unsupportedModel(cause, expectedModel) !== null) throw new ModelSelectionError(i18n.t("error.modelUnavailable", { model: expectedModel }), { cause })
+      if (unsupportedModel(cause, expectedModel) !== null)
+        throw new ModelSelectionError(i18n.t("error.modelUnavailable", { model: expectedModel }), { cause })
       throw cause
     })
     await this.waitForTurn(id, receipt)
@@ -3634,7 +3749,10 @@ export class CodexClient extends CodexAcpClient<AppState> {
     this.noteModel(this.session(id))
     const owner = this.configOwners.get(`${id}:${configId}`) ?? "main"
     this.configOwners.delete(`${id}:${configId}`)
-    if (owner !== "automation" && response.configOptions.some((option) => option.configId === configId && option.category === "model"))
+    if (
+      owner !== "automation" &&
+      response.configOptions.some((option) => option.configId === configId && option.category === "model")
+    )
       this.confirmModel(owner, this.session(id))
     // Persist an explicit effort change for this conversation. The agent normally calls this
     // `reasoning_effort`, while a few adapters use `effort`; `noteModel` persists either form,
@@ -3914,6 +4032,8 @@ export class CodexClient extends CodexAcpClient<AppState> {
     super.onSessionDropped(id)
     this.draftDirectoryIntents.delete(id)
     this.gatewayModels.delete(id)
+    this.steerSegments.delete(id)
+    this.assistantMessageIds.delete(id)
     this.accountRevocations.delete(id)
     this.accountRecoveries.delete(id)
     this.setApp((state) => {

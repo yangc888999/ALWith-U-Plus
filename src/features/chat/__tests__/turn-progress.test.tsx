@@ -2,9 +2,9 @@ import type { Session } from "@alwith/api"
 import { act, cleanup, fireEvent, render } from "@testing-library/react"
 import { afterEach, expect, test, vi } from "vitest"
 
-import { initI18n } from "@/lib/i18n"
 import { setAutoNudgeEnabled } from "@/lib/auto-nudge"
 import { setQueueSendMode } from "@/lib/chat-display-preferences"
+import { initI18n } from "@/lib/i18n"
 
 import { TurnProgressBar } from "../turn-progress"
 
@@ -85,7 +85,15 @@ function tool(id: string, status: "completed" | "in_progress", at = Date.now()) 
   }
 }
 
-const user = (at = Date.now()) => ({ id: "u1", at, replayed: false, _meta: null, kind: "user" as const, content: [], echo: null })
+const user = (at = Date.now()) => ({
+  id: "u1",
+  at,
+  replayed: false,
+  _meta: null,
+  kind: "user" as const,
+  content: [],
+  echo: null
+})
 
 test("an idle session shows no progress strip", () => {
   const view = render(<TurnProgressBar session={session({ id: "turn-idle", state: "idle" })} />)
@@ -111,9 +119,9 @@ test("a quiet turn keeps cancellation out of the progress row", () => {
   expect(view.container.querySelector("[data-turn-stop]")).toBeNull()
 })
 
-test("a running turn shows one short connecting line and the elapsed clock", () => {
+test("a running turn shows one short thinking line and the elapsed clock", () => {
   const view = render(<TurnProgressBar session={session({ id: "turn-wait" })} />)
-  expect(view.getByText(/连接中/)).toBeTruthy()
+  expect(view.getByText(/正在思考/)).toBeTruthy()
   expect(view.getByText("00:00")).toBeTruthy()
   // No effort badge, no tool counts, no long stage sentence on the row.
   expect(view.queryByText(/medium|本轮已完成|等待模型响应/)).toBeNull()
@@ -151,7 +159,7 @@ test("silence past a minute and a half is stated, not accused", () => {
   // The strip measures silence from the last applied update; an old clock means it has been quiet.
   const view = render(<TurnProgressBar session={session({ id: "turn-quiet", clock: Date.now() - 130_000 })} />)
   act(() => {})
-  expect(view.getByText(/连接中/)).toBeTruthy()
+  expect(view.getByText(/正在思考/)).toBeTruthy()
   // Describes the step's duration. "No new output for 2 minutes" read as a fault report on a
   // reasoning model that was simply thinking, which is why the wording is neutral now.
   expect(view.getByText(/本步已/)).toBeTruthy()
@@ -197,7 +205,7 @@ test("a turn parked on a prompt never offers a model switch", () => {
   expect(view.queryByRole("button", { name: "催一下" })).toBeNull()
 })
 
-test("a long silence offers a nudge, never a model switch", () => {
+test("a long silence offers a nudge, never a model switch", async () => {
   const view = render(<TurnProgressBar session={session({ id: "turn-quiet-long", clock: Date.now() - 190_000 })} />)
   act(() => {})
   // The renderer cannot see the upstream, so it never calls a stopwatch "reconnecting": a four
@@ -210,9 +218,27 @@ test("a long silence offers a nudge, never a model switch", () => {
   const button = view.getByRole("button", { name: "催一下" })
   fireEvent.click(button)
   expect(nudgeTurn).toHaveBeenCalledTimes(1)
-  // The explanation is the badge's own hover text — no floating card over the document.
+  // The badge keeps its native hover text; the "?" opens the same explanation through the app's
+  // portal tooltip, so it appears immediately instead of waiting for the browser's title delay.
   expect(view.getByText(/本步已/).getAttribute("title")).toMatch(/推理模型/)
-  expect(view.getByRole("button", { name: "为什么等这么久" }).getAttribute("title")).toMatch(/推理模型/)
+  const help = view.getByRole("button", { name: "为什么等这么久" })
+  expect(help).not.toHaveAttribute("title")
+  await act(() => Promise.try(() => help.focus()))
+  expect(await view.findByRole("tooltip")).toHaveTextContent(/推理模型/)
+})
+
+test("a turn state that cannot fit marquees instead of truncating", async () => {
+  const offsetWidth = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(240)
+  const clientWidth = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(100)
+  try {
+    const view = render(<TurnProgressBar session={session({ id: "turn-marquee" })} />)
+    await act(() => Promise.resolve())
+    expect(view.container.querySelector("[data-turn-state-marquee]")).not.toBeNull()
+    expect(view.container.querySelector(".alwith-marquee")).not.toBeNull()
+  } finally {
+    offsetWidth.mockRestore()
+    clientWidth.mockRestore()
+  }
 })
 
 test("a queued-send surface is not offered a nudge it could not deliver", () => {
@@ -267,7 +293,7 @@ test("a capacity notice for another model never paints this turn amber", () => {
       />
     )
     expect(view.container.textContent).not.toContain("过载")
-    expect(view.getByText(/连接中/)).toBeTruthy()
+    expect(view.getByText(/正在思考/)).toBeTruthy()
   } finally {
     overload.notice = null
   }
@@ -336,7 +362,9 @@ test("forty-five seconds of silence are stated inside the same line, not on a se
   expect(view.container.querySelectorAll("[data-turn-progress]")).toHaveLength(1)
   // Below the threshold the row says nothing at all about silence.
   cleanup()
-  const fresh = render(<TurnProgressBar session={session({ id: "turn-quiet-text-fresh", clock: Date.now() - 20_000 })} />)
+  const fresh = render(
+    <TurnProgressBar session={session({ id: "turn-quiet-text-fresh", clock: Date.now() - 20_000 })} />
+  )
   expect(fresh.container.querySelector("[data-turn-quiet-for]")).toBeNull()
 })
 
@@ -384,7 +412,11 @@ test("a turn running a tool is never nudged on a stopwatch", () => {
     const started = Date.now() - 200_000
     render(
       <TurnProgressBar
-        session={session({ id: "turn-auto-nudge-tool", clock: started, items: [user(started), tool("t1", "in_progress", started)] })}
+        session={session({
+          id: "turn-auto-nudge-tool",
+          clock: started,
+          items: [user(started), tool("t1", "in_progress", started)]
+        })}
       />
     )
     act(() => {

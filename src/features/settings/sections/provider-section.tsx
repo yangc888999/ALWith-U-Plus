@@ -38,9 +38,10 @@ import {
   SelectTrigger,
   SelectValue
 } from "@/components/alwith-ui/select"
-import { ProviderMark } from "@/components/provider-mark"
 import { MimoLogo } from "@/components/icons/mimo-logo"
+import { ProviderMark } from "@/components/provider-mark"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import {
   Dialog,
@@ -55,23 +56,11 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group"
 import { Separator } from "@/components/ui/separator"
-import { Switch } from "@/components/ui/switch"
 import { Spinner } from "@/components/ui/spinner"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import { defaultModelSnapshot, subscribeDefaultModel } from "@/lib/default-model"
-import { parseModelIdentity } from "@/lib/model-identity"
-import {
-  overloadNoticeEnabled,
-  setOverloadNoticeEnabled,
-  subscribeOverloadNoticeEnabled
-} from "@/lib/overload-retry-settings"
-import {
-  modelFastModeSnapshot,
-  setModelFastMode,
-  subscribeModelFastMode
-} from "@/lib/model-fast-mode"
-import { describeError } from "@/lib/error-text"
-import { openExternal } from "@/lib/open"
+import { LEGACY_ENTERPRISE_PROVIDER_ID } from "@/features/auth/enterprise-providers"
+import { type FreeModelProfile, freeModelProfiles } from "@/features/providers/free-model-capability"
 import {
   acknowledgeFreeModels,
   FREE_MODEL_WATCH_SETTING,
@@ -81,16 +70,25 @@ import {
   isFreeModelId,
   subscribeFreeModels
 } from "@/features/providers/free-model-watch"
-import { freeModelProfiles, type FreeModelProfile } from "@/features/providers/free-model-capability"
 import { pinCheckedFreeModels } from "@/features/settings/free-model-order"
+import { useCompanyModelDisplayName } from "@/lib/company-display-name"
+import { defaultModelSnapshot, subscribeDefaultModel } from "@/lib/default-model"
+import { describeError } from "@/lib/error-text"
+import { resolveModelConfig } from "@/lib/model-config"
+import { modelFastModeSnapshot, setModelFastMode, subscribeModelFastMode } from "@/lib/model-fast-mode"
+import { parseModelIdentity } from "@/lib/model-identity"
+import { openExternal } from "@/lib/open"
 import {
   overload429ReminderDisabled,
   setOverload429ReminderDisabled,
   subscribeOverload429ReminderDisabled
 } from "@/lib/overload-429-settings"
-import { useSettingsNativeModels, type SettingsNativeModels } from "@/lib/settings-bridge"
-import { useBooleanSetting } from "@/lib/use-boolean-setting"
-import { Checkbox } from "@/components/ui/checkbox"
+import {
+  overloadNoticeEnabled,
+  setOverloadNoticeEnabled,
+  subscribeOverloadNoticeEnabled
+} from "@/lib/overload-retry-settings"
+import { orchestratedSessionsUsing, providerCloseBlocker } from "@/lib/provider-usage"
 import type {
   CustomModel,
   CustomProvider,
@@ -105,10 +103,11 @@ import {
   applyProvidersWhenIdle,
   baseUrlLooksLikeEndpoint,
   discoverProviderModels,
-  normalizeProviderBaseUrl,
   faviconUrl,
   gatewayModelId,
+  loadProviders,
   mergeDiscoveredModels,
+  normalizeProviderBaseUrl,
   parseCustomModels,
   type Provider,
   providerBuiltInModels,
@@ -116,21 +115,18 @@ import {
   providerRegion,
   PROVIDERS,
   removeCustomProvider,
-  loadProviders,
   saveBuiltInModels,
   saveCustomProvider,
   saveProviderKey,
-  testProvider,
+  testProvider
 } from "@/lib/providers"
-import { useCompanyModelDisplayName } from "@/lib/company-display-name"
-import { resolveModelConfig } from "@/lib/model-config"
-import { LEGACY_ENTERPRISE_PROVIDER_ID } from "@/features/auth/enterprise-providers"
-import { orchestratedSessionsUsing, providerCloseBlocker } from "@/lib/provider-usage"
+import { type SettingsNativeModels, useSettingsNativeModels } from "@/lib/settings-bridge"
+import { useBooleanSetting } from "@/lib/use-boolean-setting"
 import { useProviders } from "@/lib/use-providers"
 import { cn } from "@/lib/utils"
 
 import { CodexProviderSection } from "./codex-provider-section"
-import { CompanyProviderCard, COMPANY_PROVIDER_TAB } from "./company-provider-card"
+import { COMPANY_PROVIDER_TAB, CompanyProviderCard } from "./company-provider-card"
 import { ModelSection } from "./model-section"
 import { ProviderReliabilitySettings } from "./provider-reliability"
 import { ProviderUsageBlock } from "./provider-usage"
@@ -168,7 +164,7 @@ function isRevisionConflict(error: unknown): boolean {
  * Runs a revision-guarded write, refreshing once if the store moved on.
  *
  * One card can write twice: toggling a model saves the catalog and bumps the revision, then the
- * 保存连接 button sends the revision the card loaded with. The second write was rejected as a
+ * 保存配置 button sends the revision the card loaded with. The second write was rejected as a
  * "changed in another window" conflict even though nothing else touched it. Refresh and retry
  * once with the store's revision; anything else (or a second failure) is a real error.
  */
@@ -235,7 +231,7 @@ function writeStored(key: string, value: string | null): void {
  * The model rows a provider panel starts from: saved overrides first, else the provider's own
  * catalog — for the native OpenAI provider that catalog is the engine's GPT list published by
  * the main window, since those models ship with the binary rather than in a resource file.
- */function providerRowModels(
+ */ function providerRowModels(
   snapshot: ProviderSnapshot,
   provider: Provider,
   native: ReturnType<typeof useSettingsNativeModels>
@@ -279,9 +275,7 @@ function providerIdForModel(model: string | null): string | null {
  * a callable model got labelled 已下架. This returns nothing unless a live session published its own
  * picker — the one list that can prove an id was withdrawn.
  */
-export function unverifiedNativeModels(
-  native: SettingsNativeModels | null | undefined
-): readonly string[] {
+export function unverifiedNativeModels(native: SettingsNativeModels | null | undefined): readonly string[] {
   // 空集是结论，不是偷懒：会话里的模型列表是**推荐子集**（Codex 的「推荐模型集」预设），
   // 不是全量目录。6.1 Terra / 6 Sol / 6 Luna 这类模型 Codex 明明有，只是不在当前预设里，
   // 拿「推荐子集」去 diff 用户的已保存行，就会把可调用的模型标成「未验证」——错在把
@@ -550,9 +544,7 @@ export function ProviderSection({ initialProviderId }: { initialProviderId?: str
           {snapshot?.error && <p className="mb-3 text-sm text-destructive">{snapshot.error}</p>}
           {/* 账号目录拉不到，跟「配置没应用」是两件事：「立即应用」能把后者写进引擎，对前者
               一点用都没有。所以这里用中性色单独提示，也不触发下面那颗按钮。 */}
-          {snapshot?.managedError && (
-            <p className="mb-3 text-xs text-muted-foreground">{snapshot.managedError}</p>
-          )}
+          {snapshot?.managedError && <p className="mb-3 text-xs text-muted-foreground">{snapshot.managedError}</p>}
           {snapshot && snapshot.status !== "applied" && (
             <Button variant="outline" className="mb-3 self-start" disabled={busy !== null} onClick={() => void retry()}>
               {t("provider.applyNow")}
@@ -562,97 +554,96 @@ export function ProviderSection({ initialProviderId }: { initialProviderId?: str
               one vendor's card would read as that vendor's setting. */}
           <ProviderReliabilitySettings />
           {snapshot && (
-          <>
-            <ProviderTabs
-              activeId={activeId}
-              keys={keys}
-              customProviders={snapshot.customProviders}
-              managedProviders={managedProviders}
-              onSelect={setActiveId}
-              onAdd={() => setActiveId("new")}
-            />
-            {/* The company channel renders first: it is issued by the signed-in account, not
+            <>
+              <ProviderTabs
+                activeId={activeId}
+                keys={keys}
+                customProviders={snapshot.customProviders}
+                managedProviders={managedProviders}
+                onSelect={setActiveId}
+                onAdd={() => setActiveId("new")}
+              />
+              {/* The company channel renders first: it is issued by the signed-in account, not
                 configured here, and it only exposes what the account cannot set itself (the
                 default thinking level) plus the sign-in action when it is missing. */}
-            {managedProviders.length === 0 && (
-              <div hidden={activeId !== COMPANY_PROVIDER_TAB} className="pb-3">
-                <CompanyProviderCard provider={null} />
-              </div>
-            )}
-            {managedProviders.map((provider) => (
-              <div key={provider.id} hidden={activeId !== provider.id} className="pb-3">
-                <CompanyProviderCard provider={provider} />
-              </div>
-            ))}
-            {PROVIDERS.map((provider) => (
-              // The provider card is a boxed block: keep its border off the card's bottom edge.
-              <div key={provider.id} hidden={activeId !== provider.id} className="pb-3">
-                <ProviderRow
-                  provider={provider}
-                  native={provider.native === true}
-                  saved={keys[provider.id] ?? null}
-                  revision={snapshot.revision}
-                  busy={busy !== null}
-                  models={
-                    provider.id === "openrouter"
-                      ? mergeDiscoveredModels(
-                          providerRowModels(snapshot, provider, nativeModels),
-                          cachedFreeModels.map((model) => ({
-                            label: typeof model.name === "string" && model.name !== "" ? model.name : model.id,
-                            api_id: model.id,
-                            ...(typeof model.context_length === "number" && model.context_length > 0
-                              ? { contextWindow: model.context_length }
-                              : {}),
-                            enabled: false
-                          }))
-                        ).models
-                      : providerRowModels(snapshot, provider, nativeModels)
-                  }
-                  retired={provider.native === true ? [] : []}
-                  onSave={(revision, key) => save(revision, provider, key)}
-                  onSaveModels={(revision, nextModels, reason) =>
-                    saveBuiltIn(revision, provider, nextModels, reason)
-                  }
-                  freeModelIds={provider.id === "openrouter" ? cachedFreeModels.map((model) => model.id) : []}
-                  freeProfiles={provider.id === "openrouter" ? freeProfiles : undefined}
-                  newModelIds={provider.id === "openrouter" ? newFreeModelIds : []}
-                  pendingNewModelIds={provider.id === "openrouter" ? pendingFreeModelIds : []}
-                  active={activeId === provider.id}
-                  onDisplayedNewModels={(ids: readonly string[]) => acknowledgeFreeModels(ids)}
-                  testResult={testResults[provider.id]}
-                  onTest={() => test(provider.id)}
-                />
-              </div>
-            ))}
-            {snapshot.customProviders.map((provider) => (
-              <div key={provider.id} hidden={activeId !== provider.id} className="pb-3">
+              {managedProviders.length === 0 && (
+                <div hidden={activeId !== COMPANY_PROVIDER_TAB} className="pb-3">
+                  <CompanyProviderCard provider={null} />
+                </div>
+              )}
+              {managedProviders.map((provider) => (
+                <div key={provider.id} hidden={activeId !== provider.id} className="pb-3">
+                  <CompanyProviderCard provider={provider} />
+                </div>
+              ))}
+              {PROVIDERS.map((provider) => (
+                // The provider card is a boxed block: keep its border off the card's bottom edge.
+                <div key={provider.id} hidden={activeId !== provider.id} className="pb-3">
+                  <ProviderRow
+                    provider={provider}
+                    native={provider.native === true}
+                    connectionDefaultOpen={false}
+                    saved={keys[provider.id] ?? null}
+                    revision={snapshot.revision}
+                    busy={busy !== null}
+                    models={
+                      provider.id === "openrouter"
+                        ? mergeDiscoveredModels(
+                            providerRowModels(snapshot, provider, nativeModels),
+                            cachedFreeModels.map((model) => ({
+                              label: typeof model.name === "string" && model.name !== "" ? model.name : model.id,
+                              api_id: model.id,
+                              ...(typeof model.context_length === "number" && model.context_length > 0
+                                ? { contextWindow: model.context_length }
+                                : {}),
+                              enabled: false
+                            }))
+                          ).models
+                        : providerRowModels(snapshot, provider, nativeModels)
+                    }
+                    retired={provider.native === true ? [] : []}
+                    onSave={(revision, key) => save(revision, provider, key)}
+                    onSaveModels={(revision, nextModels, reason) => saveBuiltIn(revision, provider, nextModels, reason)}
+                    freeModelIds={provider.id === "openrouter" ? cachedFreeModels.map((model) => model.id) : []}
+                    freeProfiles={provider.id === "openrouter" ? freeProfiles : undefined}
+                    newModelIds={provider.id === "openrouter" ? newFreeModelIds : []}
+                    pendingNewModelIds={provider.id === "openrouter" ? pendingFreeModelIds : []}
+                    active={activeId === provider.id}
+                    onDisplayedNewModels={(ids: readonly string[]) => acknowledgeFreeModels(ids)}
+                    testResult={testResults[provider.id]}
+                    onTest={() => test(provider.id)}
+                  />
+                </div>
+              ))}
+              {snapshot.customProviders.map((provider) => (
+                <div key={provider.id} hidden={activeId !== provider.id} className="pb-3">
+                  <CustomProviderEditor
+                    provider={provider}
+                    revision={snapshot.revision}
+                    busy={busy !== null}
+                    active={activeId === provider.id}
+                    testResult={testResults[provider.id]}
+                    onTest={() => test(provider.id)}
+                    onRemove={() => removeCustom(provider)}
+                    onSaved={setActiveId}
+                    onSave={saveCustom}
+                  />
+                </div>
+              ))}
+              <div hidden={activeId !== "new"} className="pb-3">
                 <CustomProviderEditor
-                  provider={provider}
+                  key={customDraftVersion}
+                  provider={null}
                   revision={snapshot.revision}
                   busy={busy !== null}
-                  active={activeId === provider.id}
-                  testResult={testResults[provider.id]}
-                  onTest={() => test(provider.id)}
-                  onRemove={() => removeCustom(provider)}
-                  onSaved={setActiveId}
+                  onSaved={(id) => {
+                    setCustomDraftVersion((version) => version + 1)
+                    setActiveId(id)
+                  }}
                   onSave={saveCustom}
                 />
               </div>
-            ))}
-            <div hidden={activeId !== "new"} className="pb-3">
-              <CustomProviderEditor
-                key={customDraftVersion}
-                provider={null}
-                revision={snapshot.revision}
-                busy={busy !== null}
-                onSaved={(id) => {
-                  setCustomDraftVersion((version) => version + 1)
-                  setActiveId(id)
-                }}
-                onSave={saveCustom}
-              />
-            </div>
-          </>
+            </>
           )}
         </SettingsCard>
       </div>
@@ -679,9 +670,7 @@ function CustomProviderIcon({ baseUrl }: { baseUrl: string | null }) {
   }, [baseUrl])
   const icon = faviconUrl(baseUrl)
   if (icon === null || failed) return drawn
-  return (
-    <img src={icon} alt="" className="size-5 shrink-0 rounded object-contain" onError={() => setFailed(true)} />
-  )
+  return <img src={icon} alt="" className="size-5 shrink-0 rounded object-contain" onError={() => setFailed(true)} />
 }
 
 export function ProviderTabs({
@@ -703,69 +692,69 @@ export function ProviderTabs({
   const companyDisplayName = useCompanyModelDisplayName()
   return (
     <div data-testid="provider-tabs" className="grid grid-cols-2 gap-2 pb-4 sm:grid-cols-3">
-        {/* The company channel leads: it needs no key and no URL, only the account. Signed out, a
+      {/* The company channel leads: it needs no key and no URL, only the account. Signed out, a
             single placeholder tab keeps the entry point visible instead of hiding it entirely. */}
-        {managedProviders.length === 0 ? (
+      {managedProviders.length === 0 ? (
+        <ProviderTab
+          id={COMPANY_PROVIDER_TAB}
+          name={companyDisplayName || t("provider.companyName")}
+          active={activeId === COMPANY_PROVIDER_TAB}
+          configured={false}
+          icon={<Building2 className="size-5 shrink-0" />}
+          onClick={() => onSelect(COMPANY_PROVIDER_TAB)}
+        />
+      ) : (
+        managedProviders.map((provider) => (
           <ProviderTab
-            id={COMPANY_PROVIDER_TAB}
-            name={companyDisplayName || t("provider.companyName")}
-            active={activeId === COMPANY_PROVIDER_TAB}
-            configured={false}
+            key={provider.id}
+            id={provider.id}
+            name={companyDisplayName || provider.name}
+            active={activeId === provider.id}
+            configured
             icon={<Building2 className="size-5 shrink-0" />}
-            onClick={() => onSelect(COMPANY_PROVIDER_TAB)}
+            onClick={() => onSelect(provider.id)}
           />
-        ) : (
-          managedProviders.map((provider) => (
-            <ProviderTab
-              key={provider.id}
-              id={provider.id}
-              name={companyDisplayName || provider.name}
-              active={activeId === provider.id}
-              configured
-              icon={<Building2 className="size-5 shrink-0" />}
-              onClick={() => onSelect(provider.id)}
-            />
-          ))
-        )}
-        {PROVIDERS.map((provider) => {
-          // Native providers run on the Codex sign-in: they are always ready, no key needed.
-          // A closed provider still has metadata (its key is kept) but is not configured.
-          const configured = keys[provider.id]?.configured === true || provider.native === true
-          return (
-            <ProviderTab
-              key={provider.id}
-              id={provider.id}
-              name={provider.name}
-              active={activeId === provider.id}
-              configured={configured}
-              icon={<ProviderMark provider={provider} className="size-5 shrink-0" />}
-              onClick={() => onSelect(provider.id)}
-            />
-          )
-        })}
-        {customProviders.map((provider) => {
-          return (
-            <ProviderTab
-              key={provider.id}
-              id={provider.id}
-              name={provider.name}
-              active={activeId === provider.id}
-              configured
-              icon={<CustomProviderIcon baseUrl={provider.baseUrl} />}
-              onClick={() => onSelect(provider.id)}
-            />
-          )
-        })}
-        <Button
-          type="button"
-          variant="outline"
-          aria-pressed={activeId === "new"}
-          onClick={onAdd}
-          className={cn("h-9 w-full justify-start gap-2 rounded-full px-4", activeId === "new" && "bg-accent")}
-        >
-          <PlusIcon className="size-4 shrink-0" />
-          <span className="truncate">{t("provider.customButton")}</span>
-        </Button>
+        ))
+      )}
+      {PROVIDERS.map((provider) => {
+        // Native providers run on the Codex sign-in: they are always ready, no key needed.
+        // A closed provider still has metadata (its key is kept) but is not configured.
+        const configured = keys[provider.id]?.configured === true || provider.native === true
+        return (
+          <ProviderTab
+            key={provider.id}
+            id={provider.id}
+            name={provider.name}
+            active={activeId === provider.id}
+            configured={configured}
+            icon={<ProviderMark provider={provider} className="size-5 shrink-0" />}
+            onClick={() => onSelect(provider.id)}
+          />
+        )
+      })}
+      {customProviders.map((provider) => {
+        return (
+          <ProviderTab
+            key={provider.id}
+            id={provider.id}
+            name={provider.name}
+            active={activeId === provider.id}
+            configured
+            icon={<CustomProviderIcon baseUrl={provider.baseUrl} />}
+            onClick={() => onSelect(provider.id)}
+          />
+        )
+      })}
+      <Button
+        type="button"
+        variant="outline"
+        aria-pressed={activeId === "new"}
+        onClick={onAdd}
+        className={cn("h-9 w-full justify-start gap-2 rounded-full px-4", activeId === "new" && "bg-accent")}
+      >
+        <PlusIcon className="size-4 shrink-0" />
+        <span className="truncate">{t("provider.customButton")}</span>
+      </Button>
     </div>
   )
 }
@@ -1072,7 +1061,8 @@ export function ProviderRow({
   onDisplayedNewModels,
   testResult,
   onTest,
-  onDiscover = discoverProviderModels
+  onDiscover = discoverProviderModels,
+  connectionDefaultOpen = true
 }: {
   provider: Provider
   /** Runs on the Codex sign-in: no connection section, no key, no per-model speed test. */
@@ -1096,15 +1086,13 @@ export function ProviderRow({
   onDisplayedNewModels?: (ids: readonly string[]) => void
   retired?: readonly string[]
   onSave: (revision: number, key: ProviderInput | null) => Promise<ProviderSnapshot | null>
-  onSaveModels: (
-    revision: number,
-    models: CustomModel[],
-    reason: ModelSaveReason
-  ) => Promise<CustomModel[] | null>
+  onSaveModels: (revision: number, models: CustomModel[], reason: ModelSaveReason) => Promise<CustomModel[] | null>
   testResult?: ProviderTestResult
   onTest?: () => void
   /** Injected for tests; the real one talks to the provider through Rust. */
   onDiscover?: (input: ProviderDiscoveryInput) => Promise<CustomModel[]>
+  /** Settings mounts this collapsed; the standalone component keeps fields visible for tests. */
+  connectionDefaultOpen?: boolean
 }) {
   const { t } = useTranslation()
   const retiredIds = new Set(retired)
@@ -1164,13 +1152,14 @@ export function ProviderRow({
   // The connection state belongs next to the fields it describes. Keeping the save button at the
   // very bottom of a long card broke the causality the page asks for: syncing models needs the
   // credential to be on disk first.
-  const connectionStatus = saved?.disabled === true
-    ? { key: "provider.connectionClosed", tone: "bg-muted-foreground" }
-    : hasUnsaved
-      ? { key: "provider.connectionUnsaved", tone: "bg-amber-500" }
-      : configured
-        ? { key: "provider.connectionSaved", tone: "bg-emerald-500" }
-        : { key: "provider.connectionMissing", tone: "bg-muted-foreground" }
+  const connectionStatus =
+    saved?.disabled === true
+      ? { key: "provider.connectionClosed", tone: "bg-muted-foreground" }
+      : hasUnsaved
+        ? { key: "provider.connectionUnsaved", tone: "bg-amber-500" }
+        : configured
+          ? { key: "provider.connectionSaved", tone: "bg-emerald-500" }
+          : { key: "provider.connectionMissing", tone: "bg-muted-foreground" }
 
   // `:free` is an OpenRouter tier. On other vendors the toggle can never match anything, so it
   // stays hidden instead of adding a dead control to every catalog.
@@ -1306,9 +1295,7 @@ export function ProviderRow({
   const [syncingModels, setSyncingModels] = useState(false)
   // Native OpenAI: the model list needs an endpoint and a token, but neither is used for chat —
   // the conversation runs on the Codex sign-in. Both are kept only for `GET /models`.
-  const [nativeBaseUrl, setNativeBaseUrl] = useState(
-    () => readStored(OPENAI_MODELS_BASE_URL_KEY) ?? OPENAI_MODELS_URL
-  )
+  const [nativeBaseUrl, setNativeBaseUrl] = useState(() => readStored(OPENAI_MODELS_BASE_URL_KEY) ?? OPENAI_MODELS_URL)
   const [nativeToken, setNativeToken] = useState(() => readStored(OPENAI_MODELS_TOKEN_KEY) ?? "")
   const [nativeTokenVisible, setNativeTokenVisible] = useState(false)
   const [draggingKey, setDraggingKey] = useState<string | null>(null)
@@ -1319,14 +1306,13 @@ export function ProviderRow({
   const dragPointer = useRef<{ id: number; key: string; startY: number } | null>(null)
   const dragRects = useRef<Array<{ key: string; top: number; bottom: number }>>([])
   // One acceleration switch per GPT model; conversations read the same store when they switch.
-  const fastModes = useSyncExternalStore(
-    subscribeModelFastMode,
-    modelFastModeSnapshot,
-    modelFastModeSnapshot
-  )
+  const fastModes = useSyncExternalStore(subscribeModelFastMode, modelFastModeSnapshot, modelFastModeSnapshot)
   // The token prompt stays as the fallback when the inline field is empty, so a one-off fetch
   // never has to write to storage at all.
   const [keyPromptOpen, setKeyPromptOpen] = useState(false)
+  // Connection settings default closed: the page should read as a model catalog first, and
+  // opening the key/base-URL editor is a deliberate action rather than a wall of fields.
+  const [connectionOpen, setConnectionOpen] = useState(connectionDefaultOpen)
   const [promptKey, setPromptKey] = useState("")
   const [promptKeyVisible, setPromptKeyVisible] = useState(false)
   const [promptBusy, setPromptBusy] = useState(false)
@@ -1336,8 +1322,7 @@ export function ProviderRow({
 
   /** Keys never contain whitespace; paste artefacts (newlines, full-width punctuation) do. */
   const pastedKey = promptKey.replace(/\s+/g, "")
-  const keyFormatError =
-    pastedKey !== "" && /[^\x21-\x7e]/.test(pastedKey) ? t("provider.syncKeyInvalidChars") : null
+  const keyFormatError = pastedKey !== "" && /[^\x21-\x7e]/.test(pastedKey) ? t("provider.syncKeyInvalidChars") : null
 
   /** Merges a `/models` answer into the table; both the inline and dialog fetches share this. */
   const applyDiscoveredModels = (found: CustomModel[]): void => {
@@ -1583,12 +1568,14 @@ export function ProviderRow({
       void persist({ disabled: false })
       return
     }
-    // No stored key at all: a visible answer, not just a toast. The dialog that collects the key
-    // opens instead, otherwise the click reads as dead.
+    // No stored key at all: open the connection editor and put the cursor in its key field.
+    // The model-list key dialog is for a different action and cannot enable the provider.
     toast.info(t("provider.enableNeedsKey", { name: provider.name }))
-    setKeyPromptOpen(true)
-    const key = document.getElementById(`${provider.id}-api-key`)
-    if (key instanceof HTMLInputElement) key.focus()
+    setConnectionOpen(true)
+    requestAnimationFrame(() => {
+      const key = document.getElementById(`${provider.id}-api-key`)
+      if (key instanceof HTMLInputElement) key.focus()
+    })
   }
 
   const closeProvider = (): void => {
@@ -1610,7 +1597,7 @@ export function ProviderRow({
   const submit = () => {
     if (keyTrimmed === "" && base.saved === null) return
     // A pasted curl URL is a concrete endpoint, not an API root. Save the cleaned root and echo
-    // it back into the field, otherwise 保存连接 would stay lit after an otherwise good save.
+    // it back into the field, otherwise 保存配置 would stay lit after an otherwise good save.
     const normalizedBaseUrl = normalizeProviderBaseUrl(baseUrl)
     if (normalizedBaseUrl !== baseUrl.trim()) setBaseUrl(normalizedBaseUrl)
     void persist({
@@ -1663,128 +1650,146 @@ export function ProviderRow({
         <>
           <Separator />
           <section className="space-y-4" aria-labelledby={`${provider.id}-connection`}>
-            <h4 id={`${provider.id}-connection`} className="text-sm font-medium">
-              {t("provider.connectionSettings")}
-            </h4>
-            <Field className="gap-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <FieldLabel htmlFor={inputId}>{t("provider.apiKey")}</FieldLabel>
-                {keyUrl !== null && (
-                  <Button
-                    type="button"
-                    variant="link"
-                    size="sm"
-                    className="h-auto p-0 text-xs text-muted-foreground"
-                    onClick={() => void openExternal(keyUrl).catch((error: unknown) => toast.error(describe(error)))}
-                  >
-                    {t("provider.getKey", { name: provider.name })}
-                    <ExternalLinkIcon className="size-3" aria-hidden="true" />
-                  </Button>
-                )}
-              </div>
-              <InputGroup>
-                <InputGroupInput
-                  id={inputId}
-                  type={showKey ? "text" : "password"}
-                  autoComplete="off"
-                  spellCheck={false}
-                  // The key survives a close, so the placeholder follows the stored credential,
-                  // not the on/off state — otherwise a closed provider asks for a key it has.
-                  placeholder={base.saved !== null ? t("provider.apiKeyKept") : t("provider.apiKeyPlaceholder")}
-                  value={apiKey}
-                  onChange={(event) => setApiKey(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && canSave) submit()
-                  }}
-                />
-                <InputGroupAddon align="inline-end">
-                  <InputGroupButton
-                    aria-label={t(showKey ? "provider.hideKey" : "provider.showKey")}
-                    onClick={() => setShowKey((value) => !value)}
-                  >
-                    {showKey ? <EyeIcon /> : <EyeOffIcon />}
-                  </InputGroupButton>
-                </InputGroupAddon>
-              </InputGroup>
-            </Field>
-            <Collapsible className="space-y-2">
-              <CollapsibleTrigger render={<Button variant="ghost" size="sm" className="group -ms-2" />}>
-                {t("provider.baseUrl")}
+            <Collapsible open={connectionOpen} onOpenChange={setConnectionOpen} className="space-y-3">
+              <CollapsibleTrigger
+                render={
+                  <button type="button" className="group flex w-full items-center justify-between gap-2 text-start" />
+                }
+              >
+                <span id={`${provider.id}-connection`} className="text-sm font-medium">
+                  {t("provider.connectionSettings")}
+                </span>
                 <ChevronDownIcon
-                  className="size-4 transition-transform group-aria-expanded:rotate-180"
+                  className="size-4 shrink-0 text-muted-foreground transition-transform group-aria-expanded:rotate-180"
                   aria-hidden="true"
                 />
               </CollapsibleTrigger>
-              <CollapsibleContent>
+              <CollapsibleContent className="space-y-4">
                 <Field className="gap-2">
-                  <FieldLabel htmlFor={`${provider.id}-base-url`} className="sr-only">
-                    {t("provider.baseUrl")}
-                  </FieldLabel>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <FieldLabel htmlFor={inputId}>{t("provider.apiKey")}</FieldLabel>
+                    {keyUrl !== null && (
+                      <Button
+                        type="button"
+                        variant="link"
+                        size="sm"
+                        className="h-auto p-0 text-xs text-muted-foreground"
+                        onClick={() =>
+                          void openExternal(keyUrl).catch((error: unknown) => toast.error(describe(error)))
+                        }
+                      >
+                        {t("provider.getKey", { name: provider.name })}
+                        <ExternalLinkIcon className="size-3" aria-hidden="true" />
+                      </Button>
+                    )}
+                  </div>
                   <InputGroup>
                     <InputGroupInput
-                      id={`${provider.id}-base-url`}
-                      type="url"
+                      id={inputId}
+                      type={showKey ? "text" : "password"}
+                      autoComplete="off"
                       spellCheck={false}
-                      placeholder={providerRegion(provider, region)?.baseUrl ?? provider.baseUrl}
-                      value={baseUrl}
-                      onChange={(event) => setBaseUrl(event.target.value)}
+                      // The key survives a close, so the placeholder follows the stored credential,
+                      // not the on/off state — otherwise a closed provider asks for a key it has.
+                      placeholder={base.saved !== null ? t("provider.apiKeyKept") : t("provider.apiKeyPlaceholder")}
+                      value={apiKey}
+                      onChange={(event) => setApiKey(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && canSave) submit()
+                      }}
                     />
+                    <InputGroupAddon align="inline-end">
+                      <InputGroupButton
+                        aria-label={t(showKey ? "provider.hideKey" : "provider.showKey")}
+                        onClick={() => setShowKey((value) => !value)}
+                      >
+                        {showKey ? <EyeIcon /> : <EyeOffIcon />}
+                      </InputGroupButton>
+                    </InputGroupAddon>
                   </InputGroup>
-                  <FieldDescription className="text-xs">{t("provider.baseUrlDescription")}</FieldDescription>
                 </Field>
-              </CollapsibleContent>
-            </Collapsible>
-            {provider.id === "openrouter" && (
-              <Field className="gap-2">
-                <FieldLabel htmlFor={`${provider.id}-protocol`}>{t("provider.protocol")}</FieldLabel>
-                <Select
-                  value={protocol}
-                  items={[
-                    { label: t("provider.protocolResponses"), value: "responses" },
-                    { label: t("provider.protocolChatCompletions"), value: "chatCompletions" }
-                  ]}
-                  onValueChange={(value) => setProtocol(value === "chatCompletions" ? "chatCompletions" : "responses")}
-                >
-                  <SelectTrigger id={`${provider.id}-protocol`} className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value="responses">{t("provider.protocolResponses")}</SelectItem>
-                      <SelectItem value="chatCompletions">{t("provider.protocolChatCompletions")}</SelectItem>
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-                <FieldDescription className="text-xs">{t("provider.protocolDescription")}</FieldDescription>
-              </Field>
-            )}
-            {baseUrlLooksLikeEndpoint(baseUrl) && (
-              <p className="text-xs leading-relaxed text-amber-600 dark:text-amber-400" role="status">
-                {t("provider.baseUrlEndpointWarning")}
-              </p>
-            )}
-            {/* Typing is not saving. Every non-native provider shares this row, so the hint lives
+                <Collapsible className="space-y-2">
+                  <CollapsibleTrigger render={<Button variant="ghost" size="sm" className="group -ms-2" />}>
+                    {t("provider.baseUrl")}
+                    <ChevronDownIcon
+                      className="size-4 transition-transform group-aria-expanded:rotate-180"
+                      aria-hidden="true"
+                    />
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <Field className="gap-2">
+                      <FieldLabel htmlFor={`${provider.id}-base-url`} className="sr-only">
+                        {t("provider.baseUrl")}
+                      </FieldLabel>
+                      <InputGroup>
+                        <InputGroupInput
+                          id={`${provider.id}-base-url`}
+                          type="url"
+                          spellCheck={false}
+                          placeholder={providerRegion(provider, region)?.baseUrl ?? provider.baseUrl}
+                          value={baseUrl}
+                          onChange={(event) => setBaseUrl(event.target.value)}
+                        />
+                      </InputGroup>
+                      <FieldDescription className="text-xs">{t("provider.baseUrlDescription")}</FieldDescription>
+                    </Field>
+                  </CollapsibleContent>
+                </Collapsible>
+                {provider.id === "openrouter" && (
+                  <Field className="gap-2">
+                    <FieldLabel htmlFor={`${provider.id}-protocol`}>{t("provider.protocol")}</FieldLabel>
+                    <Select
+                      value={protocol}
+                      items={[
+                        { label: t("provider.protocolResponses"), value: "responses" },
+                        { label: t("provider.protocolChatCompletions"), value: "chatCompletions" }
+                      ]}
+                      onValueChange={(value) =>
+                        setProtocol(value === "chatCompletions" ? "chatCompletions" : "responses")
+                      }
+                    >
+                      <SelectTrigger id={`${provider.id}-protocol`} className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="responses">{t("provider.protocolResponses")}</SelectItem>
+                          <SelectItem value="chatCompletions">{t("provider.protocolChatCompletions")}</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FieldDescription className="text-xs">{t("provider.protocolDescription")}</FieldDescription>
+                  </Field>
+                )}
+                {baseUrlLooksLikeEndpoint(baseUrl) && (
+                  <p className="text-xs leading-relaxed text-amber-600 dark:text-amber-400" role="status">
+                    {t("provider.baseUrlEndpointWarning")}
+                  </p>
+                )}
+                {/* Typing is not saving. Every non-native provider shares this row, so the hint lives
                 here rather than in one vendor's special case. */}
-            {canSave && !configured && (
-              <p className="text-xs leading-relaxed text-primary" role="status">
-                {t("provider.unsavedHint")}
-              </p>
-            )}
-            {/* The save action lives with the fields it commits. At the bottom of a card holding
+                {canSave && !configured && (
+                  <p className="text-xs leading-relaxed text-primary" role="status">
+                    {t("provider.unsavedHint")}
+                  </p>
+                )}
+                {/* The save action lives with the fields it commits. At the bottom of a card holding
                 hundreds of OpenRouter rows it was off-screen, so users filled the key, clicked
                 「更新模型列表」 below, and only then learned the key had never been saved. */}
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className={cn("size-1.5 shrink-0 rounded-full", connectionStatus.tone)} aria-hidden="true" />
-                <span className="text-xs text-muted-foreground" role="status">
-                  {t(connectionStatus.key)}
-                </span>
-              </div>
-              <Button size="sm" disabled={!canSave} title={t("provider.saveButtonHint")} onClick={submit}>
-                {busy && <Spinner data-icon="inline-start" />}
-                {t("provider.saveButton")}
-              </Button>
-            </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className={cn("size-1.5 shrink-0 rounded-full", connectionStatus.tone)} aria-hidden="true" />
+                    <span className="text-xs text-muted-foreground" role="status">
+                      {t(connectionStatus.key)}
+                    </span>
+                  </div>
+                  <Button size="sm" disabled={!canSave} title={t("provider.saveButtonHint")} onClick={submit}>
+                    {busy && <Spinner data-icon="inline-start" />}
+                    {t("provider.saveButton")}
+                  </Button>
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
           </section>
         </>
       )}
@@ -1858,9 +1863,7 @@ export function ProviderRow({
                       placeholder={OPENAI_MODELS_URL}
                       value={nativeBaseUrl}
                       onChange={(event) => setNativeBaseUrl(event.target.value)}
-                      onBlur={() =>
-                        writeStored(OPENAI_MODELS_BASE_URL_KEY, nativeBaseUrl.trim() || OPENAI_MODELS_URL)
-                      }
+                      onBlur={() => writeStored(OPENAI_MODELS_BASE_URL_KEY, nativeBaseUrl.trim() || OPENAI_MODELS_URL)}
                     />
                   </InputGroup>
                   <FieldDescription className="text-xs">{t("provider.baseUrlDescription")}</FieldDescription>
@@ -1870,11 +1873,13 @@ export function ProviderRow({
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5">
               <div className="min-w-0">
                 <p className="text-sm font-medium">{t("defaultModel.overloadMute")}</p>
-                <p className="text-xs text-muted-foreground">
-                  {t("defaultModel.overloadMuteDescription")}
-                </p>
+                <p className="text-xs text-muted-foreground">{t("defaultModel.overloadMuteDescription")}</p>
               </div>
-              <Switch checked={overloadNoticeEnabledValue} onCheckedChange={setOverloadNoticeEnabled} aria-label={t("defaultModel.overloadMute")} />
+              <Switch
+                checked={overloadNoticeEnabledValue}
+                onCheckedChange={setOverloadNoticeEnabled}
+                aria-label={t("defaultModel.overloadMute")}
+              />
             </div>
           </section>
         </>
@@ -1898,7 +1903,11 @@ export function ProviderRow({
               <p className="text-sm font-medium">{t("provider.overload429Reminder")}</p>
               <p className="text-xs text-muted-foreground">{t("provider.overload429ReminderDesc")}</p>
             </div>
-            <Switch checked={reminder429Disabled} onCheckedChange={setOverload429ReminderDisabled} aria-label={t("provider.overload429Reminder")} />
+            <Switch
+              checked={reminder429Disabled}
+              onCheckedChange={setOverload429ReminderDisabled}
+              aria-label={t("provider.overload429Reminder")}
+            />
           </div>
         </div>
       )}
@@ -1919,9 +1928,7 @@ export function ProviderRow({
               variant="outline"
               size="sm"
               disabled={busy || syncingModels || promptBusy || (!native && !configured)}
-              title={
-                !native && !configured ? t("provider.saveBeforeSync") : t("provider.syncModelsDescription")
-              }
+              title={!native && !configured ? t("provider.saveBeforeSync") : t("provider.syncModelsDescription")}
               onClick={() => (native ? void syncNativeInline() : void syncBuiltInModels())}
             >
               {syncingModels || promptBusy ? (
@@ -1979,7 +1986,7 @@ export function ProviderRow({
               {t("provider.freeOnly")}
             </button>
           )}
-          <span className="shrink-0 whitespace-nowrap text-[11px] tabular-nums text-muted-foreground">
+          <span className="shrink-0 text-[11px] whitespace-nowrap text-muted-foreground tabular-nums">
             {t("provider.showCount", { shown: filteredRows.length, total: modelRows.length })}
           </span>
           <span className="h-4 w-px shrink-0 bg-border/50" aria-hidden="true" />
@@ -2004,7 +2011,7 @@ export function ProviderRow({
             <Button variant="ghost" size="sm" disabled={selectedKeys.size === 0} onClick={clearSelection}>
               {t("provider.clearSelection")}
             </Button>
-            <span className="text-[11px] tabular-nums text-muted-foreground">
+            <span className="text-[11px] text-muted-foreground tabular-nums">
               {t("provider.selectedCount", { count: selectedKeys.size })}
             </span>
             <div className="ms-auto flex flex-wrap items-center gap-1.5">
@@ -2074,7 +2081,9 @@ export function ProviderRow({
             />
           </div>
         )}
-        <p className="text-xs text-muted-foreground"><span title={t("provider.modelsDescriptionLong")}>{t("provider.modelsDescription")}</span></p>
+        <p className="text-xs text-muted-foreground">
+          <span title={t("provider.modelsDescriptionLong")}>{t("provider.modelsDescription")}</span>
+        </p>
         {/* Quiet, one line: the rows are still in the table below, they just are not offered
             anywhere until the provider serves them again. */}
         {retired.length > 0 && (
@@ -2090,9 +2099,7 @@ export function ProviderRow({
                 first column becomes the "select all shown" checkbox, sharing the drag column. */}
             {selectionMode ? (
               <Checkbox
-                checked={
-                  filteredRows.length > 0 && filteredRows.every((row) => selectedKeys.has(row.key))
-                }
+                checked={filteredRows.length > 0 && filteredRows.every((row) => selectedKeys.has(row.key))}
                 onCheckedChange={(checked) => (checked ? selectAllFiltered() : clearSelection())}
                 aria-label={t("provider.selectAll")}
                 className="justify-self-center"
@@ -2118,9 +2125,7 @@ export function ProviderRow({
             <div
               key={row.key}
               data-model-row={row.key}
-              style={
-                draggingKey === row.key ? { transform: `translateY(${dragOffset}px)` } : undefined
-              }
+              style={draggingKey === row.key ? { transform: `translateY(${dragOffset}px)` } : undefined}
               className={cn(
                 "rounded-lg transition-shadow",
                 draggingKey === row.key && "relative z-10 opacity-70 shadow-lg",
@@ -2130,108 +2135,108 @@ export function ProviderRow({
                   "ring-2 ring-primary/50 ring-offset-1 ring-offset-background"
               )}
             >
-            <Collapsible
-              className={cn(
-                "group rounded-lg border",
-                row.enabled ? "" : "opacity-60",
-                // The model a new chat starts on stands out from the rest of the list.
-                (native ? row.api_id : gatewayModelId(provider.id, row.api_id)) === defaultChoice?.model &&
-                  "border-primary/40 bg-primary/5"
-              )}
-            >
-              {/* Collapsed: the name and the actions only. Editing fields open on demand, so a
+              <Collapsible
+                className={cn(
+                  "group rounded-lg border",
+                  row.enabled ? "" : "opacity-60",
+                  // The model a new chat starts on stands out from the rest of the list.
+                  (native ? row.api_id : gatewayModelId(provider.id, row.api_id)) === defaultChoice?.model &&
+                    "border-primary/40 bg-primary/5"
+                )}
+              >
+                {/* Collapsed: the name and the actions only. Editing fields open on demand, so a
                   provider with a dozen models stays readable instead of a wall of inputs. */}
-              <div className="grid items-center gap-2 px-3 py-2 sm:grid-cols-[1.25rem_1rem_minmax(0,1fr)_3rem_5.5rem_2rem_2rem]">
-                {/* The saved array is the order every picker reads; drag this handle to change it.
+                <div className="grid items-center gap-2 px-3 py-2 sm:grid-cols-[1.25rem_1rem_minmax(0,1fr)_3rem_5.5rem_2rem_2rem]">
+                  {/* The saved array is the order every picker reads; drag this handle to change it.
                     Pointer events, not HTML5 drag: WKWebView shows the drag image but never
                     delivers the drop, so the order never changed. */}
-                {selectionMode ? (
-                  // Bulk mode borrows the drag column: the grid keeps its seven tracks and the
-                  // row does not shift by one cell when the mode is toggled.
-                  <Checkbox
-                    checked={selectedKeys.has(row.key)}
-                    onCheckedChange={() => toggleSelection(row.key)}
-                    aria-label={t("provider.selectModel", {
-                      name: row.label.trim() || row.api_id.trim() || row.key
-                    })}
-                    className="justify-self-center"
-                  />
-                ) : (
-                  <span
-                    role="button"
-                    tabIndex={-1}
-                    aria-label={t("provider.dragModel")}
-                    aria-disabled={busy || filtering}
-                    title={t("provider.dragModel")}
-                    className={cn(
-                      "model-drag-handle touch-none text-muted-foreground opacity-60 transition-opacity select-none group-hover:opacity-100 focus-visible:opacity-100",
-                      filtering ? "cursor-not-allowed opacity-30" : "cursor-grab active:cursor-grabbing"
-                    )}
-                    onPointerDown={(event) => {
-                      if (!filtering) startPointerDrag(event, row.key)
-                    }}
-                    onPointerMove={movePointerDrag}
-                    onPointerUp={endPointerDrag}
-                    onPointerCancel={endPointerDrag}
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    <GripVerticalIcon className="size-3.5" aria-hidden="true" />
-                  </span>
-                )}
-                <CollapsibleTrigger
-                  render={
-                    <button
-                      type="button"
-                      className="col-span-2 col-start-2 flex min-w-0 items-center gap-1.5 p-0 py-0.5 text-start"
+                  {selectionMode ? (
+                    // Bulk mode borrows the drag column: the grid keeps its seven tracks and the
+                    // row does not shift by one cell when the mode is toggled.
+                    <Checkbox
+                      checked={selectedKeys.has(row.key)}
+                      onCheckedChange={() => toggleSelection(row.key)}
+                      aria-label={t("provider.selectModel", {
+                        name: row.label.trim() || row.api_id.trim() || row.key
+                      })}
+                      className="justify-self-center"
                     />
-                  }
-                >
-                  <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground transition-transform group-aria-expanded:rotate-180" />
-                  {/* Name over id: one column, read top-down, so a long id never steals width
+                  ) : (
+                    <span
+                      role="button"
+                      tabIndex={-1}
+                      aria-label={t("provider.dragModel")}
+                      aria-disabled={busy || filtering}
+                      title={t("provider.dragModel")}
+                      className={cn(
+                        "model-drag-handle touch-none text-muted-foreground opacity-60 transition-opacity select-none group-hover:opacity-100 focus-visible:opacity-100",
+                        filtering ? "cursor-not-allowed opacity-30" : "cursor-grab active:cursor-grabbing"
+                      )}
+                      onPointerDown={(event) => {
+                        if (!filtering) startPointerDrag(event, row.key)
+                      }}
+                      onPointerMove={movePointerDrag}
+                      onPointerUp={endPointerDrag}
+                      onPointerCancel={endPointerDrag}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <GripVerticalIcon className="size-3.5" aria-hidden="true" />
+                    </span>
+                  )}
+                  <CollapsibleTrigger
+                    render={
+                      <button
+                        type="button"
+                        className="col-span-2 col-start-2 flex min-w-0 items-center gap-1.5 p-0 py-0.5 text-start"
+                      />
+                    }
+                  >
+                    <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground transition-transform group-aria-expanded:rotate-180" />
+                    {/* Name over id: one column, read top-down, so a long id never steals width
                       from the name. */}
-                  <span className="flex min-w-0 flex-col">
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <span className="min-w-0 truncate text-sm leading-4">
-                        {row.label.trim() || row.api_id.trim() || t("provider.modelNamePlaceholder")}
-                      </span>
-                      {newModelIdSet.has(row.api_id) && (
-                        <span className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-1.5 text-[10px] leading-4 text-primary">
-                          {t("provider.newModel")}
+                    <span className="flex min-w-0 flex-col">
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="min-w-0 truncate text-sm leading-4">
+                          {row.label.trim() || row.api_id.trim() || t("provider.modelNamePlaceholder")}
                         </span>
-                      )}
-                      {/* 免费模型的两个标签，都来自公开目录字段：推荐=能力参考分前三，
+                        {newModelIdSet.has(row.api_id) && (
+                          <span className="shrink-0 rounded-full border border-primary/30 bg-primary/10 px-1.5 text-[10px] leading-4 text-primary">
+                            {t("provider.newModel")}
+                          </span>
+                        )}
+                        {/* 免费模型的两个标签，都来自公开目录字段：推荐=能力参考分前三，
                           多模态=输入模态除文本外还有图片/音频/视频/文件。 */}
-                      {freeProfiles?.get(row.api_id)?.recommended === true && (
-                        <span
-                          className="shrink-0 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 text-[10px] leading-4 text-emerald-600 dark:text-emerald-400"
-                          title={t("provider.freeRecommendedHint", {
-                            score: freeProfiles.get(row.api_id)?.score ?? 0
-                          })}
-                        >
-                          {t("provider.freeRecommended")}
-                        </span>
-                      )}
-                      {freeProfiles?.get(row.api_id)?.multimodal === true && (
-                        <span
-                          className="shrink-0 rounded-full border border-sky-500/30 bg-sky-500/10 px-1.5 text-[10px] leading-4 text-sky-600 dark:text-sky-400"
-                          title={t("provider.modelMultimodalHint")}
-                        >
-                          {t("provider.modelMultimodal")}
-                        </span>
-                      )}
-                      {retiredIds.has(row.api_id) && (
-                        <span className="shrink-0 rounded-full border border-border bg-muted/40 px-1.5 text-[10px] leading-4 text-muted-foreground">
-                          {t("provider.modelWithdrawn")}
+                        {freeProfiles?.get(row.api_id)?.recommended === true && (
+                          <span
+                            className="shrink-0 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 text-[10px] leading-4 text-emerald-600 dark:text-emerald-400"
+                            title={t("provider.freeRecommendedHint", {
+                              score: freeProfiles.get(row.api_id)?.score ?? 0
+                            })}
+                          >
+                            {t("provider.freeRecommended")}
+                          </span>
+                        )}
+                        {freeProfiles?.get(row.api_id)?.multimodal === true && (
+                          <span
+                            className="shrink-0 rounded-full border border-sky-500/30 bg-sky-500/10 px-1.5 text-[10px] leading-4 text-sky-600 dark:text-sky-400"
+                            title={t("provider.modelMultimodalHint")}
+                          >
+                            {t("provider.modelMultimodal")}
+                          </span>
+                        )}
+                        {retiredIds.has(row.api_id) && (
+                          <span className="shrink-0 rounded-full border border-border bg-muted/40 px-1.5 text-[10px] leading-4 text-muted-foreground">
+                            {t("provider.modelWithdrawn")}
+                          </span>
+                        )}
+                      </span>
+                      {row.api_id.trim() !== "" && (
+                        <span className="min-w-0 truncate font-mono text-[10px] leading-3.5 text-muted-foreground">
+                          {row.api_id}
                         </span>
                       )}
                     </span>
-                    {row.api_id.trim() !== "" && (
-                      <span className="min-w-0 truncate font-mono text-[10px] leading-3.5 text-muted-foreground">
-                        {row.api_id}
-                      </span>
-                    )}
-                  </span>
-                </CollapsibleTrigger>
+                  </CollapsibleTrigger>
                   <Switch
                     aria-label={t("provider.modelEnabled")}
                     title={t("provider.modelEnabled")}
@@ -2242,9 +2247,7 @@ export function ProviderRow({
                   {/* Default effort for this model: overrides the catalog default in new chats. */}
                   <Select
                     value={String(row.defaultReasoningLevel ?? "").trim() || "auto"}
-                    onValueChange={(value: string | null) =>
-                      editDefaultEffort(row.key, value ?? "auto")
-                    }
+                    onValueChange={(value: string | null) => editDefaultEffort(row.key, value ?? "auto")}
                   >
                     <SelectTrigger
                       className="h-8 w-full text-xs"
@@ -2301,80 +2304,37 @@ export function ProviderRow({
                   >
                     <Trash2Icon className="size-4" />
                   </Button>
-              </div>
-              <CollapsibleContent className="space-y-3 border-t px-3 py-3">
-                <div className="grid items-start gap-3 sm:grid-cols-2">
-                  <label className="grid gap-1 text-xs">
-                    <span className="text-muted-foreground">{t("provider.modelName")}</span>
-                    <Input
-                      value={row.label}
-                      placeholder={t("provider.modelNamePlaceholder")}
-                      aria-label={`${t("provider.modelName")} ${index + 1}`}
-                      onChange={(event) => editRow(row.key, { label: event.target.value })}
-                    />
-                  </label>
-                  <label className="grid gap-1 text-xs">
-                    <span className="text-muted-foreground">{t("provider.modelId")}</span>
-                    <Input
-                      value={row.api_id}
-                      spellCheck={false}
-                      className="font-mono text-xs"
-                      placeholder={t("provider.modelIdPlaceholder")}
-                      aria-label={`${t("provider.modelId")} ${index + 1}`}
-                      onChange={(event) => editRow(row.key, { api_id: event.target.value })}
-                    />
-                  </label>
                 </div>
-                {native ? (
-                  // Native GPT context is owned by the engine, so the context-window field (only
-                  // meaningful for custom gateway providers, per modelContextHint) is hidden here.
-                  <div className="grid gap-2">
-                    <span className="text-xs text-muted-foreground">{t("provider.modelEfforts")}</span>
-                    {/* Effort levels are picked, not typed: a typo here silently dropped the whole
-                        ladder and the picker then offered no Effort at all. */}
-                    <div className="flex flex-wrap gap-1.5">
-                      {effortChoices(row).map((level) => {
-                        const selected = effortLevels(row).includes(level)
-                        return (
-                          <button
-                            key={level}
-                            type="button"
-                            aria-pressed={selected}
-                            aria-label={level}
-                            className={cn(
-                              "rounded-full border px-2 py-0.5 text-xs transition-colors",
-                              selected
-                                ? "border-transparent bg-primary text-primary-foreground"
-                                : "border-border text-muted-foreground hover:text-foreground"
-                            )}
-                            onClick={() =>
-                              editRow(row.key, { reasoningLevels: toggleEffortLevel(row, level).join(", ") })
-                            }
-                          >
-                            {level}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="grid items-start gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+                <CollapsibleContent className="space-y-3 border-t px-3 py-3">
+                  <div className="grid items-start gap-3 sm:grid-cols-2">
                     <label className="grid gap-1 text-xs">
-                      <span className="text-muted-foreground">{t("provider.modelContext")}</span>
+                      <span className="text-muted-foreground">{t("provider.modelName")}</span>
                       <Input
-                        type="number"
-                        inputMode="numeric"
-                        min={1}
-                        value={row.contextWindow}
-                        placeholder={t("provider.modelContextPlaceholder")}
-                        aria-label={`${t("provider.modelContext")} ${index + 1}`}
-                        onChange={(event) => editRow(row.key, { contextWindow: event.target.value })}
+                        value={row.label}
+                        placeholder={t("provider.modelNamePlaceholder")}
+                        aria-label={`${t("provider.modelName")} ${index + 1}`}
+                        onChange={(event) => editRow(row.key, { label: event.target.value })}
                       />
                     </label>
+                    <label className="grid gap-1 text-xs">
+                      <span className="text-muted-foreground">{t("provider.modelId")}</span>
+                      <Input
+                        value={row.api_id}
+                        spellCheck={false}
+                        className="font-mono text-xs"
+                        placeholder={t("provider.modelIdPlaceholder")}
+                        aria-label={`${t("provider.modelId")} ${index + 1}`}
+                        onChange={(event) => editRow(row.key, { api_id: event.target.value })}
+                      />
+                    </label>
+                  </div>
+                  {native ? (
+                    // Native GPT context is owned by the engine, so the context-window field (only
+                    // meaningful for custom gateway providers, per modelContextHint) is hidden here.
                     <div className="grid gap-2">
                       <span className="text-xs text-muted-foreground">{t("provider.modelEfforts")}</span>
                       {/* Effort levels are picked, not typed: a typo here silently dropped the whole
-                          ladder and the picker then offered no Effort at all. */}
+                        ladder and the picker then offered no Effort at all. */}
                       <div className="flex flex-wrap gap-1.5">
                         {effortChoices(row).map((level) => {
                           const selected = effortLevels(row).includes(level)
@@ -2384,9 +2344,6 @@ export function ProviderRow({
                               type="button"
                               aria-pressed={selected}
                               aria-label={level}
-                              // The name alone ("xhigh", "max") says nothing about what it costs,
-                              // so the same wording used by 默认模型 is available on hover.
-                              title={t(`defaultModel.effortLevels.${level}`, { defaultValue: "" })}
                               className={cn(
                                 "rounded-full border px-2 py-0.5 text-xs transition-colors",
                                 selected
@@ -2403,27 +2360,69 @@ export function ProviderRow({
                         })}
                       </div>
                     </div>
-                  </div>
-                )}
-                <label className="grid gap-1 text-xs">
-                  <span className="text-muted-foreground">{t("provider.modelDefaultEffort")}</span>
-                  <ModelEffortSelect
-                    levels={row.reasoningLevels}
-                    value={row.defaultReasoningLevel}
-                    onChange={(next) => editDefaultEffort(row.key, next)}
-                    ariaLabel={`${t("provider.modelDefaultEffort")} ${index + 1}`}
-                  />
-                </label>
-              </CollapsibleContent>
-            </Collapsible>
+                  ) : (
+                    <div className="grid items-start gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+                      <label className="grid gap-1 text-xs">
+                        <span className="text-muted-foreground">{t("provider.modelContext")}</span>
+                        <Input
+                          type="number"
+                          inputMode="numeric"
+                          min={1}
+                          value={row.contextWindow}
+                          placeholder={t("provider.modelContextPlaceholder")}
+                          aria-label={`${t("provider.modelContext")} ${index + 1}`}
+                          onChange={(event) => editRow(row.key, { contextWindow: event.target.value })}
+                        />
+                      </label>
+                      <div className="grid gap-2">
+                        <span className="text-xs text-muted-foreground">{t("provider.modelEfforts")}</span>
+                        {/* Effort levels are picked, not typed: a typo here silently dropped the whole
+                          ladder and the picker then offered no Effort at all. */}
+                        <div className="flex flex-wrap gap-1.5">
+                          {effortChoices(row).map((level) => {
+                            const selected = effortLevels(row).includes(level)
+                            return (
+                              <button
+                                key={level}
+                                type="button"
+                                aria-pressed={selected}
+                                aria-label={level}
+                                // The name alone ("xhigh", "max") says nothing about what it costs,
+                                // so the same wording used by 默认模型 is available on hover.
+                                title={t(`defaultModel.effortLevels.${level}`, { defaultValue: "" })}
+                                className={cn(
+                                  "rounded-full border px-2 py-0.5 text-xs transition-colors",
+                                  selected
+                                    ? "border-transparent bg-primary text-primary-foreground"
+                                    : "border-border text-muted-foreground hover:text-foreground"
+                                )}
+                                onClick={() =>
+                                  editRow(row.key, { reasoningLevels: toggleEffortLevel(row, level).join(", ") })
+                                }
+                              >
+                                {level}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  <label className="grid gap-1 text-xs">
+                    <span className="text-muted-foreground">{t("provider.modelDefaultEffort")}</span>
+                    <ModelEffortSelect
+                      levels={row.reasoningLevels}
+                      value={row.defaultReasoningLevel}
+                      onChange={(next) => editDefaultEffort(row.key, next)}
+                      ariaLabel={`${t("provider.modelDefaultEffort")} ${index + 1}`}
+                    />
+                  </label>
+                </CollapsibleContent>
+              </Collapsible>
             </div>
           ))}
         </div>
-        {!native && (
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            {t("provider.modelContextHint")}
-          </p>
-        )}
+        {!native && <p className="text-xs leading-relaxed text-muted-foreground">{t("provider.modelContextHint")}</p>}
         {modelsError !== null && (
           <p className="text-xs text-destructive" role="alert">
             {modelsError}
@@ -2432,7 +2431,7 @@ export function ProviderRow({
         {/* The header's 保存模型 button is the single entry point; a second pair here read as
             three competing saves (user feedback), and 取消 only re-read the same snapshot. */}
       </section>
-      {/* 保存连接 now lives under 连接设置. Only test/result stay at the bottom, so a long model
+      {/* 保存配置 now lives under 连接设置. Only test/result stay at the bottom, so a long model
           table can no longer push the save action out of view. */}
       {!native && (
         <ProviderActions
@@ -2462,7 +2461,7 @@ export function ProviderRow({
               <button
                 type="button"
                 aria-label={t("provider.syncModelsKeyHelpLabel")}
-                className="text-muted-foreground hover:text-foreground cursor-help"
+                className="cursor-help text-muted-foreground hover:text-foreground"
                 onPointerEnter={() => toast.info(t("provider.syncModelsKeyHelp"))}
                 onFocus={() => toast.info(t("provider.syncModelsKeyHelp"))}
               >
@@ -2711,7 +2710,9 @@ export function CustomProviderEditor({
       // the moment the reader is done with it: drop it instead of shipping "My Model / model-id"
       // as a real model the picker would offer.
       if (provider === null && models.length > 1)
-        models = models.filter((model) => !(model.api_id === PLACEHOLDER_MODEL_ID && model.label === PLACEHOLDER_MODEL_LABEL))
+        models = models.filter(
+          (model) => !(model.api_id === PLACEHOLDER_MODEL_ID && model.label === PLACEHOLDER_MODEL_LABEL)
+        )
       setModelsError(null)
     } catch (error) {
       setModelsError(describe(error))

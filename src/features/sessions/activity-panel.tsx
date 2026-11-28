@@ -34,7 +34,7 @@ import { Kbd } from "@/components/ui/kbd"
 import { useCmdHeld } from "@/hooks/use-cmd-held"
 import { focusChatSession } from "@/lib/chat-window"
 import { useChatWindowSurface } from "@/lib/chat-window-state"
-import { stopSession, useApp } from "@/lib/client"
+import { stopSessionAndReopen, useApp } from "@/lib/client"
 import { openExternal } from "@/lib/open"
 import { isMac } from "@/lib/platform"
 import { displayShortcut } from "@/lib/shortcut-formatter"
@@ -282,7 +282,7 @@ function ActivityRow({
         hint={hint}
         actions={
           /* Session columns and activity rows close by session ID without stopping the shared agent. */
-          <RowStopButton title={t("sidebar.stop")} onStop={() => report(stopSession(sessionRow.sessionId))} />
+          <RowStopButton title={t("sidebar.stop")} onStop={() => report(stopSessionAndReopen(sessionRow.sessionId))} />
         }
       />
       {/* Branch lines connect running tasks to their session; Runtime removes terminal tasks. */}

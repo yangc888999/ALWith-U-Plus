@@ -18,8 +18,9 @@ import { info } from "@tauri-apps/plugin-log"
 import { selectedModelId } from "@/agent/native-models"
 import { client } from "@/lib/client"
 import { parseModelIdentity, sameModelIdentity } from "@/lib/model-identity"
-import { activeTool } from "./turn-activity"
 import { overloadNoticeEnabled } from "@/lib/overload-retry-settings"
+
+import { activeTool } from "./turn-activity"
 
 type StallReason = "overloaded" | "no_ack"
 type StallEvent = {
@@ -169,9 +170,11 @@ export async function startModelOverloadAlerts(): Promise<() => void> {
     if (now - (lastShown.get(dedupeKey) ?? 0) < 60_000) return
     // Tokens are still being billed and the store is still applying updates: output is flowing, so
     // this turn is not stalled. A retry notice from an earlier request must not stick to it — that
-    // is what made every later turn open with the same "at capacity" line. Bridge-tagged replays
-    // carry their own request identity and must not be dropped by this clock heuristic.
-    if (typeof requestId !== "string" && session.clock > 0 && now - session.clock < 5_000) return
+    // is what made every later turn open with the same "at capacity" line. A request id keeps
+    // distinct upstream attempts apart, but it does not prove this turn is still silent: a gateway
+    // idle timer can fire after the stream resumed. Apply the freshness check to every event; a
+    // genuinely stalled turn still has an old clock and publishes normally.
+    if (session.clock > 0 && session.clock <= now && now - session.clock < 5_000) return
     // The bridge only sends `no_ack` while a request is open upstream. If the turn has since moved
     // on to a local tool, that request is gone and the turn is not stalled — drop the notice.
     if (reason === "no_ack" && isRunningLocally(session)) return

@@ -11,7 +11,7 @@
 // 指令), so this goes through the same `client.prompt` path: one action, one code path, and the
 // nudge shows up in the transcript as the message it is.
 
-import type { Session } from "@alwith/api"
+import { ConfigStaleError, type Session } from "@alwith/api"
 import { info } from "@tauri-apps/plugin-log"
 import { toast } from "sonner"
 
@@ -22,9 +22,21 @@ export async function nudgeTurn(session: Session): Promise<void> {
   const text = i18n.t("chat.turnProgress.nudgeText")
   void info(`[nudge] session=${session.id} text=${text}`)
   try {
+    // A model switch can land between the row's render and this send. The base client updates the
+    // session's configOptions/revision from that refusal and removes the failed local prompt, so
+    // one retry is enough to send against the current configuration instead of surfacing a false
+    // "could not send" toast.
+    const send = async (attempt: number): Promise<void> => {
+      try {
+        await client.prompt(session.id, [{ type: "text", text }])
+      } catch (error) {
+        if (attempt === 0 && error instanceof ConfigStaleError) return send(1)
+        throw error
+      }
+    }
     // Deliberately not awaited to completion: `prompt` settles when the whole turn ends, and this
     // turn is already running. A refusal raised before dispatch still surfaces as a toast.
-    void client.prompt(session.id, [{ type: "text", text }]).catch((error: unknown) => {
+    void send(0).catch((error: unknown) => {
       void info(`[nudge] failed session=${session.id} error=${String(error)}`)
       toast.error(i18n.t("chat.turnProgress.nudgeFailed"))
     })

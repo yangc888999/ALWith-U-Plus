@@ -1,3 +1,4 @@
+import { ConfigStaleError } from "@alwith/api"
 import { beforeEach, expect, test, vi } from "vitest"
 
 import { initI18n } from "@/lib/i18n"
@@ -25,6 +26,16 @@ test("a nudge is an ordinary prompt into the turn that is already running", asyn
   // Same path the composer takes mid-turn, so the nudge lands in the transcript as the message it
   // is and no second mechanism has to be kept in sync.
   expect(host.prompt).toHaveBeenCalledWith("chat-1", [{ type: "text", text: "继续" }])
+})
+
+test("a nudge retries once after a model configuration revision changes", async () => {
+  host.prompt
+    .mockRejectedValueOnce(new ConfigStaleError({ expected: 1, actual: 2, configOptions: [] }))
+    .mockResolvedValueOnce("receipt-after-retry")
+  await nudgeTurn({ id: "chat-1" } as never)
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(host.prompt).toHaveBeenCalledTimes(2)
+  expect(host.error).not.toHaveBeenCalled()
 })
 
 test("a refused nudge is reported instead of vanishing", async () => {

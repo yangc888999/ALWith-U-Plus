@@ -2,7 +2,8 @@ import type { Session } from "@alwith/api"
 import { useMemo } from "react"
 
 /** Stable empty transcript: the composer never reads items, and replacing it every streamed token
- *  would force the input subtree through the same render as the transcript. */
+ *  would force the input subtree through the same render as the transcript. The status row inside
+ *  the composer subscribes to the live session separately, so it still sees thoughts and tools. */
 const NO_ITEMS: Session["items"] = []
 
 /**

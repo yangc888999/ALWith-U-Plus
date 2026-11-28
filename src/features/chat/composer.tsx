@@ -3,11 +3,13 @@
  * model catalog and prediction preference.
  */
 import type * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable"
+import type { Session } from "@alwith/api"
 import { usePromptInputAttachments } from "@alwith/module-chat/composer-context"
 import { Composer, type ComposerProps, setComposerDraft, useComposer } from "@alwith/module-chat/conversation"
 import {
   memo,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -32,8 +34,8 @@ import { ActivePreviewChip } from "@/features/workspace/active-preview-chip"
 import { client } from "@/lib/client"
 import { describeError } from "@/lib/error-text"
 import { groupByDirectory } from "@/lib/groups"
-import { isTemporaryChatDir } from "@/lib/quick-chat"
 import { isQueueCancelled } from "@/lib/queued-prompt"
+import { isTemporaryChatDir } from "@/lib/quick-chat"
 import { orchestrationAllowedFor } from "@/lib/session-orchestration"
 import { useHandoffBusy } from "@/lib/use-surface-operation"
 
@@ -60,7 +62,17 @@ const noHandOff: NonNullable<ComposerProps["onHandOff"]> = () => {}
 function ComposerCaretGuard({ sessionId }: { sessionId: string }) {
   const items = useStore(client.store, (state) => state.sessions[sessionId]?.items)
   const caret = useRef<{ value: string; start: number; end: number } | null>(null)
-  const record = useCallback(() => {
+  // Touching the selection while an IME is composing cancels the composition in WebKit: a pinyin
+  // buffer disappears after its first letter, and the letters that had already been typed vanish.
+  // The guard stays completely out of the field from compositionstart until one frame after
+  // compositionend, including the trailing input event that commits the composed text.
+  const composing = useRef(false)
+  const compositionFrame = useRef(0)
+  const record = useCallback((event?: Event) => {
+    // Some IMEs report the composition only on the input event. Treat that signal exactly like
+    // compositionstart so a caret restore can never run inside a composition that we are seeing
+    // for the first time on this keystroke.
+    if (event instanceof InputEvent && event.isComposing) composing.current = true
     const field = document.activeElement
     if (!(field instanceof HTMLTextAreaElement) || field.closest("[data-composer]") === null) return
     caret.current = {
@@ -71,16 +83,41 @@ function ComposerCaretGuard({ sessionId }: { sessionId: string }) {
   }, [])
 
   useEffect(() => {
-    const events = ["focusin", "input", "keyup", "mouseup", "compositionend"] as const
+    const inComposer = (event: Event): boolean => {
+      const target = event.target
+      return target instanceof HTMLTextAreaElement && target.closest("[data-composer]") !== null
+    }
+    const start = (event: Event): void => {
+      if (!inComposer(event)) return
+      composing.current = true
+      if (compositionFrame.current !== 0) cancelAnimationFrame(compositionFrame.current)
+      compositionFrame.current = 0
+    }
+    const end = (event: Event): void => {
+      if (!inComposer(event)) return
+      if (compositionFrame.current !== 0) cancelAnimationFrame(compositionFrame.current)
+      compositionFrame.current = requestAnimationFrame(() => {
+        compositionFrame.current = 0
+        composing.current = false
+        record()
+      })
+    }
+    const events = ["focusin", "beforeinput", "input", "keyup", "mouseup", "compositionend"] as const
     for (const event of events) document.addEventListener(event, record, true)
+    document.addEventListener("compositionstart", start, true)
+    document.addEventListener("compositionend", end, true)
     return () => {
       for (const event of events) document.removeEventListener(event, record, true)
+      document.removeEventListener("compositionstart", start, true)
+      document.removeEventListener("compositionend", end, true)
+      if (compositionFrame.current !== 0) cancelAnimationFrame(compositionFrame.current)
     }
   }, [record])
 
   useLayoutEffect(() => {
     // Reading the item list makes this effect run after every streamed token commit.
     if (items === undefined) return
+    if (composing.current) return
     const field = document.activeElement
     if (!(field instanceof HTMLTextAreaElement) || field.closest("[data-composer]") === null) return
     const saved = caret.current
@@ -94,6 +131,16 @@ function ComposerCaretGuard({ sessionId }: { sessionId: string }) {
   }, [items, record])
 
   return null
+}
+
+/**
+ * The composer gets a stable items-free projection so a streamed token cannot re-render the
+ * textarea. The status row still has to see those tokens to name the current step, so it subscribes
+ * to the live session here and re-renders only its own leaf — never the input subtree.
+ */
+function LiveTurnProgressBar({ session }: { session: Session }): ReactNode {
+  const live = useStore(client.store, (state) => state.sessions[session.id])
+  return <TurnProgressBar session={live ?? session} />
 }
 
 /** The input's height, dragged from the top edge of the card and remembered across launches. */
@@ -443,7 +490,7 @@ function ChatComposerImpl({
               <QueuedPromptList session={props.session} embedded />
               <div className="flex w-full min-w-0 items-center justify-between gap-2">
                 <div className="min-w-0 flex-1">
-                  <TurnProgressBar session={props.session} />
+                  <LiveTurnProgressBar session={props.session} />
                 </div>
               </div>
               <div className="flex w-full min-w-0 items-center justify-between gap-2">

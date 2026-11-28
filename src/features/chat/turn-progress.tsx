@@ -19,21 +19,20 @@ import { AlertTriangleIcon, CircleHelpIcon, Loader2Icon } from "lucide-react"
 import { type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { useTranslation } from "react-i18next"
 import { useStore } from "zustand"
-import { subscribeGroupSpeaker } from "@/lib/group-runtime"
 
 import { selectedModelId } from "@/agent/native-models"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { autoNudgeEnabled, subscribeAutoNudge } from "@/lib/auto-nudge"
+import { getQueueSendMode, subscribeChatDisplayPreferences } from "@/lib/chat-display-preferences"
+import { client } from "@/lib/client"
+import { subscribeGroupSpeaker } from "@/lib/group-runtime"
+import { displayModelLabel } from "@/lib/providers"
+import { orchestrationFor, subscribeOrchestration } from "@/lib/session-orchestration"
+import { cn } from "@/lib/utils"
+
 import { dismissOverload, matchesReportedModel, overloadNotice, subscribeOverload } from "./model-overload-alert"
 import { nudgeTurn } from "./nudge-turn"
 import { activeTool, awaitingUser } from "./turn-activity"
-import { autoNudgeEnabled, subscribeAutoNudge } from "@/lib/auto-nudge"
-import { getQueueSendMode, subscribeChatDisplayPreferences } from "@/lib/chat-display-preferences"
-import { displayModelLabel } from "@/lib/providers"
-import { cn } from "@/lib/utils"
-import { client } from "@/lib/client"
-import {
-  orchestrationFor,
-  subscribeOrchestration
-} from "@/lib/session-orchestration"
 
 /** Per-session turn clock. `last` only moves when the store reports new work, so it doubles as
  *  the "how long has it been quiet" anchor. */
@@ -82,7 +81,8 @@ function trackTurn(session: Session): Turn | null {
     // The package's `clock` is an epoch timestamp of the last applied update, so a strip mounted
     // mid-turn starts from the real last activity instead of pretending the turn just began.
     const observed = session.clock > 0 && session.clock <= now ? session.clock : now
-    const start = lastUser !== undefined && lastUser.at <= now && now - lastUser.at < 6 * 60 * 60_000 ? lastUser.at : observed
+    const start =
+      lastUser !== undefined && lastUser.at <= now && now - lastUser.at < 6 * 60 * 60_000 ? lastUser.at : observed
     const turn = {
       start,
       last: Math.max(start, observed),
@@ -140,7 +140,9 @@ function stageOf(session: Session): Stage {
   if (session.state === "requires_action") return { key: "chat.turnProgress.confirm" }
   let index = session.items.length - 1
   while (index >= 0 && session.items[index]?.kind !== "user") index -= 1
-  const done = session.items.slice(index + 1).filter((item) => item.kind === "tool" && item.status === "completed").length
+  const done = session.items
+    .slice(index + 1)
+    .filter((item) => item.kind === "tool" && item.status === "completed").length
   const waiting = (): Stage =>
     done === 0 ? { key: "chat.turnProgress.waiting" } : { key: "chat.turnProgress.waitingAfterTools", count: done }
   const last = session.items[session.items.length - 1]
@@ -178,7 +180,7 @@ type ShortState =
  *  sentence on screen. Add an entry here whenever a new step deserves its own wording; the row
  *  always stays one short line. */
 const SHORT_STATE: Record<string, ShortState> = {
-  "chat.turnProgress.waiting": "stateConnecting",
+  "chat.turnProgress.waiting": "stateThinking",
   "chat.turnProgress.waitingAfterTools": "stateThinking",
   "chat.turnProgress.thinking": "stateThinking",
   "chat.turnProgress.writing": "stateReplying",
@@ -279,20 +281,55 @@ function AutoNudger({
     watch.current.nudgedAt = now
     onCountChange(watch.current.count)
     void nudgeTurn(session)
-  }, [
-    session,
-    turnStart,
-    turnLast,
-    enabled,
-    steering,
-    localBusy,
-    parked,
-    blocked,
-    silentSeconds,
-    onCountChange
-  ])
+  }, [session, turnStart, turnLast, enabled, steering, localBusy, parked, blocked, silentSeconds, onCountChange])
 
   return null
+}
+
+/**
+ * The turn sentence scrolls only when it genuinely cannot fit.
+ *
+ * The row is one line by design; at a narrow composer the vendor + model + state used to be cut
+ * mid-word, hiding the part the row exists to explain. A single copy stays still when it fits;
+ * when it does not, two copies use the shared marquee keyframes for a seamless loop. Measuring the
+ * first copy's natural width (not the animated track) means resizing back to a wide window stops
+ * the motion instead of leaving a permanently looping row.
+ */
+function StateMarquee({ text }: { text: string }): ReactNode {
+  const box = useRef<HTMLSpanElement>(null)
+  const copy = useRef<HTMLSpanElement>(null)
+  const [looping, setLooping] = useState(false)
+
+  useEffect(() => {
+    const host = box.current
+    const first = copy.current
+    if (host === null || first === null) return
+    const check = (): void => setLooping(first.offsetWidth > host.clientWidth + 2)
+    check()
+    if (typeof ResizeObserver !== "function") return
+    const observer = new ResizeObserver(check)
+    observer.observe(host)
+    return () => observer.disconnect()
+  }, [text])
+
+  return (
+    <span
+      ref={box}
+      className="relative min-w-0 shrink overflow-hidden"
+      data-turn-state-marquee={looping ? "" : undefined}
+    >
+      <span className={cn("inline-flex w-max whitespace-nowrap", looping && "alwith-marquee")}>
+        <span ref={copy} className={looping ? "pe-4" : undefined}>
+          {text}
+        </span>
+        {looping && (
+          <span className="pe-4" aria-hidden="true">
+            {text}
+          </span>
+        )}
+      </span>
+    </span>
+  )
 }
 
 export function TurnProgressBar({ session }: { session: Session }): ReactNode {
@@ -386,8 +423,7 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
   let rolePrefix: string | null = null
   let roleModel: string | null = null
   if (orchestration !== null && phase !== null) {
-    const roleModelId =
-      phase === "planner" ? orchestration.planner.model : orchestration.worker.model
+    const roleModelId = phase === "planner" ? orchestration.planner.model : orchestration.worker.model
     roleModel = labelForModelId(session, roleModelId) ?? roleModelId
     rolePrefix = phase === "planner" ? t("chat.turnProgress.rolePlanner") : t("chat.turnProgress.roleWorker")
   }
@@ -397,8 +433,7 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
   // session applies another update, output resumed and the row must go back to 回复中/正在思考.
   // How long the upstream asked us to wait, counted down in place. When the estimate runs out the
   // row goes back to the plain "reconnecting" state; the engine is already retrying on its own.
-  const remainingMs =
-    notice?.retryAfter == null ? 0 : Math.max(0, notice.at + notice.retryAfter * 1000 - now)
+  const remainingMs = notice?.retryAfter == null ? 0 : Math.max(0, notice.at + notice.retryAfter * 1000 - now)
   const overload =
     notice !== null &&
     notice.sessionId === session.id &&
@@ -453,6 +488,22 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
       : overload.retryAfter === null
         ? t("chat.overload.descriptionUnknown")
         : t("chat.overload.description", { minutes: overload.minutes ?? 1 })
+  const turnStateText =
+    overload !== null
+      ? overload.reason === "no_ack"
+        ? t("chat.overload.titleNoAck", {
+            model: overload.modelName,
+            duration: t(quietFor.key, quietFor.values)
+          })
+        : overload.retryAfter === null
+          ? t("chat.overload.titleUnknown", { model: overload.modelName })
+          : t("chat.overload.titleRecover", {
+              model: overload.modelName,
+              duration: t(eta.key, eta.values)
+            })
+      : t(`chat.turnProgress.${state}`, {
+          name: model ?? t("chat.turnProgress.stateModelFallback")
+        })
 
   return (
     <div className="w-full min-w-0" data-turn-progress="">
@@ -474,9 +525,7 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
           "relative flex min-w-0 items-center gap-2 overflow-hidden text-[11px]",
           // Healthy turns get no box at all: the row is part of the composer card, and a second
           // bordered slab above it was exactly the "layer cake" the composer did not need.
-          alerting
-            ? "h-8 rounded-lg border border-amber-500/35 bg-amber-500/[0.07] px-2.5"
-            : "h-7 px-0.5"
+          alerting ? "h-8 rounded-lg border border-amber-500/35 bg-amber-500/[0.07] px-2.5" : "h-7 px-0.5"
         )}
       >
         {/* An indeterminate hairline says "still alive" without another line of copy. Only the
@@ -492,78 +541,63 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
           <Loader2Icon className="size-3 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />
         )}
         <span
-          className="flex min-w-0 flex-1 items-center gap-1 truncate font-medium text-foreground/85"
+          className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden font-medium text-foreground/85"
           title={stallHelp ?? stateTitle}
           data-turn-state=""
         >
           {rolePrefix !== null && (
-            <span className="shrink-0 rounded bg-primary/12 px-1 py-px text-[10px] font-semibold leading-tight text-primary">
+            <span className="shrink-0 rounded bg-primary/12 px-1 py-px text-[10px] leading-tight font-semibold text-primary">
               {rolePrefix}
             </span>
           )}
-          {overload !== null ? (
-            <>
-              {overload.reason === "no_ack"
-                ? t("chat.overload.titleNoAck", {
-                    model: overload.modelName,
-                    duration: t(quietFor.key, quietFor.values)
-                  })
-                : overload.retryAfter === null
-                  ? t("chat.overload.titleUnknown", { model: overload.modelName })
-                  : t("chat.overload.titleRecover", {
-                      model: overload.modelName,
-                      duration: t(eta.key, eta.values)
-                    })}
-              <span className="inline-block w-[1.5em] text-left" aria-hidden="true">
-                {dots}
-              </span>
-            </>
-          ) : (
-            <>
-              {t(`chat.turnProgress.${state}`, {
-                name: model ?? t("chat.turnProgress.stateModelFallback")
-              })}
-              {state !== "stateConfirm" && (
-                <span className="inline-block w-[1.5em] text-left" aria-hidden="true">
-                  {dots}
-                </span>
-              )}
-              {/* The silence, in the same line as the state. Stated, not accused: this says how
-                  long the row has been quiet, never why. An auto-nudge replaces it — once the row
-                  has done something about the wait, that is the more useful sentence. */}
-              {autoNudged > 0 ? (
-                <span className="shrink-0 text-muted-foreground" data-turn-auto-nudged="">
-                  {t("chat.turnProgress.autoNudged", { count: autoNudged })}
-                </span>
-              ) : (
-                quietSeconds !== null && (
-                  <span className="shrink-0 text-muted-foreground/80" data-turn-quiet-for="">
-                    {t("chat.turnProgress.quietFor", { seconds: quietSeconds })}
-                  </span>
-                )
-              )}
-            </>
+          <StateMarquee text={turnStateText} />
+          {(overload !== null || state !== "stateConfirm") && (
+            <span className="inline-block w-[1.5em] shrink-0 text-left" aria-hidden="true">
+              {dots}
+            </span>
           )}
+          {overload === null &&
+            (autoNudged > 0 ? (
+              <span className="shrink-0 text-muted-foreground" data-turn-auto-nudged="">
+                {t("chat.turnProgress.autoNudged", { count: autoNudged })}
+              </span>
+            ) : (
+              quietSeconds !== null && (
+                <span className="shrink-0 text-muted-foreground/80" data-turn-quiet-for="">
+                  {t("chat.turnProgress.quietFor", { seconds: quietSeconds })}
+                </span>
+              )
+            ))}
         </span>
         {quiet && (
           <span
-            className="shrink-0 rounded px-1.5 py-0.5 tabular-nums text-muted-foreground"
+            className="shrink-0 rounded px-1.5 py-0.5 text-muted-foreground tabular-nums"
             title={slowHelp}
             data-turn-quiet=""
           >
             {t("chat.turnProgress.quiet", { duration: t(quietFor.key, quietFor.values) })}
           </span>
         )}
-        <span className="shrink-0 tabular-nums text-muted-foreground/70">{clock(now - turn.start)}</span>
+        <span className="shrink-0 text-muted-foreground/70 tabular-nums">{clock(now - turn.start)}</span>
         {quiet && (
-          <button
-            type="button"
-            aria-label={t("chat.turnProgress.details")}
-            title={slowHelp}
-            className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
-          >
-            <CircleHelpIcon className="size-3" aria-hidden="true" />
-          </button>
+          <TooltipProvider delay={0}>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label={t("chat.turnProgress.details")}
+                    className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
+                  />
+                }
+              >
+                <CircleHelpIcon className="size-3" aria-hidden="true" />
+              </TooltipTrigger>
+              <TooltipContent role="tooltip" side="top" className="max-w-[280px] text-left leading-relaxed">
+                {slowHelp}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
         {canNudge && (
           <button
@@ -575,7 +609,6 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
             {t("chat.turnProgress.nudge")}
           </button>
         )}
-
       </div>
     </div>
   )

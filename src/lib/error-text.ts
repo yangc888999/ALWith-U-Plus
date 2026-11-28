@@ -457,7 +457,7 @@ const RULES: Rule[] = [
   },
   {
     // The settings store is revision-guarded. One card writes twice (a model toggle, then
-    // 「保存连接」), so the second write can arrive one revision behind; the save path retries
+    // 「保存配置」), so the second write can arrive one revision behind; the save path retries
     // once, and this is what the reader sees if that still fails.
     match: /changed in another window/i,
     key: "error.providerChangedElsewhere"

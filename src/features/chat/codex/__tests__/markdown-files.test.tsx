@@ -38,6 +38,15 @@ test("standalone local file links become cards while source references and fence
   expect(view.container.querySelector("code")?.textContent).toContain("[fake](fake.pdf)")
 })
 
+test("internal web citation markers never reach the reader", () => {
+  const view = render(viewOf("已实测成功。\uE200cite\uE202turn0search0\uE202turn0search2\uE201\n\n- 样例图：daily.png"))
+  mounted.push(view)
+  expect(view.container.textContent).toContain("已实测成功。")
+  expect(view.container.textContent).not.toContain("cite")
+  expect(view.container.textContent).not.toContain("turn0search")
+  expect(view.container.textContent).toContain("样例图：daily.png")
+})
+
 test("local image references load from the owning directory and can be saved", async () => {
   const invoke = vi.spyOn(core, "invoke").mockResolvedValue({ data: "png", mimeType: "image/png" })
   mocks.push(invoke)
