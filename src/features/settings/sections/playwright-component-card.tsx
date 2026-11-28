@@ -5,7 +5,7 @@
 // PLAYWRIGHT_BROWSERS_PATH; a project that pins Playwright can reuse the same headless shell.
 
 import { isTauri } from "@tauri-apps/api/core"
-import { CheckCircle2Icon, DownloadIcon, ExternalLinkIcon, RefreshCwIcon, XCircleIcon } from "lucide-react"
+import { DownloadIcon, ExternalLinkIcon, Globe2Icon, RefreshCwIcon } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
@@ -16,22 +16,10 @@ import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { openExternal } from "@/lib/open"
 
-import { SettingRow, SettingsCard } from "./shared"
+import { ComponentInstallPanel, ComponentMeta, ComponentMetaGrid, ComponentStatusPill } from "./component-card-parts"
+import { SettingsCard, SettingsNote } from "./shared"
 
 const PLAYWRIGHT_RELEASES = "https://github.com/microsoft/playwright/releases"
-
-function StatusPill({ ok, label }: { ok: boolean; label: string }) {
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${
-        ok ? "border-emerald-500/30 text-emerald-600" : "border-amber-500/30 text-amber-600"
-      }`}
-    >
-      {ok ? <CheckCircle2Icon className="size-3.5" /> : <XCircleIcon className="size-3.5" />}
-      {label}
-    </span>
-  )
-}
 
 export function PlaywrightComponentCard() {
   const { t } = useTranslation()
@@ -104,47 +92,91 @@ export function PlaywrightComponentCard() {
     <SettingsCard
       title={t("support.playwrightTitle")}
       desc={t("support.playwrightDesc")}
+      icon={<Globe2Icon />}
       action={
-        <StatusPill
-          ok={installed}
-          label={installed ? t("support.playwrightInstalled") : t("support.playwrightNotInstalled")}
-        />
-      }
-    >
-      <SettingRow compact title={t("support.playwrightVersion")}>
-        <div className="flex min-w-0 flex-col items-start gap-1.5 md:items-end">
-          <div className="flex flex-wrap items-center justify-start gap-2 md:justify-end">
-            <span className="text-sm text-muted-foreground">
-              {t("support.playwrightCoreVersion", { version })}
-            </span>
-            <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-              {t("support.playwrightHeadlessVersion", { revision })}
-            </span>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <ComponentStatusPill
+            ok={installed}
+            busy={busy === "install"}
+            label={
+              status === null
+                ? t("support.checking")
+                : busy === "install"
+                  ? t("support.installing")
+                  : installed
+                    ? t("support.playwrightInstalled")
+                    : t("support.playwrightNotInstalled")
+            }
+          />
+          {installed && (
             <Button
               variant="outline"
               size="sm"
-              className="h-7 gap-1.5 px-2.5 text-xs"
+              className="h-7 gap-1.5 px-2.5 text-[10px]"
               disabled={!installed || busy !== null}
               onClick={checkUpdate}
             >
-              {busy === "check" ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon className="size-3.5" />}
+              {busy === "check" ? <Spinner className="size-3" /> : <RefreshCwIcon className="size-3" />}
               {t("support.playwrightCheckUpdate")}
             </Button>
-            {update?.hasUpdate === true && (
-              <Button size="sm" className="h-7 px-2 text-xs" disabled={busy !== null} onClick={updateNow}>
-                {busy === "update" && <Spinner data-icon="inline-start" />}
-                {t("support.playwrightUpdateNow")}
-              </Button>
-            )}
-            {!installed && (
-              <Button size="sm" className="h-7 gap-1.5 px-2.5 text-xs" disabled={busy !== null} onClick={install}>
-                {busy === "install" ? <Spinner data-icon="inline-start" /> : <DownloadIcon className="size-3.5" />}
-                {t("support.playwrightInstall")}
-              </Button>
-            )}
-          </div>
+          )}
+          {update?.hasUpdate === true && (
+            <Button size="sm" className="h-7 px-2 text-[10px]" disabled={busy !== null} onClick={updateNow}>
+              {busy === "update" && <Spinner className="size-3" />}
+              {t("support.playwrightUpdateNow")}
+            </Button>
+          )}
+        </div>
+      }
+    >
+      {status === null ? (
+        <div className="flex items-center gap-2 px-1 py-3 text-xs text-muted-foreground">
+          <span className="size-3.5 animate-spin rounded-full border-2 border-current border-r-transparent" />
+          {t("support.checking")}
+        </div>
+      ) : !installed ? (
+        <div>
+          <ComponentInstallPanel
+            icon={<DownloadIcon className="size-3.5" />}
+            title={t("support.playwrightInstall")}
+            description={t("support.playwrightDesc")}
+            actionLabel={t("support.playwrightInstall")}
+            busyLabel={t("support.installing")}
+            busy={busy === "install"}
+            onAction={install}
+          />
+          <span
+            className="mt-2 block max-w-full truncate font-mono text-[10px] leading-4 text-muted-foreground/70"
+            title={status.installDir}
+          >
+            {status.installDir}
+          </span>
+          {status.hint !== "" && <span className="mt-1 block text-[11px] text-muted-foreground">{status.hint}</span>}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          <ComponentMetaGrid>
+            <ComponentMeta
+              label={t("support.playwrightVersion")}
+              value={t("support.playwrightCoreVersion", { version })}
+              sub={status.browserVersion ?? undefined}
+            />
+            <ComponentMeta
+              label="Headless Shell"
+              value={t("support.playwrightHeadlessVersion", { revision })}
+              sub="Chromium Headless Shell"
+            />
+            <ComponentMeta
+              label={t("support.path")}
+              value={
+                <span className="truncate font-mono text-[10px] font-normal" title={status.browserPath ?? status.installDir}>
+                  {status.browserPath ?? status.installDir}
+                </span>
+              }
+            />
+          </ComponentMetaGrid>
           {update !== null && (
-            <div className="flex flex-wrap items-center justify-start gap-2 text-[11px] text-muted-foreground md:justify-end">
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
               <span>{update.message}</span>
               {update.url !== null && update.url !== "" && (
                 <button
@@ -158,35 +190,20 @@ export function PlaywrightComponentCard() {
               )}
             </div>
           )}
-          {status?.browserPath && (
-            <span
-              className="block max-w-full truncate text-left font-mono text-[10px] leading-4 text-muted-foreground/70 md:text-right"
-              title={status.browserPath}
+          {status.hint !== "" && <span className="text-[11px] leading-4 text-muted-foreground">{status.hint}</span>}
+          <SettingsNote>{t("support.playwrightUsageHint")}</SettingsNote>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 text-[10px] text-primary underline-offset-2 hover:underline"
+              onClick={() => void openExternal(PLAYWRIGHT_RELEASES)}
             >
-              {status.browserPath}
-            </span>
-          )}
-          {status !== null && !status.browserPath && (
-            <span
-              className="block max-w-full truncate text-left font-mono text-[10px] leading-4 text-muted-foreground/70 md:text-right"
-              title={status.installDir}
-            >
-              {status.installDir}
-            </span>
-          )}
-          {status?.hint && <span className="text-[11px] leading-4 text-muted-foreground">{status.hint}</span>}
+              <ExternalLinkIcon className="size-3" />
+              {t("support.playwrightReleases")}
+            </button>
+          </div>
         </div>
-      </SettingRow>
-      <SettingRow compact title={t("support.playwrightUsage")} desc={t("support.playwrightUsageHint")}>
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 text-xs text-primary underline-offset-2 hover:underline"
-          onClick={() => void openExternal(PLAYWRIGHT_RELEASES)}
-        >
-          <ExternalLinkIcon className="size-3" />
-          {t("support.playwrightReleases")}
-        </button>
-      </SettingRow>
+      )}
     </SettingsCard>
   )
 }

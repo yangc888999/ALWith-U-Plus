@@ -393,9 +393,7 @@ function Surface({
         chat={chat}
         draft={draft}
       >
-        <ChatHeader title="Conversation" project={<span>Project</span>}>
-          {null}
-        </ChatHeader>
+        <ChatHeader title="Conversation">{null}</ChatHeader>
         <div>Chat {cwd}</div>
       </FileWorkspace>
     </WorkspaceHeaderContext.Provider>

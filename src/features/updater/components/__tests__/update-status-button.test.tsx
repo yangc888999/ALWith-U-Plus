@@ -57,7 +57,7 @@ test("reports installation errors without echoing the native error", async () =>
   const view = render(<UpdateStatusButton />)
   fireEvent.click(view.getAllByRole("button").find((button) => button.textContent?.includes("v0.2.5"))!)
   await waitFor(() =>
-    expect(error).toHaveBeenCalledWith("Couldn't install the update")
+    expect(error).toHaveBeenCalledWith("Couldn't install the update. Try again — the download is kept.")
   )
 })
 

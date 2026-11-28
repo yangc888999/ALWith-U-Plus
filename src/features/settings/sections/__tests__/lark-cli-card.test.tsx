@@ -173,25 +173,24 @@ test("a broken avatar falls back to the name initial instead of a broken image",
   expect(screen.getByText("C")).toBeVisible()
 })
 
-test("the component and the account are two distinct modules", async () => {
+test("the account lives in the component card header", async () => {
   render(<LarkCliCard />)
   expect(await screen.findByRole("heading", { name: "Lark CLI" })).toBeVisible()
-  expect(screen.getByRole("heading", { name: "Feishu account" })).toBeVisible()
+  expect(screen.queryByRole("heading", { name: "Feishu account" })).toBeNull()
+  expect(screen.getByText("Chen Yang (Leo)")).toBeVisible()
+  expect(screen.getByRole("button", { name: "Sign out" })).toBeEnabled()
 })
 
-test("neither card stacks a hand-written divider on top of the row border", async () => {
+test("the unified component card does not add hand-written dividers", async () => {
   const { container } = render(<LarkCliCard />)
   await screen.findByText("Chen Yang (Leo)")
   const cards = container.querySelectorAll(".settings-card")
-  expect(cards).toHaveLength(2)
-  // `.settings-row` already owns a border-bottom. Adding `border-t` next to it produced the
-  // doubled rule the user circled. Both cards must rely on the row border alone.
+  expect(cards).toHaveLength(1)
+  // The old two-card layout stacked a hand-written rule on top of the row border; keep the
+  // unified card free of those duplicate dividers.
   for (const card of cards) {
     expect(card.querySelectorAll(".border-t")).toHaveLength(0)
   }
-  // Component card: Version + App identity (bot). Account card: sign-in status only.
-  expect(cards[0].querySelectorAll(".settings-row")).toHaveLength(2)
-  expect(cards[1].querySelectorAll(".settings-row")).toHaveLength(1)
 })
 
 test("after signing out, permissions and every bot status disappear", async () => {
@@ -208,8 +207,8 @@ test("after signing out, permissions and every bot status disappear", async () =
   expect(screen.queryByText(/Bot identity ready/)).toBeNull()
   expect(screen.queryByText("Ready")).toBeNull()
   expect(screen.queryByText("Chen Yang (Leo)")).toBeNull()
-  // The way back stays visible: title, hint, and a pure sign-in button.
-  expect(screen.getByRole("heading", { name: "Feishu account" })).toBeVisible()
+  // The way back stays visible in the header: account chip and a pure sign-in button.
+  expect(screen.getByText("Feishu account · Not signed in")).toBeVisible()
   expect(screen.getByRole("button", { name: "Sign in to Feishu" })).toBeEnabled()
 })
 
@@ -223,6 +222,22 @@ test("a first install without app credentials shows an explicit setup path", asy
   // Signing in before an app is bound only fails, so it is not offered yet.
   expect(screen.getByRole("button", { name: "Sign in to Feishu" })).toBeDisabled()
   expect(screen.queryByText("Your account's permissions")).toBeNull()
+})
+
+test("an installing Lark CLI shows a busy install panel", async () => {
+  vi.mocked(commands.larkCliStatus).mockResolvedValueOnce({
+    ...fixtures.status,
+    available: false,
+    cliPath: "",
+    version: "",
+    hint: ""
+  })
+  vi.mocked(commands.larkCliInstall).mockImplementationOnce(() => new Promise(() => {}))
+  render(<LarkCliCard />)
+  fireEvent.click(await screen.findByRole("button", { name: "Install" }))
+  const busy = await screen.findByRole("button", { name: /Installing/i })
+  expect(busy).toBeDisabled()
+  expect(screen.getAllByText("Installing…").length).toBeGreaterThan(0)
 })
 
 test("scope authorization starts only from the checkbox chain and has its own dialog title", async () => {
@@ -286,7 +301,7 @@ test("the bot identity stays visible in the component card after signing out", a
   render(<LarkCliCard />)
 
   expect(await screen.findByText("App identity (bot)")).toBeVisible()
-  expect(screen.getByText("Ready for group pushes")).toBeVisible()
+  expect(screen.getByText("Ready for message pushes")).toBeVisible()
   expect(screen.getByText(/App ID: cli_x/)).toBeVisible()
   // The account card is still collapsed: the bot row is a component fact, not account state.
   expect(screen.queryByText("Your account's permissions")).toBeNull()

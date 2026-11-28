@@ -72,11 +72,38 @@ pub fn classify_check_error(message: &str) -> CheckFailureReason {
 pub struct UpdaterService {
     state: RwLock<State>,
     notify_listeners: Box<dyn Fn(&State) + Send + Sync>,
+    /// The plugin's `Update` object carries the release identity and download URL used by both
+    /// `download` and `install`. Keeping it means a retry never has to reach GitHub again just to
+    /// revalidate an archive that is already downloaded and signed.
+    prepared_update: std::sync::Mutex<Option<tauri_plugin_updater::Update>>,
 }
 
 impl UpdaterService {
     pub fn new(notify: impl Fn(&State) + Send + Sync + 'static) -> Self {
-        Self { state: RwLock::new(State::Uninitialized), notify_listeners: Box::new(notify) }
+        Self {
+            state: RwLock::new(State::Uninitialized),
+            notify_listeners: Box::new(notify),
+            prepared_update: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn remember_prepared_update(&self, update: tauri_plugin_updater::Update) {
+        if let Ok(mut slot) = self.prepared_update.lock() {
+            *slot = Some(update);
+        }
+    }
+
+    fn clear_prepared_update(&self) {
+        if let Ok(mut slot) = self.prepared_update.lock() {
+            *slot = None;
+        }
+    }
+
+    fn prepared_update(&self, expected: &UpdateInfo) -> Option<tauri_plugin_updater::Update> {
+        let slot = self.prepared_update.lock().ok()?;
+        slot.as_ref()
+            .filter(|update| update.version == expected.version && update.signature == expected.signature)
+            .cloned()
     }
 
     pub fn state(&self) -> State {
@@ -299,11 +326,12 @@ use tauri_plugin_updater::UpdaterExt;
 
 pub struct PluginChecker {
     app: AppHandle,
+    service: std::sync::Arc<UpdaterService>,
 }
 
 impl PluginChecker {
-    pub fn new(app: AppHandle) -> Self {
-        Self { app }
+    pub fn new(app: AppHandle, service: std::sync::Arc<UpdaterService>) -> Self {
+        Self { app, service }
     }
 }
 
@@ -316,10 +344,14 @@ impl UpdateChecker for PluginChecker {
             })
         })?;
         let Some(update) = result else {
+            // A definitive "no update" also invalidates a previously prepared release. A network
+            // error never reaches this branch, so a cached archive survives a failed check.
+            self.service.clear_prepared_update();
             return Ok(None);
         };
         let filename = persist::filename_from_url(update.download_url.as_ref())
             .ok_or_else(|| "cannot extract filename from download URL".to_string())?;
+        self.service.remember_prepared_update(update.clone());
         Ok(Some(UpdateInfo {
             version: update.version.clone(),
             filename,
@@ -331,11 +363,12 @@ impl UpdateChecker for PluginChecker {
 
 pub struct PluginDownloader {
     app: AppHandle,
+    service: std::sync::Arc<UpdaterService>,
 }
 
 impl PluginDownloader {
-    pub fn new(app: AppHandle) -> Self {
-        Self { app }
+    pub fn new(app: AppHandle, service: std::sync::Arc<UpdaterService>) -> Self {
+        Self { app, service }
     }
 }
 
@@ -344,12 +377,21 @@ impl Downloader for PluginDownloader {
         &'a self, update: &'a UpdateInfo, on_progress: ProgressFn,
     ) -> BoxFuture<'a, Result<Vec<u8>, String>> {
         Box::pin(async move {
-            let updater = self.app.updater().map_err(|e| e.to_string())?;
-            let plugin_update =
-                updater.check().await.map_err(|e| e.to_string())?.ok_or_else(|| "no update available".to_string())?;
-            if plugin_update.version != update.version || plugin_update.signature != update.signature {
-                return Err("update changed between check and download".to_string());
-            }
+            let plugin_update = if let Some(prepared) = self.service.prepared_update(update) {
+                prepared
+            } else {
+                let updater = self.app.updater().map_err(|e| e.to_string())?;
+                let checked = updater
+                    .check()
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| "no update available".to_string())?;
+                if checked.version != update.version || checked.signature != update.signature {
+                    return Err("update changed between check and download".to_string());
+                }
+                self.service.remember_prepared_update(checked.clone());
+                checked
+            };
             plugin_update
                 .download(|chunk, total| on_progress(chunk as u64, total), || {})
                 .await
@@ -360,30 +402,44 @@ impl Downloader for PluginDownloader {
 
 pub struct PluginInstaller {
     app: AppHandle,
+    service: std::sync::Arc<UpdaterService>,
 }
 
 impl PluginInstaller {
-    pub fn new(app: AppHandle) -> Self {
-        Self { app }
+    pub fn new(app: AppHandle, service: std::sync::Arc<UpdaterService>) -> Self {
+        Self { app, service }
     }
 }
 
 impl Installer for PluginInstaller {
     fn install<'a>(&'a self, update: &'a UpdateInfo, bytes: Vec<u8>) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
-            let started = std::time::Instant::now();
-            let updater = self
-                .app
-                .updater_builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .map_err(|e| e.to_string())?;
-            let plugin_update =
-                updater.check().await.map_err(|e| e.to_string())?.ok_or_else(|| "no update available".to_string())?;
-            log::info!("Update release revalidated in {:?}", started.elapsed());
-            if plugin_update.version != update.version || plugin_update.signature != update.signature {
-                return Err("downloaded update is no longer the current release".to_string());
-            }
+            let plugin_update = if let Some(prepared) = self.service.prepared_update(update) {
+                // The archive is already downloaded and signature-checked. Installing it must not
+                // depend on GitHub being reachable again: slow networks and rate limits used to
+                // fail the install while a retry minutes later succeeded.
+                log::info!("Installing update {} from the prepared release metadata", update.version);
+                prepared
+            } else {
+                let started = std::time::Instant::now();
+                let updater = self
+                    .app
+                    .updater_builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()
+                    .map_err(|e| e.to_string())?;
+                let checked = updater
+                    .check()
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .ok_or_else(|| "no update available".to_string())?;
+                log::info!("Update release revalidated in {:?}", started.elapsed());
+                if checked.version != update.version || checked.signature != update.signature {
+                    return Err("downloaded update is no longer the current release".to_string());
+                }
+                self.service.remember_prepared_update(checked.clone());
+                checked
+            };
             // Signature verification, archive extraction and application replacement are blocking.
             tokio::task::spawn_blocking(move || plugin_update.install(bytes).map_err(|e| e.to_string()))
                 .await
@@ -472,7 +528,7 @@ pub fn init(app: &tauri::App) {
             return;
         };
         if auto_update_enabled(&app) {
-            let checker = PluginChecker::new(app.clone());
+            let checker = PluginChecker::new(app.clone(), svc.clone());
             svc.init_recover(&updater_dir, env!("CARGO_PKG_VERSION"), &MinisignVerifier::new(public_key), &checker)
                 .await;
         } else {
@@ -492,7 +548,7 @@ pub fn init(app: &tauri::App) {
                         let State::Ready { update: ready_update } = svc.state() else {
                             return;
                         };
-                        let checker = PluginChecker::new(app.clone());
+                        let checker = PluginChecker::new(app.clone(), svc.clone());
                         let latest = scheduler::is_latest_with_timeout(scheduler::OVERWRITE_CHECK_TIMEOUT, || async {
                             checker.check().map(|remote| is_same_release(remote.as_ref(), &ready_update))
                         })

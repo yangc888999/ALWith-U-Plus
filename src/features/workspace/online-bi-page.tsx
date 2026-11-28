@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next"
 import { toast } from "sonner"
 
 import { commands } from "@/bindings"
+import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -17,7 +18,7 @@ import { Input } from "@/components/ui/input"
 import { OnlineBiGlyph } from "@/features/layout/components/feature-glyphs"
 import { cn } from "@/lib/utils"
 
-import { OnlineBiNativeView } from "./online-bi-embed"
+import { OnlineBiNativeView, type OnlineBiPageState } from "./online-bi-embed"
 import {
   getOnlineBiEmbedSrcFor,
   normalizeOnlineBiReportUrl,
@@ -42,6 +43,8 @@ type TabEditor = {
 function reportTitleFromUrl(url: string): string {
   try {
     const parsed = new URL(url)
+    const tab = parsed.searchParams.get("tab")?.trim()
+    if (tab !== undefined && tab !== "") return tab.replace(/^\d+\s*/, "").slice(0, 40)
     const segment = parsed.pathname.split("/").filter(Boolean).at(-1)
     return segment === undefined ? parsed.hostname : decodeURIComponent(segment)
   } catch {
@@ -49,9 +52,33 @@ function reportTitleFromUrl(url: string): string {
   }
 }
 
+function OnlineBiLoadingSkeleton({ label }: { label: string }) {
+  return (
+    <div className="absolute inset-0 z-10 flex flex-col gap-3 bg-background p-4" role="status" aria-label={label}>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="size-3 animate-spin rounded-full border-2 border-current border-r-transparent" />
+        {label}
+      </div>
+      <div className="flex min-h-0 flex-1 gap-4">
+        <div className="hidden w-40 shrink-0 flex-col gap-2 rounded-lg border border-border/50 bg-muted/20 p-3 sm:flex">
+          {Array.from({ length: 6 }, (_, index) => (
+            <div key={index} className="h-2.5 animate-pulse rounded bg-muted" />
+          ))}
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col gap-3 rounded-lg border border-border/50 bg-muted/10 p-4">
+          <div className="h-3 w-24 animate-pulse rounded bg-muted" />
+          <div className="h-3 w-48 max-w-full animate-pulse rounded bg-muted" />
+          <div className="min-h-24 flex-1 animate-pulse rounded-lg bg-muted/70" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /** Full-page 在线 BI surface on the workbench screen, with persistent report tabs. */
 export function OnlineBiPage() {
   const { t } = useTranslation()
+  const { resolvedTheme } = useTheme()
   const [tabsState, setTabsState] = useState<OnlineBiTabsState>(() =>
     loadOnlineBiTabs(t("onlineBi.defaultTab"))
   )
@@ -62,7 +89,11 @@ export function OnlineBiPage() {
   const [src, setSrc] = useState<string | null>(null)
   const [reload, setReload] = useState(0)
   const [editor, setEditor] = useState<TabEditor | null>(null)
+  const [pageReady, setPageReady] = useState(false)
+  const [signedIn, setSignedIn] = useState(false)
   const navigation = useRef(0)
+  const loading = src === null || !pageReady
+  const signedOut = !loading && !signedIn
 
   useEffect(() => {
     saveOnlineBiTabs(tabsState)
@@ -76,6 +107,7 @@ export function OnlineBiPage() {
         return
       }
       const request = ++navigation.current
+      setPageReady(false)
       setCurrentUrl(normalized)
       setDraft(normalized)
       try {
@@ -97,9 +129,37 @@ export function OnlineBiPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const handlePageState = useCallback((state: OnlineBiPageState): void => {
+    setPageReady(state.ready)
+    setSignedIn(state.signedIn)
+  }, [])
+
+  useEffect(() => {
+    // The BI login form can finish without a full document load. Poll the native cookie jar only
+    // while the signed-out page is visible, so the host status flips to 已登录 as soon as the
+    // password/OAuth flow completes. Stop immediately once signed in.
+    if (loading || signedIn) return
+    const timer = window.setInterval(() => {
+      void commands
+        .onlineBiEmbedPageState()
+        .then((state) => {
+          if (state.signedIn) setSignedIn(true)
+        })
+        .catch(() => {})
+    }, 2_500)
+    return () => window.clearInterval(timer)
+  }, [loading, signedIn])
+
+  const collapseBiSidebar = (): void => {
+    void commands
+      .onlineBiEmbedCollapseSidebar()
+      .catch((error: unknown) => console.error("[online-bi] collapse sidebar", error))
+  }
+
   const openTab = (tab: OnlineBiTab): void => {
     setTabsState((state) => ({ ...state, activeId: tab.id }))
     void navigate(tab.url)
+    collapseBiSidebar()
   }
 
   const openAddTab = (): void => {
@@ -118,7 +178,19 @@ export function OnlineBiPage() {
         toast.error(t("onlineBi.captureFailed"))
         return
       }
-      setEditor((current) => (current === null ? current : { ...current, url: normalized }))
+      setEditor((current) =>
+        current === null
+          ? current
+          : {
+              ...current,
+              url: normalized,
+              label:
+                current.mode === "add" &&
+                (current.label.trim() === "" || current.label === reportTitleFromUrl(current.url))
+                  ? reportTitleFromUrl(normalized)
+                  : current.label
+            }
+      )
     } catch (error: unknown) {
       toast.error(error instanceof Error ? error.message : String(error))
     }
@@ -140,6 +212,7 @@ export function OnlineBiPage() {
       setTabsState((state) => ({ tabs: [...state.tabs, tab], activeId: tab.id }))
       setEditor(null)
       void navigate(tab.url)
+      collapseBiSidebar()
       return
     }
     const id = editor.id
@@ -150,7 +223,10 @@ export function OnlineBiPage() {
       activeId: wasActive ? id : state.activeId
     }))
     setEditor(null)
-    if (wasActive) void navigate(normalized)
+    if (wasActive) {
+      void navigate(normalized)
+      collapseBiSidebar()
+    }
   }
 
   const removeEditedTab = (): void => {
@@ -257,6 +333,30 @@ export function OnlineBiPage() {
             )
           })}
         </div>
+        <span
+          className={cn(
+            "me-1 inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border px-2 text-[10px]",
+            loading
+              ? "border-amber-500/25 bg-amber-500/8 text-amber-600"
+              : signedOut
+                ? "border-amber-500/25 bg-amber-500/8 text-amber-600"
+                : "border-emerald-500/25 bg-emerald-500/8 text-emerald-600"
+          )}
+        >
+          <span
+            className={cn(
+              "size-1.5 rounded-full",
+              loading ? "animate-pulse bg-amber-500" : signedOut ? "bg-amber-500" : "bg-emerald-500"
+            )}
+          />
+          {t(
+            loading
+              ? "onlineBi.statusLoading"
+              : signedOut
+                ? "onlineBi.statusSignedOut"
+                : "onlineBi.statusSignedIn"
+          )}
+        </span>
         <Button
           type="button"
           variant="ghost"
@@ -271,12 +371,16 @@ export function OnlineBiPage() {
       </div>
 
       <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
-        {src === null && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-background text-sm text-muted-foreground">
-            {t("settings.onlineBiLoading")}
-          </div>
+        {loading && <OnlineBiLoadingSkeleton label={t("settings.onlineBiLoading")} />}
+        {src !== null && (
+          <OnlineBiNativeView
+            src={src}
+            reload={reload}
+            hidden={editor !== null}
+            theme={resolvedTheme}
+            onPageState={handlePageState}
+          />
         )}
-        {src !== null && <OnlineBiNativeView src={src} reload={reload} />}
       </div>
 
       <Dialog open={editor !== null} onOpenChange={(open) => !open && setEditor(null)}>

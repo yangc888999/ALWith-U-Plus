@@ -2043,7 +2043,11 @@ export function FileWorkspace({
                       {onlineBi ? (
                         /* Native view, not an iframe: WKWebView withholds cookies from a
                            cross-site frame, and the dashboard's session is a cookie. */
-                        <OnlineBiNativeView src={biSrc ?? ONLINE_BI_URL} reload={biReload} />
+                        <OnlineBiNativeView
+                          src={biSrc ?? ONLINE_BI_URL}
+                          reload={biReload}
+                          theme={resolvedTheme}
+                        />
                       ) : (
                         <ExtensionMount id={previewExtension} />
                       )}

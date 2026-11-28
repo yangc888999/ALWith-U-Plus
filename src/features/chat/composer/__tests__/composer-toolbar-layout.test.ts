@@ -69,12 +69,15 @@ test("composer is a distinct card inside the chat column", () => {
   expect(styles).toMatch(/\[data-chat-input-header\]:not\(:has\(button, span\)\)\s*\{\s*display: none;/)
 })
 
-test("transcript and composer share one adaptive width and keep the turn-rail gutter", () => {
+test("transcript and composer share one adaptive width while the turn rail floats", () => {
   expect(styles).toContain(
     "--chat-content-width: min(var(--chat-column-width), calc(100% - var(--chat-rail-gutter)))"
   )
-  expect(styles).toContain(
-    "calc(var(--chat-column-width) - var(--chat-rail-gutter) + 32px)"
+  expect(styles).toContain("--chat-composer-width: min(var(--chat-column-width), 100%)")
+  expect(styles).toContain("--chat-rail-gutter: 2rem")
+  // The rail is an absolute overlay with a 28px hit lane, not a reserved 48px column.
+  expect(styles).toMatch(
+    /\[data-timeline-user-message-navigation-content\] \.timeline-user-message-navigation-row\s*\{\s*width: 28px;/
   )
   expect(styles).toMatch(
     /\[data-timeline-user-message-navigation-content\]\s*\{\s*max-width:\s*var\(--chat-content-width\)/

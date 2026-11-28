@@ -33,7 +33,6 @@ import { ActionCard, ElicitationFormDialog } from "@/features/chat/action-card"
 import { ChatView } from "@/features/chat/chat-view"
 import { DRAFT_SESSION_ID, DraftChat } from "@/features/chat/draft-chat"
 import { newChatDirectory } from "@/features/chat/new-chat-directory"
-import { ChatProjectMenu } from "@/features/chat/project-session-popover"
 import { registerSessionJump } from "@/features/chat/session-jump"
 import { useDriveArchive } from "@/features/drive/archive-runtime"
 import { DriveDeleteConfirmation, DrivePage, DriveStatus, useDriveConnection } from "@/features/drive/drive"
@@ -1456,11 +1455,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
         )
         .catch((error) => toast.error(describeError(error)))
     }
-    const newProjectChat = (cwd: string | null) => {
-      if (cwd === null || isTemporaryChatDir(cwd)) newChat()
-      else newChatInDirectory(cwd)
-    }
-
     const deleted = (sessionId: string, cwd: string): void => {
       setSelectedId((current) => (current === sessionId ? null : current))
       // Every temporary conversation owns exactly one folder. The menu passes its cwd so this
@@ -1494,16 +1488,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           key={`${session.id}-${surfaceGeneration}`}
           session={session}
           voiceResume={voiceHandoff.resume}
-          projectMenu={
-            <ChatProjectMenu
-              cwd={session.cwd}
-              currentSessionId={session.id}
-              pendingChat={pendingChat}
-              onSelectPending={selectPendingChat}
-              onSelect={select}
-              onNewChat={newProjectChat}
-            />
-          }
           onSelectSession={select}
           onNewChat={newTask}
           onClearContext={(cwd) => clearContextInPlace(session.id, cwd)}
@@ -1522,16 +1506,6 @@ export function App({ initialPreferences }: { initialPreferences: Preferences })
           projectSession={draftProjectSession}
           directChat={draftDirectChat}
           cwd={lastDirectory}
-          projectMenu={
-            <ChatProjectMenu
-              cwd={lastDirectory}
-              currentSessionId={selectedId}
-              pendingChat={pendingChat}
-              onSelectPending={selectPendingChat}
-              onSelect={select}
-              onNewChat={newProjectChat}
-            />
-          }
           onCwdChange={pickDraftFolder}
           onCwdResolved={chooseDraftFolder}
           onListed={onListed}

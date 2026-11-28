@@ -16,6 +16,20 @@
   max-width: var(--chat-content-width);
 }
 
+/* The rail is an overlay, not a column. Move it to the very edge and narrow its hit lane so the
+   transcript can use the space the old 6rem gutter reserved. The marker itself keeps its size. */
+[data-timeline-user-message-navigation-content] .timeline-user-message-navigation {
+  inset-inline-start: 2px;
+}
+
+[data-timeline-user-message-navigation-content] .timeline-user-message-navigation-row {
+  width: 28px;
+}
+
+[data-timeline-user-message-navigation-content] .codex-timeline-content {
+  padding-inline-start: calc(var(--codex-timeline-inline-padding, 20px) + 14px);
+}
+
 /* Isolate technical notation from the interface direction. */
 [data-slot="kbd"],
 [data-slot="kbd-group"],
@@ -374,15 +388,11 @@ html[data-window-backdrop="acrylic"]
    simply fills it and nothing changes. */
 :root {
   --chat-column-width: 70rem; /* 1120px at the default 16px root */
-  /* The turn rail needs a 48px leading gutter at the default root size. Transcript rows and the
-     composer card share this visual measure; the composer box is slightly wider so its 16px
-     side padding lands the card on exactly the same edges as the text. */
-  --chat-rail-gutter: 6rem;
+  /* The turn rail floats over the transcript's leading inset instead of reserving a 48px lane.
+     Only the breathing room at the pane edges is subtracted; the composer uses the full column. */
+  --chat-rail-gutter: 2rem;
   --chat-content-width: min(var(--chat-column-width), calc(100% - var(--chat-rail-gutter)));
-  --chat-composer-width: min(
-    calc(var(--chat-column-width) - var(--chat-rail-gutter) + 32px),
-    calc(100% - var(--chat-rail-gutter) + 32px)
-  );
+  --chat-composer-width: min(var(--chat-column-width), 100%);
 }
 /* High-density desktops expose a much wider CSS viewport than a laptop (often 2560-3200px).
    A fixed 16px root left every rem-based control physically small there. Scale the root with
@@ -2012,6 +2022,14 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   box-shadow: none;
 }
 
+/* Frosted glass: the old composer kept a 97%-opaque charcoal fill, so it read as a grey slab
+   laid over a translucent page. Use the same translucent card token and add the missing blur /
+   top highlight that makes it read as part of the material. */
+html:is([data-appearance="aero"], [data-appearance="liquid-glass"]) {
+  --composer-surface: var(--card);
+  --composer-surface-alpha: 1;
+}
+
 /* The composer is a card inside the chat column. The page owns the material; the card is the
    one raised control at the bottom, which is what makes the input distinguishable from the
    transcript instead of blending into a black rectangle. */
@@ -2038,6 +2056,38 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
   background: color-mix(in srgb, var(--composer-surface) calc(var(--composer-surface-alpha, 1) * 100%), transparent);
   background-image: none;
   box-shadow: 0 18px 44px -34px color-mix(in oklab, #000 60%, transparent);
+}
+
+html:is([data-appearance="aero"], [data-appearance="liquid-glass"])
+  [data-composer]
+  > [data-chat-drop-zone]
+  > .relative:has(> form > .codex-composer-surface) {
+  border-color: color-mix(in oklab, var(--foreground) 14%, transparent);
+  backdrop-filter: blur(22px) saturate(1.35);
+  box-shadow:
+    0 20px 48px -34px color-mix(in oklab, #000 64%, transparent),
+    inset 0 1px 0 color-mix(in oklab, #fff 12%, transparent);
+}
+
+html[data-appearance="liquid-glass"]
+  [data-composer]
+  > [data-chat-drop-zone]
+  > .relative:has(> form > .codex-composer-surface) {
+  backdrop-filter: blur(28px) saturate(1.7);
+}
+
+html:is([data-appearance="aero"], [data-appearance="liquid-glass"]):not(.dark)
+  [data-composer]
+  > [data-chat-drop-zone]
+  > .relative:has(> form > .codex-composer-surface) {
+  background-image: linear-gradient(180deg, oklch(1 0 0 / 0.38), transparent 46%);
+}
+
+html:is([data-appearance="aero"], [data-appearance="liquid-glass"]).dark
+  [data-composer]
+  > [data-chat-drop-zone]
+  > .relative:has(> form > .codex-composer-surface) {
+  background-image: linear-gradient(180deg, oklch(1 0 0 / 0.07), transparent 42%);
 }
 /* 输入区交出填充与描边，只保留自己的滚动裁剪；顶部圆角让给父级，底部自己收口。 */
 [data-composer] .codex-composer-surface {
@@ -2068,6 +2118,46 @@ html:not([data-appearance="solid"]) .main-screen-trailing {
 [data-composer] .codex-composer-surface > div:has(> .alwith-composer-textarea) {
   min-height: 0;
   padding: 10px 14px 6px !important;
+}
+
+/* The right-hand conversation actions float over the transcript edge; they are not a column.
+   On precise pointers they stay out of the way until the conversation is hovered or focused.
+   Touch layouts keep them visible because there is no hover to reveal them. */
+[data-chat-edge-actions] {
+  transition:
+    opacity 160ms ease-out,
+    transform 160ms ease-out;
+}
+
+/* The round badge is contextual, not a control: when the turn is quiet enough to show help or
+   the nudge action, those controls own the row's right edge. A narrow composer drops the badge
+   as well; the clock's title still names the round. */
+[data-turn-progress] {
+  container-type: inline-size;
+}
+
+[data-turn-progress]:has([data-turn-quiet], [data-turn-help], [data-turn-nudge]) [data-turn-round] {
+  display: none;
+}
+
+@container (max-width: 24rem) {
+  [data-turn-round] {
+    display: none;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  [data-conversation-detail]:not(:hover):not(:focus-within) [data-chat-edge-actions] {
+    opacity: 0;
+    transform: translateX(6px);
+    pointer-events: none;
+  }
+
+  /* The buttons themselves carry `pointer-events-auto` for the visible dock; without this the
+     invisible dock would still own its hit area. */
+  [data-conversation-detail]:not(:hover):not(:focus-within) [data-chat-edge-actions] * {
+    pointer-events: none;
+  }
 }
 
 /* chip 行：整宽、无填充，靠一条 1px 分割线与输入区隔开。分割线用 inset 阴影画，

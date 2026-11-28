@@ -8,7 +8,6 @@ import { OperationPermissionCenter } from "../operation-permission-center"
 
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true }))
 vi.mock("@/lib/platform", () => ({ isMac: () => true }))
-vi.mock("@/lib/open", () => ({ openExternal: vi.fn() }))
 vi.mock("@/bindings", () => ({
   commands: {
     permissionsCenterStatus: vi.fn(async () => [
@@ -20,7 +19,8 @@ vi.mock("@/bindings", () => ({
       { id: "microphone", granted: false, state: "denied" }
     ]),
     permissionsCenterRequest: vi.fn(async () => null),
-    permissionsCenterOpenSettings: vi.fn(async () => null)
+    permissionsCenterOpenSettings: vi.fn(async () => null),
+    permissionsCenterOpenUrl: vi.fn(async () => null)
   }
 }))
 
@@ -54,13 +54,14 @@ test("shows observable statuses and opens the correct authorization path", async
   )
 })
 
-test("settings-only permissions use their System Settings deep link", async () => {
-  const { openExternal } = await import("@/lib/open")
+test("settings-only permissions use the backend System Settings deep link", async () => {
   const { container } = render(<OperationPermissionCenter />)
   const files = container.querySelector('[data-permission="filesAndFolders"]')
   if (files === null) throw new Error("files row missing")
   fireEvent.click(files.querySelector("button") as HTMLButtonElement)
-  expect(vi.mocked(openExternal)).toHaveBeenCalledWith(
-    "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"
+  await waitFor(() =>
+    expect(vi.mocked(commands.permissionsCenterOpenUrl)).toHaveBeenCalledWith({
+      url: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"
+    })
   )
 })

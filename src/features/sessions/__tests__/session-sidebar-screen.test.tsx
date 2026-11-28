@@ -277,6 +277,7 @@ test("the sidebar keeps 资料库 and no longer carries a BI Metrics row", async
 test("the quick-chat group carries its count while project rows stay uncounted", () => {
   useSessionsUiStore.setState({ view: "sessions" })
   const newChat = vi.fn()
+  const newProject = vi.fn()
   client.store.setState({
     sessionListLoaded: true,
     sessionList: [
@@ -297,6 +298,7 @@ test("the quick-chat group carries its count while project rows stay uncounted",
           selectedId={null}
           onSelect={() => {}}
           onNewChat={newChat}
+          onNewProject={newProject}
           onNewProjectChat={() => {}}
           onSearch={() => {}}
           onOpenSettings={() => {}}
@@ -318,6 +320,10 @@ test("the quick-chat group carries its count while project rows stay uncounted",
   if (plus === null) throw new Error("quick-chat new button is missing")
   fireEvent.click(plus)
   expect(newChat).toHaveBeenCalledOnce()
+  const projectPlus = view.container.querySelector<HTMLButtonElement>("[data-project-new]")
+  if (projectPlus === null) throw new Error("project new button is missing")
+  fireEvent.click(projectPlus)
+  expect(newProject).toHaveBeenCalledOnce()
   expect(view.queryByText("2", { exact: true })).toBeNull()
   expect(view.queryByText(/loaded/i)).toBeNull()
   expect(view.queryByRole("button", { name: "Load more" })).toBeNull()

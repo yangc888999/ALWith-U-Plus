@@ -337,6 +337,33 @@ test("picking another model mid-turn stops the stalled model's amber row", async
   }
 })
 
+test("the round badge follows the clock and counts native turns", () => {
+  const at = Date.now()
+  const view = render(
+    <TurnProgressBar
+      session={session({
+        id: "turn-rounds",
+        items: [
+          { ...user(at), id: "u1", _meta: { codex: { turnId: "turn-1" } } },
+          { ...user(at), id: "steer", _meta: { codex: { turnId: "turn-1" } } },
+          { ...user(at), id: "u2", _meta: { codex: { turnId: "turn-2" } } }
+        ]
+      })}
+    />
+  )
+  const clock = view.container.querySelector("[data-turn-clock]")
+  const round = view.container.querySelector("[data-turn-round]")
+  expect(round).not.toBeNull()
+  expect(round?.previousElementSibling).toBe(clock)
+  expect(round?.textContent).toContain("2")
+  expect(clock?.parentElement?.getAttribute("title")).toBe("共 2 轮对话")
+})
+
+test("the round badge stays out of the row before the first prompt", () => {
+  const view = render(<TurnProgressBar session={session({ id: "turn-rounds-empty" })} />)
+  expect(view.container.querySelector("[data-turn-round]")).toBeNull()
+})
+
 test("a turn ending mid-flight keeps the hook order stable", () => {
   // The strip bails out to null once the turn ends, and the two store subscriptions used to sit
   // below that bail-out — so finishing a turn changed the hook count and React tore the whole app

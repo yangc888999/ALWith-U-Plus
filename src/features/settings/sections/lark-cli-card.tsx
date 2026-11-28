@@ -20,11 +20,12 @@ import {
   CheckCircle2Icon,
   ChevronDownIcon,
   ChevronRightIcon,
+  DownloadIcon,
   ExternalLinkIcon,
   LogInIcon,
   LogOutIcon,
   RefreshCwIcon,
-  XCircleIcon
+  SendIcon
 } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
@@ -37,7 +38,8 @@ import { commands, type LarkAuthIdentity, type LarkAuthLogin, type LarkAuthStatu
 import { formatCountdown } from "@/lib/format-countdown"
 import { openExternal } from "@/lib/open"
 
-import { SettingRow, SettingsCard, SettingsNote } from "./shared"
+import { ComponentInstallPanel, ComponentMeta, ComponentMetaGrid, ComponentStatusPill } from "./component-card-parts"
+import { SettingsCard, SettingsNote } from "./shared"
 
 /**
  * 本集成真正用到的能力 → `lark-cli auth status --json` 里**真实存在**的 scope 名。
@@ -71,7 +73,15 @@ function hasCapability(entry: (typeof LARK_CAPABILITIES)[number], granted: Set<s
 }
 
 /** 飞书头像：CDN 拉不到或图片加载失败就退回首字，永远不会留一张破图。 */
-function UserAvatar({ name, url }: { name: string; url: string | null | undefined }) {
+function UserAvatar({
+  name,
+  url,
+  className = "size-9"
+}: {
+  name: string
+  url: string | null | undefined
+  className?: string
+}) {
   const [failed, setFailed] = useState(false)
   if (url && !failed) {
     return (
@@ -79,7 +89,7 @@ function UserAvatar({ name, url }: { name: string; url: string | null | undefine
         src={url}
         alt=""
         aria-hidden="true"
-        className="size-9 shrink-0 rounded-full object-cover ring-1 ring-border"
+        className={`${className} shrink-0 rounded-full object-cover ring-1 ring-border`}
         onError={() => setFailed(true)}
       />
     )
@@ -87,7 +97,7 @@ function UserAvatar({ name, url }: { name: string; url: string | null | undefine
   return (
     <span
       aria-hidden="true"
-      className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary ring-1 ring-border"
+      className={`flex ${className} shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary ring-1 ring-border`}
     >
       {name.trim().charAt(0).toUpperCase() || "?"}
     </span>
@@ -319,228 +329,257 @@ export function LarkCliCard() {
       ? t("support.botAppId", { id: auth.appId })
       : t("support.botNoApp")
 
-  // B 卡状态行的说明区。加载中 / 退出中都不渲染任何否定性提示，避免闪一下错误态。
-  const accountDescription = (() => {
-    if (!installed) return <p>{t("support.installFirst")}</p>
-    if (!authKnown) return <p>{busy.logout ? t("support.signingOut") : t("support.accountChecking")}</p>
+  // The permission summary lives in the account meta tile, while the detailed checklist is
+  // rendered below only while the user identity is signed in.
+  const grantedScopes = new Set(signedInUser?.scopes ?? [])
+  const capabilityCount = LARK_CAPABILITIES.filter((entry) => hasCapability(entry, grantedScopes)).length
+
+  const accountAction = (() => {
+    if (!installed) return null
+    if (!authKnown) {
+      return (
+        <span className="inline-flex h-7 items-center gap-1.5 rounded-full border border-border/70 bg-muted/25 px-2.5 text-[10px] text-muted-foreground">
+          <Spinner className="size-3" />
+          {busy.logout ? t("support.signingOut") : t("support.accountChecking")}
+        </span>
+      )
+    }
     if (needsAppConfig) {
       return (
-        <div className="mt-1 flex flex-col items-start gap-2">
-          <p className="text-sm font-medium text-foreground">{t("support.appNotConfiguredTitle")}</p>
-          <p>{t("support.appNotConfigured")}</p>
-          <div className="flex flex-wrap items-center gap-2">
-            <code className="rounded bg-muted px-2 py-1 font-mono text-[11px] text-foreground">
-              {CONFIG_INIT_COMMAND}
-            </code>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-6 px-2 text-[11px]"
-              onClick={copyConfigCommand}
-            >
-              {t("support.copyCommand")}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-6 px-2 text-[11px]"
-              onClick={load}
-            >
-              <RefreshCwIcon className="size-3" />
-              {t("support.recheck")}
-            </Button>
-            <button
-              type="button"
-              className="inline-flex items-center gap-1 text-[11px] text-primary underline-offset-2 hover:underline"
-              onClick={() => void openExternal(FEISHU_CLI_DOCS)}
-            >
-              <ExternalLinkIcon className="size-3" />
-              {t("support.officialDocs")}
-            </button>
-          </div>
+        <div className="flex items-center gap-2">
+          <span className="inline-flex h-7 items-center rounded-full border border-amber-500/30 px-2.5 text-[10px] text-amber-600">
+            {t("support.accountUnconfigured")}
+          </span>
+          <Button variant="outline" size="sm" className="h-7 px-2.5 text-[10px]" disabled>
+            {t("support.login")}
+          </Button>
         </div>
       )
     }
     if (signedInUser !== null) {
       return (
-        <div className="mt-2 flex min-w-0 items-center gap-2.5">
-          <UserAvatar
-            key={profile?.avatarUrl ?? "initial"}
-            name={displayName}
-            url={profile?.avatarUrl}
-          />
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-1.5">
-              <span className="truncate text-sm font-medium text-foreground">{displayName}</span>
-              <span className="shrink-0 text-[10px] text-emerald-600">{t("support.signedIn")}</span>
-            </div>
-            {displayOpenId !== "" && (
-              <div
-                className="truncate font-mono text-[10px] leading-4 text-muted-foreground"
-                title={displayOpenId}
-              >
-                {displayOpenId}
-              </div>
-            )}
+        <div className="flex items-center gap-2 rounded-full border border-border/70 bg-muted/25 py-1 ps-1.5 pe-1">
+          <UserAvatar key={profile?.avatarUrl ?? "initial"} name={displayName} url={profile?.avatarUrl} className="size-6" />
+          <div className="min-w-0 max-w-[9rem]">
+            <div className="truncate text-[10px] font-medium text-foreground">{displayName}</div>
+            <div className="text-[9px] text-emerald-600">{t("support.signedIn")}</div>
           </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-1.5 text-[10px]"
+            disabled={busy.logout}
+            onClick={logout}
+            aria-label={t("support.logout")}
+          >
+            {busy.logout ? <Spinner className="size-3" /> : <LogOutIcon className="size-3" />}
+            {t("support.logout")}
+          </Button>
         </div>
       )
     }
-    return <p>{t("support.notLoggedInHint")}</p>
+    return (
+      <div className="flex items-center gap-2">
+        <span className="inline-flex h-7 items-center rounded-full border border-border/70 bg-muted/25 px-2.5 text-[10px] text-muted-foreground">
+          {t("support.accountTitle")} · {t("support.accountSignedOut")}
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 gap-1.5 px-2.5 text-[10px]"
+          disabled={!installed || !authKnown || needsAppConfig || busy.auth || busy.logout}
+          onClick={() => startLogin()}
+        >
+          {busy.auth ? <Spinner className="size-3" /> : <LogInIcon className="size-3" />}
+          {t("support.login")}
+        </Button>
+      </div>
+    )
   })()
+
+  const appConfigPanel = needsAppConfig ? (
+    <div className="rounded-lg border border-amber-500/25 bg-amber-500/8 p-3">
+      <div className="text-xs font-medium text-foreground">{t("support.appNotConfiguredTitle")}</div>
+      <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{t("support.appNotConfigured")}</p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <code className="rounded bg-muted px-2 py-1 font-mono text-[11px] text-foreground">{CONFIG_INIT_COMMAND}</code>
+        <Button variant="outline" size="sm" className="h-6 px-2 text-[10px]" onClick={copyConfigCommand}>
+          {t("support.copyCommand")}
+        </Button>
+        <Button variant="outline" size="sm" className="h-6 px-2 text-[10px]" onClick={load}>
+          <RefreshCwIcon className="size-3" />
+          {t("support.recheck")}
+        </Button>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 text-[10px] text-primary underline-offset-2 hover:underline"
+          onClick={() => void openExternal(FEISHU_CLI_DOCS)}
+        >
+          <ExternalLinkIcon className="size-3" />
+          {t("support.officialDocs")}
+        </button>
+      </div>
+    </div>
+  ) : null
 
   return (
     <>
-      {/* ── 模块 A：组件本身。安装路径、版本、更新信息全在「版本」这一框里，
-          行与行之间不再手插 divider（原来 .settings-row 自带 border-bottom，
-          叠加手写 border-t 就成了截图里那两条线）。 ── */}
       <SettingsCard
         title={t("support.larkTitle")}
         desc={t("support.larkDesc")}
+        icon={<SendIcon />}
         action={
-          <StatusPill ok={installed} label={installed ? t("support.statusInstalled") : t("support.statusNotInstalled")} />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <ComponentStatusPill
+              ok={installed}
+              busy={busy.install}
+              label={
+                status === null
+                  ? t("support.checking")
+                  : busy.install
+                    ? t("support.installing")
+                    : installed
+                      ? t("support.statusInstalled")
+                      : t("support.statusNotInstalled")
+              }
+            />
+            {accountAction}
+          </div>
         }
       >
-        {/* 版本与检查按钮同一行，有更新才多出「立即更新」；更新完成后提醒重启。
-            Codex 引擎那一行已不再有检查/更新按钮（引擎随发版走），这套交互只剩 Lark CLI 用。 */}
-        <SettingRow compact title={t("support.version")}>
-          <div className="flex min-w-0 flex-col items-start gap-1.5 md:items-end">
-            <div className="flex flex-wrap items-center justify-start gap-2 md:justify-end">
-              <span className="text-sm text-muted-foreground">
-                {t("support.larkVersion", { version: status?.version ?? "—" })}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1.5 px-2.5 text-xs"
-                disabled={!installed || busy.check || busy.update}
-                onClick={checkUpdate}
-              >
-                {busy.check ? <Spinner data-icon="inline-start" /> : <RefreshCwIcon className="size-3.5" />}
-                {t("support.checkUpdate")}
-              </Button>
-              {update?.hasUpdate === true && (
-                <Button size="sm" className="h-7 px-2 text-xs" disabled={busy.update} onClick={updateNow}>
-                  {busy.update && <Spinner data-icon="inline-start" />}
-                  {t("support.updateNow")}
-                </Button>
-              )}
-            </div>
-            {update && (
-              <div className="flex flex-col items-start gap-1 text-[11px] leading-4 text-muted-foreground md:items-end">
-                <span>
-                  {update.hasUpdate
-                    ? t("support.updateAvailable", {
-                        current: update.currentVersion ?? "?",
-                        latest: update.latestVersion ?? "?"
-                      })
-                    : t("support.upToDate", { version: update.currentVersion ?? status?.version ?? "?" })}
-                </span>
-                {update.hasUpdate && (
-                  <div className="flex flex-wrap items-center justify-start gap-3 md:justify-end">
-                    {(update.changelog ?? null) !== null && (
-                      <button
-                        type="button"
-                        className="inline-flex items-center gap-1 text-[11px] text-primary underline-offset-2 hover:underline"
-                        onClick={() => void openExternal(update.changelog ?? "")}
+        {status === null ? (
+          <div className="flex items-center gap-2 px-1 py-3 text-xs text-muted-foreground">
+            <span className="size-3.5 animate-spin rounded-full border-2 border-current border-r-transparent" />
+            {t("support.checking")}
+          </div>
+        ) : !installed ? (
+          <div>
+            <ComponentInstallPanel
+              icon={<DownloadIcon className="size-3.5" />}
+              title={t("support.install")}
+              description={t("support.larkInstallNote")}
+              actionLabel={t("support.install")}
+              busyLabel={t("support.installing")}
+              busy={busy.install}
+              onAction={install}
+            />
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <ComponentMetaGrid>
+              <ComponentMeta
+                ariaLabel={t("support.version")}
+                label={t("support.version")}
+                value={t("support.larkVersion", { version: status?.version ?? "—" })}
+                sub={status?.cliPath ?? undefined}
+                action={
+                  <div className="mt-2 flex flex-col gap-1.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 gap-1.5 px-2.5 text-[10px]"
+                        disabled={!installed || busy.check || busy.update}
+                        onClick={checkUpdate}
                       >
-                        <ExternalLinkIcon className="size-3" />
-                        {t("support.changelog")}
-                      </button>
+                        {busy.check ? <Spinner className="size-3" /> : <RefreshCwIcon className="size-3" />}
+                        {t("support.checkUpdate")}
+                      </Button>
+                      {update?.hasUpdate === true && (
+                        <Button size="sm" className="h-7 px-2 text-[10px]" disabled={busy.update} onClick={updateNow}>
+                          {busy.update && <Spinner className="size-3" />}
+                          {t("support.updateNow")}
+                        </Button>
+                      )}
+                    </div>
+                    {update && (
+                      <span className="text-[10px] leading-4 text-muted-foreground">
+                        {update.hasUpdate
+                          ? t("support.updateAvailable", {
+                              current: update.currentVersion ?? "?",
+                              latest: update.latestVersion ?? "?"
+                            })
+                          : t("support.upToDate", { version: update.currentVersion ?? status?.version ?? "?" })}
+                      </span>
                     )}
-                    {(update.url ?? null) !== null && (
-                      <button
-                        type="button"
-                        className="inline-flex items-center gap-1 text-[11px] text-primary underline-offset-2 hover:underline"
-                        onClick={() => void openExternal(update.url ?? "")}
-                      >
-                        <ExternalLinkIcon className="size-3" />
-                        {t("support.releasePage")}
-                      </button>
+                    {update?.hasUpdate === true && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {(update.changelog ?? null) !== null && (
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 text-[10px] text-primary underline-offset-2 hover:underline"
+                            onClick={() => void openExternal(update.changelog ?? "")}
+                          >
+                            <ExternalLinkIcon className="size-3" />
+                            {t("support.changelog")}
+                          </button>
+                        )}
+                        {(update.url ?? null) !== null && (
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 text-[10px] text-primary underline-offset-2 hover:underline"
+                            onClick={() => void openExternal(update.url ?? "")}
+                          >
+                            <ExternalLinkIcon className="size-3" />
+                            {t("support.releasePage")}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {updatedVersion !== null && (
+                      <span className="text-[10px] leading-4 text-emerald-600">
+                        {t("support.larkUpdatedRestart", { version: updatedVersion })}
+                      </span>
                     )}
                   </div>
-                )}
+                }
+              />
+              <ComponentMeta
+                label={t("support.botTitle")}
+                value={
+                  <ComponentStatusPill
+                    ok={botReady}
+                    label={botReady ? t("support.botReady") : t("support.botNotReady")}
+                  />
+                }
+                sub={botDescription}
+              />
+              <ComponentMeta
+                label={signedInUser === null ? t("support.authStatus") : t("support.permissions")}
+                value={
+                  signedInUser === null
+                    ? t("support.accountSignedOut")
+                    : `${capabilityCount} / ${LARK_CAPABILITIES.length}`
+                }
+                sub={
+                  signedInUser === null ? (
+                    t("support.accountSignedOutHint")
+                  ) : (
+                    <span className="flex min-w-0 flex-col">
+                      <span>{t("support.permissionsGrantedCount", { count: grantedScopes.size })}</span>
+                      {displayOpenId !== "" && (
+                        <span className="truncate font-mono" title={displayOpenId}>
+                          {displayOpenId}
+                        </span>
+                      )}
+                    </span>
+                  )
+                }
+              />
+            </ComponentMetaGrid>
+
+            {appConfigPanel}
+
+            {signedInUser !== null && (
+              <div className="pt-1">
+                <div className="text-xs leading-5 font-medium text-foreground">{t("support.permissions")}</div>
+                <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{t("support.identityHelp")}</p>
+                <UserPermissions identity={signedInUser} onRequestScopes={startLogin} />
               </div>
             )}
-            {updatedVersion !== null && (
-              <span className="text-[11px] leading-4 text-emerald-600">
-                {t("support.larkUpdatedRestart", { version: updatedVersion })}
-              </span>
-            )}
-            {/* 安装路径放在右侧控件列，而不是会被 align-items:center 挤压的 desc 第二行。 */}
-            {installed && status?.cliPath && (
-              <span
-                className="block max-w-full truncate text-left font-mono text-[10px] leading-4 text-muted-foreground/70 md:text-right"
-                title={status.cliPath}
-              >
-                {status.cliPath}
-              </span>
-            )}
+            {signedInUser === null && !needsAppConfig && <SettingsNote>{t("support.notLoggedInHint")}</SettingsNote>}
+            <p className="px-1 text-[10px] leading-4 text-muted-foreground">{t("support.accountDesc")}</p>
           </div>
-        </SettingRow>
-
-        {/* 机器人身份是组件凭证，不是账号登录态：放在组件卡里只读展示，主账户退出后依然如实可见。 */}
-        {installed && (
-          <SettingRow compact title={t("support.botTitle")} desc={botDescription}>
-            {auth === null ? (
-              <span className="text-xs text-muted-foreground">{t("support.checking")}</span>
-            ) : (
-              <StatusPill
-                ok={botReady}
-                label={botReady ? t("support.botReady") : t("support.botNotReady")}
-              />
-            )}
-          </SettingRow>
-        )}
-
-        {!installed && (
-          <div className="px-4 pb-3 pt-1">
-            <SettingsNote>{t("support.larkInstallNote")}</SettingsNote>
-            <Button
-              size="sm"
-              className="mt-1 h-7 px-2 text-xs"
-              disabled={busy.install}
-              onClick={install}
-            >
-              {busy.install && <Spinner data-icon="inline-start" />}
-              {t("support.install")}
-            </Button>
-          </div>
-        )}
-      </SettingsCard>
-
-      {/* ── 模块 B：飞书账号。只认「本人身份是否登录」；退出后权限区整块消失。 ── */}
-      <SettingsCard title={t("support.accountTitle")} desc={t("support.accountDesc")}>
-        <SettingRow compact title={t("support.authStatus")} desc={accountDescription}>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 gap-1.5 px-2.5 text-xs"
-            disabled={!installed || !authKnown || needsAppConfig || busy.auth || busy.logout}
-            onClick={signedInUser !== null ? logout : () => startLogin()}
-          >
-            {busy.auth || busy.logout ? (
-              <Spinner data-icon="inline-start" />
-            ) : signedInUser !== null ? (
-              <LogOutIcon className="size-3.5" />
-            ) : (
-              <LogInIcon className="size-3.5" />
-            )}
-            {signedInUser !== null ? t("support.logout") : t("support.login")}
-          </Button>
-        </SettingRow>
-
-        {/* 权限清单的唯一入口，也只在主账户登录后才存在。授权全部走这里的勾选链路。
-            不要再手插 divider：.settings-row 自带 border-bottom，叠加 border-t
-            就是上一版截图里那两条贴在一起的线。 */}
-        {signedInUser !== null && (
-          <>
-            <div className="px-4 pt-3">
-              <div className="text-sm leading-5 font-medium">{t("support.permissions")}</div>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">{t("support.identityHelp")}</p>
-            </div>
-            <UserPermissions identity={signedInUser} onRequestScopes={startLogin} />
-          </>
         )}
       </SettingsCard>
 
@@ -810,15 +849,3 @@ function AuthDialog({
   )
 }
 
-function StatusPill({ ok, label }: { ok: boolean; label: string }) {
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${
-        ok ? "border-emerald-500/30 text-emerald-600" : "border-amber-500/30 text-amber-600"
-      }`}
-    >
-      {ok ? <CheckCircle2Icon className="size-3.5" /> : <XCircleIcon className="size-3.5" />}
-      {label}
-    </span>
-  )
-}

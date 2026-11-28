@@ -177,14 +177,6 @@ type PluginsState = {
 
 export type PluginsStore = StoreApi<PluginsState>
 
-/** Two refreshes cover the same directories when their sorted keys match. */
-function sameScope(
-  pending: { cwds: string[] } | null,
-  cwds: string[]
-): boolean {
-  return pending !== null && pending.cwds.join("\u0000") === cwds.join("\u0000")
-}
-
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -260,6 +252,10 @@ export function createPluginsStore(api: PluginsApi): PluginsStore {
       includeRemote: boolean
     } | null = null
     let refreshing: Promise<void> | null = null
+    // Loading the online index is an explicit user choice. Keep it sticky for the lifetime of this
+    // store: a later background/visible-tab refresh must not overwrite the online catalog with the
+    // local-only snapshot (which made the page fall back to the "简版" notice seconds after loading).
+    let onlineMarketplaceRequested = false
     const refreshAfterChange = async (forceRefetch = false) => {
       await get().refresh(undefined, { forceRefetch, background: true })
       if (get().error) throw new Error(i18n.t("plugins.toast.syncError", { message: get().error }))
@@ -300,6 +296,8 @@ export function createPluginsStore(api: PluginsApi): PluginsStore {
         // Concurrent asks merge: the visible tab and a background invalidation must not turn into
         // two scans of the same catalog.
         const slices = new Set<CatalogSlice>(options.slices ?? ["skills", "marketplace", "installed"])
+        const includeRemote = options.includeRemote === true || onlineMarketplaceRequested
+        if (includeRemote) onlineMarketplaceRequested = true
         if (pendingRefresh) {
           const same = pendingRefresh.cwds.join("\u0000") === cwds.join("\u0000")
           if (same) for (const slice of pendingRefresh.slices) slices.add(slice)
@@ -308,7 +306,7 @@ export function createPluginsStore(api: PluginsApi): PluginsStore {
           cwds,
           forceRefetch: options.forceRefetch === true || pendingRefresh?.forceRefetch === true,
           slices,
-          includeRemote: options.includeRemote === true || (sameScope(pendingRefresh, cwds) && pendingRefresh?.includeRemote === true)
+          includeRemote
         }
         set({ cwds, ...(!options.background ? { loading: true } : {}) })
         if (refreshing) return refreshing

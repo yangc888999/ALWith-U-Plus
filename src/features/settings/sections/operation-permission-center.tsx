@@ -14,7 +14,6 @@ import type { OperationPermissionStatus } from "@/bindings"
 import { commands } from "@/bindings"
 import { Button } from "@/components/ui/button"
 import { isMac } from "@/lib/platform"
-import { openExternal } from "@/lib/open"
 
 import { SettingsCard, SettingsNote } from "./shared"
 
@@ -219,7 +218,11 @@ export function OperationPermissionCenter() {
   const request = (row: PermissionRow): void => {
     if (!isTauri() || !isMac()) return
     if (row.supported !== true) {
-      if (row.settingsUrl !== undefined) void openExternal(row.settingsUrl)
+      if (row.settingsUrl !== undefined) {
+        void commands
+          .permissionsCenterOpenUrl({ url: row.settingsUrl })
+          .catch((error: unknown) => toast.error(error instanceof Error ? error.message : String(error)))
+      }
       return
     }
     const state = stateOf(row)
@@ -299,7 +302,13 @@ export function OperationPermissionCenter() {
                         variant="ghost"
                         size="sm"
                         className="h-6 px-1.5 text-[10px] text-muted-foreground"
-                        onClick={() => void openExternal(row.settingsUrl ?? "")}
+                        onClick={() =>
+                          void commands
+                            .permissionsCenterOpenUrl({ url: row.settingsUrl ?? "" })
+                            .catch((error: unknown) =>
+                              toast.error(error instanceof Error ? error.message : String(error))
+                            )
+                        }
                         aria-label={t("computer.openSettings")}
                       >
                         <ExternalLinkIcon className="size-3" />

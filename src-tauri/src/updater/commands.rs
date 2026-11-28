@@ -14,7 +14,7 @@ pub async fn check_and_autodownload(app: AppHandle, svc: Arc<UpdaterService>) {
     if !crate::updater::auto_update_enabled(&app) {
         return;
     }
-    let checker = PluginChecker::new(app.clone());
+    let checker = PluginChecker::new(app.clone(), svc.clone());
     let svc_check = svc.clone();
     if tokio::task::spawn_blocking(move || svc_check.check_for_updates(&checker)).await.is_err() {
         return;
@@ -27,7 +27,7 @@ pub async fn check_and_autodownload(app: AppHandle, svc: Arc<UpdaterService>) {
     let Ok(updater_dir) = updater_dir(&app) else {
         return;
     };
-    let downloader = PluginDownloader::new(app);
+    let downloader = PluginDownloader::new(app, svc.clone());
     svc.autodownload_if_available(&downloader, &updater_dir).await;
 }
 
@@ -35,7 +35,7 @@ pub async fn check_and_autodownload(app: AppHandle, svc: Arc<UpdaterService>) {
 pub async fn updater_install_and_relaunch(
     app: AppHandle, svc: TauriState<'_, Arc<UpdaterService>>,
 ) -> Result<(), String> {
-    let installer = PluginInstaller::new(app.clone());
+    let installer = PluginInstaller::new(app.clone(), svc.inner().clone());
     let updater_dir = updater_dir(&app)?;
     svc.install_and_relaunch(&installer, &updater_dir).await
 }

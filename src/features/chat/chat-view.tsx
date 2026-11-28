@@ -4,7 +4,6 @@ import { info } from "@tauri-apps/plugin-log"
 import { ChevronUpIcon, Loader2Icon } from "lucide-react"
 import {
   type MouseEvent as ReactMouseEvent,
-  type ReactNode,
   type RefObject,
   useCallback,
   useDeferredValue,
@@ -60,7 +59,6 @@ type ChatViewProps = {
   onSelectSession?: (sessionRow: SessionSummary) => void
   onReturnToMain?: () => void
   headerTarget?: HTMLElement | null
-  projectMenu?: ReactNode
   onNewChat: () => void
   onNewProject?: () => void
   /** Opens a fresh thread in the given project so the agent stops carrying old context. */
@@ -132,7 +130,6 @@ function Conversation({
   voiceResume,
   onReturnToMain,
   headerTarget,
-  projectMenu,
   onNewChat,
   onNewProject,
   onDeleted,
@@ -159,14 +156,12 @@ function Conversation({
   // A split saved with this chat may point at a provider that has since been closed.
   useOrchestrationProviderWarning(session.id)
   // Recount only when the transcript itself changes: a replayed session re-renders once per
-  // streamed item, and counting every turn each time is quadratic on big threads.
-  const turnCount = useMemo(
+  // streamed item, and counting every prompt each time is quadratic on big threads. This is the
+  // windowing budget (user prompts), not the round badge: steering stays inside its native turn.
+  const totalTurns = useMemo(
     () => session.items.reduce((count, item) => (item.kind === "user" ? count + 1 : count), 0),
     [session.items]
   )
-
-  // ---- Issue #3: only render the most recent window of turns; older turns load on demand. ----
-  const totalTurns = turnCount
   const [visibleTurns, setVisibleTurns] = useState(INITIAL_TURNS)
   // While a replay runs, hand the conversation a calm-cadence snapshot of the same session instead
   // of the live one: the store still receives every item on time, but 16ms ingest batches no longer
@@ -303,8 +298,6 @@ function Conversation({
         <ChatHeader
           target={headerTarget}
           title={session.title ?? (session.items.length === 0 ? t("sidebar.newChat") : t("sidebar.untitled"))}
-          project={projectMenu}
-          turnCount={turnCount}
         >
           <div className="ms-1 flex shrink-0 items-center gap-1">
             <SendModeSwitch />

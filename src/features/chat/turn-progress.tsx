@@ -16,7 +16,7 @@
 
 import type { Session } from "@alwith/api"
 import { AlertTriangleIcon, CircleHelpIcon, Loader2Icon } from "lucide-react"
-import { type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { useTranslation } from "react-i18next"
 import { useStore } from "zustand"
 
@@ -33,6 +33,7 @@ import { cn } from "@/lib/utils"
 import { dismissOverload, matchesReportedModel, overloadNotice, subscribeOverload } from "./model-overload-alert"
 import { nudgeTurn } from "./nudge-turn"
 import { activeTool, awaitingUser } from "./turn-activity"
+import { countSessionRounds } from "./turn-count"
 
 /** Per-session turn clock. `last` only moves when the store reports new work, so it doubles as
  *  the "how long has it been quiet" anchor. */
@@ -398,6 +399,9 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
   const autoNudgeOn = useSyncExternalStore(subscribeAutoNudge, autoNudgeEnabled, autoNudgeEnabled)
 
   const turn = trackTurn(session)
+  // One round = one native Codex turn. Steering adds user items to the turn already running, so
+  // counting raw prompts here would make the badge disagree with the conversation.
+  const roundCount = useMemo(() => countSessionRounds(session), [session.items])
   // The count is keyed to the turn it belongs to, so a finished turn's "自动催了 1 次" can never
   // show up over the next one: the key mismatch already reads as zero, without a reset effect.
   const [autoNudge, setAutoNudge] = useState<{ turn: number; count: number }>({ turn: 0, count: 0 })
@@ -578,7 +582,23 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
             {t("chat.turnProgress.quiet", { duration: t(quietFor.key, quietFor.values) })}
           </span>
         )}
-        <span className="shrink-0 text-muted-foreground/70 tabular-nums">{clock(now - turn.start)}</span>
+        {/* Clock + round are one meta cluster. The round yields to the quiet/help/nudge controls
+            when the turn stalls, and the clock's title keeps the count reachable either way. */}
+        <span
+          className="flex shrink-0 items-center gap-1.5 text-muted-foreground/70 tabular-nums"
+          title={roundCount > 0 ? t("chat.turnCountTitle", { count: roundCount }) : undefined}
+          data-turn-clock-group=""
+        >
+          <span data-turn-clock="">{clock(now - turn.start)}</span>
+          {roundCount > 0 && (
+            <span className="flex items-center gap-1.5 text-muted-foreground/55" data-turn-round="">
+              <span className="h-2.5 w-px bg-border" aria-hidden="true" />
+              <span className="whitespace-nowrap text-[11px] font-medium">
+                {t("chat.turnCountBadge", { count: roundCount })}
+              </span>
+            </span>
+          )}
+        </span>
         {quiet && (
           <TooltipProvider delay={0}>
             <Tooltip>
@@ -587,6 +607,7 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
                   <button
                     type="button"
                     aria-label={t("chat.turnProgress.details")}
+                    data-turn-help=""
                     className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
                   />
                 }
@@ -603,6 +624,7 @@ export function TurnProgressBar({ session }: { session: Session }): ReactNode {
           <button
             type="button"
             title={t("chat.turnProgress.nudgeHint")}
+            data-turn-nudge=""
             className="shrink-0 rounded-full border border-border/70 px-2 py-0.5 font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
             onClick={() => void nudgeTurn(session)}
           >

@@ -97,6 +97,42 @@ pub async fn permissions_center_open_settings(permission: String) -> Result<(), 
     }
 }
 
+/// Opens a System Settings privacy pane that macOS does not expose through a TCC query API.
+///
+/// The webview must not use the generic opener plugin for `x-apple.systempreferences:` URLs: its
+/// URL scope rejects the scheme, which produced "Not allowed to open url …" for Files and Folders,
+/// App Management, Media, Contacts and the other settings-only rows. Validate the small URL family
+/// here, then launch System Settings through the system `open` binary; this is the same route the
+/// macOS privacy crate uses for the supported TCC panes.
+fn allowed_settings_url(url: &str) -> bool {
+    url.starts_with("x-apple.systempreferences:com.apple.preference.security?")
+        || url == "x-apple.systempreferences:com.apple.preference.notifications"
+        || url.starts_with("x-apple.systempreferences:com.apple.settings.")
+}
+
+#[tauri3_specta::command]
+pub async fn permissions_center_open_url(url: String) -> Result<(), String> {
+    #[cfg(not(target_os = "macos"))]
+    return Err("当前平台没有 macOS 系统设置深链".to_string());
+    #[cfg(target_os = "macos")]
+    {
+        if !allowed_settings_url(&url) {
+            return Err("不支持的系统设置地址".to_string());
+        }
+        tauri::async_runtime::spawn_blocking(move || {
+            let status =
+                std::process::Command::new("/usr/bin/open").arg(&url).status().map_err(|error| error.to_string())?;
+            if status.success() {
+                Ok(())
+            } else {
+                Err(format!("打开系统设置失败（退出码 {}）", status.code().unwrap_or(-1)))
+            }
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +147,18 @@ mod tests {
             assert!(permission_for("camera").is_some());
             assert!(permission_for("filesAndFolders").is_none());
         }
+    }
+
+    #[test]
+    fn only_privacy_settings_deep_links_are_allowed() {
+        assert!(allowed_settings_url(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"
+        ));
+        assert!(allowed_settings_url(
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Contacts"
+        ));
+        assert!(!allowed_settings_url("https://example.com"));
+        assert!(!allowed_settings_url("file:///Applications"));
+        assert!(allowed_settings_url("x-apple.systempreferences:com.apple.preference.notifications"));
     }
 }

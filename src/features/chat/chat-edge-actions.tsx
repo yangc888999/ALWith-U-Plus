@@ -122,7 +122,10 @@ export function ChatEdgeActions({
   )
   const edgeLabel = "max-w-0 overflow-hidden whitespace-nowrap text-xs opacity-0 transition-all duration-200 group-hover:max-w-[9rem] group-hover:opacity-100 group-focus-visible:max-w-[9rem] group-focus-visible:opacity-100"
   return (
-    <div className="pointer-events-none absolute inset-y-0 end-0 z-20 flex flex-col items-end justify-center gap-2 pe-1.5">
+    <div
+      data-chat-edge-actions=""
+      className="pointer-events-none absolute inset-y-0 end-0 z-20 flex flex-col items-end justify-center gap-2 pe-1.5"
+    >
       {projectMemory && (
         <DropdownMenu>
           <DropdownMenuTrigger

@@ -1,0 +1,189 @@
+:root[data-alwith-bi-theme="dark"] {
+  --c-surface: #171a21 !important;
+  --c-border: #2b303b !important;
+  --c-text-dim: #9aa4b2 !important;
+  color-scheme: dark !important;
+}
+:root[data-alwith-bi-theme="dark"],
+:root[data-alwith-bi-theme="dark"] body {
+  background: #0f1115 !important;
+  color: #e6e9ef !important;
+}
+html[data-alwith-bi-theme="dark"] .stApp,
+html[data-alwith-bi-theme="dark"] [data-testid="stAppViewContainer"],
+html[data-alwith-bi-theme="dark"] [data-testid="stMain"],
+html[data-alwith-bi-theme="dark"] [data-testid="stHeader"],
+html[data-alwith-bi-theme="dark"] [data-testid="stMainBlockContainer"],
+html[data-alwith-bi-theme="dark"] .block-container {
+  background: #0f1115 !important;
+  color: #e6e9ef !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stSidebar"],
+html[data-alwith-bi-theme="dark"] [data-testid="stSidebarContent"] {
+  background: #12141a !important;
+  border-color: #2b303b !important;
+  box-shadow: none !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stSidebar"] [data-testid="stMarkdown"] p,
+html[data-alwith-bi-theme="dark"] [data-testid="stSidebar"] [data-testid="stMarkdown"] li,
+html[data-alwith-bi-theme="dark"] [data-testid="stSidebar"] label {
+  color: #9aa4b2 !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stExpander"],
+html[data-alwith-bi-theme="dark"] [data-testid="metric-container"],
+html[data-alwith-bi-theme="dark"] [data-testid="stMetric"],
+html[data-alwith-bi-theme="dark"] .stCard,
+html[data-alwith-bi-theme="dark"] .stMetric,
+html[data-alwith-bi-theme="dark"] [data-testid="stForm"],
+html[data-alwith-bi-theme="dark"] [data-testid="stAlert"],
+html[data-alwith-bi-theme="dark"] [data-testid="stCodeBlock"],
+html[data-alwith-bi-theme="dark"] [data-testid="stTable"] {
+  background: #171a21 !important;
+  border-color: #2b303b !important;
+  color: #e6e9ef !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stAlert"] * {
+  color: #e6e9ef !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stDataFrame"] {
+  background: #171a21 !important;
+  border-color: #2b303b !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stTextInput"] input,
+html[data-alwith-bi-theme="dark"] [data-testid="stNumberInput"] input,
+html[data-alwith-bi-theme="dark"] [data-testid="stTextArea"] textarea,
+html[data-alwith-bi-theme="dark"] [data-testid="stDateInput"] input,
+html[data-alwith-bi-theme="dark"] [data-testid="stTextInputRootElement"],
+html[data-alwith-bi-theme="dark"] [data-testid="stNumberInputContainer"],
+html[data-alwith-bi-theme="dark"] [data-testid="stDateInputField"],
+html[data-alwith-bi-theme="dark"] [data-testid="stDateInputFieldsScroller"],
+html[data-alwith-bi-theme="dark"] [data-testid="hidden-dateinput-container"] input,
+html[data-alwith-bi-theme="dark"] [data-testid="stSelectbox"] .react-aria-ComboBox,
+html[data-alwith-bi-theme="dark"] [data-testid="stSelectbox"] .react-aria-ComboBox > div,
+html[data-alwith-bi-theme="dark"] [data-testid="stMultiSelect"] .react-aria-ComboBox,
+html[data-alwith-bi-theme="dark"] [data-testid="stMultiSelect"] .react-aria-ComboBox > div,
+html[data-alwith-bi-theme="dark"] [role="combobox"] {
+  background: #171a21 !important;
+  border-color: #2b303b !important;
+  color: #e6e9ef !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stSelectbox"] .react-aria-ComboBox input,
+html[data-alwith-bi-theme="dark"] [data-testid="stMultiSelect"] .react-aria-ComboBox input {
+  background: transparent !important;
+  color: #e6e9ef !important;
+  -webkit-text-fill-color: #e6e9ef !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stSelectbox"] .react-aria-ComboBox input::placeholder,
+html[data-alwith-bi-theme="dark"] [data-testid="stMultiSelect"] .react-aria-ComboBox input::placeholder {
+  color: #7d8797 !important;
+  -webkit-text-fill-color: #7d8797 !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stSelectbox"] *,
+html[data-alwith-bi-theme="dark"] [data-testid="stMultiSelect"] *,
+html[data-alwith-bi-theme="dark"] [data-testid="stDateInput"] * {
+  border-color: #2b303b !important;
+}
+html[data-alwith-bi-theme="dark"] [role="listbox"],
+html[data-alwith-bi-theme="dark"] [role="option"] {
+  background: #171a21 !important;
+  color: #e6e9ef !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stBaseButton-secondary"],
+html[data-alwith-bi-theme="dark"] [data-testid="stBaseButton-tertiary"],
+html[data-alwith-bi-theme="dark"] [data-testid="stPopoverButton"],
+html[data-alwith-bi-theme="dark"] [data-testid="stDownloadButton"] button,
+html[data-alwith-bi-theme="dark"] [data-testid="stFormSubmitButton"] button {
+  background: #171a21 !important;
+  border-color: #2b303b !important;
+  color: #e6e9ef !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stBaseButton-primary"],
+html[data-alwith-bi-theme="dark"] [data-testid="stBaseButton-primaryFormSubmit"] {
+  background: var(--c-accent) !important;
+  color: #fff !important;
+  border-color: transparent !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stTabs"] > div,
+html[data-alwith-bi-theme="dark"] [data-testid="stTabs"] [role="tablist"] {
+  background: #171a21 !important;
+  border-color: #2b303b !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stTabs"] [data-testid="stTab"] {
+  background: transparent !important;
+  color: #9aa4b2 !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stTabs"] [data-testid="stTab"][aria-selected="true"] {
+  background: rgba(91, 140, 255, 0.14) !important;
+  color: #7aa2ff !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stTabs"] [data-testid="stTab"] p {
+  color: inherit !important;
+}
+html[data-alwith-bi-theme="dark"] body div[role="radiogroup"] label[data-testid="stRadioOption"]:not([data-selected="true"]) {
+  background: #171a21 !important;
+  border: 1px solid #2b303b !important;
+}
+html[data-alwith-bi-theme="dark"] body div[role="radiogroup"] label[data-testid="stRadioOption"]:not([data-selected="true"]) [data-testid="stMarkdownContainer"] p {
+  color: #c7ced9 !important;
+}
+html[data-alwith-bi-theme="dark"] body div[role="radiogroup"] label[data-testid="stRadioOption"][data-selected="true"] [data-testid="stMarkdownContainer"] p {
+  color: #ffffff !important;
+}
+html[data-alwith-bi-theme="dark"] button[data-variant="segmented_control"] {
+  background: #171a21 !important;
+  color: #9aa4b2 !important;
+  border-color: #2b303b !important;
+}
+html[data-alwith-bi-theme="dark"] button[data-variant="segmented_control"][data-selected="true"] {
+  background: rgba(91, 140, 255, 0.16) !important;
+  color: #7aa2ff !important;
+  border-color: #3b5bdb !important;
+}
+html[data-alwith-bi-theme="dark"] button[data-variant="segmented_control"] p {
+  color: inherit !important;
+}
+html[data-alwith-bi-theme="dark"] [class*="st-key-boardtabs"] {
+  background: transparent !important;
+  background-image: none !important;
+}
+html[data-alwith-bi-theme="dark"] body div[role="radiogroup"] label[data-testid="stRadioOption"] {
+  box-shadow: none !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stFormSubmitButton"] [data-testid="stBaseButton-primaryFormSubmit"] {
+  background: var(--c-accent) !important;
+  color: #ffffff !important;
+  border-color: transparent !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stTextInput"] input::placeholder,
+html[data-alwith-bi-theme="dark"] [data-testid="stNumberInput"] input::placeholder,
+html[data-alwith-bi-theme="dark"] [data-testid="stTextArea"] textarea::placeholder {
+  color: #7d8797 !important;
+  -webkit-text-fill-color: #7d8797 !important;
+}
+html[data-alwith-bi-theme="dark"] iframe[title*="report_doc_view"] {
+  filter: invert(1) hue-rotate(180deg) brightness(0.9) contrast(1.05);
+}
+html[data-alwith-bi-theme="dark"] .bi-user-badge {
+  background: #171a21 !important;
+  color: #c7ced9 !important;
+  border-color: #2b303b !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stMarkdownContainer"] p,
+html[data-alwith-bi-theme="dark"] [data-testid="stMarkdownContainer"] li,
+html[data-alwith-bi-theme="dark"] label,
+html[data-alwith-bi-theme="dark"] [data-testid="stWidgetLabel"] {
+  color: #e6e9ef !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stCaptionContainer"],
+html[data-alwith-bi-theme="dark"] [data-testid="stCaptionContainer"] p {
+  color: #9aa4b2 !important;
+}
+html[data-alwith-bi-theme="dark"] .echarts-container canvas {
+  filter: invert(1) hue-rotate(180deg) brightness(0.9) contrast(1.08) !important;
+}
+html[data-alwith-bi-theme="dark"] [data-testid="stDataFrame"] canvas {
+  filter: invert(1) hue-rotate(180deg) brightness(0.9) contrast(0.95) !important;
+}
+html[data-alwith-bi-theme="dark"] .js-plotly-plot .modebar {
+  background: #171a21 !important;
+}

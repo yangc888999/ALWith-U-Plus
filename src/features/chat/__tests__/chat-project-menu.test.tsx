@@ -11,7 +11,6 @@ import { useChatWindowSurface, useMainWindowSurface } from "@/lib/chat-window-st
 import { client } from "@/lib/client"
 import { initI18n } from "@/lib/i18n"
 
-import { ChatHeader } from "../chat-header"
 import * as projectApps from "../open-in-editor"
 import { ChatProjectMenu } from "../project-session-popover"
 
@@ -76,54 +75,6 @@ test("a project menu shows its own pending chat before history loads and hands o
   expect(view.getAllByRole("button", { name: native.title! })).toHaveLength(1)
 })
 
-test.each(["main", "floating"] as const)(
-  "%s header excludes displayed conversations before counting and expanding the project list",
-  async (surface) => {
-    const cwd = "/tmp/project"
-    const entries = Array.from({ length: 7 }, (_, index) => sessionRow(`Chat ${index}`, cwd))
-    const main = sessionRow("Main chat", cwd)
-    const floating = sessionRow("Floating chat", cwd)
-    client.store.setState({ sessionList: [main, floating, ...entries] })
-    useMainWindowSurface.setState({ sessionId: main.sessionId, visible: true })
-    useChatWindowSurface.setState({ sessionId: floating.sessionId, visible: true })
-    const select = vi.fn()
-    const target = surface === "floating" ? document.createElement("div") : undefined
-    if (target) document.body.append(target)
-    const view = render(
-      <ChatHeader
-        target={target}
-        title="Current conversation"
-        project={
-          <ChatProjectMenu
-            cwd={cwd}
-            currentSessionId={surface === "main" ? main.sessionId : floating.sessionId}
-            onSelect={select}
-            onNewChat={() => {}}
-          />
-        }
-      >
-        <span>Actions</span>
-      </ChatHeader>
-    )
-    try {
-      const folder = view.getByRole("button", { name: "project" })
-      if (target) expect(target).toContainElement(folder)
-      await act(() => Promise.resolve(fireEvent.click(folder)))
-      expect(view.queryByRole("button", { name: "Main chat" })).toBeNull()
-      expect(view.queryByRole("button", { name: "Floating chat" })).toBeNull()
-      expect(view.queryByText("7 chats")).toBeNull()
-      expect(view.getAllByRole("button", { name: /^Chat / })).toHaveLength(5)
-      await act(() => Promise.resolve(fireEvent.click(view.getByRole("button", { name: "Show more" }))))
-      expect(view.getAllByRole("button", { name: /^Chat / })).toHaveLength(7)
-      await act(() => Promise.resolve(fireEvent.click(view.getByRole("button", { name: "Chat 6" }))))
-      expect(select).toHaveBeenCalledExactlyOnceWith(entries[6])
-    } finally {
-      view.unmount()
-      target?.remove()
-    }
-  }
-)
-
 test("quick chats update their empty state as windows hide and keep the current conversation excluded", async () => {
   const cwd = "/Users/mac/Documents/ALwith"
   const main = sessionRow("Main chat", cwd)
@@ -163,11 +114,7 @@ test("quick chats use the sidebar grouping and ordering before the default direc
     sessionRow("Resolved directory chat", defaultCwd)
   ]
   client.store.setState({ sessionList: entries })
-  const view = render(
-    <ChatHeader title="New chat" project={<ChatProjectMenu cwd={null} onSelect={select} onNewChat={() => {}} />}>
-      <span>Actions</span>
-    </ChatHeader>
-  )
+  const view = render(<ChatProjectMenu cwd={null} onSelect={select} onNewChat={() => {}} />)
   const folder = view.getByRole("button", { name: "Chats" })
   expect(folder.querySelector(".lucide-folder-closed")).not.toBeNull()
   await act(() => Promise.try(() => fireEvent.click(folder)))

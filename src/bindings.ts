@@ -163,6 +163,8 @@ export const commands = {
     __t3Invoke<null>("permissions_center_request", args),
   permissionsCenterOpenSettings: (args: { permission: string }): Promise<null> =>
     __t3Invoke<null>("permissions_center_open_settings", args),
+  permissionsCenterOpenUrl: (args: { url: string }): Promise<null> =>
+    __t3Invoke<null>("permissions_center_open_url", args),
   nodeStatus: (): Promise<NodeStatus_Serialize> => __t3Invoke<NodeStatus_Serialize>("node_status"),
   /**
    *  Download the official macOS universal Node.js `.pkg` for the latest LTS and open it with the
@@ -662,6 +664,8 @@ export const commands = {
     width: number
     height: number
     email: string | null
+    theme: string | null
+    visible: boolean | null
   }): Promise<null> => __t3Invoke<null>("online_bi_embed_mount", args),
   /**
    *  Navigates the existing view. Never recreate it for a URL change — that is a new cookie jar.
@@ -674,10 +678,30 @@ export const commands = {
    */
   onlineBiEmbedCurrentUrl: (): Promise<string | null> => __t3Invoke<string | null>("online_bi_embed_current_url"),
   /**
+   *  Current page URL plus the BI sign-in state. The frontend uses this when a page-load event was
+   *  missed (for example when the native view was created before React attached its listener).
+   */
+  onlineBiEmbedPageState: (): Promise<OnlineBiPageState> => __t3Invoke<OnlineBiPageState>("online_bi_embed_page_state"),
+  /**
    *  Hides the view without destroying it: the session lives in this window's cookie jar.
    */
   onlineBiEmbedSetVisible: (args: { visible: boolean }): Promise<null> =>
     __t3Invoke<null>("online_bi_embed_set_visible", args),
+  /**
+   *  Applies the host app's appearance without reloading the board or touching its cookie jar.
+   */
+  onlineBiEmbedSetTheme: (args: { theme: string }): Promise<null> =>
+    __t3Invoke<null>("online_bi_embed_set_theme", args),
+  /**
+   *  Collapses the BI's own navigation sidebar when a host tab is opened.
+   *
+   *  Streamlit exposes a native collapse button and persists the choice under `stSidebarCollapsed-`.
+   *  Clicking the button is what leaves the reader a visible expand control; writing the storage key
+   *  as well keeps the rule effective when the tab change triggers a full Streamlit document load and
+   *  the button is not mounted yet. The reader can expand it again at any time; this command only
+   *  runs on an explicit tab open, never on every render.
+   */
+  onlineBiEmbedCollapseSidebar: (): Promise<null> => __t3Invoke<null>("online_bi_embed_collapse_sidebar"),
   /**
    *  Drops the view when the preview leaves the BI surface.
    */
@@ -876,6 +900,7 @@ export type CommandErrors = {
   permissionsCenterStatus: never
   permissionsCenterRequest: string
   permissionsCenterOpenSettings: string
+  permissionsCenterOpenUrl: string
   nodeStatus: never
   nodeInstall: string
   brewStatus: never
@@ -990,7 +1015,10 @@ export type CommandErrors = {
   onlineBiEmbedMount: string
   onlineBiEmbedNavigate: string
   onlineBiEmbedCurrentUrl: string
+  onlineBiEmbedPageState: string
   onlineBiEmbedSetVisible: string
+  onlineBiEmbedSetTheme: string
+  onlineBiEmbedCollapseSidebar: string
   onlineBiEmbedClose: string
   applySessionProvider: string
   restartApp: never
@@ -1985,6 +2013,11 @@ export type OnlineBiCredentials = {
   hasToken: boolean
   /**  Path the preview column embeds; the token is appended as `?s=`. */
   path: string
+}
+
+export type OnlineBiPageState = {
+  signedIn: boolean
+  url: string
 }
 
 export type OpenHotkeys = null

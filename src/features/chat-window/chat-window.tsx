@@ -11,7 +11,6 @@ import { ChatView } from "@/features/chat/chat-view"
 import { DRAFT_SESSION_ID, DraftChat } from "@/features/chat/draft-chat"
 import { chooseFolder } from "@/features/chat/draft-project-picker"
 import { newChatDirectory } from "@/features/chat/new-chat-directory"
-import { ChatProjectMenu } from "@/features/chat/project-session-popover"
 import { XIcon } from "lucide-react"
 
 import { useVoiceHandoff } from "@/features/voice/use-voice-handoff"
@@ -344,9 +343,6 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
               owner="chat"
               startSurface={preferences.defaultStartSurface}
               headerTarget={headerTarget}
-              projectMenu={
-                <ChatProjectMenu cwd={cwd} currentSessionId={selectedId} onSelect={selectSession} onNewChat={newChat} />
-              }
               onNewChat={newChat}
               onNewProject={newProject}
               onReturnToMain={returnToMain}
@@ -368,14 +364,6 @@ export function ChatWindow({ preferences }: { preferences: Preferences }) {
               session={session}
               voiceResume={voiceHandoff.resume}
               headerTarget={headerTarget}
-              projectMenu={
-                <ChatProjectMenu
-                  cwd={session.cwd}
-                  currentSessionId={session.id}
-                  onSelect={selectSession}
-                  onNewChat={newChat}
-                />
-              }
               onNewChat={newChat}
               onNewProject={newProject}
               onClearContext={() => newChat()}

@@ -90,3 +90,14 @@ test("an installed component shows the matching headless shell and can check upd
   fireEvent.click(screen.getByRole("button", { name: "Check for updates" }))
   await waitFor(() => expect(vi.mocked(commands.playwrightComponentCheckUpdate)).toHaveBeenCalledOnce())
 })
+
+test("an installing component shows a busy status and a disabled install action", async () => {
+  vi.mocked(commands.playwrightComponentInstall).mockImplementationOnce(
+    () => new Promise(() => {})
+  )
+  render(<PlaywrightComponentCard />)
+  fireEvent.click(await screen.findByRole("button", { name: "Install" }))
+  const busy = await screen.findByRole("button", { name: /Installing/i })
+  expect(busy).toBeDisabled()
+  expect(screen.getAllByText("Installing…").length).toBeGreaterThan(0)
+})

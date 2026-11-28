@@ -5,7 +5,7 @@ import { drafts, importDraft, SessionActions } from "@alwith/module-chat/convers
 import { relativeTime } from "@alwith/module-chat/session-list"
 import { invoke } from "@tauri-apps/api/core"
 import { ArrowUpRightIcon, FolderIcon } from "lucide-react"
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import type { DraftOwner } from "@/agent/client"
@@ -18,6 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from "@/components/ui/alert-dialog"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { dispatchCollection, reportCollection } from "@/features/collection/store"
 import { useDisplayProfile } from "@/features/profile/use-display-profile"
@@ -85,7 +86,6 @@ export function DraftChat({
   onReturnToMain,
   runOperation,
   headerTarget,
-  projectMenu,
   onNewChat,
   onNewProject,
   startSurface = "work",
@@ -111,7 +111,6 @@ export function DraftChat({
   onOpenWindow?: () => void
   onReturnToMain?: () => void
   headerTarget?: HTMLElement | null
-  projectMenu?: ReactNode
   onNewChat: () => void
   onNewProject?: () => void
   /** Which new-task tab opens first. Embedded test surfaces keep Work unless they say otherwise. */
@@ -389,7 +388,7 @@ export function DraftChat({
         {/* The main window has nothing to title before the first message, so the draft shows
             only the conversation; the floating window keeps its drag bar and its menus. */}
         {headerTarget !== undefined && (
-          <ChatHeader target={headerTarget} title={t("sidebar.newChat")} project={projectMenu}>
+          <ChatHeader target={headerTarget} title={t("sidebar.newChat")}>
             <ChatActionsMenu
               surface="floating"
               onOpenWindow={session && !preparing ? onOpenWindow : undefined}
@@ -409,6 +408,25 @@ export function DraftChat({
           {/* Only the greeting and composer form the centred hero. Recent projects hang below the
               composer without joining its height, so switching Work on/off never moves the hero. */}
           <div className="welcome-hero-core relative flex w-full flex-col items-center">
+            {minimalDraft && (
+              <div
+                data-minimal-identity=""
+                className="mb-5 flex w-full max-w-3xl items-center justify-center gap-3 px-2"
+              >
+                {profile !== null && (
+                  <Avatar className="size-9 shrink-0 shadow-sm">
+                    {profile.avatarUrl && <AvatarImage src={profile.avatarUrl} alt="" />}
+                    <AvatarFallback className="bg-primary text-xs text-primary-foreground">
+                      {profile.initials}
+                    </AvatarFallback>
+                  </Avatar>
+                )}
+                <div className="min-w-0 text-left">
+                  <p className="truncate text-sm font-medium text-foreground">{greeting}</p>
+                  <p className="truncate text-xs text-muted-foreground">{subtitle}</p>
+                </div>
+              </div>
+            )}
             {!minimalDraft && (
               <div className="flex w-full flex-col items-center gap-5">
                 <div className="w-full max-w-4xl text-center">

@@ -324,6 +324,7 @@ function SidebarPanels({
   onSelect,
   onNewChat,
   onNewQuickChat,
+  onNewProject,
   onNewProjectChat,
   onViewFiles,
   onSearch,
@@ -783,13 +784,32 @@ function SidebarPanels({
                           </>
                         )
                       }
-                      const label =
+                      const label = (
                         <div
                           data-project-label=""
-                          className="px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground"
+                          className="flex items-center gap-1 px-2 pt-3 pb-1 text-xs font-medium text-muted-foreground"
                         >
-                          {`${t("sidebar.projects")} (${projectCount})`}
+                          <span className="min-w-0 flex-1 truncate">
+                            {`${t("sidebar.projects")} (${projectCount})`}
+                          </span>
+                          {onNewProject !== undefined && (
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              className="size-6 shrink-0"
+                              data-project-new=""
+                              aria-label={t("sidebar.newProject")}
+                              title={t("sidebar.newProject")}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                onNewProject()
+                              }}
+                            >
+                              <CirclePlusIcon />
+                            </Button>
+                          )}
                         </div>
+                      )
                       return (
                         <>
                           {label}

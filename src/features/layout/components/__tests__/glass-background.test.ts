@@ -92,6 +92,26 @@ test("floating menus and panels share a readable transparency-controlled surface
   expect(styles).not.toContain('--popover: oklch(0.22 0.014 250 / 0.94)')
 })
 
+test("the frosted composer borrows the card material instead of an opaque slab", () => {
+  // The old 97%-opaque charcoal fill made the input read as a grey rectangle pasted over the
+  // glass page. The frosted modes must reuse the appearance-aware --card token and add blur.
+  const tokenRule =
+    /html:is\(\[data-appearance="aero"\], \[data-appearance="liquid-glass"\]\)\s*\{([^}]*)\}/.exec(styles)?.[1] ??
+    ""
+  expect(tokenRule).toContain("--composer-surface: var(--card)")
+  expect(tokenRule).toContain("--composer-surface-alpha: 1")
+
+  const glassCard =
+    /html:is\(\[data-appearance="aero"\], \[data-appearance="liquid-glass"\]\)\s*\n?\s*\[data-composer\][\s\S]*?\{([^}]*)\}/.exec(
+      styles
+    )?.[1] ?? ""
+  expect(glassCard).toContain("backdrop-filter: blur(22px)")
+  expect(glassCard).toContain("inset 0 1px 0")
+  expect(styles).toMatch(
+    /html:is\(\[data-appearance="aero"\], \[data-appearance="liquid-glass"\]\):not\(\.dark\)[\s\S]*?background-image: linear-gradient\(180deg, oklch\(1 0 0 \/ 0\.38\)/
+  )
+})
+
 test("frosted accents adapt in both light and dark appearances", () => {
   expect(styles).toMatch(
     /html\[data-appearance="aero"\]:not\(\.dark\)\s*\{[^}]*--settings-accent:\s*color-mix/

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest"
 
 import type {
   PluginDetail,
+  PluginListParams,
   PluginMarketplaceEntry,
   PluginReadResponse,
   PluginSummary,
@@ -86,7 +87,9 @@ function fakeApi(): PluginsApi & { calls: string[]; installed: Set<string> } {
         return { effectiveEnabled: params.enabled }
       })
     },
-    listPlugins() {
+    listPlugins(params?: PluginListParams) {
+      const includeRemote = (params as { includeRemote?: boolean } | undefined)?.includeRemote === true
+      calls.push(`plugins:${includeRemote ? "remote" : "local"}`)
       return Promise.resolve({ marketplaces: [catalog], marketplaceLoadErrors: [], featuredPluginIds: [] })
     },
     installedPlugins() {
@@ -180,6 +183,19 @@ describe("plugins store", () => {
       screenshots: [],
       screenshotUrls: []
     })
+  })
+
+  test("once the online marketplace is requested, later refreshes keep it online", async () => {
+    const api = fakeApi()
+    const store = createPluginsStore(api)
+
+    await store.getState().refresh([], { slices: ["marketplace"], includeRemote: true })
+    await store.getState().refresh([], { slices: ["marketplace"], background: true })
+
+    expect(api.calls.filter((call) => call.startsWith("plugins:"))).toEqual([
+      "plugins:remote",
+      "plugins:remote"
+    ])
   })
 
   test("readPlugin fills a compact summary and missing detail collections", async () => {
